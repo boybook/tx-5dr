@@ -76,6 +76,7 @@ export interface MockTimers extends PluginTimers {
 /** UIBridge that captures sent data. Inspect `_sentData` in assertions. */
 export interface MockUIBridge extends UIBridge {
   readonly _sentData: Map<string, unknown[]>;
+  readonly _events: Array<{ type: string; id: string; data?: unknown }>;
 }
 
 /** Full mock context with typed access to all sub-mocks. */
@@ -160,21 +161,38 @@ function createMockHostDependencies(): HostDependencies {
 
 // ===== Factory: KVStore =====
 
+function cloneJsonValue(value: unknown): unknown {
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) return undefined;
+  return JSON.parse(serialized) as unknown;
+}
+
+function cloneStructuredValue<T>(value: T): T {
+  if (Buffer.isBuffer(value)) return Buffer.from(value) as T;
+  return structuredClone(value);
+}
+
 export function createMockKVStore(initial?: Record<string, unknown>): MockKVStore {
-  const data = new Map<string, unknown>(initial ? Object.entries(initial) : []);
+  const clonedInitial = initial ? cloneJsonValue(initial) as Record<string, unknown> : {};
+  const data = new Map<string, unknown>(Object.entries(clonedInitial));
   return {
     _data: data,
     get<T = unknown>(key: string, defaultValue?: T): T {
-      return (data.has(key) ? data.get(key) : defaultValue) as T;
+      return (data.has(key) ? cloneJsonValue(data.get(key)) : defaultValue) as T;
     },
     set(key: string, value: unknown): void {
-      data.set(key, value);
+      const clonedEntry = cloneJsonValue({ [key]: value }) as Record<string, unknown>;
+      if (!Object.prototype.hasOwnProperty.call(clonedEntry, key)) {
+        data.delete(key);
+      } else {
+        data.set(key, clonedEntry[key]);
+      }
     },
     delete(key: string): void {
       data.delete(key);
     },
     getAll(): Record<string, unknown> {
-      return Object.fromEntries(data);
+      return cloneJsonValue(Object.fromEntries(data)) as Record<string, unknown>;
     },
     async flush(): Promise<void> {
       // no-op in mock
@@ -235,19 +253,22 @@ const DEFAULT_MODE: ModeDescriptor = {
 export function createMockOperatorSnapshot(
   overrides?: Partial<OperatorSnapshot>,
 ): OperatorSnapshot {
+  const mode = cloneStructuredValue(overrides?.mode ?? DEFAULT_MODE);
+  const transmitCycles = cloneStructuredValue(overrides?.transmitCycles ?? [0]);
+  const automation = cloneStructuredValue(overrides?.automation ?? null);
+  const getOtherOperators = overrides?.getOtherOperators ?? (() => []);
   return {
-    id: 'operator-0',
-    isTransmitting: false,
-    callsign: 'W1AW',
-    grid: 'FN31',
-    frequency: 1500,
-    mode: DEFAULT_MODE,
-    transmitCycles: [0],
-    automation: null,
-    getOtherOperators: () => [],
-    hasWorkedCallsign: async () => false,
-    isTargetBeingWorkedByOthers: () => false,
-    ...overrides,
+    id: overrides?.id ?? 'operator-0',
+    isTransmitting: overrides?.isTransmitting ?? false,
+    callsign: overrides?.callsign ?? 'W1AW',
+    grid: overrides?.grid ?? 'FN31',
+    frequency: overrides?.frequency ?? 1500,
+    get mode() { return cloneStructuredValue(mode); },
+    get transmitCycles() { return cloneStructuredValue(transmitCycles); },
+    get automation() { return cloneStructuredValue(automation); },
+    getOtherOperators: () => cloneStructuredValue(getOtherOperators()),
+    hasWorkedCallsign: overrides?.hasWorkedCallsign ?? (async () => false),
+    isTargetBeingWorkedByOthers: overrides?.isTargetBeingWorkedByOthers ?? (() => false),
   };
 }
 
@@ -258,8 +279,9 @@ export function createMockOperatorCommandPort(
   return {
     _commands: commands,
     async submit(command) {
-      commands.push(command);
-      await submit?.(command);
+      const snapshot = cloneStructuredValue(command);
+      commands.push(snapshot);
+      await submit?.(cloneStructuredValue(snapshot));
       return { epoch: commands.length, outcome: 'completed' };
     },
   };
@@ -270,26 +292,28 @@ export function createMockOperatorCommandPort(
 export function createMockRadioView(
   overrides?: Partial<RadioView>,
 ): RadioView {
+  const mode: RadioView['mode'] = cloneStructuredValue(overrides?.mode ?? {
+    engineMode: 'digital',
+    mode: 'FT8',
+    radioMode: 'USB',
+    descriptor: DEFAULT_MODE,
+  });
   return {
-    frequency: 14074000,
-    band: '20m',
-    mode: {
-      engineMode: 'digital',
-      mode: 'FT8',
-      radioMode: 'USB',
-      descriptor: DEFAULT_MODE,
-    },
-    isConnected: true,
-    ...overrides,
+    frequency: overrides?.frequency ?? 14074000,
+    band: overrides?.band ?? '20m',
+    get mode() { return cloneStructuredValue(mode); },
+    isConnected: overrides?.isConnected ?? true,
   };
 }
 
 export function createMockRadioCapabilitiesView(): RadioCapabilitiesView {
   const snapshot: CapabilityList = { descriptors: [], capabilities: [] };
   return {
-    getSnapshot: () => snapshot,
-    getState: (id: string) => snapshot.capabilities.find((capability) => capability.id === id) ?? null,
-    refresh: async () => snapshot,
+    getSnapshot: () => cloneStructuredValue(snapshot),
+    getState: (id: string) => cloneStructuredValue(
+      snapshot.capabilities.find((capability) => capability.id === id) ?? null,
+    ),
+    refresh: async () => cloneStructuredValue(snapshot),
   };
 }
 
@@ -310,7 +334,7 @@ export function createMockRadioPowerView(): RadioPowerView {
       canPowerOff: true,
       supportedStates: ['off', 'standby', 'operate'],
     }),
-    getState: () => state,
+    getState: () => cloneStructuredValue(state),
   };
 }
 
@@ -329,10 +353,7 @@ export function createMockRadioPowerCommandPort(): RadioPowerCommandPort {
 export function createMockLogbookAccess(
   overrides?: Partial<LogbookAccess>,
 ): LogbookAccess {
-  const commit = async (record: QSORecord): Promise<QSORecord> => ({
-    ...record,
-    messageHistory: [...record.messageHistory],
-  });
+  const commit = async (record: QSORecord): Promise<QSORecord> => cloneStructuredValue(record);
   const update = async (
     qsoId: string,
     updates: Partial<QSORecord>,
@@ -388,41 +409,43 @@ export function createMockBandAccess(
 
 export function createMockUIBridge(): MockUIBridge {
   const sentData = new Map<string, unknown[]>();
+  const events: MockUIBridge['_events'] = [];
   return {
     _sentData: sentData,
+    _events: events,
     send(panelId: string, data: unknown): void {
       const existing = sentData.get(panelId) ?? [];
-      existing.push(data);
+      existing.push(cloneJsonValue(data));
       sentData.set(panelId, existing);
     },
-    setPanelMeta(_panelId: string, _meta: Parameters<UIBridge['setPanelMeta']>[1]): void {
-      // no-op in mock
+    setPanelMeta(panelId: string, meta: Parameters<UIBridge['setPanelMeta']>[1]): void {
+      events.push({ type: 'panel-meta', id: panelId, data: cloneJsonValue(meta) });
     },
-    setPanelContributions(_groupId: string, _panels: Parameters<UIBridge['setPanelContributions']>[1]): void {
-      // no-op in mock
+    setPanelContributions(groupId: string, panels: Parameters<UIBridge['setPanelContributions']>[1]): void {
+      events.push({ type: 'panel-contributions', id: groupId, data: cloneJsonValue(panels) });
     },
-    clearPanelContributions(_groupId: string): void {
-      // no-op in mock
+    clearPanelContributions(groupId: string): void {
+      events.push({ type: 'panel-contributions', id: groupId, data: [] });
     },
     registerPageHandler(_handler: Parameters<UIBridge['registerPageHandler']>[0]): void {
       // no-op in mock
     },
     pushToSession(
-      _pageSessionId: string,
-      _action: string,
-      _data?: unknown,
+      pageSessionId: string,
+      action: string,
+      data?: unknown,
     ): void {
-      // no-op in mock
+      events.push({ type: 'session-push', id: `${pageSessionId}:${action}`, data: cloneJsonValue(data) });
     },
     listActivePageSessions(_pageId: string): ReturnType<UIBridge['listActivePageSessions']> {
       return [];
     },
     pushToPage(
-      _pageId: string,
-      _action: string,
-      _data?: unknown,
+      pageId: string,
+      action: string,
+      data?: unknown,
     ): void {
-      // no-op in mock
+      events.push({ type: 'page-push', id: `${pageId}:${action}`, data: cloneJsonValue(data) });
     },
   };
 }
@@ -432,8 +455,11 @@ export function createMockUIBridge(): MockUIBridge {
 export function createMockFileStore(): PluginFileStore {
   const storage = new Map<string, Buffer>();
   return {
-    async write(p: string, data: Buffer) { storage.set(p, data); },
-    async read(p: string) { return storage.get(p) ?? null; },
+    async write(p: string, data: Buffer) { storage.set(p, Buffer.from(data)); },
+    async read(p: string) {
+      const data = storage.get(p);
+      return data ? Buffer.from(data) : null;
+    },
     async delete(p: string) { return storage.delete(p); },
     async list(prefix?: string) {
       const keys = Array.from(storage.keys());
@@ -461,7 +487,9 @@ export function createMockNetworkControl(): MockNetworkControl {
           _closed: () => closed,
           async _emitMessage(data, remote) {
             if (!messageHandler) return;
-            const payload = typeof data === 'string' ? Buffer.from(data, 'utf8') : data;
+            const payload = typeof data === 'string'
+              ? Buffer.from(data, 'utf8')
+              : new Uint8Array(data);
             await messageHandler(payload, {
               address: remote?.address ?? '127.0.0.1',
               port: remote?.port ?? 2237,
@@ -476,7 +504,11 @@ export function createMockNetworkControl(): MockNetworkControl {
             binds.push(options);
           },
           async send(data, port, host) {
-            sent.push({ data, port, host });
+            sent.push({
+              data: typeof data === 'string' ? data : new Uint8Array(data),
+              port,
+              host,
+            });
           },
           onMessage(handler) {
             messageHandler = handler;
@@ -543,20 +575,24 @@ export function createMockEventBus(options?: MockEventBusOptions): MockEventBus 
     _subscriptions: subscriptions,
     _published: published,
     publish(topic: string, payload?: unknown) {
-      const message: PluginEventBusMessage = {
+      const message = cloneStructuredValue<PluginEventBusMessage>({
         topic,
-        payload,
+        payload: cloneStructuredValue(payload),
         timestamp: Date.now(),
         publisher: {
           pluginName: ownerName,
           instanceScope: ownerScope,
           operatorId: ownerId,
         },
-      };
-      published.push(message);
+      });
+      published.push(cloneStructuredValue(message));
       const handlers = [...(subscriptions.get(topic) ?? [])];
       for (const handler of handlers) {
-        void Promise.resolve(handler(message));
+        try {
+          void Promise.resolve(handler(cloneStructuredValue(message))).catch(() => undefined);
+        } catch {
+          // Match the production bus: subscriber failures do not reach publishers.
+        }
       }
     },
     subscribe(topic, handler) {
@@ -614,33 +650,58 @@ export function createMockHostSettingsControl(overrides?: Partial<HostSettingsCo
 
   return {
     ft8: {
-      async get() { return ft8; },
-      async update(patch) { Object.assign(ft8, patch); return ft8; },
+      async get() { return cloneStructuredValue(ft8); },
+      async update(patch) {
+        Object.assign(ft8, cloneStructuredValue(patch));
+        return cloneStructuredValue(ft8);
+      },
     },
     decodeWindows: {
-      async get() { return decodeWindows; },
-      async update(settings) { Object.assign(decodeWindows, settings); return decodeWindows; },
+      async get() { return cloneStructuredValue(decodeWindows); },
+      async update(settings) {
+        Object.assign(decodeWindows, cloneStructuredValue(settings));
+        return cloneStructuredValue(decodeWindows);
+      },
     },
     realtime: {
-      async get() { return realtime; },
-      async update(settings) { Object.assign(realtime, settings); return realtime; },
+      async get() { return cloneStructuredValue(realtime); },
+      async update(settings) {
+        Object.assign(realtime, cloneStructuredValue(settings));
+        return cloneStructuredValue(realtime);
+      },
     },
     frequencyPresets: {
-      async get() { return frequencyPresets; },
-      async update(presets) { frequencyPresets.presets = presets; frequencyPresets.isCustomized = true; return frequencyPresets; },
-      async reset() { frequencyPresets.isCustomized = false; return frequencyPresets; },
+      async get() { return cloneStructuredValue(frequencyPresets); },
+      async update(presets) {
+        frequencyPresets.presets = cloneStructuredValue(presets);
+        frequencyPresets.isCustomized = true;
+        return cloneStructuredValue(frequencyPresets);
+      },
+      async reset() {
+        frequencyPresets.isCustomized = false;
+        return cloneStructuredValue(frequencyPresets);
+      },
     },
     station: {
-      async get() { return station; },
-      async update(patch) { Object.assign(station, patch); return station; },
+      async get() { return cloneStructuredValue(station); },
+      async update(patch) {
+        Object.assign(station, cloneStructuredValue(patch));
+        return cloneStructuredValue(station);
+      },
     },
     pskReporter: {
-      async get() { return pskReporter; },
-      async update(patch) { Object.assign(pskReporter, patch); return pskReporter; },
+      async get() { return cloneStructuredValue(pskReporter); },
+      async update(patch) {
+        Object.assign(pskReporter, cloneStructuredValue(patch));
+        return cloneStructuredValue(pskReporter);
+      },
     },
     ntp: {
-      async get() { return ntp; },
-      async update(request) { ntp.servers = request.servers; return ntp; },
+      async get() { return cloneStructuredValue(ntp); },
+      async update(request) {
+        ntp.servers = cloneStructuredValue(request.servers);
+        return cloneStructuredValue(ntp);
+      },
     },
     ...overrides,
   };
@@ -743,11 +804,14 @@ export function createMockContext<
   const hostDependencies = opts.hostDependencies
     ?? (opts.permissions?.includes('host:hamlib') ? createMockHostDependencies() : {});
   const logbookSync = { register() { /* no-op in mock */ } };
+  const configState = cloneJsonValue(opts.config ?? {}) as Record<string, unknown>;
 
   return {
-    config: opts.config ?? {},
+    get config() {
+      return cloneStructuredValue(configState);
+    },
     async updateConfig(patch: Record<string, unknown>) {
-      // no-op in mock
+      Object.assign(configState, cloneJsonValue(patch));
     },
     store: { global: globalStore, operator: operatorStore },
     log,

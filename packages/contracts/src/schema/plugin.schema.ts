@@ -115,6 +115,11 @@ export const PluginSettingOptionSchema = z.object({
  */
 export type PluginSettingOption = z.infer<typeof PluginSettingOptionSchema>;
 
+/**
+ * Field descriptor used for each item in an `object[]` or `keyedObjectArrays`
+ * setting editor. `key` becomes the object property; `type` controls the Host
+ * input; `required` and `default` are applied per item.
+ */
 export const PluginObjectArrayFieldSchema = z.object({
   key: z.string(),
   type: z.enum(['string', 'number', 'boolean']).optional().default('string'),
@@ -126,6 +131,10 @@ export const PluginObjectArrayFieldSchema = z.object({
 });
 export type PluginObjectArrayField = z.infer<typeof PluginObjectArrayFieldSchema>;
 
+/**
+ * Fixed key exposed by keyed setting editors. `key` is persisted in the value;
+ * `label` and `description` are literal text or plugin locale keys.
+ */
 export const PluginKeyedStringArrayKeySchema = z.object({
   key: z.string(),
   label: z.string(),
@@ -133,10 +142,18 @@ export const PluginKeyedStringArrayKeySchema = z.object({
 });
 export type PluginKeyedStringArrayKey = z.infer<typeof PluginKeyedStringArrayKeySchema>;
 
+/**
+ * Declarative condition evaluated against values in the same settings form.
+ * A leaf compares one `setting` with `equals` or `notEquals`; `allOf` requires
+ * every nested condition and `anyOf` requires at least one. Nested groups may
+ * be combined recursively.
+ */
 export interface PluginSettingCondition {
   /** Single setting key to compare. Preserves the original condition shape. */
   setting?: string;
+  /** Match when the referenced value is strictly equal to this value. */
   equals?: unknown;
+  /** Match when the referenced value is not strictly equal to this value. */
   notEquals?: unknown;
   /** All nested conditions must match. */
   allOf?: PluginSettingCondition[];
@@ -152,6 +169,7 @@ export const PluginSettingConditionSchema: z.ZodType<PluginSettingCondition> = z
   anyOf: z.array(PluginSettingConditionSchema).optional(),
 }));
 
+/** Description override selected when its condition matches. */
 export const PluginSettingConditionalDescriptionSchema = z.object({
   when: PluginSettingConditionSchema,
   description: z.string(),
@@ -178,6 +196,17 @@ export type PluginSettingScope = z.infer<typeof PluginSettingScopeSchema>;
  *
  * The host uses this schema to generate configuration forms, validate updates
  * and resolve default values before injecting them into `ctx.config`.
+ *
+ * Collection defaults must match the selected renderer:
+ * - `string[]` -> `string[]`
+ * - `object[]` -> `Array<Record<string, unknown>>` described by `itemFields`
+ * - `keyedStringArrays` -> `Record<string, string[]>`
+ * - `keyedObjectArrays` -> `Record<string, Array<Record<string, unknown>>>`
+ * - `keyedObjects` -> `Record<string, Record<string, unknown>>`
+ *
+ * Keyed editors use `keys` for their fixed outer keys; object-based editors use
+ * `itemFields` for the nested shape. `info` is display-only and cannot be used
+ * by `quickSettings`.
  */
 export const PluginSettingDescriptorSchema = z.object({
   type: PluginSettingTypeSchema,
@@ -377,6 +406,10 @@ export const PluginPanelDescriptorSchema = z.object({
  */
 export type PluginPanelDescriptor = z.infer<typeof PluginPanelDescriptorSchema>;
 
+/**
+ * Plugin instance that owns a runtime panel contribution: the single global
+ * instance or one explicitly identified operator instance.
+ */
 export const PluginUIPanelContributionTargetSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('global') }),
   z.object({ kind: z.literal('operator'), operatorId: z.string() }),

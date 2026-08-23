@@ -40,16 +40,11 @@ export const CallRequestSchema = z.object({
 
 // ========== 传输请求类型 ==========
 
-/**
- * 传输请求（已在 websocket.schema.ts 中定义）
- * TransmitRequestSchema
- */
+// TransmitRequestSchema is declared in websocket.schema.ts.
 
 // ========== 时隙映射类型 ==========
 
-/**
- * 操作员时隙配置
- */
+/** Transmit-message templates for the six logical slots of one operator. */
 export const OperatorSlotsSchema = z.object({
   TX1: z.string().optional(),
   TX2: z.string().optional(),

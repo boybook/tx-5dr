@@ -19,11 +19,17 @@ export interface ScoredCandidate extends ParsedFT8Message {
   score: number;
 }
 
+/** Structured explanation emitted when an active QSO lifecycle fails. */
 export interface QSOFailureInfo {
+  /** Callsign of the station being worked when the failure occurred. */
   targetCallsign: string;
+  /** Human-readable failure summary suitable for diagnostics. */
   reason: string;
+  /** Optional protocol/runtime stage identifier, such as `TX2`. */
   stage?: string;
+  /** Number of transmissions that received no response, when applicable. */
   unansweredTransmissions?: number;
+  /** Whether the target replied at least once before the failure. */
   hadTargetReply?: boolean;
 }
 
@@ -51,11 +57,15 @@ export interface StrategyDecision {
     graceSlots?: number;
     excludeCallsigns?: string[];
   };
+  /** Optional structured reason for a strategy-requested QSO failure stop. */
   qsoFailure?: QSOFailureInfo;
 }
 
 /**
  * Metadata describing why a strategy decision is being evaluated.
+ *
+ * @deprecated API v2 strategy runtimes receive `StrategyDecisionMetaV2` from
+ * `runtime.ts`; this legacy shape is retained for source compatibility only.
  */
 export interface StrategyDecisionMeta {
   /**
@@ -85,9 +95,9 @@ export interface LastMessageInfo {
  * Declarative automatic-call request proposed by a utility plugin.
  *
  * Utility plugins should prefer returning this shape from
- * {@link PluginHooks.onAutoCallCandidate} instead of directly invoking
- * `ctx.operator.call(...)` inside broadcast hooks. This lets the host arbitrate
- * between multiple simultaneous auto-call plugins in a deterministic way.
+ * {@link PluginHooks.onAutoCallCandidate} instead of directly submitting a call
+ * command from a broadcast hook. This lets the host arbitrate between multiple
+ * simultaneous auto-call plugins in a deterministic way.
  */
 export interface AutoCallProposal {
   /** Target callsign that should be called next. */
@@ -142,10 +152,15 @@ export interface AutoCallExecutionPlan {
  * still receiving the host-parsed messages used by normal decision hooks.
  */
 export interface SlotActivityEvent {
+  /** Timing and identity of the slot represented by this event. */
   slotInfo: SlotInfo;
+  /** Complete decoder slot pack, or `null` for reset/no-pack events. */
   slotPack: SlotPack | null;
+  /** Original decoder frames in their received order. */
   frames: FrameMessage[];
+  /** Host-parsed messages derived from the frames. */
   messages: ParsedFT8Message[];
+  /** Whether the data is live, replayed, or clearing prior slot state. */
   source: 'live' | 'replay' | 'reset';
 }
 
@@ -163,7 +178,13 @@ export type FrequencyChangeState = FrequencyState;
  * - broadcast hooks observe lifecycle events and side effects.
  *
  * Hooks should be quick and defensive. A misbehaving plugin can delay the whole
- * decode pipeline, so expensive work should be throttled, cached or deferred.
+ * decode pipeline, so expensive work should be throttled, cached, or explicitly
+ * awaited with cancellation and error handling rather than detached in the
+ * background.
+ *
+ * DTO arguments are detached snapshots and may be inspected or transformed
+ * without mutating Host state. `ctx` properties that perform Host operations are
+ * live capabilities and may only be invoked before the current Hook settles.
  */
 export interface PluginHooks<Permissions extends readonly PluginPermission[] = readonly []> {
   /**
@@ -196,9 +217,8 @@ export interface PluginHooks<Permissions extends readonly PluginPermission[] = r
   /**
    * Filters candidate target messages before the scoring phase.
    *
-   * The returned array feeds into the next plugin in the utility pipeline. As a
-   * safety mechanism, returning an empty array when the input was non-empty is
-   * treated by the host as an accidental full drop and may be ignored.
+   * The returned array feeds into the next plugin in the utility pipeline.
+   * Returning an empty array intentionally removes every remaining candidate.
    */
   onFilterCandidates?(
     candidates: ParsedFT8Message[],
@@ -244,7 +264,11 @@ export interface PluginHooks<Permissions extends readonly PluginPermission[] = r
   onFrequencyChange?(state: FrequencyChangeState, ctx: PluginContextFor<Permissions>): void | Promise<void>;
 
   /**
-   * Broadcast when the host locks onto a target and a QSO officially starts.
+   * Reserved QSO-start notification.
+   *
+   * @deprecated The Host does not currently dispatch this hook. Do not use it
+   * for state transitions; observe decoded/slot activity or the active strategy
+   * snapshot instead until an explicit QSO-start event is implemented.
    */
   onQSOStart?(info: { targetCallsign: string; grid?: string }, ctx: PluginContextFor<Permissions>): void | Promise<void>;
 
@@ -272,8 +296,8 @@ export interface PluginHooks<Permissions extends readonly PluginPermission[] = r
   /**
    * Broadcast after one or more persisted plugin settings have changed.
    *
-   * The `changes` object contains only the updated keys and their new resolved
-   * values.
+   * The first argument is the Host's merged persisted settings object for the
+   * affected scope, not only the keys changed by the latest update.
    */
   onConfigChange?(changes: Record<string, unknown>, ctx: PluginContextFor<Permissions>): void | Promise<void>;
 }

@@ -181,6 +181,73 @@ describe('PluginManager runtime logs', () => {
     await pluginManager.shutdown();
   });
 
+  it('stores detached JSON-safe plugin log data without retaining capabilities', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-runtime-log-data-'));
+    tempDirs.push(dataDir);
+
+    await writeUserPlugin(dataDir, 'log-data-plugin', `
+      export default {
+        name: 'log-data-plugin',
+        version: '1.0.0',
+        type: 'utility',
+        instanceScope: 'global',
+        onLoad(ctx) {
+          const cyclic = { value: 1 };
+          cyclic.self = cyclic;
+          ctx.log.info('capability data', { operator: ctx.operator });
+          ctx.log.info('cyclic data', cyclic);
+          ctx.log.error('error data', new Error('expected failure'));
+        },
+      };
+    `);
+
+    const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
+    const operator = createOperator(eventEmitter);
+    const pluginManager = createPluginManager(dataDir, eventEmitter, operator);
+    pluginManager.loadConfig({
+      configs: {
+        'log-data-plugin': { enabled: true, settings: {} },
+      },
+      operatorStrategies: {
+        [operator.config.id]: 'standard-qso',
+      },
+      operatorSettings: {},
+    });
+
+    await pluginManager.start();
+
+    const history = pluginManager.getRuntimeLogHistory();
+    const pluginEntries = history.filter((entry) => (
+      isPluginLogEntry(entry) && entry.pluginName === 'log-data-plugin'
+    )) as PluginLogEntry[];
+    expect(() => JSON.stringify(pluginEntries)).not.toThrow();
+    expect(pluginEntries.find((entry) => entry.message === 'capability data')?.data).toEqual({
+      code: 'PLUGIN_DATA_NOT_SERIALIZABLE',
+      message: 'Plugin log data was not JSON-serializable',
+    });
+    expect(pluginEntries.find((entry) => entry.message === 'cyclic data')?.data).toEqual({
+      code: 'PLUGIN_DATA_NOT_SERIALIZABLE',
+      message: 'Plugin log data was not JSON-serializable',
+    });
+    expect(pluginEntries.find((entry) => entry.message === 'error data')?.data).toMatchObject({
+      name: 'Error',
+      message: 'expected failure',
+    });
+
+    const errorData = pluginEntries.find((entry) => entry.message === 'error data')?.data as Record<string, unknown>;
+    errorData.message = 'mutated by reader';
+    const freshError = pluginManager.getRuntimeLogHistory().find((entry) => (
+      isPluginLogEntry(entry)
+      && entry.pluginName === 'log-data-plugin'
+      && entry.message === 'error data'
+    ));
+    expect((freshError as PluginLogEntry | undefined)?.data).toMatchObject({
+      message: 'expected failure',
+    });
+
+    await pluginManager.shutdown();
+  });
+
   it('updates auto-call enabled operator ids when operator settings change', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-runtime-log-'));
     tempDirs.push(dataDir);

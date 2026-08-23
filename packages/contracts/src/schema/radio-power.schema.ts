@@ -37,7 +37,9 @@ export const RadioPowerStageSchema = z.enum([
 export type RadioPowerStage = z.infer<typeof RadioPowerStageSchema>;
 
 /**
- * WS event payload: server → client.
+ * Last known power transition state exposed through WebSocket events and
+ * `ctx.radioPower.getState()`. `state` is the controller's high-level state;
+ * `stage` is finer progress; errors use a localized key plus diagnostic detail.
  */
 export const RadioPowerStateEventSchema = z.object({
   profileId: z.string().optional(),
@@ -51,12 +53,17 @@ export const RadioPowerStateEventSchema = z.object({
 export type RadioPowerStateEvent = z.infer<typeof RadioPowerStateEventSchema>;
 
 /**
- * REST request body: POST /api/radio/power
+ * Power targets accepted by Host commands. `on`/`off` control physical power;
+ * `standby`/`operate` switch a responding radio between controller states.
  */
-/** Allowed physical radio target states for a power request. */
 export const RadioPowerTargetSchema = z.enum(['on', 'off', 'standby', 'operate']);
 export type RadioPowerTarget = z.infer<typeof RadioPowerTargetSchema>;
 
+/**
+ * Request to transition one radio profile to a physical/controller power state.
+ * `profileId` selects the profile, `state` is the requested target, and
+ * `autoEngine` controls whether TX-5DR starts after a successful power-on.
+ */
 export const RadioPowerRequestSchema = z.object({
   profileId: z.string().min(1),
   /** Physical radio power target. This is not the TX-5DR software engine state. */
@@ -66,9 +73,7 @@ export const RadioPowerRequestSchema = z.object({
 });
 export type RadioPowerRequest = z.infer<typeof RadioPowerRequestSchema>;
 
-/**
- * REST response: POST /api/radio/power
- */
+/** Result returned by the REST endpoint and `ctx.radioPowerCommands.submit()`. */
 export const RadioPowerResponseSchema = z.object({
   success: z.boolean(),
   target: RadioPowerTargetSchema,
@@ -77,8 +82,10 @@ export const RadioPowerResponseSchema = z.object({
 export type RadioPowerResponse = z.infer<typeof RadioPowerResponseSchema>;
 
 /**
- * REST response: GET /api/radio/power/support?profileId=xxx
- * The server resolves mfgName/modelName internally via HamLib.getSupportedRigs().
+ * Power operations supported by one radio profile, returned by REST and
+ * `ctx.radioPower.getSupport()`. `reason` explains why wake is unavailable;
+ * `supportedStates` lists connected-state transitions the Host may accept.
+ * The Host resolves manufacturer/model names through Hamlib.
  */
 export const RadioPowerSupportInfoSchema = z.object({
   profileId: z.string(),

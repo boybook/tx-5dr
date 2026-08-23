@@ -26,6 +26,7 @@ import type { AutoCallProposalResult } from './PluginHookDispatcher.js';
 import { evaluateAutomaticTargetEligibility } from './AutoTargetEligibility.js';
 import type { DecisionOrchestratorDeps, OperatorDecisionState } from './types.js';
 import { createLogger } from '../utils/logger.js';
+import { snapshotPluginData } from './plugin-data-boundary.js';
 import { FT8MessageParser, CycleUtils, isUndecodedCallsignPlaceholder } from '@tx5dr/core';
 import type { OperatorCommandToken } from '../transmission/OperatorIntentCoordinator.js';
 
@@ -120,27 +121,31 @@ export class DecisionOrchestrator {
       void this.deps.dispatcher.dispatchBroadcast(
         operatorId,
         'onSlotActivity',
-        (hook, ctx) => hook({
+        (hook, ctx) => hook(snapshotPluginData({
           slotInfo,
           slotPack,
           frames: slotPack?.frames ?? [],
           messages: parsedMessages,
           source: 'live',
-        }, ctx),
+        }, 'structured'), ctx),
         (instance) => this.deps.getCtxForInstance(instance),
       );
 
       void this.deps.dispatcher.dispatchBroadcast(
         operatorId,
         'onSlotStart',
-        (hook, ctx) => hook(slotInfo, parsedMessages, ctx),
+        (hook, ctx) => hook(
+          snapshotPluginData(slotInfo, 'structured'),
+          snapshotPluginData(parsedMessages, 'structured'),
+          ctx,
+        ),
         (instance) => this.deps.getCtxForInstance(instance),
       );
 
       void this.deps.dispatcher.dispatchBroadcast(
         operatorId,
         'onDecode',
-        (hook, ctx) => hook(parsedMessages, ctx),
+        (hook, ctx) => hook(snapshotPluginData(parsedMessages, 'structured'), ctx),
         (instance) => this.deps.getCtxForInstance(instance),
       );
 
@@ -739,7 +744,7 @@ export class DecisionOrchestrator {
     const checkpoint = this.deps.invokeStrategyRuntimeSync(
       operatorId,
       'checkpoint:decision',
-      (runtime) => structuredClone(runtime.checkpoint()),
+      (runtime) => runtime.checkpoint(),
     );
     if (checkpoint === undefined) return null;
     const source: StrategyDecisionSource = meta.isReDecision ? 'late-decode' : 'slot-auto';
@@ -754,7 +759,7 @@ export class DecisionOrchestrator {
         const result = await this.deps.invokeStrategyRuntime(
           operatorId,
           `decide:${source}`,
-          (runtime) => runtime.decide(messages, {
+          (runtime) => runtime.decide(snapshotPluginData(messages, 'structured'), {
             epoch: token.epoch,
             source,
             isReDecision: meta.isReDecision,
@@ -767,7 +772,9 @@ export class DecisionOrchestrator {
           this.deps.invokeStrategyRuntimeSync(
             operatorId,
             'restore:superseded-decision',
-            (runtime) => runtime.restore(checkpoint),
+            (runtime) => {
+              runtime.restore(snapshotPluginData(checkpoint, 'structured'));
+            },
           );
           return null;
         }
@@ -778,7 +785,9 @@ export class DecisionOrchestrator {
           this.deps.invokeStrategyRuntimeSync(
             operatorId,
             'restore:target-reservation-conflict',
-            (runtime) => runtime.restore(checkpoint),
+            (runtime) => {
+              runtime.restore(snapshotPluginData(checkpoint, 'structured'));
+            },
           );
           if (!nextTarget || rejectedTargets.has(nextTarget)) {
             logger.warn('Strategy repeatedly selected a target reserved by another operator', {
@@ -824,7 +833,9 @@ export class DecisionOrchestrator {
         this.deps.invokeStrategyRuntimeSync(
           operatorId,
           'restore:failed-decision',
-          (runtime) => runtime.restore(checkpoint),
+          (runtime) => {
+            runtime.restore(snapshotPluginData(checkpoint, 'structured'));
+          },
         );
         if (signal.aborted || (error instanceof Error && error.name === 'AbortError')) {
           logger.debug('Discarded aborted strategy decision', { operatorId, epoch: token.epoch, source });
@@ -903,7 +914,9 @@ export class DecisionOrchestrator {
       this.deps.invokeStrategyRuntimeSync(
         operatorId,
         `settle-qso:${status}`,
-        (runtime) => runtime.settleQSOCompletion?.({ lifecycleEpoch, recordId, status }),
+        (runtime) => {
+          runtime.settleQSOCompletion?.({ lifecycleEpoch, recordId, status });
+        },
       );
       const afterQueueVersion = this.deps.invokeStrategyRuntimeSync(
         operatorId,

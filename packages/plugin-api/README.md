@@ -93,6 +93,12 @@ This is a Host API contract, not a sandbox for hostile Node.js code. Third-party
 plugins currently execute in the server process; process isolation is a
 separate security boundary.
 
+## Data Ownership and Callback Lifetime
+
+Configuration, hook arguments, query results and messages cross the Host boundary by value. Plugins may modify their local copies, but changes are not persisted until they call an explicit API such as `ctx.updateConfig()`, `store.set()` or a command port. UI/config/KV channels accept JSON-compatible values; hooks, strategy results and EventBus payloads accept structured-clone-compatible values. Functions, cycles, Host handles and other unsupported values are rejected with `PLUGIN_DATA_NOT_SERIALIZABLE`.
+
+Host capabilities such as `ctx.ui`, `ctx.logbook`, radio command ports, network sockets and native `Response` objects are live handles. Use them only before the current Host callback settles. A handle retained past timeout, reload or unload rejects with `PLUGIN_INVOCATION_EXPIRED`; use Host timers and callbacks for later work instead of detached continuations.
+
 ## Operator Transmit Control
 
 Utility plugins that need to submit operator commands must declare
@@ -197,7 +203,7 @@ The whitelist intentionally excludes authentication tokens, operator CRUD, hardw
 
 ## Plugin Event Bus
 
-Server-side plugins can exchange in-process messages through `ctx.eventBus`, a topic-based pub/sub bus scoped to the host process. This enables loose coupling between plugins without shared state.
+Server-side plugins can exchange in-process messages through `ctx.eventBus`, a topic-based pub/sub bus scoped to the host process. Payloads use structured-clone semantics and each subscriber receives an independent value, enabling loose coupling without shared mutable state. Functions, promises, weak collections, and host capability objects cannot be published.
 
 ### Permission
 
@@ -221,7 +227,7 @@ Every message received by a subscriber is a `PluginEventBusMessage`:
 ```ts
 interface PluginEventBusMessage {
   topic: string;           // The topic this message was published to
-  payload: unknown;        // Arbitrary data set by the publisher
+  payload: unknown;        // Independent structured-clone value
   timestamp: number;       // Epoch ms when the host dispatched the message
   publisher: {
     pluginName: string;    // Publishing plugin's name

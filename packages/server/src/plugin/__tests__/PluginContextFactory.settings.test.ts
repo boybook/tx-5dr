@@ -10,8 +10,9 @@ import {
   type PluginPermission,
   type RealtimeSettingsResponseData,
 } from '@tx5dr/contracts';
-import type { LoadedPlugin, PluginManagerDeps } from '../types.js';
+import type { LoadedPlugin, PluginInstance, PluginManagerDeps } from '../types.js';
 import { PluginContextFactory } from '../PluginContextFactory.js';
+import { PluginInvocationGuard } from '../PluginInvocationGuard.js';
 import { ConfigManager } from '../../config/config-manager.js';
 
 const tempDirs: string[] = [];
@@ -115,6 +116,31 @@ async function createContext(plugin: LoadedPlugin, deps: PluginManagerDeps = cre
 }
 
 describe('PluginContextFactory host settings access', () => {
+  it('keeps nested settings capabilities usable through the guard', async () => {
+    mockConfigManager();
+    const plugin = createPlugin(['settings:ft8']);
+    const rawCtx = await createContext(plugin);
+    const instance: PluginInstance = {
+      plugin,
+      scope: { kind: 'global' },
+      ctx: rawCtx,
+      rawCtx,
+      generation: 1,
+      lifecycle: 'active',
+      lifecycleTail: Promise.resolve(),
+      desiredLifecycle: 'active',
+      lifecycleRevision: 1,
+      enabled: true,
+      errorCounts: new Map(),
+      autoDisabled: false,
+    };
+    const guard = new PluginInvocationGuard();
+    const ctx = guard.wrapContext(rawCtx, instance);
+
+    await expect(guard.invoke(instance, 'test:settings', () => ctx.settings!.ft8!.get()))
+      .resolves.toMatchObject({ myCallsign: 'BG4IAJ' });
+  });
+
   it('does not expose settings when plugin permissions are missing', async () => {
     mockConfigManager();
     const ctx = await createContext(createPlugin());

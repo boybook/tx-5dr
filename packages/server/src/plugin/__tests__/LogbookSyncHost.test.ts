@@ -195,4 +195,62 @@ describe('LogbookSyncHost', () => {
     expect(provider.upload).toHaveBeenCalledTimes(1);
     expect(host.getProviderInfo('wavelog')).toBeNull();
   });
+
+  it('reads optional preflight handlers inside the invocation and detaches options', async () => {
+    const host = new LogbookSyncHost();
+    const gate = deferred<void>();
+    let insideInvocation = false;
+    let observedSince: number | undefined;
+    const provider = createProvider();
+    Object.defineProperty(provider, 'getUploadPreflight', {
+      configurable: true,
+      get() {
+        expect(insideInvocation).toBe(true);
+        return async (_callsign: string, options?: { since?: number }) => {
+          await gate.promise;
+          observedSince = options?.since;
+          return { ready: true, pendingCount: 0, uploadableCount: 0, blockedCount: 0 };
+        };
+      },
+    });
+    const owner = createOwner();
+    owner.invoke = async (_operation, callback) => {
+      insideInvocation = true;
+      try {
+        return await callback();
+      } finally {
+        insideInvocation = false;
+      }
+    };
+    host.register('wavelog-sync', provider, owner);
+    const options = { since: 1, includeAlreadyUploaded: false };
+
+    const result = host.getUploadPreflight('wavelog', 'BG5DRB', options);
+    options.since = 2;
+    gate.resolve();
+
+    await expect(result).resolves.toMatchObject({ ready: true });
+    expect(observedSince).toBe(1);
+  });
+
+  it('detaches download range options before provider use', async () => {
+    const host = new LogbookSyncHost();
+    const gate = deferred<void>();
+    let observedSince: number | undefined;
+    const provider = createProvider();
+    provider.download = vi.fn(async (_callsign, options) => {
+      await gate.promise;
+      observedSince = options?.since;
+      return { downloaded: 0, matched: 0, updated: 0 };
+    });
+    host.register('wavelog-sync', provider, createOwner());
+    const options = { since: 1 };
+
+    const result = host.download('wavelog', 'BG5DRB', options);
+    options.since = 2;
+    gate.resolve();
+
+    await expect(result).resolves.toMatchObject({ downloaded: 0 });
+    expect(observedSince).toBe(1);
+  });
 });

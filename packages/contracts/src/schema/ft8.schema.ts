@@ -276,6 +276,9 @@ export const FT8MessageSchema = z.discriminatedUnion('type', [
  * This is the main plugin-facing FT8 payload. It combines RF metrics from the
  * decoder (`snr`, `dt`, `df`), the original unparsed text (`rawMessage`), the
  * normalized semantic form (`message`) and optional logbook enrichment.
+ * `snr` is dB, `dt` is seconds from the expected decode timing, `df` is audio
+ * offset in hertz, and `timestamp` is Unix epoch milliseconds. `slotId` ties
+ * the decode back to its `SlotInfo`/`SlotPack`.
  */
 export const ParsedFT8MessageSchema = z.object({
   snr: z.number(),

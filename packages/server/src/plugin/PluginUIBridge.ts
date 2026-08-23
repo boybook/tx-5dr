@@ -9,6 +9,7 @@ import type { EventEmitter } from 'eventemitter3';
 import type { DigitalRadioEngineEvents, PluginPanelDescriptor, PluginPanelMetaPayload } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
 import type { PluginPageSession } from './PluginPageSessionStore.js';
+import { snapshotPluginData } from './plugin-data-boundary.js';
 
 const logger = createLogger('PluginUIBridge');
 
@@ -46,22 +47,24 @@ export class PluginUIBridge implements UIBridge {
   }
 
   send(panelId: string, data: unknown): void {
+    const snapshot = snapshotPluginData(data, 'json');
     logger.debug(`Plugin UI data: plugin=${this.pluginName}, panel=${panelId}`);
     this.eventEmitter.emit('pluginData', {
       pluginName: this.pluginName,
       operatorId: this.operatorId,
       panelId,
-      data,
+      data: snapshot,
     });
   }
 
   setPanelMeta(panelId: string, meta: import('@tx5dr/plugin-api').PanelMeta): void {
-    logger.debug(`Plugin UI meta: plugin=${this.pluginName}, panel=${panelId}`, meta);
+    const snapshot = snapshotPluginData(meta, 'json');
+    logger.debug(`Plugin UI meta: plugin=${this.pluginName}, panel=${panelId}`, snapshot);
     const payload: PluginPanelMetaPayload = {
       pluginName: this.pluginName,
       operatorId: this.operatorId,
       panelId,
-      meta,
+      meta: snapshot,
     };
     this.onPanelMeta?.(payload);
     this.eventEmitter.emit('pluginPanelMeta', payload);
@@ -72,7 +75,8 @@ export class PluginUIBridge implements UIBridge {
     if (!this.onPanelContributions) {
       throw new Error('panel_contributions_not_supported');
     }
-    this.onPanelContributions(this.pluginName, this.instanceTarget, groupId, panels);
+    const snapshot = snapshotPluginData(panels, 'json');
+    this.onPanelContributions(this.pluginName, this.instanceTarget, groupId, snapshot);
   }
 
   clearPanelContributions(groupId: string): void {
@@ -118,12 +122,13 @@ export class PluginUIBridge implements UIBridge {
     action: string,
     data?: unknown,
   ): void {
+    const snapshot = snapshotPluginData(data, 'json');
     this.eventEmitter.emit('pluginPagePush', {
       pluginName: this.pluginName,
       pageId: session.pageId,
       pageSessionId: session.sessionId,
       action,
-      data,
+      data: snapshot,
     });
   }
 

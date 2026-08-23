@@ -16,9 +16,7 @@ export const PSKReporterStatsSchema = z.object({
   consecutiveFailures: z.number().default(0),
 });
 
-/**
- * PSKReporter 配置 Schema
- */
+/** PSK Reporter publishing identity, antenna metadata, interval and counters. */
 export const PSKReporterConfigSchema = z.object({
   /** 是否启用 PSKReporter 上报 */
   enabled: z.boolean().default(false),

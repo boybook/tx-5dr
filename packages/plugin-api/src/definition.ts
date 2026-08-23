@@ -36,32 +36,43 @@ import type { StrategyRuntime } from './runtime.js';
  *
  * @example
  * ```js
- * /** @type {import('@tx5dr/plugin-api').PluginDefinition} *\/
- * export default {
+ * import { definePlugin } from '@tx5dr/plugin-api';
+ *
+ * export default definePlugin({
+ *   apiVersion: 2,
  *   name: 'my-plugin',
  *   version: '1.0.0',
  *   type: 'utility',
  *   description: 'Annotates interesting decoded stations.',
+ *   permissions: [],
  *   hooks: {
  *     onDecode(messages, ctx) {
  *       ctx.log.info('decoded', { count: messages.length });
  *     },
  *   },
- * };
+ * });
  * ```
  *
  * @example
  * ```ts
- * import type { PluginDefinition } from '@tx5dr/plugin-api';
+ * import { definePlugin } from '@tx5dr/plugin-api';
  *
- * const plugin: PluginDefinition = {
+ * export default definePlugin({
+ *   apiVersion: 2,
  *   name: 'my-strategy',
  *   version: '1.0.0',
  *   type: 'strategy',
- *   createStrategyRuntime(ctx) {
+ *   createStrategyRuntime() {
  *     return {
+ *       checkpoint() {
+ *         return {};
+ *       },
+ *       restore() {},
  *       decide() {
- *         return { stop: false };
+ *         return {
+ *           transmission: null,
+ *           snapshot: this.getSnapshot(),
+ *         };
  *       },
  *       getTransmitText() {
  *         return null;
@@ -76,15 +87,19 @@ import type { StrategyRuntime } from './runtime.js';
  *       reset() {},
  *     };
  *   },
- * };
- *
- * export default plugin;
+ * });
  * ```
  */
 export interface PluginDefinition<
   Permissions extends readonly PluginPermission[] = readonly [],
 > {
-  /** Required for strategy and transmit-control plugins. */
+  /**
+   * Public API contract version. All new plugins should use `2`.
+   *
+   * API v2 is required for strategy plugins and for utility plugins that request
+   * any mutation capability: `operator:transmit-control`, `radio:control`,
+   * `radio:tuner-control`, `radio:power`, `logbook:write` or `logbook:sync`.
+   */
   apiVersion?: 2;
 
   /**
@@ -114,8 +129,9 @@ export interface PluginDefinition<
    */
   type: PluginType;
 
-  /** Optional, backwards-compatible strategy capability declarations. */
+  /** Optional strategy capabilities advertised to Host UI and routing. */
   strategyFeatures?: {
+    /** Declares the `QueuedStrategyRuntime` assisted-target queue contract. */
     targetQueue?: 1;
   };
 
@@ -124,6 +140,9 @@ export interface PluginDefinition<
    * shared instance for the whole station.
    *
    * Defaults to `operator` when omitted.
+   * Global scope is utility-only. It cannot use operator-scoped settings or
+   * quick settings, and only global-compatible hooks/panels are accepted by the
+   * loader. Use it for station-wide sync, network services and radio policy.
    */
   instanceScope?: PluginInstanceScope;
 
@@ -235,9 +254,9 @@ export interface PluginDefinition<
   /**
    * Runs after the plugin instance has been loaded and the context is ready.
    *
-   * Use this for startup work such as warming caches, scheduling timers or
-   * sending initial panel data. Keep it fast; long-running work should be
-   * deferred or done asynchronously.
+   * Use this for startup work such as warming caches, scheduling Host timers or
+   * sending initial panel data. Await required asynchronous work before returning;
+   * do not detach continuations that retain Host capabilities after the callback.
    */
   onLoad?(ctx: PluginContextFor<Permissions>): void | Promise<void>;
 

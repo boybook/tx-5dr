@@ -63,6 +63,7 @@ import { createLogger } from '../utils/logger.js';
 import { resolvePluginPaths } from './paths.js';
 import path from 'path';
 import { OperatorIntentCoordinator } from '../transmission/OperatorIntentCoordinator.js';
+import { markPluginCapabilityTree, snapshotPluginData } from './plugin-data-boundary.js';
 
 const logger = createLogger('PluginManager');
 const GLOBAL_PLUGIN_SCOPE_ID = '__global__';
@@ -111,7 +112,7 @@ export class PluginManager {
   private readonly pluginEventBusHost: PluginEventBusHost;
   private pluginRuntimeLogHistory: PluginLogHistoryEntry[] = [];
   private readonly recordPluginLogHistory = (entry: PluginLogEntry) => {
-    this.appendPluginLogHistory({ ...entry });
+    this.appendPluginLogHistory(snapshotPluginData(entry, 'json'));
   };
 
   private systemState: PluginSystemRuntimeState = {
@@ -175,7 +176,12 @@ export class PluginManager {
         isCurrent: () => this.globalInstances.get(pluginName) === instance
           && instance.desiredLifecycle === 'active'
           && (instance.lifecycle === 'starting' || instance.lifecycle === 'active'),
-        invoke: (operation, callback) => this.invocationGuard.invoke(instance, operation, callback),
+        invoke: (operation, callback) => this.invocationGuard.invokeData(
+          instance,
+          operation,
+          'json',
+          callback,
+        ),
         invokeSync: (operation, callback) => this.invocationGuard.invokeSync(instance, operation, callback),
       });
     };
@@ -506,7 +512,10 @@ export class PluginManager {
             void this.dispatcher.dispatchInstance(
               globalInstance,
               'onConfigChange',
-              (hook, guardedCtx) => hook(mergedSettings, guardedCtx),
+              (hook, guardedCtx) => hook(
+                snapshotPluginData(mergedSettings, 'structured'),
+                guardedCtx,
+              ),
             );
           }
           this.bumpGeneration();
@@ -636,16 +645,29 @@ export class PluginManager {
     const checkpoint = this.invokeStrategyRuntimeSync(
       operatorId,
       'checkpoint:queue-observation',
-      (runtime) => structuredClone(runtime.checkpoint()),
+      (runtime) => runtime.checkpoint(),
     );
     const changed = this.invokeStrategyRuntimeSync(operatorId, `observe:${source}`, (runtime) => (
       isQueuedStrategyRuntime(runtime)
-        ? runtime.observeDecodedMessages(messages, { slotInfo, source, signal })
+        ? runtime.observeDecodedMessages(
+          snapshotPluginData(messages, 'structured'),
+          {
+            slotInfo: snapshotPluginData(slotInfo, 'structured'),
+            source,
+            signal,
+          },
+        )
         : false
     )) ?? false;
     if (signal.aborted || !this.intentCoordinator.isCurrent(token)) {
       if (checkpoint !== undefined) {
-        this.invokeStrategyRuntimeSync(operatorId, 'restore:superseded-queue-observation', (runtime) => runtime.restore(checkpoint));
+        this.invokeStrategyRuntimeSync(
+          operatorId,
+          'restore:superseded-queue-observation',
+          (runtime) => {
+            runtime.restore(snapshotPluginData(checkpoint, 'structured'));
+          },
+        );
       }
       return false;
     }
@@ -661,7 +683,7 @@ export class PluginManager {
     return this.submitQueueMutation(
       operatorId,
       'enqueue',
-      (runtime) => runtime.enqueueTarget(request),
+      (runtime) => runtime.enqueueTarget(snapshotPluginData(request, 'structured')),
       async ({ beforeSnapshot, result, token, signal }) => {
         if (options?.startIfIdle !== true
             || beforeSnapshot.rows.length !== 0
@@ -870,7 +892,9 @@ export class PluginManager {
     this.invokeStrategyRuntimeSync(
       operatorId,
       'patchContext',
-      (runtime) => runtime.patchContext(patch),
+      (runtime) => {
+        runtime.patchContext(snapshotPluginData(patch, 'structured'));
+      },
     );
   }
 
@@ -895,7 +919,9 @@ export class PluginManager {
       after: state,
       beforeTargetCallsign: beforeTargetCallsign ?? null,
     });
-    this.invokeStrategyRuntimeSync(operatorId, 'setState', (runtime) => runtime.setState(state));
+    this.invokeStrategyRuntimeSync(operatorId, 'setState', (runtime) => {
+      runtime.setState(state);
+    });
     this.orchestrator.invalidateDecisionMessageSet(operatorId);
     this.eventEmitter.emit('operatorSlotChanged', { operatorId, slot: state });
   }
@@ -914,7 +940,9 @@ export class PluginManager {
     this.invokeStrategyRuntimeSync(
       operatorId,
       'setSlotContent',
-      (runtime) => runtime.setSlotContent({ slot, content }),
+      (runtime) => {
+        runtime.setSlotContent({ slot, content });
+      },
     );
     this.orchestrator.invalidateDecisionMessageSet(operatorId);
     this.eventEmitter.emit('operatorSlotContentChanged', { operatorId, slot, content });
@@ -943,7 +971,11 @@ export class PluginManager {
     void this.dispatcher.dispatchInstance(
       instance,
       'onUserAction',
-      (hook, guardedCtx) => hook(actionId, payload, guardedCtx),
+      (hook, guardedCtx) => hook(
+        actionId,
+        snapshotPluginData(payload, 'structured'),
+        guardedCtx,
+      ),
     );
   }
 
@@ -1106,12 +1138,15 @@ export class PluginManager {
     const checkpoint = this.invokeStrategyRuntimeSync(
       operatorId,
       'checkpoint:request-call',
-      (runtime) => structuredClone(runtime.checkpoint()),
+      (runtime) => runtime.checkpoint(),
     );
     const accepted = this.invokeStrategyRuntimeSync(
       operatorId,
       'requestCall',
-      (runtime) => runtime.requestCall(callsign, lastMessage),
+      (runtime) => runtime.requestCall(
+        callsign,
+        lastMessage ? snapshotPluginData(lastMessage, 'structured') : undefined,
+      ),
     );
     if (accepted === false) {
       logger.warn('Strategy rejected requestCall without starting the operator', { operatorId, callsign });
@@ -1129,7 +1164,9 @@ export class PluginManager {
         this.invokeStrategyRuntimeSync(
           operatorId,
           'restore:request-call-target-conflict',
-          (runtime) => runtime.restore(checkpoint),
+          (runtime) => {
+            runtime.restore(snapshotPluginData(checkpoint, 'structured'));
+          },
         );
       }
       logger.warn('Manual/plugin requestCall target is reserved by another same-station operator', {
@@ -1172,7 +1209,9 @@ export class PluginManager {
     this.invokeStrategyRuntimeSync(
       operatorId,
       'onTransmissionQueued',
-      (runtime) => runtime.onTransmissionQueued?.(transmission),
+      (runtime) => {
+        runtime.onTransmissionQueued?.(transmission);
+      },
     );
   }
 
@@ -1184,7 +1223,7 @@ export class PluginManager {
     await this.dispatcher.dispatchBroadcast(
       operatorId,
       'onQSOComplete',
-      (hook, ctx) => hook(record, ctx),
+      (hook, ctx) => hook(snapshotPluginData(record, 'structured'), ctx),
       (instance) => this.getCtxForInstance(instance),
     );
   }
@@ -1193,7 +1232,7 @@ export class PluginManager {
     await this.dispatcher.dispatchBroadcast(
       operatorId,
       'onQSOFail',
-      (hook, ctx) => hook(info, ctx),
+      (hook, ctx) => hook(snapshotPluginData(info, 'structured'), ctx),
       (instance) => this.getCtxForInstance(instance),
     );
   }
@@ -1305,7 +1344,7 @@ export class PluginManager {
     const startIndex = Math.max(this.pluginRuntimeLogHistory.length - normalizedLimit, 0);
     return this.pluginRuntimeLogHistory
       .slice(startIndex)
-      .map((entry) => ({ ...entry }));
+      .map((entry) => snapshotPluginData(entry, 'json'));
   }
 
   private appendPluginLogHistory(entry: PluginLogHistoryEntry): void {
@@ -1357,7 +1396,7 @@ export class PluginManager {
       void this.dispatcher.dispatchInstance(
         globalInstance,
         'onConfigChange',
-        (hook, guardedCtx) => hook(settings, guardedCtx),
+        (hook, guardedCtx) => hook(snapshotPluginData(settings, 'structured'), guardedCtx),
       );
     }
     // 通知所有操作员实例配置变更（仅 global scope 键）
@@ -1367,7 +1406,7 @@ export class PluginManager {
         void this.dispatcher.dispatchInstance(
           instance,
           'onConfigChange',
-          (hook, guardedCtx) => hook(settings, guardedCtx),
+          (hook, guardedCtx) => hook(snapshotPluginData(settings, 'structured'), guardedCtx),
         );
       }
     }
@@ -1526,13 +1565,13 @@ export class PluginManager {
       throw new Error(`Page session does not belong to ${pluginName}/${pageId}: ${pageSessionId}`);
     }
 
-    const payload = {
+    const payload = snapshotPluginData({
       pluginName,
       pageId,
       pageSessionId,
       action,
       data,
-    };
+    }, 'json');
 
     const queue = this.pageSessionPushQueues.get(pageSessionId) ?? [];
     queue.push(payload);
@@ -1598,13 +1637,14 @@ export class PluginManager {
 
     const bridge = instance.rawCtx.ui as import('./PluginUIBridge.js').PluginUIBridge;
     if (bridge.hasPageHandler()) {
-      return this.invocationGuard.invoke(
+      return this.invocationGuard.invokeData(
         instance,
         'ui:onMessage',
+        'json',
         () => bridge.handlePageInvoke(
           pageId,
           action,
-          data,
+          snapshotPluginData(data, 'json'),
           this.createInvocationScopedPageContext(instance, requestContext),
         ),
       );
@@ -1621,6 +1661,33 @@ export class PluginManager {
     const assertCurrent = () => this.invocationGuard.assertCaptured(instance, invocation);
     const files = requestContext.files;
     const page = requestContext.page;
+    const scopedFiles = markPluginCapabilityTree(Object.freeze({
+      async write(filePath: string, contents: Buffer) {
+        assertCurrent();
+        return files.write(filePath, contents);
+      },
+      async read(filePath: string) {
+        assertCurrent();
+        return files.read(filePath);
+      },
+      async delete(filePath: string) {
+        assertCurrent();
+        return files.delete(filePath);
+      },
+      async list(prefix?: string) {
+        assertCurrent();
+        return files.list(prefix);
+      },
+    }));
+    const scopedPage = markPluginCapabilityTree(Object.freeze({
+      sessionId: page.sessionId,
+      pageId: page.pageId,
+      resource: page.resource ? Object.freeze({ ...page.resource }) : undefined,
+      push(action: string, payload?: unknown) {
+        assertCurrent();
+        page.push(action, payload);
+      },
+    }));
 
     return Object.freeze({
       pageSessionId: requestContext.pageSessionId,
@@ -1633,33 +1700,8 @@ export class PluginManager {
       }),
       resource: requestContext.resource ? Object.freeze({ ...requestContext.resource }) : undefined,
       instanceTarget: Object.freeze({ ...requestContext.instanceTarget }),
-      files: Object.freeze({
-        async write(filePath: string, contents: Buffer) {
-          assertCurrent();
-          return files.write(filePath, contents);
-        },
-        async read(filePath: string) {
-          assertCurrent();
-          return files.read(filePath);
-        },
-        async delete(filePath: string) {
-          assertCurrent();
-          return files.delete(filePath);
-        },
-        async list(prefix?: string) {
-          assertCurrent();
-          return files.list(prefix);
-        },
-      }),
-      page: Object.freeze({
-        sessionId: page.sessionId,
-        pageId: page.pageId,
-        resource: page.resource ? Object.freeze({ ...page.resource }) : undefined,
-        push(action: string, payload?: unknown) {
-          assertCurrent();
-          page.push(action, payload);
-        },
-      }),
+      files: scopedFiles,
+      page: scopedPage,
     });
   }
 
@@ -1681,7 +1723,7 @@ export class PluginManager {
     for (const [instanceName, instance] of this.instances.get(operatorId) ?? []) {
       if (!instance.enabled || this.getOperatorSettingsNamespace(instanceName) !== settingsNamespace) continue;
       void this.dispatcher.dispatchInstance(instance, 'onConfigChange', (hook, guardedCtx) => (
-        hook(mergedSettings, guardedCtx)
+        hook(snapshotPluginData(mergedSettings, 'structured'), guardedCtx)
       ));
     }
     this.bumpGeneration();
@@ -2008,9 +2050,10 @@ export class PluginManager {
   ): Promise<T | undefined> {
     const instance = this.getStrategyInstance(operatorId);
     if (!instance?.runtime) return undefined;
-    return this.invocationGuard.invoke(
+    return this.invocationGuard.invokeData(
       instance,
       operation,
+      'structured',
       () => callback(instance.runtime!),
       { signal: options?.signal, drainOnExternalAbortMs: 1_000 },
     );
@@ -2023,9 +2066,10 @@ export class PluginManager {
   ): T | undefined {
     const instance = this.getStrategyInstance(operatorId);
     if (!instance?.runtime) return undefined;
-    return this.invocationGuard.invokeSync(
+    return this.invocationGuard.invokeSyncData(
       instance,
       operation,
+      'structured',
       () => callback(instance.runtime!),
     );
   }
@@ -2103,7 +2147,9 @@ export class PluginManager {
         continue;
       }
       try {
-        const eligibilityContext = Object.freeze({ config: instance.rawCtx.config });
+        const eligibilityContext = Object.freeze({
+          config: snapshotPluginData(instance.rawCtx.config, 'structured'),
+        });
         if (plugin.definition.isAutoCallEnabled!(eligibilityContext) === true) {
           ids.push(operatorId);
         }
@@ -2306,7 +2352,9 @@ export class PluginManager {
       this.invokeStrategyRuntimeSync(
         operatorId,
         'reset',
-        (runtime) => runtime.reset(reason),
+        (runtime) => {
+          runtime.reset(reason);
+        },
       );
     } catch (err) {
       logger.warn(`Failed to reset strategy runtime: operator=${operatorId}`, err);
@@ -2754,7 +2802,16 @@ export class PluginManager {
           instance,
           'onUnload',
           () => hook(instance.ctx as never),
-          { allowedContextRoots: new Set(['store', 'timers', 'files']) },
+          {
+            allowedContextRoots: new Set([
+              'store',
+              'timers',
+              'files',
+              'operator',
+              'ui',
+              'hostDependencies',
+            ]),
+          },
         );
       } catch (err) {
         this.emitPluginRuntimeLog({
@@ -2822,7 +2879,7 @@ export class PluginManager {
       void Promise.allSettled(this.deps.getOperators().map((operator) => this.dispatcher.dispatchBroadcast(
         operator.config.id,
         'onFrequencyChange',
-        (hook, ctx) => hook(state, ctx),
+        (hook, ctx) => hook(snapshotPluginData(state, 'structured'), ctx),
         (instance) => this.getCtxForInstance(instance),
       )));
     };

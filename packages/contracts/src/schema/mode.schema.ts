@@ -1,8 +1,6 @@
 import { z } from 'zod';
 
-/**
- * 模式描述符 - 定义 FT8/FT4 等模式的时序参数
- */
+/** Timing, decoder and display parameters for a digital mode such as FT8 or FT4. */
 export const ModeDescriptorSchema = z.object({
   /** 模式名称，如 "FT8", "FT4" */
   name: z.string(),
@@ -109,9 +107,7 @@ export const FT4_WINDOW_PRESETS: Record<string, number[]> = {
   lightweight: [0],              // 1 轮：仅末端
 };
 
-/**
- * 解码窗口设置 Schema
- */
+/** Per-mode decode-window presets and optional custom timing windows. */
 export const DecodeWindowSettingsSchema = z.object({
   ft8: z.object({
     preset: z.enum(['maximum', 'balanced', 'lightweight', 'minimum', 'custom']).default('balanced'),

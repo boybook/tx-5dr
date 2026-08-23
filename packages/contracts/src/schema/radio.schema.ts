@@ -11,9 +11,7 @@ export const RepeaterShiftSchema = z.enum(['none', 'minus', 'plus']);
  */
 export const ToneSquelchModeSchema = z.enum(['none', 'ctcss', 'dcs']);
 
-/**
- * 预设频率Schema
- */
+/** Saved dial-frequency preset with band, digital mode and radio modulation. */
 export const PresetFrequencySchema = z.object({
   band: z.string(),
   mode: z.string(), // 协议模式，如 FT8, FT4

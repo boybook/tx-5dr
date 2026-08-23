@@ -46,6 +46,7 @@ import { evaluateAutomaticTargetEligibility } from './AutoTargetEligibility.js';
 import type { PluginEventBusOwner } from './PluginEventBusHost.js';
 import { createLogger } from '../utils/logger.js';
 import type { LoadedPlugin, PluginManagerDeps } from './types.js';
+import { snapshotPluginData } from './plugin-data-boundary.js';
 
 type HostHamlibModule = {
   Rotator: HamlibHostDependency['Rotator'];
@@ -68,6 +69,31 @@ type SavedPluginFrequency = {
   radioMode?: string;
   band?: string;
 } | null | undefined;
+
+function snapshotPluginLogData(data: unknown): unknown {
+  if (data === undefined) return undefined;
+  const errorCause = data instanceof Error
+    ? (data as Error & { cause?: unknown }).cause
+    : undefined;
+  const normalized = data instanceof Error
+    ? {
+        name: data.name,
+        message: data.message,
+        stack: data.stack,
+        cause: errorCause instanceof Error
+          ? { name: errorCause.name, message: errorCause.message, stack: errorCause.stack }
+          : errorCause,
+      }
+    : data;
+  try {
+    return snapshotPluginData(normalized, 'json');
+  } catch {
+    return {
+      code: 'PLUGIN_DATA_NOT_SERIALIZABLE',
+      message: 'Plugin log data was not JSON-serializable',
+    };
+  }
+}
 
 function isValidFrequency(frequency: unknown): frequency is number {
   return typeof frequency === 'number' && Number.isFinite(frequency) && frequency > 0;
@@ -158,13 +184,13 @@ export class PluginContextFactory {
 
     const baseContext: PluginContextBase = {
       get config() {
-        return Object.freeze({ ...getPluginSettings() });
+        return getPluginSettings();
       },
       async updateConfig(patch: Record<string, unknown>) {
         if (!updatePluginSettings) {
           throw new Error('updateConfig is not available for this plugin instance');
         }
-        await updatePluginSettings(patch);
+        await updatePluginSettings(snapshotPluginData(patch, 'json'));
       },
       store: {
         global: globalStorage,
@@ -261,9 +287,12 @@ export class PluginContextFactory {
     return {
       udp: {
         createSocket: (options?: import('@tx5dr/plugin-api').PluginUdpSocketOptions) => {
+          const socketOptions = options
+            ? snapshotPluginData(options, 'structured')
+            : undefined;
           const socket = createSocket({
-            type: (options?.type ?? 'udp4') as SocketType,
-            reuseAddr: options?.reuseAddr ?? false,
+            type: (socketOptions?.type ?? 'udp4') as SocketType,
+            reuseAddr: socketOptions?.reuseAddr ?? false,
           });
           sockets.add(socket);
           let bound = false;
@@ -318,6 +347,9 @@ export class PluginContextFactory {
             async bind(bindOptions?: import('@tx5dr/plugin-api').PluginUdpBindOptions) {
               if (closed) throw new Error('UDP socket is closed');
               if (bound) return;
+              const detachedBindOptions = bindOptions
+                ? snapshotPluginData(bindOptions, 'structured')
+                : undefined;
               await new Promise<void>((resolve, reject) => {
                 const onError = (error: Error) => {
                   socket.off('listening', onListening);
@@ -326,17 +358,17 @@ export class PluginContextFactory {
                 const onListening = () => {
                   socket.off('error', onError);
                   bound = true;
-                  if (typeof options?.broadcast === 'boolean') {
-                    socket.setBroadcast(options.broadcast);
+                  if (typeof socketOptions?.broadcast === 'boolean') {
+                    socket.setBroadcast(socketOptions.broadcast);
                   }
-                  if (typeof options?.multicastTtl === 'number') {
-                    socket.setMulticastTTL(options.multicastTtl);
+                  if (typeof socketOptions?.multicastTtl === 'number') {
+                    socket.setMulticastTTL(socketOptions.multicastTtl);
                   }
                   resolve();
                 };
                 socket.once('error', onError);
                 socket.once('listening', onListening);
-                socket.bind(bindOptions?.port ?? 0, bindOptions?.host);
+                socket.bind(detachedBindOptions?.port ?? 0, detachedBindOptions?.host);
               });
             },
             async send(data: Uint8Array | string, port: number, host: string) {
@@ -407,7 +439,7 @@ export class PluginContextFactory {
         },
         async update(patch: Parameters<HostSettingsService['updateFT8']>[0]) {
           assertPermission('settings:ft8', 'update FT8 settings');
-          return service.updateFT8(patch);
+          return service.updateFT8(snapshotPluginData(patch, 'structured'));
         },
       },
       decodeWindows: {
@@ -417,7 +449,7 @@ export class PluginContextFactory {
         },
         async update(settings: Parameters<HostSettingsService['updateDecodeWindows']>[0]) {
           assertPermission('settings:decode-windows', 'update decode window settings');
-          return service.updateDecodeWindows(settings);
+          return service.updateDecodeWindows(snapshotPluginData(settings, 'structured'));
         },
       },
       realtime: {
@@ -427,7 +459,7 @@ export class PluginContextFactory {
         },
         async update(settings: Parameters<HostSettingsService['updateRealtime']>[0]) {
           assertPermission('settings:realtime', 'update realtime settings');
-          const updated = await service.updateRealtime(settings);
+          const updated = await service.updateRealtime(snapshotPluginData(settings, 'structured'));
           const data = RealtimeSettingsResponseDataSchema.parse(updated);
           thisDeps.eventEmitter.emit('realtimeSettingsChanged', data);
           return updated;
@@ -440,7 +472,7 @@ export class PluginContextFactory {
         },
         async update(presets: Parameters<HostSettingsService['updateFrequencyPresets']>[0]) {
           assertPermission('settings:frequency-presets', 'update frequency presets');
-          return service.updateFrequencyPresets(presets);
+          return service.updateFrequencyPresets(snapshotPluginData(presets, 'structured'));
         },
         async reset() {
           assertPermission('settings:frequency-presets', 'reset frequency presets');
@@ -454,7 +486,7 @@ export class PluginContextFactory {
         },
         async update(patch: Parameters<HostSettingsService['updateStation']>[0]) {
           assertPermission('settings:station', 'update station settings');
-          return service.updateStation(patch);
+          return service.updateStation(snapshotPluginData(patch, 'structured'));
         },
       },
       pskReporter: {
@@ -464,7 +496,7 @@ export class PluginContextFactory {
         },
         async update(patch: Parameters<HostSettingsService['updatePSKReporter']>[0]) {
           assertPermission('settings:psk-reporter', 'update PSK Reporter settings');
-          return service.updatePSKReporter(patch);
+          return service.updatePSKReporter(snapshotPluginData(patch, 'structured'));
         },
       },
       ntp: {
@@ -474,12 +506,12 @@ export class PluginContextFactory {
         },
         async update(request: Parameters<HostSettingsService['updateNtp']>[0]) {
           assertPermission('settings:ntp', 'update NTP settings');
-          return service.updateNtp(request);
+          return service.updateNtp(snapshotPluginData(request, 'structured'));
         },
       },
     };
     const permissions = new Set(plugin.definition.permissions ?? []);
-    return Object.freeze({
+    return {
       ...(permissions.has('settings:ft8') ? { ft8: controls.ft8 } : {}),
       ...(permissions.has('settings:decode-windows') ? { decodeWindows: controls.decodeWindows } : {}),
       ...(permissions.has('settings:realtime') ? { realtime: controls.realtime } : {}),
@@ -487,7 +519,7 @@ export class PluginContextFactory {
       ...(permissions.has('settings:station') ? { station: controls.station } : {}),
       ...(permissions.has('settings:psk-reporter') ? { pskReporter: controls.pskReporter } : {}),
       ...(permissions.has('settings:ntp') ? { ntp: controls.ntp } : {}),
-    });
+    };
   }
 
   private validateLogbookSyncProvider(
@@ -535,17 +567,20 @@ export class PluginContextFactory {
 
   private createLogger(pluginName: string) {
     const emit = (level: PluginLogEntry['level'], message: string, data?: unknown) => {
+      const snapshot = snapshotPluginLogData(data);
       const entry: PluginLogEntry = {
         pluginName,
         level,
         message,
-        data,
+        data: snapshot,
         timestamp: Date.now(),
       };
       this.deps.eventEmitter.emit('pluginLog', entry);
       // 也写到系统日志
       const sysLogger = createLogger(`Plugin:${pluginName}`);
-      sysLogger[level](message, typeof data === 'object' && data ? data as Record<string, unknown> : { data });
+      sysLogger[level](message, typeof snapshot === 'object' && snapshot
+        ? snapshot as Record<string, unknown>
+        : { data: snapshot });
     };
 
     return {
@@ -596,7 +631,9 @@ export class PluginContextFactory {
 
       let enabled = false;
       try {
-        const eligibilityContext = Object.freeze({ config: ctx.config });
+        const eligibilityContext = Object.freeze({
+          config: snapshotPluginData(ctx.config, 'structured'),
+        });
         enabled = isTransmitControlEnabled(eligibilityContext) === true;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -618,7 +655,11 @@ export class PluginContextFactory {
         if (!deps.submitOperatorCommand) {
           throw new Error('Host operator command coordinator is unavailable');
         }
-        return deps.submitOperatorCommand(operatorId, command, plugin.definition.name);
+        return deps.submitOperatorCommand(
+          operatorId,
+          snapshotPluginData(command, 'structured'),
+          plugin.definition.name,
+        );
       },
     };
   }
@@ -669,7 +710,11 @@ export class PluginContextFactory {
       },
       getOtherOperators: () => this.createOtherOperatorSnapshots(operatorId),
       async hasWorkedCallsign(callsign: string, options?: { anyBand?: boolean }) {
-        return deps.hasWorkedCallsign(operatorId, callsign, options);
+        return deps.hasWorkedCallsign(
+          operatorId,
+          callsign,
+          options ? snapshotPluginData(options, 'structured') : undefined,
+        );
       },
       isTargetBeingWorkedByOthers(targetCallsign: string) {
         return deps.getOperatorById(operatorId)?.isTargetBeingWorkedByOthers(targetCallsign) ?? false;
@@ -850,7 +895,7 @@ export class PluginContextFactory {
       }
     };
 
-    const radio: PluginContextBase['radio'] = Object.freeze({
+    const radio: PluginContextBase['radio'] = {
       get frequency() {
         return getEffectiveFrequency();
       },
@@ -868,7 +913,7 @@ export class PluginContextFactory {
       get isConnected() {
         return deps.getRadioConnected();
       },
-    });
+    };
 
     const capabilities: Omit<RuntimePluginContext, keyof PluginContextBase> = {};
     capabilities.radioCapabilities = {
@@ -906,7 +951,7 @@ export class PluginContextFactory {
               && !plugin.definition.permissions?.includes('radio:tuner-control')) {
             throw new Error('switch-band autoTune requires radio:tuner-control');
           }
-          await deps.submitRadioMaintenanceCommand(command);
+          await deps.submitRadioMaintenanceCommand(snapshotPluginData(command, 'structured'));
         },
     };
     capabilities.radioTunerCommands = {
@@ -914,7 +959,7 @@ export class PluginContextFactory {
           if (!deps.submitRadioMaintenanceCommand) {
             throw new Error('Host radio maintenance coordinator is unavailable');
           }
-          await deps.submitRadioMaintenanceCommand(command);
+          await deps.submitRadioMaintenanceCommand(snapshotPluginData(command, 'structured'));
         },
     };
     capabilities.radioPowerCommands = {
@@ -922,9 +967,10 @@ export class PluginContextFactory {
           if (!deps.setRadioPower) {
             throw new Error('Radio power control API is unavailable in this host');
           }
+          const detached = snapshotPluginData(command, 'structured');
           return deps.setRadioPower(
-            RadioPowerTargetSchema.parse(command.state),
-            command.options,
+            RadioPowerTargetSchema.parse(detached.state),
+            detached.options,
           );
         },
     };
@@ -1007,11 +1053,11 @@ export class PluginContextFactory {
         },
         async addQSO(record: import('@tx5dr/contracts').QSORecord) {
           const logBook = getRequiredLogBook();
-          return logBook.provider.addQSO(record, operatorId);
+          return logBook.provider.addQSO(snapshotPluginData(record, 'structured'), operatorId);
         },
         async updateQSO(qsoId: string, updates: Partial<import('@tx5dr/contracts').QSORecord>) {
           const logBook = getRequiredLogBook();
-          return logBook.provider.updateQSO(qsoId, updates);
+          return logBook.provider.updateQSO(qsoId, snapshotPluginData(updates, 'structured'));
         },
         async getStatistics() {
           const logBook = getExistingLogBook();
@@ -1050,7 +1096,11 @@ export class PluginContextFactory {
         if (!operatorId) {
           return false;
         }
-        return deps.hasWorkedCallsign(operatorId, callsign, options);
+        return deps.hasWorkedCallsign(
+          operatorId,
+          callsign,
+          options ? snapshotPluginData(options, 'structured') : undefined,
+        );
       },
       async hasWorkedDXCC(dxccEntity: string) {
         if (!deps.hasWorkedDXCC || !operatorId) {

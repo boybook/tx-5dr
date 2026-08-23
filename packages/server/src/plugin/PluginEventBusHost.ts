@@ -1,4 +1,5 @@
 import type { PluginEventBusMessage } from '@tx5dr/plugin-api';
+import { snapshotPluginData } from './plugin-data-boundary.js';
 
 type PluginEventBusInstanceScope = 'operator' | 'global';
 
@@ -31,9 +32,9 @@ export class PluginEventBusHost {
   ) {}
 
   publish(owner: PluginEventBusOwner, topic: string, payload?: unknown): void {
-    const message: PluginEventBusMessage = {
+    const canonicalMessage: PluginEventBusMessage = {
       topic,
-      payload,
+      payload: snapshotPluginData(payload, 'structured'),
       timestamp: Date.now(),
       publisher: {
         pluginName: owner.pluginName,
@@ -43,14 +44,19 @@ export class PluginEventBusHost {
     };
 
     const subscribers = [...(this.subscriptionsByTopic.get(topic) ?? [])];
-    for (const subscription of subscribers) {
+    const deliveries = subscribers.map((subscription) => ({
+      subscription,
+      message: snapshotPluginData(canonicalMessage, 'structured'),
+    }));
+
+    for (const { subscription, message } of deliveries) {
       let result: void | Promise<void>;
       try {
         result = subscription.handler(message);
       } catch (error) {
         this.onSubscriberError?.({
           subscriber: subscription.owner,
-          message,
+          message: snapshotPluginData(canonicalMessage, 'structured'),
           error,
         });
         continue;
@@ -59,7 +65,7 @@ export class PluginEventBusHost {
       void Promise.resolve(result).catch((error) => {
         this.onSubscriberError?.({
           subscriber: subscription.owner,
-          message,
+          message: snapshotPluginData(canonicalMessage, 'structured'),
           error,
         });
       });

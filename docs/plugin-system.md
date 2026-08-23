@@ -129,6 +129,12 @@ Host 会校验并冻结加载后的定义。不要在运行期修改 definition�
 | `ui` | panel 数据和 iframe 通信 |
 | `files` | 插件私有文件存储 |
 
+普通数据与 Host capability 使用不同的所有权语义：配置、查询结果、QSO、解码消息
+和消息 payload 都按值交给插件，可以缓存和自由修改；修改不会隐式写回 Host。socket、
+logbook accessor、radio/operator view、Response 等 capability 是实时 Host handle，可以在
+同一插件实例中保存，但只能在 Host 发起的有效 callback 内调用，并在插件卸载后失效。
+需要修改系统状态时，始终调用对应的 `set`、`update` 或 command API。
+
 ### 4.2 permission 映射
 
 未声明 permission 时，对应属性在 TypeScript 类型和运行时对象中都不存在。
@@ -483,8 +489,9 @@ await ctx.files.write('cache/data.bin', buffer);
 const data = await ctx.files.read('cache/data.bin');
 ```
 
-小型 JSON 兼容数据使用 `store`；二进制或较大文件使用 `files`。路径由 Host 限制
-在插件私有目录内。
+小型 JSON 兼容数据使用 `store`；二进制或较大文件使用 `files`。`store` 按值读写：
+修改 `get()` / `getAll()` 的返回值不会隐式更新存储，必须再次调用 `set()`。路径由
+Host 限制在插件私有目录内。
 
 ### 7.3 Panels
 
@@ -570,7 +577,8 @@ Host 验证；不要相信 iframe 自行提交的 operatorId、callsign 或权�
 - strategy 收到 `AbortSignal` 后应立即停止；其他 invocation 失效后不要继续提交
   operator、radio、logbook 或 UI 命令。
 - hook throw/reject 会被隔离到当前插件实例；仍应捕获可预期错误并写清晰日志。
-- `onUnload(ctx)` 只提供 `store`、`log`、`timers`、`files`，用于清理插件资源。
+- `onUnload(ctx)` 只提供 `store`、`log`、`timers`、`files` 和只读 `operator`，
+  用于识别当前实例并清理插件资源。
 - UDP socket、event bus subscription 和外部客户端应保存自己的 cleanup handle，
   在 unload 时关闭；Host timer 会自动清理。
 

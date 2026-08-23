@@ -36,9 +36,7 @@ export type CapabilityUpdateMode = z.infer<typeof CapabilityUpdateModeSchema>;
 export const CapabilityOptionValueSchema = z.union([z.string(), z.number()]);
 export type CapabilityOptionValue = z.infer<typeof CapabilityOptionValueSchema>;
 
-/**
- * 运行时能力值。
- */
+/** Runtime value carried by a radio capability state. */
 export const CapabilityValueSchema = z.union([z.boolean(), z.number(), z.string()]);
 export type CapabilityValue = z.infer<typeof CapabilityValueSchema>;
 
@@ -84,10 +82,7 @@ export const CapabilityDisplaySchema = z.object({
 });
 export type CapabilityDisplay = z.infer<typeof CapabilityDisplaySchema>;
 
-/**
- * 能力描述符
- * 由服务端在运行时下发，作为当前连接会话的真源。
- */
+/** Host-provided descriptor that defines one capability for the current session. */
 export const CapabilityDescriptorSchema = z.object({
   /** 全局唯一能力 ID，如 'tuner_switch', 'rf_power', 'lock_mode' */
   id: z.string(),
@@ -165,10 +160,7 @@ export const CapabilityDescriptorSchema = z.object({
 
 export type CapabilityDescriptor = z.infer<typeof CapabilityDescriptorSchema>;
 
-/**
- * 能力运行时状态
- * 动态数据，通过 WebSocket 实时同步到前端。
- */
+/** Dynamic support, availability and value state for one capability. */
 export const CapabilityStateSchema = z.object({
   /** 能力 ID，与 CapabilityDescriptor.id 对应 */
   id: z.string(),
@@ -209,9 +201,7 @@ export const CapabilityStateSchema = z.object({
 
 export type CapabilityState = z.infer<typeof CapabilityStateSchema>;
 
-/**
- * 能力列表快照（radioCapabilityList WS 消息 / REST 响应的 data 部分）
- */
+/** Complete descriptor/state snapshot returned by radio capability APIs. */
 export const CapabilityListSchema = z.object({
   descriptors: z.array(CapabilityDescriptorSchema),
   capabilities: z.array(CapabilityStateSchema),
@@ -220,7 +210,8 @@ export const CapabilityListSchema = z.object({
 export type CapabilityList = z.infer<typeof CapabilityListSchema>;
 
 /**
- * 写命令负载（writeRadioCapability WS 命令的 data 部分）
+ * Legacy WebSocket payload for writing a generic radio capability.
+ * Plugin API v2 uses explicit radio/tuner command ports instead.
  */
 export const WriteCapabilityPayloadSchema = z.object({
   /** 能力 ID */

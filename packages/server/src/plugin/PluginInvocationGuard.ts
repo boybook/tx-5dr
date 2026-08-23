@@ -1,6 +1,15 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { RuntimePluginContext } from '@tx5dr/plugin-api';
 import type { PluginInstance } from './types.js';
+import {
+  isPluginCapability,
+  isDetachedPluginData,
+  markPluginCapability,
+  markPluginCapabilityTree,
+  snapshotPluginData,
+  PluginDataBoundaryError,
+  type PluginDataSnapshotMode,
+} from './plugin-data-boundary.js';
 
 export class PluginInvocationExpiredError extends Error {
   readonly code = 'PLUGIN_INVOCATION_EXPIRED';
@@ -43,12 +52,14 @@ export interface CurrentPluginInvocation {
 }
 
 const PROTECTED_CONTEXT_KEYS = new Set<keyof RuntimePluginContext>([
+  'config',
   'updateConfig',
   'store',
   'timers',
   'operator',
   'operatorCommands',
   'radio',
+  'band',
   'radioCapabilities',
   'radioCommands',
   'radioTunerCommands',
@@ -64,6 +75,7 @@ const PROTECTED_CONTEXT_KEYS = new Set<keyof RuntimePluginContext>([
   'fetch',
   'hostDependencies',
 ]);
+const EVERGREEN_CONTEXT_KEYS = new Set<keyof RuntimePluginContext>(['log']);
 
 /** Revokes host capabilities when a hook/runtime continuation outlives its invocation. */
 export class PluginInvocationGuard {
@@ -83,22 +95,89 @@ export class PluginInvocationGuard {
     const cached = this.getCachedProxy(instance, context, '__context__');
     if (cached) return cached as RuntimePluginContext;
 
+    for (const property of Object.getOwnPropertyNames(context)) {
+      const key = property as keyof RuntimePluginContext;
+      if (!PROTECTED_CONTEXT_KEYS.has(key) && !EVERGREEN_CONTEXT_KEYS.has(key)) {
+        throw new Error(`PLUGIN_CAPABILITY_POLICY_MISSING: unclassified context root '${property}'`);
+      }
+    }
+
     const proxy = new Proxy(context, {
-      get: (target, property, receiver) => {
-        const value = Reflect.get(target, property, receiver);
-        if (!PROTECTED_CONTEXT_KEYS.has(property as keyof RuntimePluginContext) || value == null) {
+      get: (target, property, _receiver) => {
+        const protectedRoot = PROTECTED_CONTEXT_KEYS.has(property as keyof RuntimePluginContext);
+        if (protectedRoot) {
+          this.assertCurrent(instance, property as keyof RuntimePluginContext);
+        }
+        const value = Reflect.get(target, property, target);
+        if (!protectedRoot || value == null) {
           return value;
+        }
+        if (property === 'config') {
+          return snapshotPluginData(value, 'structured');
         }
         return this.wrapProtectedValue(value, instance, property as keyof RuntimePluginContext);
       },
-      getOwnPropertyDescriptor: (target, property) => this.wrapProtectedDescriptor(
-        Reflect.getOwnPropertyDescriptor(target, property),
+      getOwnPropertyDescriptor: (target, property) => {
+        const root = property as keyof RuntimePluginContext;
+        if (!PROTECTED_CONTEXT_KEYS.has(root)) {
+          return Reflect.getOwnPropertyDescriptor(target, property);
+        }
+        this.assertCurrent(instance, root);
+        return this.wrapProtectedDescriptor(
+          Reflect.getOwnPropertyDescriptor(target, property),
+          instance,
+          root,
+        );
+      },
+      set: (_target, property) => this.rejectCapabilityMutation(
         instance,
         property as keyof RuntimePluginContext,
       ),
+      defineProperty: (_target, property) => this.rejectCapabilityMutation(
+        instance,
+        property as keyof RuntimePluginContext,
+      ),
+      deleteProperty: (_target, property) => this.rejectCapabilityMutation(
+        instance,
+        property as keyof RuntimePluginContext,
+      ),
+      setPrototypeOf: () => this.rejectCapabilityMutation(instance),
+      preventExtensions: () => this.rejectCapabilityMutation(instance),
     });
+    markPluginCapability(context);
+    markPluginCapability(proxy);
     this.cacheProxy(instance, context, '__context__', proxy);
     return proxy;
+  }
+
+  async invokeData<T>(
+    instance: PluginInstance,
+    operation: string,
+    mode: PluginDataSnapshotMode,
+    callback: (signal: AbortSignal) => T | Promise<T>,
+    options: InvocationOptions = {},
+  ): Promise<T> {
+    return this.invoke(instance, operation, async (signal) => {
+      this.assertCurrent(instance);
+      const value = await callback(signal);
+      this.assertCurrent(instance);
+      const snapshot = snapshotPluginData(value, mode);
+      this.assertCurrent(instance);
+      return snapshot;
+    }, options);
+  }
+
+  invokeSyncData<T>(
+    instance: PluginInstance,
+    operation: string,
+    mode: PluginDataSnapshotMode,
+    callback: () => T,
+  ): T {
+    return this.invokeSync(instance, operation, () => {
+      const value = callback();
+      this.assertCurrent(instance);
+      return snapshotPluginData(value, mode);
+    });
   }
 
   async invoke<T>(
@@ -142,6 +221,18 @@ export class PluginInvocationGuard {
         }, abortGraceMs);
       }
     };
+    const revoked = new Promise<never>((_, reject) => {
+      state.controller.signal.addEventListener('abort', () => {
+        const rejectRevoked = () => reject(state.controller.signal.reason instanceof Error
+          ? state.controller.signal.reason
+          : new PluginInvocationExpiredError(String(state.controller.signal.reason ?? 'Plugin invocation revoked')));
+        if (options.signal?.aborted && options.drainOnExternalAbortMs !== undefined) {
+          setTimeout(rejectRevoked, options.drainOnExternalAbortMs);
+        } else {
+          rejectRevoked();
+        }
+      }, { once: true });
+    });
     if (options.signal) {
       const onAbort = () => revoke(options.signal?.reason ?? 'external invocation abort');
       if (options.signal.aborted) {
@@ -153,23 +244,14 @@ export class PluginInvocationGuard {
     }
 
     try {
-      const execution = this.storage.run(state, async () => callback(state.controller.signal));
+      const execution = this.storage.run(state, async () => {
+        this.assertCurrent(instance);
+        return callback(state.controller.signal);
+      });
       void execution.finally(() => {
         executionSettled = true;
         if (abortWatchdog) clearTimeout(abortWatchdog);
       }).catch(() => undefined);
-      const revoked = new Promise<never>((_, reject) => {
-        state.controller.signal.addEventListener('abort', () => {
-          const rejectRevoked = () => reject(state.controller.signal.reason instanceof Error
-            ? state.controller.signal.reason
-            : new PluginInvocationExpiredError(String(state.controller.signal.reason ?? 'Plugin invocation revoked')));
-          if (options.signal?.aborted && options.drainOnExternalAbortMs !== undefined) {
-            setTimeout(rejectRevoked, options.drainOnExternalAbortMs);
-          } else {
-            rejectRevoked();
-          }
-        }, { once: true });
-      });
       if (options.timeoutMs === undefined) {
         return await Promise.race([execution, revoked]);
       }
@@ -270,43 +352,102 @@ export class PluginInvocationGuard {
     if ((typeof value !== 'object' || value === null) && typeof value !== 'function') {
       return value;
     }
+    markPluginCapabilityTree(value);
     if (typeof value === 'function') {
-      return ((...args: unknown[]) => {
-        this.assertCurrent(instance, root);
-        return this.wrapProtectedResult(
-          Reflect.apply(value as (...values: unknown[]) => unknown, undefined, args),
-          instance,
-          root,
-        );
-      }) as T;
+      return this.wrapProtectedFunction(value, instance, root);
     }
 
     const object = value as object;
     const cached = this.getCachedProxy(instance, object, String(root));
     if (cached) return cached as T;
     const proxy = new Proxy(object, {
-      get: (target, property, receiver) => {
+      get: (target, property, _receiver) => {
         this.assertCurrent(instance, root);
-        const child = Reflect.get(target, property, receiver);
+        const child = Reflect.get(target, property, target);
         if (typeof child === 'function') {
-          return (...args: unknown[]) => {
-            this.assertCurrent(instance, root);
-            const result = Reflect.apply(child, target, args);
-            return this.wrapProtectedResult(result, instance, root);
-          };
+          return this.wrapProtectedFunction(child, instance, root, target);
         }
         if (child && typeof child === 'object') {
-          return this.wrapProtectedValue(child, instance, root);
+          return this.wrapProtectedResult(child, instance, root);
         }
         return child;
       },
-      getOwnPropertyDescriptor: (target, property) => this.wrapProtectedDescriptor(
-        Reflect.getOwnPropertyDescriptor(target, property),
-        instance,
-        root,
-      ),
+      getOwnPropertyDescriptor: (target, property) => {
+        this.assertCurrent(instance, root);
+        return this.wrapProtectedDescriptor(
+          Reflect.getOwnPropertyDescriptor(target, property),
+          instance,
+          root,
+        );
+      },
+      set: () => this.rejectCapabilityMutation(instance, root),
+      defineProperty: () => this.rejectCapabilityMutation(instance, root),
+      deleteProperty: () => this.rejectCapabilityMutation(instance, root),
+      setPrototypeOf: () => this.rejectCapabilityMutation(instance, root),
+      preventExtensions: () => this.rejectCapabilityMutation(instance, root),
     });
+    markPluginCapability(proxy);
     this.cacheProxy(instance, object, String(root), proxy);
+    return proxy as T;
+  }
+
+  private wrapProtectedFunction<T>(
+    value: T & Function,
+    instance: PluginInstance,
+    root: keyof RuntimePluginContext,
+    boundThis?: unknown,
+  ): T {
+    const proxy = new Proxy(value, {
+      apply: (target, _thisArg, args) => {
+        this.assertCurrent(instance, root);
+        return this.wrapProtectedResult(
+          Reflect.apply(target, boundThis, args),
+          instance,
+          root,
+          args,
+        );
+      },
+      construct: (target, args) => {
+        this.assertCurrent(instance, root);
+        return this.wrapProtectedResult(
+          Reflect.construct(target, args, target),
+          instance,
+          root,
+          args,
+        ) as object;
+      },
+      get: (target, property) => {
+        this.assertCurrent(instance, root);
+        const descriptor = Reflect.getOwnPropertyDescriptor(target, property);
+        if (descriptor?.configurable === false
+            && 'value' in descriptor
+            && descriptor.writable === false
+            && descriptor.value
+            && (typeof descriptor.value === 'object' || typeof descriptor.value === 'function')) {
+          throw new TypeError('Non-configurable host capability descriptors cannot be retained');
+        }
+        const child = Reflect.get(target, property, target);
+        if (typeof child === 'function') {
+          return this.wrapProtectedFunction(child, instance, root, target);
+        }
+        return this.detachOrWrapResult(child, instance, root, []);
+      },
+      getOwnPropertyDescriptor: (target, property) => {
+        this.assertCurrent(instance, root);
+        return this.wrapProtectedDescriptor(
+          Reflect.getOwnPropertyDescriptor(target, property),
+          instance,
+          root,
+        );
+      },
+      set: () => this.rejectCapabilityMutation(instance, root),
+      defineProperty: () => this.rejectCapabilityMutation(instance, root),
+      deleteProperty: () => this.rejectCapabilityMutation(instance, root),
+      setPrototypeOf: () => this.rejectCapabilityMutation(instance, root),
+      preventExtensions: () => this.rejectCapabilityMutation(instance, root),
+    });
+    markPluginCapability(value);
+    markPluginCapability(proxy);
     return proxy as T;
   }
 
@@ -314,18 +455,65 @@ export class PluginInvocationGuard {
     result: T,
     instance: PluginInstance,
     root: keyof RuntimePluginContext,
+    pluginOwnedInputs: readonly unknown[] = [],
   ): T {
     if (result instanceof Promise) {
-      return result.then((value) => (
-        value && (typeof value === 'object' || typeof value === 'function')
-          ? this.wrapProtectedValue(value, instance, root)
-          : value
+      return result.then((value) => this.detachOrWrapResult(
+        value,
+        instance,
+        root,
+        pluginOwnedInputs,
       )) as T;
     }
-    if (result && (typeof result === 'object' || typeof result === 'function')) {
+    return this.detachOrWrapResult(result, instance, root, pluginOwnedInputs);
+  }
+
+  private detachOrWrapResult<T>(
+    result: T,
+    instance: PluginInstance,
+    root: keyof RuntimePluginContext,
+    pluginOwnedInputs: readonly unknown[],
+  ): T {
+    if (!result || (typeof result !== 'object' && typeof result !== 'function')) {
+      return result;
+    }
+    if (isPluginCapability(result)) {
       return this.wrapProtectedValue(result, instance, root);
     }
-    return result;
+    if (pluginOwnedInputs.some((input) => input === result)) {
+      return result;
+    }
+    if (isDetachedPluginData(result)) {
+      return result;
+    }
+    if (typeof result === 'function') {
+      return this.wrapProtectedValue(result, instance, root);
+    }
+    const prototype = Object.getPrototypeOf(result);
+    const isStructuredData = Array.isArray(result)
+      || Buffer.isBuffer(result)
+      || result instanceof Date
+      || result instanceof Map
+      || result instanceof Set
+      || result instanceof RegExp
+      || result instanceof ArrayBuffer
+      || ArrayBuffer.isView(result)
+      || prototype === Object.prototype
+      || prototype === null;
+    if (!isStructuredData) {
+      markPluginCapability(result);
+      return this.wrapProtectedValue(result, instance, root);
+    }
+    try {
+      return snapshotPluginData(result, 'structured');
+    } catch (error) {
+      if (error instanceof PluginDataBoundaryError && error.reason === 'capability') {
+        throw error;
+      }
+      // Native handles are conservatively retained as guarded capabilities.
+      markPluginCapability(result);
+      return this.wrapProtectedValue(result, instance, root);
+    }
   }
 
   private wrapProtectedDescriptor(
@@ -339,11 +527,15 @@ export class PluginInvocationGuard {
     // host-owned wrapper objects so they still pass through the guarded path.
     if (descriptor.configurable === false
         && ('value' in descriptor ? descriptor.writable === false : true)) {
+      const immutableValue = 'value' in descriptor ? descriptor.value : descriptor.get ?? descriptor.set;
+      if (immutableValue && (typeof immutableValue === 'object' || typeof immutableValue === 'function')) {
+        throw new TypeError('Non-configurable host capability descriptors cannot be retained');
+      }
       return descriptor;
     }
     const wrapped = { ...descriptor };
     if ('value' in wrapped) {
-      wrapped.value = this.wrapProtectedValue(wrapped.value, instance, root);
+      wrapped.value = this.detachOrWrapResult(wrapped.value, instance, root, []);
     }
     if (wrapped.get) {
       const getter = wrapped.get;
@@ -368,6 +560,14 @@ export class PluginInvocationGuard {
     root: string,
   ): object | undefined {
     return this.proxyCacheByInstance.get(instance)?.get(target)?.get(root);
+  }
+
+  private rejectCapabilityMutation(
+    instance: PluginInstance,
+    root?: keyof RuntimePluginContext,
+  ): never {
+    this.assertCurrent(instance, root);
+    throw new TypeError('Plugin host capabilities are read-only');
   }
 
   private cacheProxy(

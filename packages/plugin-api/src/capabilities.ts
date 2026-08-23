@@ -28,7 +28,9 @@ export const PLUGIN_CONTEXT_CAPABILITY_KEYS = {
   'host:hamlib': ['hostDependencies'],
 } as const satisfies Partial<Record<PluginPermission, readonly string[]>>;
 
+/** Permission names that add one or more top-level runtime context properties. */
 export type PluginContextCapabilityPermission = keyof typeof PLUGIN_CONTEXT_CAPABILITY_KEYS;
+/** Top-level runtime context property controlled by a manifest permission. */
 export type PluginContextCapabilityKey =
   (typeof PLUGIN_CONTEXT_CAPABILITY_KEYS)[PluginContextCapabilityPermission][number];
 
@@ -42,6 +44,7 @@ export const PLUGIN_COMMAND_CAPABILITY_PERMISSIONS = [
   'logbook:sync',
 ] as const satisfies readonly PluginPermission[];
 
+/** Returns the unique context-property allowlist implied by a permission list. */
 export function getPluginContextCapabilityKeys(
   permissions: readonly PluginPermission[] | undefined,
 ): PluginContextCapabilityKey[] {

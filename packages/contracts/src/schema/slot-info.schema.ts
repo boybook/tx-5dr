@@ -19,11 +19,12 @@ export const SlotPackFrequencyContextSchema = z.object({
 export type SlotPackFrequencyContext = z.infer<typeof SlotPackFrequencyContextSchema>;
 
 /**
- * 时隙周期（偶数奇数）
- */
-
-/**
- * 时隙信息
+ * Timing and identity of one FT8/FT4 receive or transmit slot.
+ *
+ * `startMs` is the calibrated Unix epoch start in milliseconds; `phaseMs` is
+ * elapsed time inside the slot; `driftMs` is the clock correction; `cycleNumber`
+ * is the absolute slot index (use modulo two for even/odd); and `utcSeconds` is
+ * the integer epoch-second form used for display and logs.
  */
 export const SlotInfoSchema = z.object({
   /** 时隙唯一标识符 */
@@ -44,9 +45,7 @@ export const SlotInfoSchema = z.object({
 
 export type SlotInfo = z.infer<typeof SlotInfoSchema>;
 
-/**
- * 基于日志本的消息分析结果
- */
+/** Logbook-derived enrichment attached to a decoded message when available. */
 export const LogbookAnalysisSchema = z.object({
   /** 是否为新呼号（之前没有通联过） */
   isNewCallsign: z.boolean().optional(),
@@ -79,7 +78,9 @@ export const LogbookAnalysisSchema = z.object({
 export type LogbookAnalysis = z.infer<typeof LogbookAnalysisSchema>;
 
 /**
- * FT8 帧数据
+ * Original decoder frame with RF metrics and unparsed message text.
+ * `snr` is dB, `freq` is audio offset in hertz, `dt` is seconds, and
+ * `confidence` is normalized to 0..1.
  */
 export const FrameMessageSchema = z.object({
   /** 信号强度 (dB) */
@@ -160,7 +161,9 @@ export const DecodeResultSchema = z.object({
 export type DecodeResult = z.infer<typeof DecodeResultSchema>;
 
 /**
- * 时隙封装信息（去重和多次解码取优）
+ * Deduplicated best-frame collection for one slot, including decode statistics,
+ * history and the dial-frequency context captured when the slot began.
+ * `startMs`, `endMs` and history timestamps use Unix epoch milliseconds.
  */
 export const SlotPackSchema = z.object({
   /** 时隙ID */

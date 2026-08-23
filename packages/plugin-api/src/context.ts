@@ -40,8 +40,9 @@ export interface PluginContextBase {
   /**
    * Resolved plugin configuration values.
    *
-   * The host validates and persists settings, then injects the final values into
-   * this readonly map before invoking hooks or lifecycle methods. Use
+   * The host validates and persists settings, then supplies a detached snapshot
+   * before invoking hooks or lifecycle methods. Mutating nested values does not
+   * update persistence; call {@link PluginContextBase.updateConfig} instead. Use
    * {@link PluginHooks.onConfigChange} to react to updates.
    */
   readonly config: Readonly<Record<string, unknown>>;
@@ -157,6 +158,11 @@ type LogbookCapability<Permissions extends readonly PluginPermission[]> =
 /**
  * Plugin context whose privileged ports are derived from literal manifest
  * permissions. Capabilities that were not declared do not exist in the type.
+ *
+ * Host handles are invocation-scoped. In particular, a `Response` returned by
+ * `ctx.fetch` and its Headers/body reader must be consumed before the current
+ * Host callback settles; retaining the native handle for later use results in
+ * `PLUGIN_INVOCATION_EXPIRED`.
  */
 export type PluginContextFor<Permissions extends readonly PluginPermission[]> =
   PluginContextBase
@@ -198,13 +204,15 @@ export type PluginContext = PluginContextFor<readonly []>;
 /**
  * Teardown-only context passed to `onUnload`.
  *
- * Cleanup may flush plugin-owned state and release plugin-owned files, but it
- * cannot retain or acquire operator, radio, network, UI, event-bus or logbook
- * command capabilities while the instance is being revoked.
+ * Cleanup may inspect the read-only operator state, flush plugin-owned state
+ * and release plugin-owned files. The Host also permits previously acquired
+ * native-resource and UI handles to finish cleanup, but does not reopen radio,
+ * network, event-bus, logbook or command capabilities while the instance is
+ * being revoked.
  */
 export type PluginCleanupContext = Pick<
   PluginContextBase,
-  'store' | 'log' | 'timers' | 'files'
+  'store' | 'log' | 'timers' | 'files' | 'operator'
 >;
 
 /** Host-side erased runtime shape. Public plugin definitions should use `definePlugin()`. */
@@ -230,12 +238,16 @@ export type RuntimePluginContext = PluginContextBase & Partial<{
  * command, radio, logbook-write, network, timer or UI capability.
  */
 export interface StrategyPluginContext {
+  /** Detached snapshot of the strategy plugin's resolved configuration. */
   readonly config: Readonly<Record<string, unknown>>;
+  /** Logger scoped to this strategy instance. */
   readonly log: PluginLogger;
+  /** Read-only operator snapshot; mutation ports are deliberately absent. */
   readonly operator: OperatorSnapshot;
 }
 
 /** Minimal context used to evaluate a transmit-control eligibility predicate. */
 export interface PluginEligibilityContext {
+  /** Current detached configuration snapshot used by the synchronous gate. */
   readonly config: Readonly<Record<string, unknown>>;
 }

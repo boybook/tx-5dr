@@ -341,7 +341,14 @@ export const DecodeErrorInfoSchema = z.object({
   }),
 });
 
-// 频率状态数据结构
+/**
+ * Current dial-frequency projection broadcast to plugins and clients.
+ *
+ * `frequency` is RF dial frequency in hertz; `mode` is the TX-5DR engine mode;
+ * `band` and `description` are display labels; `radioMode` is the underlying
+ * modulation when known. `source` distinguishes application changes from
+ * updates reported by the radio.
+ */
 export const FrequencyStateSchema = z.object({
   frequency: z.number(),
   mode: z.string(),
