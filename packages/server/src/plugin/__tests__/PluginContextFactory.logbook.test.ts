@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import type { DigitalRadioEngineEvents, QSORecord } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import type { LoadedPlugin, PluginManagerDeps } from '../types.js';
-import type { LogbookAccess } from '@tx5dr/plugin-api';
+import type { LogbookAccess, LogbookBatchMutation } from '@tx5dr/plugin-api';
 import { PluginContextFactory } from '../PluginContextFactory.js';
 import { LogManager } from '../../log/LogManager.js';
 
@@ -95,8 +95,10 @@ describe('PluginContextFactory logbook access', () => {
     );
     expect(readOnly.logbook).toBeDefined();
     expect('queryQSOs' in readOnly.logbook!).toBe(true);
+    expect('readQsoSnapshot' in readOnly.logbook!).toBe(true);
     expect('addQSO' in readOnly.logbook!).toBe(false);
     expect('updateQSO' in readOnly.logbook!).toBe(false);
+    expect('applyQsoBatch' in readOnly.logbook!).toBe(false);
     expect('notifyUpdated' in readOnly.logbook!).toBe(false);
   });
 
@@ -119,9 +121,17 @@ describe('PluginContextFactory logbook access', () => {
     };
     const addQSO = vi.fn(async () => structuredClone(committedAdd));
     const updateQSO = vi.fn(async () => structuredClone(committedUpdate));
+    const readQsoSnapshot = vi.fn(async () => ({
+      revision: 'revision-1',
+      records: [structuredClone(committedAdd)],
+    }));
+    const applyQsoBatch = vi.fn(async () => ({
+      revision: 'revision-2',
+      outcomes: [{ inputIndex: 0, status: 'updated', record: structuredClone(committedUpdate) }],
+    }));
     const logBook = {
       id: 'logbook-BG4IAJ',
-      provider: { addQSO, updateQSO },
+      provider: { addQSO, updateQSO, readQsoSnapshot, applyQsoBatch },
     };
     vi.spyOn(LogManager, 'getInstance').mockReturnValue({
       resolveLogBookId: vi.fn(() => logBook.id),
@@ -152,12 +162,30 @@ describe('PluginContextFactory logbook access', () => {
       mode: 'FM',
       messageHistory: ['caller update'],
     };
+    const mutations: LogbookBatchMutation[] = [{
+      type: 'update',
+      qsoId: input.id,
+      updates,
+    }];
 
     const logbook = ctx.logbook as LogbookAccess;
     await expect(logbook.addQSO(input)).resolves.toEqual(committedAdd);
     await expect(logbook.updateQSO(input.id, updates)).resolves.toEqual(committedUpdate);
+    const snapshot = await logbook.readQsoSnapshot({ callsign: 'BG2CM' });
+    const batch = await logbook.applyQsoBatch(mutations, { expectedRevision: snapshot.revision });
     expect(addQSO).toHaveBeenCalledWith(input, 'operator-1');
     expect(updateQSO).toHaveBeenCalledWith(input.id, updates);
+    expect(readQsoSnapshot).toHaveBeenCalledWith(expect.objectContaining({ callsign: 'BG2CM' }));
+    expect(applyQsoBatch).toHaveBeenCalledWith(
+      mutations,
+      { expectedRevision: 'revision-1' },
+      'operator-1',
+    );
+
+    snapshot.records[0]!.messageHistory.push('mutated snapshot');
+    batch.outcomes[0]!.record.messageHistory.push('mutated result');
+    expect(committedAdd.messageHistory).toEqual(['committed add']);
+    expect(committedUpdate.messageHistory).toEqual(['committed update']);
   });
 
   it('emits full logbookUpdated payload for operator-bound notifyUpdated', async () => {
@@ -321,10 +349,13 @@ describe('PluginContextFactory logbook access', () => {
 
     await expect(logbook.getLogBookId()).resolves.toBeNull();
     await expect(logbook.queryQSOs({})).resolves.toEqual([]);
+    await expect(logbook.readQsoSnapshot()).rejects.toMatchObject({ code: 'LOGBOOK_UNAVAILABLE' });
     await expect(logbook.countQSOs()).resolves.toBe(0);
     await expect(logbook.getStatistics()).resolves.toBeNull();
     await expect(logbook.addQSO(record)).rejects.toMatchObject({ code: 'LOGBOOK_UNAVAILABLE' });
     await expect(logbook.updateQSO(record.id, { notes: 'updated' }))
+      .rejects.toMatchObject({ code: 'LOGBOOK_UNAVAILABLE' });
+    await expect(logbook.applyQsoBatch([], { expectedRevision: 'missing' }))
       .rejects.toMatchObject({ code: 'LOGBOOK_UNAVAILABLE' });
     await expect(logbook.notifyUpdated()).resolves.toBeUndefined();
     expect(getOrCreateLogBookByCallsign).not.toHaveBeenCalled();

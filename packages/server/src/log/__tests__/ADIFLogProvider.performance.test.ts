@@ -70,4 +70,51 @@ describe('ADIFLogProvider large-logbook performance', () => {
       notes: '70k rewrite benchmark',
     });
   }, 90_000);
+
+  it('commits a field-scale sync batch through one bounded rewrite', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-sync-batch-performance-'));
+    const logFilePath = join(tempDir, 'sync.adi');
+    const records: string[] = [];
+    const padding = 'x'.repeat(420);
+
+    for (let index = 0; index < 3_526; index += 1) {
+      const seconds = String(index % 60).padStart(2, '0');
+      const minutes = String(Math.floor(index / 60) % 60).padStart(2, '0');
+      const hours = String(Math.floor(index / 3600) % 24).padStart(2, '0');
+      records.push([
+        adifField('CALL', `K${index % 10}SYNC${index}`),
+        adifField('QSO_DATE', '20260101'),
+        adifField('TIME_ON', `${hours}${minutes}${seconds}`),
+        adifField('MODE', 'FT8'),
+        adifField('FREQ', index % 2 === 0 ? '7.074000' : '14.074000'),
+        adifField('COMMENT', padding),
+        '<EOR>',
+      ].join(''));
+    }
+
+    await writeFile(logFilePath, `TX-5DR Test\n<ADIF_VER:5>3.1.4\n<EOH>\n\n${records.join('\n')}\n`, 'utf8');
+    provider = new ADIFLogProvider({
+      logFilePath,
+      autoCreateFile: false,
+      logFileName: 'sync.adi',
+    });
+    await provider.initialize();
+    const snapshot = await provider.readQsoSnapshot();
+    expect(snapshot.records).toHaveLength(3_526);
+
+    const startedAt = performance.now();
+    const result = await provider.applyQsoBatch(
+      snapshot.records.slice(0, 2_854).map(record => ({
+        type: 'update' as const,
+        qsoId: record.id,
+        updates: { lotwQslSent: 'Y' as const },
+      })),
+      { expectedRevision: snapshot.revision },
+    );
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(result.outcomes).toHaveLength(2_854);
+    expect(result.outcomes.every(outcome => outcome.status === 'updated')).toBe(true);
+    expect(elapsedMs).toBeLessThan(20_000);
+  }, 45_000);
 });

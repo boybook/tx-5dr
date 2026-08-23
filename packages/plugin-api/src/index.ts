@@ -156,6 +156,14 @@ export type {
   PluginUdpRemoteInfo,
 } from './helpers.js';
 
+export type {
+  LogbookBatchMutation,
+  LogbookBatchOptions,
+  LogbookBatchOutcome,
+  LogbookBatchResult,
+  LogbookQsoSnapshot,
+} from '@tx5dr/core';
+
 
 /** Callsign and DXCC helpers available to plugins. */
 export {

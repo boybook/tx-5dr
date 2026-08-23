@@ -13,7 +13,7 @@ export { LOGBOOK_OPERATION_ERROR_CODES } from '@tx5dr/contracts';
 export type { LogbookOperationErrorCode } from '@tx5dr/contracts';
 
 export interface LogbookWriteFailure {
-  operation: 'append' | 'rewrite' | 'import';
+  operation: 'append' | 'rewrite' | 'import' | 'batch';
   error: {
     code: LogbookOperationErrorCode;
     message: string;
@@ -22,6 +22,41 @@ export interface LogbookWriteFailure {
   };
   qsoRecord?: QSORecord;
   operatorId?: string;
+}
+
+export type LogbookBatchMutation =
+  | {
+      type: 'add';
+      record: QSORecord;
+    }
+  | {
+      type: 'update';
+      qsoId: string;
+      updates: Partial<QSORecord>;
+    };
+
+export interface LogbookBatchOptions {
+  /** Revision returned by readQsoSnapshot(). */
+  expectedRevision: string;
+}
+
+export interface LogbookBatchOutcome {
+  /** Position of the corresponding mutation in the submitted batch. */
+  inputIndex: number;
+  status: 'added' | 'updated' | 'unchanged';
+  /** Final persisted state after the entire batch has been applied. */
+  record: QSORecord;
+}
+
+export interface LogbookBatchResult {
+  /** Revision of the logbook after the batch, or the unchanged revision for a no-op batch. */
+  revision: string;
+  outcomes: LogbookBatchOutcome[];
+}
+
+export interface LogbookQsoSnapshot {
+  revision: string;
+  records: QSORecord[];
 }
 
 export interface LogbookBackupDownload {
@@ -359,6 +394,16 @@ export interface ILogProvider {
    * @param operatorId 发起自动记录的操作员ID（可选，用于定向失败通知）
    */
   updateQSO(id: string, updates: Partial<QSORecord>, operatorId?: string): Promise<QSORecord>;
+
+  /** Read all QSOs and their optimistic-lock revision from one provider state. */
+  readQsoSnapshot(options?: LogQueryOptions): Promise<LogbookQsoSnapshot>;
+
+  /** Apply additions and partial updates through one durable logbook transaction. */
+  applyQsoBatch(
+    mutations: readonly LogbookBatchMutation[],
+    options: LogbookBatchOptions,
+    operatorId?: string,
+  ): Promise<LogbookBatchResult>;
   
   /**
    * 删除QSO记录

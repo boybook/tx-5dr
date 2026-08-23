@@ -22,6 +22,9 @@ function createQso(id: string, overrides: Partial<QSORecord> = {}): QSORecord {
 function createContext(fetchImpl: (input: string, init?: RequestInit) => Promise<Response>) {
   const store = new Map<string, unknown>();
   const queryQSOs = vi.fn(async (_filter?: unknown) => [] as QSORecord[]);
+  const applyQsoBatch = vi.fn(async () => {
+    throw new Error('Club Log must not mutate the local logbook');
+  });
 
   const ctx = {
     store: {
@@ -35,6 +38,7 @@ function createContext(fetchImpl: (input: string, init?: RequestInit) => Promise
     logbook: {
       forCallsign: vi.fn(() => ({
         queryQSOs,
+        applyQsoBatch,
       })),
     },
     log: {
@@ -50,6 +54,7 @@ function createContext(fetchImpl: (input: string, init?: RequestInit) => Promise
     ctx: ctx as unknown as PluginContext,
     fetch: ctx.fetch,
     queryQSOs,
+    applyQsoBatch,
     store,
   };
 }
@@ -101,7 +106,7 @@ describe('ClubLogSyncProvider', () => {
 
   it('auto-upload uses explicit records and posts a realtime form', async () => {
     withApiKey();
-    const { ctx, fetch, queryQSOs } = createContext(async () => textResponse('QSO OK'));
+    const { ctx, fetch, queryQSOs, applyQsoBatch } = createContext(async () => textResponse('QSO OK'));
     const provider = new ClubLogSyncProvider(ctx);
     configure(provider);
 
@@ -109,6 +114,7 @@ describe('ClubLogSyncProvider', () => {
 
     expect(result).toEqual({ uploaded: 1, skipped: 0, failed: 0, failures: undefined });
     expect(queryQSOs).not.toHaveBeenCalled();
+    expect(applyQsoBatch).not.toHaveBeenCalled();
     expect(fetch).toHaveBeenCalledTimes(1);
     const [url, init] = fetch.mock.calls[0];
     expect(url).toBe('https://clublog.org/realtime.php');
@@ -175,7 +181,7 @@ describe('ClubLogSyncProvider', () => {
 
   it('manual upload submits batch ADIF and skips ledger entries later', async () => {
     withApiKey();
-    const { ctx, fetch, queryQSOs } = createContext(async () => textResponse('File queued'));
+    const { ctx, fetch, queryQSOs, applyQsoBatch } = createContext(async () => textResponse('File queued'));
     const provider = new ClubLogSyncProvider(ctx);
     configure(provider);
     const qso = createQso('qso-1');
@@ -188,6 +194,7 @@ describe('ClubLogSyncProvider', () => {
     expect(second.uploaded).toBe(0);
     expect(second.skipped).toBe(1);
     expect(fetch).toHaveBeenCalledTimes(1);
+    expect(applyQsoBatch).not.toHaveBeenCalled();
     const [url, init] = fetch.mock.calls[0];
     expect(url).toBe('https://clublog.org/putlogs.php');
     expect(init?.body).toBeInstanceOf(FormData);

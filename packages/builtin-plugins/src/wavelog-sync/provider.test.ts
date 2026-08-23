@@ -31,6 +31,23 @@ function createContext(fetchImpl: (input: string, init?: RequestInit) => Promise
     id,
     messageHistory: [...(updates.messageHistory ?? [])],
   }));
+  const readQsoSnapshot = vi.fn(async () => ({ revision: 'revision-1', records: [] as QSORecord[] }));
+  const applyQsoBatch = vi.fn(async (
+    mutations: Array<
+      | { type: 'add'; record: QSORecord }
+      | { type: 'update'; qsoId: string; updates: Partial<QSORecord> }
+    >,
+  ) => ({
+    revision: 'revision-2',
+    outcomes: await Promise.all(mutations.map(async (mutation, inputIndex) => {
+      if (mutation.type === 'add') {
+        const record = await addQSO(mutation.record);
+        return { inputIndex, status: 'added' as const, record };
+      }
+      const record = await updateQSO(mutation.qsoId, mutation.updates);
+      return { inputIndex, status: 'updated' as const, record };
+    })),
+  }));
   const notifyUpdated = vi.fn(async () => {});
   const ctx = {
     store: {
@@ -46,6 +63,8 @@ function createContext(fetchImpl: (input: string, init?: RequestInit) => Promise
         queryQSOs,
         addQSO,
         updateQSO,
+        readQsoSnapshot,
+        applyQsoBatch,
         notifyUpdated,
       })),
     },
@@ -64,6 +83,8 @@ function createContext(fetchImpl: (input: string, init?: RequestInit) => Promise
     queryQSOs,
     addQSO,
     updateQSO,
+    readQsoSnapshot,
+    applyQsoBatch,
     notifyUpdated,
     fetch: ctx.fetch,
   };
@@ -427,7 +448,7 @@ describe('WaveLogSyncProvider', () => {
       startTime: Date.parse('2026-07-16T03:01:00.000Z'),
       endTime: Date.parse('2026-07-16T03:01:00.000Z'),
     });
-    const { ctx, queryQSOs, addQSO, updateQSO, notifyUpdated } = createContext(async () =>
+    const { ctx, readQsoSnapshot, addQSO, updateQSO, notifyUpdated } = createContext(async () =>
       adifDownloadResponse([{
         call: 'JQ1XGV',
         qsoDate: '20260716',
@@ -440,7 +461,7 @@ describe('WaveLogSyncProvider', () => {
         lotwRcvdDate: '20260716',
       }]),
     );
-    queryQSOs.mockResolvedValue([local]);
+    readQsoSnapshot.mockResolvedValue({ revision: 'revision-1', records: [local] });
 
     const provider = new WaveLogSyncProvider(ctx);
     provider.setConfig('BG5DRB', {
@@ -468,6 +489,41 @@ describe('WaveLogSyncProvider', () => {
     expect(notifyUpdated).toHaveBeenCalledTimes(1);
   });
 
+  it('does not submit a local batch for a no-op WaveLog status merge', async () => {
+    const local = createQso('local', {
+      callsign: 'JQ1XGV',
+      frequency: 144_460_970,
+      startTime: Date.parse('2026-07-16T03:01:00.000Z'),
+      endTime: Date.parse('2026-07-16T03:01:00.000Z'),
+      lotwQslSent: 'Y',
+    });
+    const { ctx, readQsoSnapshot, applyQsoBatch, notifyUpdated } = createContext(async () =>
+      adifDownloadResponse([{
+        call: 'JQ1XGV',
+        qsoDate: '20260716',
+        timeOn: '030100',
+        freq: '144.46097',
+        mode: 'FT8',
+        lotwSent: 'Y',
+      }]),
+    );
+    readQsoSnapshot.mockResolvedValue({ revision: 'revision-1', records: [local] });
+    const provider = new WaveLogSyncProvider(ctx);
+    provider.setConfig('BG5DRB', {
+      url: 'https://wavelog.example.com',
+      apiKey: 'api-key',
+      stationId: 'station-1',
+      radioName: 'TX5DR',
+      autoUploadQSO: true,
+    });
+
+    const result = await provider.download('BG5DRB');
+
+    expect(result).toMatchObject({ downloaded: 1, matched: 1, updated: 0, imported: 0 });
+    expect(applyQsoBatch).not.toHaveBeenCalled();
+    expect(notifyUpdated).not.toHaveBeenCalled();
+  });
+
   it('download imports unmatched remote QSOs and skips noop status merges', async () => {
     const alreadySynced = createQso('local-synced', {
       callsign: 'JH0BBE',
@@ -477,7 +533,7 @@ describe('WaveLogSyncProvider', () => {
       lotwQslSent: 'Y',
       lotwQslSentDate: Date.parse('2026-07-16T00:00:00.000Z'),
     });
-    const { ctx, queryQSOs, addQSO, updateQSO, notifyUpdated } = createContext(async () =>
+    const { ctx, readQsoSnapshot, addQSO, updateQSO, notifyUpdated } = createContext(async () =>
       adifDownloadResponse([
         {
           call: 'JH0BBE',
@@ -498,13 +554,7 @@ describe('WaveLogSyncProvider', () => {
         },
       ]),
     );
-    queryQSOs.mockImplementation(async (filter?: unknown) => {
-      const callsign = (filter as { callsign?: string } | undefined)?.callsign;
-      if (callsign?.toUpperCase() === 'JH0BBE') {
-        return [alreadySynced];
-      }
-      return [];
-    });
+    readQsoSnapshot.mockResolvedValue({ revision: 'revision-1', records: [alreadySynced] });
 
     const provider = new WaveLogSyncProvider(ctx);
     provider.setConfig('BG5DRB', {
@@ -533,8 +583,8 @@ describe('WaveLogSyncProvider', () => {
     expect(notifyUpdated).toHaveBeenCalledTimes(1);
   });
 
-  it('stops a download pass at the first local durability failure', async () => {
-    const { ctx, addQSO, notifyUpdated } = createContext(async () =>
+  it('reports an atomic download batch durability failure without notifying', async () => {
+    const { ctx, addQSO, applyQsoBatch, notifyUpdated } = createContext(async () =>
       adifDownloadResponse([
         {
           call: 'JA1FAIL',
@@ -571,10 +621,11 @@ describe('WaveLogSyncProvider', () => {
       imported: 0,
       failures: [expect.objectContaining({
         code: 'wavelog_download_logbook_failed',
-        qsoCallsign: 'JA1FAIL',
+        source: 'logbook',
       })],
     });
-    expect(addQSO).toHaveBeenCalledOnce();
+    expect(applyQsoBatch).toHaveBeenCalledOnce();
+    expect(addQSO).toHaveBeenCalledTimes(2);
     expect(notifyUpdated).not.toHaveBeenCalled();
   });
 
@@ -592,7 +643,7 @@ describe('WaveLogSyncProvider', () => {
       startTime: Date.parse('2026-07-16T03:11:00.000Z'),
       endTime: Date.parse('2026-07-16T03:11:00.000Z'),
     });
-    const { ctx, queryQSOs, addQSO, updateQSO, notifyUpdated } = createContext(async () =>
+    const { ctx, readQsoSnapshot, addQSO, updateQSO, notifyUpdated } = createContext(async () =>
       adifDownloadResponse([{
         call: 'JQ1XGV',
         qsoDate: '20260716',
@@ -604,7 +655,7 @@ describe('WaveLogSyncProvider', () => {
       }]),
     );
     // Return the worse candidate first to prove the score ranking is honored.
-    queryQSOs.mockResolvedValue([other, best]);
+    readQsoSnapshot.mockResolvedValue({ revision: 'revision-1', records: [other, best] });
 
     const provider = new WaveLogSyncProvider(ctx);
     provider.setConfig('BG5DRB', {
@@ -640,7 +691,7 @@ describe('WaveLogSyncProvider', () => {
       startTime: Date.parse('2026-07-16T03:01:00.000Z'),
       endTime: Date.parse('2026-07-16T03:01:00.000Z'),
     });
-    const { ctx, queryQSOs, addQSO, updateQSO, notifyUpdated } = createContext(async () =>
+    const { ctx, readQsoSnapshot, addQSO, updateQSO, notifyUpdated } = createContext(async () =>
       adifDownloadResponse([{
         call: 'JQ1XGV',
         qsoDate: '20260716',
@@ -652,7 +703,7 @@ describe('WaveLogSyncProvider', () => {
         myCall: 'BG5DRB',
       }]),
     );
-    queryQSOs.mockResolvedValue([local]);
+    readQsoSnapshot.mockResolvedValue({ revision: 'revision-1', records: [local] });
 
     const provider = new WaveLogSyncProvider(ctx);
     provider.setConfig('BG5DRB', {
@@ -680,6 +731,49 @@ describe('WaveLogSyncProvider', () => {
     // imported as a duplicate.
     expect(addQSO).not.toHaveBeenCalled();
     expect(notifyUpdated).toHaveBeenCalledTimes(1);
+  });
+
+  it('replans a revision conflict without downloading WaveLog a second time', async () => {
+    const local = createQso('local', {
+      callsign: 'JQ1XGV',
+      frequency: 144_460_970,
+      startTime: Date.parse('2026-07-16T03:01:00.000Z'),
+      endTime: Date.parse('2026-07-16T03:01:00.000Z'),
+    });
+    const { ctx, readQsoSnapshot, applyQsoBatch, fetch } = createContext(async () =>
+      adifDownloadResponse([{
+        call: 'JQ1XGV',
+        qsoDate: '20260716',
+        timeOn: '030100',
+        freq: '144.46097',
+        mode: 'FT8',
+        lotwSent: 'Y',
+      }]),
+    );
+    readQsoSnapshot
+      .mockResolvedValueOnce({ revision: 'revision-1', records: [local] })
+      .mockResolvedValueOnce({ revision: 'revision-2', records: [local] });
+    applyQsoBatch
+      .mockRejectedValueOnce(Object.assign(new Error('conflict'), { code: 'LOGBOOK_REVISION_CONFLICT' }))
+      .mockResolvedValueOnce({
+        revision: 'revision-3',
+        outcomes: [{ inputIndex: 0, status: 'updated', record: { ...local, lotwQslSent: 'Y' } }],
+      });
+    const provider = new WaveLogSyncProvider(ctx);
+    provider.setConfig('BG5DRB', {
+      url: 'https://wavelog.example.com',
+      apiKey: 'api-key',
+      stationId: 'station-1',
+      radioName: 'TX5DR',
+      autoUploadQSO: true,
+    });
+
+    const result = await provider.download('BG5DRB');
+
+    expect(result.updated).toBe(1);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(readQsoSnapshot).toHaveBeenCalledTimes(2);
+    expect(applyQsoBatch).toHaveBeenCalledTimes(2);
   });
 });
 type PluginContext = PluginContextFor<readonly ['network', 'logbook:read', 'logbook:write']>;

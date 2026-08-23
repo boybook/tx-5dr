@@ -13,6 +13,11 @@ import type {
 import {
   type CallsignAnalysis,
   type ILogProvider,
+  type LogbookBatchMutation,
+  type LogbookBatchOutcome,
+  type LogbookBatchOptions,
+  type LogbookBatchResult,
+  type LogbookQsoSnapshot,
   type LogbookWriteFailure,
   LogbookOperationError,
   type LogQueryOptions,
@@ -96,6 +101,12 @@ interface WorkingImportRecord {
   canonicalId?: string;
 }
 
+interface WorkingBatchOutcome {
+  inputIndex: number;
+  status: LogbookBatchOutcome['status'];
+  targetId: string;
+}
+
 function initialHealth(): LogbookHealth {
   return {
     state: 'loading',
@@ -115,6 +126,24 @@ function cloneHealth(health: LogbookHealth): LogbookHealth {
     ...health,
     issues: health.issues.map(issue => ({ ...issue })),
   };
+}
+
+function qsoRecordsEqual(left: Readonly<QSORecord>, right: Readonly<QSORecord>): boolean {
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)] as Array<keyof QSORecord>);
+  for (const key of keys) {
+    // Enrichment refreshes this diagnostic timestamp even when persisted QSO data is unchanged.
+    if (key === 'dxccResolvedAt') continue;
+    const leftValue = left[key];
+    const rightValue = right[key];
+    if (Array.isArray(leftValue) || Array.isArray(rightValue)) {
+      if (!Array.isArray(leftValue) || !Array.isArray(rightValue)) return false;
+      if (leftValue.length !== rightValue.length) return false;
+      if (leftValue.some((value, index) => value !== rightValue[index])) return false;
+    } else if (leftValue !== rightValue) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function issueKey(issue: LogbookHealthIssue): string {
@@ -302,6 +331,172 @@ export class ADIFLogProvider implements ILogProvider {
         const mutation = this.document!.prepareUpdate(id, next);
         await this.commitMutation(mutation);
         return cloneRecord(this.records.get(id)!);
+      });
+    });
+  }
+
+  async readQsoSnapshot(options?: LogQueryOptions): Promise<LogbookQsoSnapshot> {
+    const queryOptions = options ? {
+      ...options,
+      frequencyRange: options.frequencyRange ? { ...options.frequencyRange } : undefined,
+      timeRange: options.timeRange ? { ...options.timeRange } : undefined,
+      excludeModes: options.excludeModes ? [...options.excludeModes] : undefined,
+    } : undefined;
+    this.assertReadable();
+    return this.enqueue(async () => {
+      this.assertReadable();
+      return {
+        revision: generationRevision(this.generation),
+        records: this.records.query(queryOptions),
+      };
+    });
+  }
+
+  async applyQsoBatch(
+    mutations: readonly LogbookBatchMutation[],
+    options: LogbookBatchOptions,
+    operatorId?: string,
+  ): Promise<LogbookBatchResult> {
+    const requestedMutations = mutations.map((mutation): LogbookBatchMutation => (
+      mutation.type === 'add'
+        ? { type: 'add', record: cloneRecord(mutation.record) }
+        : {
+            type: 'update',
+            qsoId: mutation.qsoId,
+            updates: {
+              ...mutation.updates,
+              messageHistory: mutation.updates.messageHistory
+                ? [...mutation.updates.messageHistory]
+                : undefined,
+            },
+          }
+    ));
+    const expectedRevision = options.expectedRevision;
+
+    return this.executeWrite('batch', undefined, operatorId, async () => {
+      this.assertWritable();
+      return this.enqueue(async () => {
+        this.assertWritable();
+        const currentRevision = generationRevision(this.generation);
+        if (!expectedRevision || expectedRevision !== currentRevision) {
+          throw new LogbookOperationError(
+            'LOGBOOK_REVISION_CONFLICT',
+            'The logbook changed after the QSO snapshot was read; refresh and retry the batch',
+          );
+        }
+
+        if (requestedMutations.length === 0) {
+          return { revision: currentRevision, outcomes: [] };
+        }
+
+        const originalRecords = new Map(this.records.all().map(record => [record.id, record]));
+        const workingRecords = new Map(
+          [...originalRecords].map(([id, record]) => [id, cloneRecord(record)]),
+        );
+        const addedIds = new Set<string>();
+        const addedOrder: string[] = [];
+        const updatedExistingOrder: string[] = [];
+        const updatedExistingIds = new Set<string>();
+        const outcomes: WorkingBatchOutcome[] = [];
+
+        for (let inputIndex = 0; inputIndex < requestedMutations.length; inputIndex += 1) {
+          const mutation = requestedMutations[inputIndex]!;
+          if (mutation.type === 'add') {
+            const requestedId = mutation.record.id?.trim();
+            let id = requestedId && !workingRecords.has(requestedId)
+              ? requestedId
+              : `tx5dr-${randomUUID()}`;
+            while (workingRecords.has(id)) id = `tx5dr-${randomUUID()}`;
+            const persisted = normalizeQsoForPersistence({
+              ...mutation.record,
+              id,
+              messageHistory: [...(mutation.record.messageHistory ?? [])],
+            });
+            workingRecords.set(id, persisted);
+            addedIds.add(id);
+            addedOrder.push(id);
+            outcomes.push({ inputIndex, status: 'added', targetId: id });
+            continue;
+          }
+
+          const existing = workingRecords.get(mutation.qsoId);
+          if (!existing) throw new Error(`QSO with id ${mutation.qsoId} not found`);
+          const updates = mutation.updates;
+          const requested = {
+            ...existing,
+            ...updates,
+            id: mutation.qsoId,
+            submode: updates.mode !== undefined && updates.submode === undefined
+              ? undefined
+              : updates.submode ?? existing.submode,
+            messageHistory: [...(updates.messageHistory ?? existing.messageHistory)],
+          };
+          const changed = !qsoRecordsEqual(existing, requested);
+          if (changed) {
+            const next = normalizeQsoForPersistence(requested);
+            workingRecords.set(mutation.qsoId, next);
+            if (!addedIds.has(mutation.qsoId) && !updatedExistingIds.has(mutation.qsoId)) {
+              updatedExistingIds.add(mutation.qsoId);
+              updatedExistingOrder.push(mutation.qsoId);
+            }
+          }
+          outcomes.push({
+            inputIndex,
+            status: changed ? 'updated' : 'unchanged',
+            targetId: mutation.qsoId,
+          });
+        }
+
+        const changedExistingIds = updatedExistingOrder.filter((id) => {
+          const original = originalRecords.get(id);
+          const current = workingRecords.get(id);
+          return Boolean(original && current && !qsoRecordsEqual(original, current));
+        });
+        const changedExistingIdSet = new Set(changedExistingIds);
+        const operations: LogbookRewriteOperation[] = [
+          ...changedExistingIds.map(id => ({
+            type: 'replace' as const,
+            id,
+            qso: cloneRecord(workingRecords.get(id)!),
+          })),
+          ...addedOrder.map(id => {
+            const record = cloneRecord(workingRecords.get(id)!);
+            return {
+              type: 'append' as const,
+              raw: encodeAdifRecord(record),
+              qso: record,
+            };
+          }),
+        ];
+
+        if (operations.length > 0) {
+          PersistenceCoordinator.getInstance().assertMutationsAllowed('logbook:batch');
+          const mutation = changedExistingIds.length > 0
+            ? this.document!.prepareRewrite(operations)
+            : this.document!.prepareImport(operations);
+          await this.commitMutation(mutation);
+        }
+
+        const finalRevision = generationRevision(this.generation);
+        return {
+          revision: finalRevision,
+          outcomes: outcomes.map((outcome) => {
+            const record = operations.length > 0
+              ? this.records.get(outcome.targetId)
+              : workingRecords.get(outcome.targetId);
+            if (!record) throw new Error(`Committed QSO with id ${outcome.targetId} not found`);
+            const finalStatus = outcome.status === 'updated'
+              && originalRecords.has(outcome.targetId)
+              && !changedExistingIdSet.has(outcome.targetId)
+              ? 'unchanged'
+              : outcome.status;
+            return {
+              inputIndex: outcome.inputIndex,
+              status: finalStatus,
+              record: cloneRecord(record),
+            };
+          }),
+        };
       });
     });
   }

@@ -38,16 +38,59 @@ function createQso(id: string, overrides: Partial<QSORecord> = {}): QSORecord {
 function createContext() {
   const store = new Map<string, unknown>();
   const files = new Map<string, Buffer>();
+  let snapshotRecords: QSORecord[] = [];
+  let revision = 1;
   const queryQSOs = vi.fn(async (_filter?: unknown) => [] as QSORecord[]);
-  const updateQSO = vi.fn(async (id: string, updates: Partial<QSORecord>) => createQso(id, {
-    ...updates,
-    id,
-    messageHistory: [...(updates.messageHistory ?? [])],
-  }));
+  const updateQSO = vi.fn(async (id: string, updates: Partial<QSORecord>) => {
+    const existing = snapshotRecords.find((record) => record.id === id);
+    if (!existing) throw new Error(`QSO with id ${id} not found`);
+    return {
+      ...existing,
+      ...updates,
+      id,
+      messageHistory: [...(updates.messageHistory ?? existing.messageHistory ?? [])],
+    };
+  });
   const addQSO = vi.fn(async (record: QSORecord) => ({
     ...record,
     messageHistory: [...record.messageHistory],
   }));
+  const readQsoSnapshot = vi.fn(async () => ({
+    revision: `revision-${revision}`,
+    records: snapshotRecords.map((record) => ({
+      ...record,
+      messageHistory: [...(record.messageHistory ?? [])],
+    })),
+  }));
+  const applyQsoBatch = vi.fn(async (
+    mutations: Array<
+      | { type: 'add'; record: QSORecord }
+      | { type: 'update'; qsoId: string; updates: Partial<QSORecord> }
+    >,
+    options: { expectedRevision: string },
+  ) => {
+    if (options.expectedRevision !== `revision-${revision}`) {
+      throw Object.assign(new Error('revision conflict'), { code: 'LOGBOOK_REVISION_CONFLICT' });
+    }
+    const next = snapshotRecords.map((record) => ({ ...record, messageHistory: [...(record.messageHistory ?? [])] }));
+    const outcomes = [];
+    for (const [inputIndex, mutation] of mutations.entries()) {
+      if (mutation.type === 'add') {
+        const added = await addQSO(mutation.record);
+        next.push(added);
+        outcomes.push({ inputIndex, status: 'added' as const, record: added });
+        continue;
+      }
+      const existingIndex = next.findIndex((record) => record.id === mutation.qsoId);
+      if (existingIndex < 0) throw new Error(`QSO with id ${mutation.qsoId} not found`);
+      const updated = await updateQSO(mutation.qsoId, mutation.updates);
+      next[existingIndex] = updated;
+      outcomes.push({ inputIndex, status: 'updated' as const, record: updated });
+    }
+    snapshotRecords = next;
+    revision += 1;
+    return { revision: `revision-${revision}`, outcomes };
+  });
   const notifyUpdated = vi.fn(async () => undefined);
 
   const ctx = {
@@ -64,6 +107,8 @@ function createContext() {
         queryQSOs,
         updateQSO,
         addQSO,
+        readQsoSnapshot,
+        applyQsoBatch,
         notifyUpdated,
       })),
     },
@@ -93,7 +138,15 @@ function createContext() {
     queryQSOs,
     updateQSO,
     addQSO,
+    readQsoSnapshot,
+    applyQsoBatch,
     notifyUpdated,
+    setSnapshotRecords(records: QSORecord[]) {
+      snapshotRecords = records.map((record) => ({
+        ...record,
+        messageHistory: [...(record.messageHistory ?? [])],
+      }));
+    },
   };
 }
 
@@ -420,7 +473,7 @@ describe('LoTWSyncProvider', () => {
   });
 
   it('auto-upload uses explicit records without rescanning the logbook', async () => {
-    const { ctx, queryQSOs, updateQSO, notifyUpdated } = createContext();
+    const { ctx, queryQSOs, updateQSO, applyQsoBatch, notifyUpdated, setSnapshotRecords } = createContext();
     const provider = new LoTWSyncProvider(ctx);
     provider.setConfig('BG5DRB', {
       username: 'user',
@@ -436,6 +489,7 @@ describe('LoTWSyncProvider', () => {
     });
 
     const qso = createQso('qso-1');
+    setSnapshotRecords([qso]);
     const internals = provider as unknown as LoTWProviderInternals;
     const prepareUpload = vi.spyOn(internals, 'prepareUpload').mockResolvedValue({
       issues: [],
@@ -460,6 +514,7 @@ describe('LoTWSyncProvider', () => {
     expect(queryQSOs).not.toHaveBeenCalled();
     expect(prepareUpload).toHaveBeenCalledWith(expect.anything(), [qso], 'BG5DRB');
     expect(uploadBatch).toHaveBeenCalledTimes(1);
+    expect(applyQsoBatch).toHaveBeenCalledTimes(1);
     expect(updateQSO).toHaveBeenCalledWith('qso-1', {
       lotwQslSent: 'Y',
       lotwQslSentDate: expect.any(Number),
@@ -469,7 +524,7 @@ describe('LoTWSyncProvider', () => {
   });
 
   it('manual upload still scans the logbook for unsent QSOs', async () => {
-    const { ctx, queryQSOs } = createContext();
+    const { ctx, queryQSOs, setSnapshotRecords } = createContext();
     const provider = new LoTWSyncProvider(ctx);
     provider.setConfig('BG5DRB', {
       username: 'user',
@@ -486,6 +541,7 @@ describe('LoTWSyncProvider', () => {
 
     const qso = createQso('qso-1');
     queryQSOs.mockResolvedValue([qso]);
+    setSnapshotRecords([qso]);
     const internals = provider as unknown as LoTWProviderInternals;
     const prepareUpload = vi.spyOn(internals, 'prepareUpload').mockResolvedValue({
       issues: [],
@@ -509,7 +565,7 @@ describe('LoTWSyncProvider', () => {
   });
 
   it('manual upload filters pending QSOs by the selected upload date range', async () => {
-    const { ctx, queryQSOs, updateQSO } = createContext();
+    const { ctx, queryQSOs, updateQSO, setSnapshotRecords } = createContext();
     const provider = new LoTWSyncProvider(ctx);
     configureProvider(provider);
     const inRange = createQso('qso-in-range', { startTime: Date.parse('2026-04-17T12:00:00.000Z') });
@@ -519,6 +575,7 @@ describe('LoTWSyncProvider', () => {
       lotwQslSent: 'Y',
     });
     queryQSOs.mockResolvedValue([tooOld, inRange, alreadySent]);
+    setSnapshotRecords([tooOld, inRange, alreadySent]);
     const internals = provider as unknown as LoTWProviderInternals;
     const prepareUpload = vi.spyOn(internals, 'prepareUpload').mockResolvedValue({
       issues: [],
@@ -543,7 +600,7 @@ describe('LoTWSyncProvider', () => {
   });
 
   it('manual upload can include QSOs already marked as uploaded when requested', async () => {
-    const { ctx, queryQSOs, updateQSO } = createContext();
+    const { ctx, queryQSOs, updateQSO, applyQsoBatch, setSnapshotRecords } = createContext();
     const provider = new LoTWSyncProvider(ctx);
     configureProvider(provider);
     const unsent = createQso('qso-unsent', { startTime: Date.parse('2026-04-17T12:00:00.000Z') });
@@ -552,6 +609,7 @@ describe('LoTWSyncProvider', () => {
       lotwQslSent: 'Y',
     });
     queryQSOs.mockResolvedValue([unsent, alreadySent]);
+    setSnapshotRecords([unsent, alreadySent]);
     const internals = provider as unknown as LoTWProviderInternals;
     const prepareUpload = vi.spyOn(internals, 'prepareUpload').mockResolvedValue({
       issues: [],
@@ -570,7 +628,8 @@ describe('LoTWSyncProvider', () => {
     expect(result).toMatchObject({ submitted: 2, uploaded: 2, failed: 0 });
     expect(prepareUpload).toHaveBeenCalledWith(expect.anything(), [unsent, alreadySent], 'BG5DRB');
     expect(updateQSO).toHaveBeenCalledWith('qso-unsent', expect.objectContaining({ lotwQslSent: 'Y' }));
-    expect(updateQSO).toHaveBeenCalledWith('qso-sent', expect.objectContaining({ lotwQslSent: 'Y' }));
+    expect(updateQSO).toHaveBeenCalledWith('qso-sent', expect.objectContaining({ lotwQslSentDate: expect.any(Number) }));
+    expect(applyQsoBatch).toHaveBeenCalledTimes(1);
   });
 
   it('upload preflight filters blockers by the selected upload date range', async () => {
@@ -632,7 +691,7 @@ describe('LoTWSyncProvider', () => {
   });
 
   it('can skip certificate-blocked QSOs and upload the remaining prepared QSOs', async () => {
-    const { ctx, files, updateQSO } = createContext();
+    const { ctx, files, updateQSO, setSnapshotRecords } = createContext();
     const provider = new LoTWSyncProvider(ctx);
     configureProvider(provider);
     files.set(
@@ -647,6 +706,7 @@ describe('LoTWSyncProvider', () => {
       callsign: 'K1BAD',
       startTime: Date.parse('2024-04-17T12:00:00.000Z'),
     });
+    setSnapshotRecords([uploadable, blocked]);
     const internals = provider as unknown as LoTWProviderInternals;
     const uploadBatch = vi.spyOn(internals, 'uploadBatch').mockResolvedValue({ acceptedAt: Date.now(), responseSummary: 'accepted' });
     const progress: Array<{ stage: string; batchIndex?: number; batchCount?: number }> = [];
@@ -677,11 +737,12 @@ describe('LoTWSyncProvider', () => {
   });
 
   it('marks accepted uploads as sent without querying LoTW reports', async () => {
-    const { ctx, updateQSO } = createContext();
+    const { ctx, updateQSO, applyQsoBatch, setSnapshotRecords } = createContext();
     ctx.fetch.mockImplementation(async () => lotwResponse('ARRL Logbook of the World Status Report\n<eoh>\n'));
     const provider = new LoTWSyncProvider(ctx);
     configureProvider(provider);
     const qso = createQso('qso-1');
+    setSnapshotRecords([qso]);
     const internals = provider as unknown as LoTWProviderInternals;
     vi.spyOn(internals, 'prepareUpload').mockResolvedValue({
       issues: [],
@@ -700,14 +761,16 @@ describe('LoTWSyncProvider', () => {
       lotwQslSent: 'Y',
       lotwQslSentDate: expect.any(Number),
     });
+    expect(applyQsoBatch).toHaveBeenCalledTimes(1);
   });
 
   it('reports local sent-status update failures after LoTW accepts a batch', async () => {
-    const { ctx, updateQSO } = createContext();
+    const { ctx, updateQSO, setSnapshotRecords } = createContext();
     updateQSO.mockRejectedValue(new Error('local db is locked'));
     const provider = new LoTWSyncProvider(ctx);
     configureProvider(provider);
     const qso = createQso('qso-1');
+    setSnapshotRecords([qso]);
     const internals = provider as unknown as LoTWProviderInternals;
     vi.spyOn(internals, 'prepareUpload').mockResolvedValue({
       issues: [],
@@ -723,7 +786,6 @@ describe('LoTWSyncProvider', () => {
     expect(result.failures).toEqual([
       expect.objectContaining({
         code: 'lotw_update_qsl_status_failed',
-        qsoId: 'qso-1',
         message: 'local db is locked',
       }),
     ]);
@@ -731,12 +793,13 @@ describe('LoTWSyncProvider', () => {
   });
 
   it('splits large upload batches before submitting to LoTW', async () => {
-    const { ctx } = createContext();
+    const { ctx, applyQsoBatch, setSnapshotRecords } = createContext();
     const provider = new LoTWSyncProvider(ctx);
     configureProvider(provider);
     const qsos = Array.from({ length: 101 }, (_, index) => createQso(`qso-${index + 1}`, {
       startTime: Date.parse('2026-04-17T12:00:00.000Z') + index * 60000,
     }));
+    setSnapshotRecords(qsos);
     const internals = provider as unknown as LoTWProviderInternals;
     vi.spyOn(internals, 'prepareUpload').mockResolvedValue({
       issues: [],
@@ -751,8 +814,38 @@ describe('LoTWSyncProvider', () => {
     expect(result).toMatchObject({ submitted: 101, uploaded: 101, failed: 0 });
     expect(result.verified).toBeUndefined();
     expect(uploadBatch).toHaveBeenCalledTimes(2);
+    expect(applyQsoBatch).toHaveBeenCalledTimes(1);
     expect((uploadBatch.mock.calls[0][0] as { qsos: QSORecord[] }).qsos).toHaveLength(100);
     expect((uploadBatch.mock.calls[1][0] as { qsos: QSORecord[] }).qsos).toHaveLength(1);
+  });
+
+  it('commits only the QSO IDs from remotely accepted upload batches', async () => {
+    const { ctx, applyQsoBatch, setSnapshotRecords } = createContext();
+    const provider = new LoTWSyncProvider(ctx);
+    configureProvider(provider);
+    const qsos = Array.from({ length: 101 }, (_, index) => createQso(`qso-${index + 1}`, {
+      startTime: Date.parse('2026-04-17T12:00:00.000Z') + index * 60000,
+    }));
+    setSnapshotRecords(qsos);
+    const internals = provider as unknown as LoTWProviderInternals;
+    vi.spyOn(internals, 'prepareUpload').mockResolvedValue({
+      issues: [],
+      blockedCount: 0,
+      batches: [{ qsos, certificate: { callsign: 'BG5DRB' } }],
+    });
+    vi.spyOn(internals, 'resolveUploadLocation').mockReturnValue({ callsign: 'BG5DRB', dxccId: 291, gridSquare: 'PM01AA', cqZone: '24', ituZone: '44', state: 'CA', county: 'Santa Clara' });
+    vi.spyOn(internals, 'uploadBatch')
+      .mockResolvedValueOnce({ acceptedAt: Date.now(), responseSummary: 'accepted' })
+      .mockRejectedValueOnce(new Error('remote rejected second batch'));
+
+    const result = await provider.upload('BG5DRB', { records: qsos });
+
+    expect(result).toMatchObject({ submitted: 100, uploaded: 100, failed: 1 });
+    expect(applyQsoBatch).toHaveBeenCalledTimes(1);
+    expect(applyQsoBatch.mock.calls[0][0]).toHaveLength(100);
+    expect(applyQsoBatch.mock.calls[0][0]).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ qsoId: 'qso-101' }),
+    ]));
   });
 
   it('projects SSB sideband records to LoTW contact mode SSB', () => {
@@ -882,14 +975,14 @@ describe('LoTWSyncProvider', () => {
   });
 
   it('download sync backfills sent and received status when a LoTW record matches a local QSO', async () => {
-    const { ctx, queryQSOs, updateQSO, addQSO, notifyUpdated } = createContext();
+    const { ctx, updateQSO, addQSO, applyQsoBatch, notifyUpdated, setSnapshotRecords } = createContext();
     const local = createQso('local-1', {
       lotwQslSent: undefined,
       lotwQslSentDate: undefined,
       lotwQslReceived: undefined,
       lotwQslReceivedDate: undefined,
     });
-    queryQSOs.mockResolvedValue([local]);
+    setSnapshotRecords([local]);
     ctx.fetch.mockResolvedValue(lotwResponse(
       'ARRL Logbook of the World Status Report\n<PROGRAMID:4>LoTW <eoh>\n'
       + '<CALL:6>N0CALL <STATION_CALLSIGN:6>BG5DRB <BAND:3>20M <FREQ:8>14.07400 '
@@ -912,7 +1005,176 @@ describe('LoTWSyncProvider', () => {
       lotwQslReceived: 'Y',
       lotwQslReceivedDate: Date.parse('2026-04-18T00:00:00.000Z'),
     });
+    expect(applyQsoBatch).toHaveBeenCalledTimes(1);
     expect(notifyUpdated).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not rewrite a local QSO whose LoTW status and dates are already current', async () => {
+    const { ctx, applyQsoBatch, notifyUpdated, setSnapshotRecords } = createContext();
+    const confirmedAt = Date.parse('2026-04-18T00:00:00.000Z');
+    setSnapshotRecords([createQso('local-1', {
+      lotwQslSent: 'Y',
+      lotwQslSentDate: confirmedAt,
+      lotwQslReceived: 'Y',
+      lotwQslReceivedDate: confirmedAt,
+    })]);
+    ctx.fetch.mockResolvedValue(lotwResponse(
+      'ARRL Logbook of the World Status Report\n<PROGRAMID:4>LoTW <eoh>\n'
+      + '<CALL:6>N0CALL <STATION_CALLSIGN:6>BG5DRB <BAND:3>20M <FREQ:8>14.07400 '
+      + '<MODE:4>MFSK <SUBMODE:3>FT8 <QSO_DATE:8>20260417 <TIME_ON:6>120000 '
+      + '<LOTW_QSL_RCVD:1>Y <LOTW_QSLRDATE:8>20260418 <eor>',
+    ));
+    const provider = new LoTWSyncProvider(ctx);
+    configureProvider(provider);
+
+    const result = await provider.download('BG5DRB', {
+      since: Date.parse('2026-04-17T00:00:00.000Z'),
+      until: Date.parse('2026-04-17T23:59:59.999Z'),
+    });
+
+    expect(result).toMatchObject({ downloaded: 1, matched: 1, updated: 0, imported: 0 });
+    expect(applyQsoBatch).not.toHaveBeenCalled();
+    expect(notifyUpdated).not.toHaveBeenCalled();
+  });
+
+  it('does not downgrade a verified LoTW confirmation to received', async () => {
+    const { ctx, applyQsoBatch, setSnapshotRecords } = createContext();
+    const confirmedAt = Date.parse('2026-04-18T00:00:00.000Z');
+    setSnapshotRecords([createQso('local-1', {
+      lotwQslSent: 'Y',
+      lotwQslSentDate: confirmedAt,
+      lotwQslReceived: 'V',
+      lotwQslReceivedDate: confirmedAt,
+    })]);
+    ctx.fetch.mockResolvedValue(lotwResponse(
+      'ARRL Logbook of the World Status Report\n<PROGRAMID:4>LoTW <eoh>\n'
+      + '<CALL:6>N0CALL <STATION_CALLSIGN:6>BG5DRB <BAND:3>20M <FREQ:8>14.07400 '
+      + '<MODE:3>FT8 <QSO_DATE:8>20260417 <TIME_ON:6>120000 '
+      + '<LOTW_QSL_RCVD:1>Y <LOTW_QSLRDATE:8>20260418 <eor>',
+    ));
+    const provider = new LoTWSyncProvider(ctx);
+    configureProvider(provider);
+
+    const result = await provider.download('BG5DRB', {
+      since: Date.parse('2026-04-17T00:00:00.000Z'),
+      until: Date.parse('2026-04-17T23:59:59.999Z'),
+    });
+
+    expect(result).toMatchObject({ matched: 1, updated: 0 });
+    expect(applyQsoBatch).not.toHaveBeenCalled();
+  });
+
+  it('coalesces repeated remote confirmations for one local QSO into one mutation', async () => {
+    const { ctx, applyQsoBatch, setSnapshotRecords } = createContext();
+    setSnapshotRecords([createQso('local-1')]);
+    ctx.fetch.mockResolvedValue(lotwResponse(
+      'ARRL Logbook of the World Status Report\n<PROGRAMID:4>LoTW <eoh>\n'
+      + '<CALL:6>N0CALL <STATION_CALLSIGN:6>BG5DRB <BAND:3>20M <FREQ:8>14.07400 '
+      + '<MODE:3>FT8 <QSO_DATE:8>20260417 <TIME_ON:6>120000 '
+      + '<LOTW_QSL_RCVD:1>Y <LOTW_QSLRDATE:8>20260418 <eor>\n'
+      + '<CALL:6>N0CALL <STATION_CALLSIGN:6>BG5DRB <BAND:3>20M <FREQ:8>14.07400 '
+      + '<MODE:3>FT8 <QSO_DATE:8>20260417 <TIME_ON:6>120000 '
+      + '<LOTW_QSL_RCVD:1>Y <LOTW_QSLRDATE:8>20260419 <eor>',
+    ));
+    const provider = new LoTWSyncProvider(ctx);
+    configureProvider(provider);
+
+    const result = await provider.download('BG5DRB', {
+      since: Date.parse('2026-04-17T00:00:00.000Z'),
+      until: Date.parse('2026-04-17T23:59:59.999Z'),
+    });
+
+    expect(result).toMatchObject({ downloaded: 2, matched: 2, updated: 1, imported: 0 });
+    expect(applyQsoBatch).toHaveBeenCalledTimes(1);
+    expect(applyQsoBatch.mock.calls[0][0]).toEqual([
+      expect.objectContaining({
+        type: 'update',
+        qsoId: 'local-1',
+        updates: expect.objectContaining({
+          lotwQslReceivedDate: Date.parse('2026-04-19T00:00:00.000Z'),
+        }),
+      }),
+    ]);
+  });
+
+  it('replans a downloaded window after a logbook revision conflict', async () => {
+    const { ctx, readQsoSnapshot, applyQsoBatch, setSnapshotRecords } = createContext();
+    setSnapshotRecords([createQso('local-1')]);
+    applyQsoBatch.mockRejectedValueOnce(Object.assign(new Error('revision conflict'), {
+      code: 'LOGBOOK_REVISION_CONFLICT',
+    }));
+    ctx.fetch.mockResolvedValue(lotwResponse(
+      'ARRL Logbook of the World Status Report\n<PROGRAMID:4>LoTW <eoh>\n'
+      + '<CALL:6>N0CALL <STATION_CALLSIGN:6>BG5DRB <BAND:3>20M <FREQ:8>14.07400 '
+      + '<MODE:3>FT8 <QSO_DATE:8>20260417 <TIME_ON:6>120000 '
+      + '<LOTW_QSL_RCVD:1>Y <LOTW_QSLRDATE:8>20260418 <eor>',
+    ));
+    const provider = new LoTWSyncProvider(ctx);
+    configureProvider(provider);
+
+    const result = await provider.download('BG5DRB', {
+      since: Date.parse('2026-04-17T00:00:00.000Z'),
+      until: Date.parse('2026-04-17T23:59:59.999Z'),
+    });
+
+    expect(result).toMatchObject({ matched: 1, updated: 1, imported: 0 });
+    expect(readQsoSnapshot).toHaveBeenCalledTimes(2);
+    expect(applyQsoBatch).toHaveBeenCalledTimes(2);
+  });
+
+  it('commits each successful LoTW download window as one local batch', async () => {
+    const { ctx, applyQsoBatch } = createContext();
+    ctx.fetch
+      .mockResolvedValueOnce(lotwResponse(
+        'ARRL Logbook of the World Status Report\n<PROGRAMID:4>LoTW <eoh>\n'
+        + '<CALL:6>N0CALL <STATION_CALLSIGN:6>BG5DRB <BAND:3>20M <FREQ:8>14.07400 '
+        + '<MODE:3>FT8 <QSO_DATE:8>20260101 <TIME_ON:6>120000 <eor>',
+      ))
+      .mockResolvedValueOnce(lotwResponse(
+        'ARRL Logbook of the World Status Report\n<PROGRAMID:4>LoTW <eoh>\n'
+        + '<CALL:5>K1ABC <STATION_CALLSIGN:6>BG5DRB <BAND:3>20M <FREQ:8>14.07400 '
+        + '<MODE:3>FT8 <QSO_DATE:8>20260108 <TIME_ON:6>120000 <eor>',
+      ));
+    const provider = new LoTWSyncProvider(ctx);
+    configureProvider(provider);
+
+    const result = await provider.download('BG5DRB', {
+      since: Date.parse('2026-01-01T00:00:00.000Z'),
+      until: Date.parse('2026-01-08T23:59:59.999Z'),
+    });
+
+    expect(result).toMatchObject({ downloaded: 2, imported: 2, updated: 0 });
+    expect(applyQsoBatch).toHaveBeenCalledTimes(2);
+    expect(applyQsoBatch.mock.calls[0][0]).toHaveLength(1);
+    expect(applyQsoBatch.mock.calls[1][0]).toHaveLength(1);
+  });
+
+  it('stops downloading later windows after a local batch commit fails', async () => {
+    const { ctx, applyQsoBatch, notifyUpdated } = createContext();
+    ctx.fetch.mockResolvedValue(lotwResponse(
+      'ARRL Logbook of the World Status Report\n<PROGRAMID:4>LoTW <eoh>\n'
+      + '<CALL:6>N0CALL <STATION_CALLSIGN:6>BG5DRB <BAND:3>20M <FREQ:8>14.07400 '
+      + '<MODE:3>FT8 <QSO_DATE:8>20260101 <TIME_ON:6>120000 <eor>',
+    ));
+    applyQsoBatch.mockRejectedValue(new Error('local logbook is read-only'));
+    const provider = new LoTWSyncProvider(ctx);
+    configureProvider(provider);
+
+    const result = await provider.download('BG5DRB', {
+      since: Date.parse('2026-01-01T00:00:00.000Z'),
+      until: Date.parse('2026-01-08T23:59:59.999Z'),
+    });
+
+    expect(ctx.fetch).toHaveBeenCalledTimes(1);
+    expect(result.failures).toEqual([
+      expect.objectContaining({
+        code: 'lotw_download_logbook_failed',
+        source: 'logbook',
+        message: 'local logbook is read-only',
+      }),
+    ]);
+    expect(provider.getConfig('BG5DRB')?.lastDownloadTime).toBeUndefined();
+    expect(notifyUpdated).not.toHaveBeenCalled();
   });
 
   it('downloads large LoTW ranges in dated request windows', async () => {
@@ -965,6 +1227,42 @@ describe('LoTWSyncProvider', () => {
       }),
     ]);
     expect(addQSO).toHaveBeenCalledTimes(1);
+  });
+
+  it('continues with later download windows after a remote window fails', async () => {
+    const { ctx, applyQsoBatch } = createContext();
+    const firstWindow = lotwResponse(
+      'ARRL Logbook of the World Status Report\n<PROGRAMID:4>LoTW <eoh>\n'
+      + '<CALL:6>N0CALL <STATION_CALLSIGN:6>BG5DRB <BAND:3>20M <FREQ:8>14.07400 '
+      + '<MODE:3>FT8 <QSO_DATE:8>20260101 <TIME_ON:6>120000 <eor>',
+    );
+    const rateLimited = () => new Response('<html><b>Page Request Limit!</b></html>', { status: 503 });
+    const thirdWindow = lotwResponse(
+      'ARRL Logbook of the World Status Report\n<PROGRAMID:4>LoTW <eoh>\n'
+      + '<CALL:5>K1ABC <STATION_CALLSIGN:6>BG5DRB <BAND:3>20M <FREQ:8>14.07400 '
+      + '<MODE:3>FT8 <QSO_DATE:8>20260115 <TIME_ON:6>120000 <eor>',
+    );
+    ctx.fetch
+      .mockResolvedValueOnce(firstWindow)
+      .mockResolvedValueOnce(rateLimited())
+      .mockResolvedValueOnce(rateLimited())
+      .mockResolvedValueOnce(rateLimited())
+      .mockResolvedValueOnce(thirdWindow);
+    const provider = new LoTWSyncProvider(ctx);
+    configureProvider(provider);
+
+    const result = await provider.download('BG5DRB', {
+      since: Date.parse('2026-01-01T00:00:00.000Z'),
+      until: Date.parse('2026-01-15T23:59:59.999Z'),
+    });
+
+    expect(ctx.fetch).toHaveBeenCalledTimes(5);
+    expect(result).toMatchObject({ downloaded: 2, imported: 2 });
+    expect(result.failures).toEqual([
+      expect.objectContaining({ code: 'lotw_rate_limited', retryable: true }),
+    ]);
+    expect(applyQsoBatch).toHaveBeenCalledTimes(2);
+    expect(provider.getConfig('BG5DRB')?.lastDownloadTime).toBeUndefined();
   });
 
   it('retries a LoTW page request limit on the same window before moving on', async () => {

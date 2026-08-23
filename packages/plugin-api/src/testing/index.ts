@@ -366,13 +366,29 @@ export function createMockLogbookAccess(
     ...updates,
     id: qsoId,
   });
+  const readQsoSnapshot = async () => ({ revision: 'mock-revision', records: [] });
+  const applyQsoBatch: LogbookAccess['applyQsoBatch'] = async (mutations) => ({
+    revision: 'mock-revision',
+    outcomes: await Promise.all(mutations.map(async (mutation, inputIndex) => {
+      if (mutation.type === 'add') {
+        return { inputIndex, status: 'added' as const, record: await commit(mutation.record) };
+      }
+      return {
+        inputIndex,
+        status: 'updated' as const,
+        record: await update(mutation.qsoId, mutation.updates),
+      };
+    })),
+  });
   const callsignAccess = {
     callsign: 'N0CALL',
     getLogBookId: async () => 'logbook-N0CALL',
     queryQSOs: async () => [],
+    readQsoSnapshot,
     countQSOs: async () => 0,
     addQSO: commit,
     updateQSO: update,
+    applyQsoBatch,
     getStatistics: async () => null,
     notifyUpdated: async () => {},
   };
@@ -382,10 +398,12 @@ export function createMockLogbookAccess(
     hasWorkedDXCC: async () => false,
     hasWorkedGrid: async () => false,
     queryQSOs: async () => [],
+    readQsoSnapshot,
     countQSOs: async () => 0,
     forCallsign: () => callsignAccess,
     addQSO: commit,
     updateQSO: update,
+    applyQsoBatch,
     notifyUpdated: async () => {},
     ...overrides,
   };
@@ -783,6 +801,7 @@ export function createMockContext<
     hasWorkedDXCC: logbook.hasWorkedDXCC,
     hasWorkedGrid: logbook.hasWorkedGrid,
     queryQSOs: logbook.queryQSOs,
+    readQsoSnapshot: logbook.readQsoSnapshot,
     countQSOs: logbook.countQSOs,
     forCallsign(callsign: string) {
       const access = logbook.forCallsign(callsign);
@@ -790,6 +809,7 @@ export function createMockContext<
         callsign: access.callsign,
         getLogBookId: access.getLogBookId,
         queryQSOs: access.queryQSOs,
+        readQsoSnapshot: access.readQsoSnapshot,
         countQSOs: access.countQSOs,
         getStatistics: access.getStatistics,
       };
