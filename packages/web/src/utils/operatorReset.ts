@@ -16,7 +16,7 @@ const hasText = (value: unknown): boolean => (
 );
 
 const hasNonDefaultReport = (value: unknown): boolean => (
-  typeof value === 'number' && Number.isFinite(value) && value !== 0
+  typeof value === 'number' && Number.isFinite(value)
 );
 
 const getOperatorSlot = (operator: OperatorStatus): string | undefined => (
@@ -54,8 +54,8 @@ export const resetOperatorsForOperatingStateChange = ({
   const clearContext: WSSetOperatorContextMessage['data']['context'] = {
     targetCallsign: '',
     targetGrid: '',
-    reportSent: 0,
-    reportReceived: 0,
+    reportSent: null,
+    reportReceived: null,
   };
 
   for (const operator of operators) {

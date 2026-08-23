@@ -2550,15 +2550,15 @@ export class WSServer extends WSMessageHandler {
   private broadcastQSOToast(operatorId: string, qso: any, key: ServerMessageKey.QSO_LOGGED | ServerMessageKey.QSO_UPDATED): void {
     try {
       const mhz = (qso.frequency / 1_000_000).toFixed(3);
-      const reportSent = qso.reportSent || '--';
-      const reportReceived = qso.reportReceived || '--';
+      const reportSent = qso.reportSent != null && qso.reportSent !== '' ? qso.reportSent : '--';
+      const reportReceived = qso.reportReceived != null && qso.reportReceived !== '' ? qso.reportReceived : '--';
       const summaryParts = [qso.callsign];
       if (qso.grid) {
         summaryParts.push(qso.grid);
       }
       summaryParts.push(`${mhz} MHz`);
       summaryParts.push(qso.mode);
-      if (qso.reportSent || qso.reportReceived) {
+      if ((qso.reportSent != null && qso.reportSent !== '') || (qso.reportReceived != null && qso.reportReceived !== '')) {
         summaryParts.push(`${reportSent}/${reportReceived}`);
       }
 
