@@ -378,4 +378,83 @@ describe('pluginSettings utils', () => {
       params: { band: '20m', line: 1 },
     });
   });
+
+  it('normalizes object[] rows with action/string[]/multiselect/radio fields', () => {
+    const controlRowSettings = {
+      ...mockPluginSettings,
+      targets: {
+        type: 'keyedObjectArrays' as const,
+        label: 'Targets',
+        scope: 'operator' as const,
+        default: {},
+        keys: [{ key: 'a', label: 'A' }],
+        itemFields: [
+          { key: 'name', type: 'string' as const, label: 'Name' },
+          {
+            key: 'method',
+            type: 'radio' as const,
+            label: 'Method',
+            default: 'POST',
+            options: [
+              { value: 'POST', label: 'POST' },
+              { value: 'GET', label: 'GET' },
+            ],
+          },
+          { key: 'headers', type: 'string[]' as const, label: 'Headers' },
+          {
+            key: 'events',
+            type: 'multiselect' as const,
+            label: 'Events',
+            default: ['decode', 'qso'],
+            options: [{ value: 'decode', label: 'Decode' }],
+          },
+          { key: 'test', type: 'action' as const, label: 'Test' },
+        ],
+      },
+    };
+    const plugin: PluginStatus = { ...mockPlugin, settings: controlRowSettings };
+
+    expect(
+      normalizePluginSettingsForSave(
+        plugin,
+        {
+          targets: {
+            a: [
+              {
+                id: 'row-1',
+                name: 'Main',
+                method: 'POST',
+                headers: 'Authorization: x\nX-Custom: y',
+                events: ['qso', 'decode', 'decode'],
+                test: '',
+              },
+              {
+                id: 'row-2',
+                name: '',
+                method: 'POST',
+                headers: '',
+                events: ['decode', 'qso'],
+                test: '',
+              },
+            ],
+          },
+        },
+        'operator',
+      ),
+    ).toMatchObject({
+      targets: {
+        // action rows are dropped, string[] splits textarea lines, multiselect
+        // is deduped and sorted; a row of pure defaults is omitted.
+        a: [
+          {
+            id: 'row-1',
+            name: 'Main',
+            method: 'POST',
+            headers: ['Authorization: x', 'X-Custom: y'],
+            events: ['decode', 'qso'],
+          },
+        ],
+      },
+    });
+  });
 });

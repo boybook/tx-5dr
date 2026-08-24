@@ -26,6 +26,8 @@ interface PluginOperatorSettingsFormProps {
   isAutomationPauseUpdating?: boolean;
   onToggleAutomationPause?: () => void;
   automationPauseError?: string;
+  /** 触发 `action` 类型设置项时回调（actionId 由调用方分发到插件 onUserAction hook） */
+  onUserAction?: (actionId: string) => void;
 }
 
 export function getDefaultOperatorPluginSettings(plugin: PluginStatus): Record<string, unknown> {
@@ -60,6 +62,7 @@ export const PluginOperatorSettingsForm: React.FC<PluginOperatorSettingsFormProp
   isAutomationPauseUpdating = false,
   onToggleAutomationPause,
   automationPauseError = '',
+  onUserAction,
 }) => {
   const { t } = useTranslation('settings');
   const currentSettings = useMemo(
@@ -173,6 +176,7 @@ export const PluginOperatorSettingsForm: React.FC<PluginOperatorSettingsFormProp
             onChange={(val) => onChange(key, val)}
             pluginName={plugin.name}
             settings={currentSettings}
+            onUserAction={onUserAction}
           />
         ))}
       </div>

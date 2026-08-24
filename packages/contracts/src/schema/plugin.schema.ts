@@ -122,12 +122,38 @@ export type PluginSettingOption = z.infer<typeof PluginSettingOptionSchema>;
  */
 export const PluginObjectArrayFieldSchema = z.object({
   key: z.string(),
-  type: z.enum(['string', 'number', 'boolean']).optional().default('string'),
+  type: z.enum(['string', 'number', 'boolean', 'string[]', 'radio', 'multiselect', 'action']).optional().default('string'),
   label: z.string(),
   description: z.string().optional(),
   placeholder: z.string().optional(),
   required: z.boolean().optional(),
   default: z.unknown().optional(),
+  /** Selectable values used by `radio` and `multiselect` fields inside object[] rows. */
+  options: z.array(PluginSettingOptionSchema).optional(),
+  /** Action id dispatched to `onUserAction` for `action` fields inside object[] rows. Defaults to the field key when omitted. */
+  actionId: z.string().optional(),
+  /**
+   * Stretches the field across the whole row in fixed-column row layouts.
+   * When at least one field declares `fullWidth`, the object[] row editor
+   * switches to a fixed two-column (3:1) grid; otherwise the adaptive grid is
+   * kept for backward compatibility.
+   */
+  fullWidth: z.boolean().optional(),
+}).superRefine((field, ctx) => {
+  if ((field.type === 'radio' || field.type === 'multiselect')
+    && (!field.options || field.options.length === 0)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `${field.type === 'radio' ? 'Radio' : 'Multiselect'} fields require at least one option`,
+    });
+  }
+  if (field.options && new Set(field.options.map((option) => option.value)).size !== field.options.length) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['options'],
+      message: 'Field option values must be unique',
+    });
+  }
 });
 export type PluginObjectArrayField = z.infer<typeof PluginObjectArrayFieldSchema>;
 
