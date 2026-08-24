@@ -988,6 +988,74 @@ export const api = {
     return apiRequest<LastFrequencyResponse>('/radio/last-frequency', undefined, apiBase);
   },
 
+  async getImageRadioStatus(apiBase?: string): Promise<{ success: boolean; status: import('@tx5dr/contracts').ImageRadioStatus | null }> {
+    return apiRequest('/image-radio/status', undefined, apiBase);
+  },
+
+  async getImageRadioModes(apiBase?: string): Promise<{ success: boolean; modes: import('@tx5dr/contracts').ImageSstvModeInfo[] }> {
+    return apiRequest('/image-radio/modes', undefined, apiBase);
+  },
+
+  async setImageReceiveProfile(profile: import('@tx5dr/contracts').ImageReceiveProfile, apiBase?: string): Promise<{ success: boolean; status: import('@tx5dr/contracts').ImageRadioStatus }> {
+    return apiRequest('/image-radio/receive-profile', {
+      method: 'PUT',
+      body: JSON.stringify(profile),
+    }, apiBase);
+  },
+
+  async getImageArtifacts(query: { family?: 'sstv' | 'fax'; direction?: 'rx' | 'tx'; operatorId?: string; limit?: number; offset?: number } = {}, apiBase?: string): Promise<{ success: boolean; artifacts: import('@tx5dr/contracts').ImageArtifact[] }> {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) if (value !== undefined) params.set(key, String(value));
+    return apiRequest(`/image-radio/artifacts${params.size ? `?${params}` : ''}`, undefined, apiBase);
+  },
+
+  async getImageArtifactBlob(id: string, apiBase?: string): Promise<Blob> {
+    return apiBlobRequest(`/image-radio/artifacts/${encodePathSegment(id)}/image`, undefined, apiBase);
+  },
+
+  async updateImageArtifact(id: string, patch: { pinned?: boolean; qsoId?: string }, apiBase?: string): Promise<{ success: boolean; artifact: import('@tx5dr/contracts').ImageArtifact }> {
+    return apiRequest(`/image-radio/artifacts/${encodePathSegment(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }, apiBase);
+  },
+
+  async deleteImageArtifact(id: string, apiBase?: string): Promise<{ success: boolean }> {
+    return apiRequest(`/image-radio/artifacts/${encodePathSegment(id)}`, { method: 'DELETE' }, apiBase);
+  },
+
+  async getImagePaperManifest(apiBase?: string): Promise<{ success: boolean; manifest: { session: import('@tx5dr/contracts').ImageSessionSummary; boundaries: import('@tx5dr/contracts').ImagePaperBoundary[]; segments: Array<{ boundaryId: string; startLine: number; endLine: number; width: number; pixelFormat: import('@tx5dr/contracts').ImagePixelFormat; snapshotUrl: string }> } }> {
+    return apiRequest('/image-radio/paper/current', { cache: 'no-store' }, apiBase);
+  },
+
+  async getImagePaperSegmentSnapshot(boundaryId: string, apiBase?: string): Promise<Blob> {
+    return apiBlobRequest(`/image-radio/paper/segments/${encodePathSegment(boundaryId)}/snapshot`, { cache: 'no-store' }, apiBase);
+  },
+
+  async saveCurrentImagePaper(command: import('@tx5dr/contracts').ImagePaperSaveCommand, apiBase?: string): Promise<{ success: boolean; artifactId: string }> {
+    return apiRequest('/image-radio/paper/save', { method: 'POST', body: JSON.stringify(command) }, apiBase);
+  },
+
+  async uploadSstvArtifact(input: { file: Blob; operatorId: string; mode: string; frequency: number; radioMode?: string }, apiBase?: string): Promise<{ success: boolean; artifact: import('@tx5dr/contracts').ImageArtifact }> {
+    const params = new URLSearchParams({ operatorId: input.operatorId, mode: input.mode, frequency: String(input.frequency) });
+    if (input.radioMode) params.set('radioMode', input.radioMode);
+    const form = new FormData();
+    form.append('file', input.file, 'sstv.png');
+    return apiRequest(`/image-radio/artifacts/sstv?${params}`, { method: 'POST', body: form }, apiBase);
+  },
+
+  async getImageTemplates(operatorId?: string, apiBase?: string): Promise<{ success: boolean; templates: import('@tx5dr/contracts').ImageTemplate[] }> {
+    return apiRequest(`/image-radio/templates${operatorId ? `?operatorId=${encodePathSegment(operatorId)}` : ''}`, undefined, apiBase);
+  },
+
+  async saveImageTemplate(template: import('@tx5dr/contracts').ImageTemplate, apiBase?: string): Promise<{ success: boolean; template: import('@tx5dr/contracts').ImageTemplate }> {
+    return apiRequest(`/image-radio/templates/${encodePathSegment(template.id)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ operatorId: template.operatorId, name: template.name, backgroundArtifactId: template.backgroundArtifactId, layers: template.layers }),
+    }, apiBase);
+  },
+
+  async deleteImageTemplate(id: string, operatorId: string, apiBase?: string): Promise<{ success: boolean }> {
+    return apiRequest(`/image-radio/templates/${encodePathSegment(id)}?operatorId=${encodePathSegment(operatorId)}`, { method: 'DELETE' }, apiBase);
+  },
+
   async setRadioFrequency(
     params: {
       frequency: number;

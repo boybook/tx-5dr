@@ -143,7 +143,7 @@ function pruneNodeModules(nm) {
     'esquery', 'graphemer', 'espree', 'esrecurse', 'estraverse', 'estree-walker', 'esutils',
     'acorn', 'acorn-jsx', 'acorn-walk', 'doctrine', 'optionator',
     'chai', 'autocannon', 'clinic', 'insight', 'inquirer',
-    'source-map', 'pngjs', 'bluebird',
+    'source-map', 'bluebird',
     'electron-installer-common', 'rcedit', 'pe-library', 'cmake-js',
     'dir-compare', 'flora-colossus', 'galactus',
     'got', 'global-agent', 'global-dirs', 'roarr', 'serialize-error',
@@ -201,6 +201,16 @@ function cleanPlatformPrebuilds(nm, platform, arch) {
   const hamlibPrebuilds = path.join(nm, 'hamlib', 'prebuilds');
   const serialportPrebuilds = path.join(nm, '@serialport', 'bindings-cpp', 'prebuilds');
   const onnxruntimePrebuilds = path.join(nm, 'onnxruntime-node', 'bin', 'napi-v6');
+  const rasterwaveKeep = platform === 'darwin'
+    ? `rasterwave-node-darwin-${arch}`
+    : platform === 'linux'
+      ? `rasterwave-node-linux-${arch}-gnu`
+      : `rasterwave-node-win32-${arch}-msvc`;
+  try {
+    for (const entry of fs.readdirSync(nm)) {
+      if (entry.startsWith('rasterwave-node-') && entry !== rasterwaveKeep) rmrf(path.join(nm, entry));
+    }
+  } catch { /* ignore */ }
 
   if (platform === 'linux') {
     const removeArch = arch === 'arm64' ? 'linux-x64' : 'linux-arm64';
@@ -261,6 +271,29 @@ function cleanPlatformPrebuilds(nm, platform, arch) {
       for (const entry of fs.readdirSync(winOnnx)) if (entry !== onnxKeepArch) rmrf(path.join(winOnnx, entry));
     }
   }
+}
+
+function assertPackagedImageRadioRuntime(nm, platform, arch) {
+  const rasterwaveKeep = platform === 'darwin'
+    ? `rasterwave-node-darwin-${arch}`
+    : platform === 'linux'
+      ? `rasterwave-node-linux-${arch}-gnu`
+      : `rasterwave-node-win32-${arch}-msvc`;
+  for (const packageName of ['pngjs', 'rasterwave-node', rasterwaveKeep]) {
+    if (!fs.existsSync(path.join(nm, packageName))) {
+      throw new Error(`Missing packaged Image Radio dependency: ${packageName}`);
+    }
+  }
+  const bindingDir = path.join(nm, rasterwaveKeep);
+  if (!fs.readdirSync(bindingDir).some((entry) => entry.endsWith('.node'))) {
+    throw new Error(`Missing packaged rasterwave native binding: ${rasterwaveKeep}`);
+  }
+  const foreignBindings = fs.readdirSync(nm)
+    .filter((entry) => entry.startsWith('rasterwave-node-') && entry !== rasterwaveKeep);
+  if (foreignBindings.length > 0) {
+    throw new Error(`Foreign rasterwave bindings remain in package: ${foreignBindings.join(', ')}`);
+  }
+  console.log(`Image Radio runtime retained: pngjs, rasterwave-node, ${rasterwaveKeep}`);
 }
 
 function readMacosRpaths(runtimeFile) {
@@ -353,6 +386,7 @@ async function packageAfterCopy({ appRoot, resourcesDir, platform, arch }) {
   try { cleanPackages(appRoot); } catch (error) { console.warn('workspace cleanup warning:', error.message || error); }
   try { cleanNonRuntimeFiles(nm); } catch (error) { console.warn('non-runtime cleanup warning:', error.message || error); }
   try { cleanPlatformPrebuilds(nm, platform, arch); } catch (error) { console.warn('prebuild cleanup warning:', error.message || error); }
+  assertPackagedImageRadioRuntime(nm, platform, arch);
 
   if (platform === 'darwin') {
     try { fixMacosRuntimeRpaths(appRoot); } catch (error) { console.warn('macOS RPATH warning:', error.message || error); }

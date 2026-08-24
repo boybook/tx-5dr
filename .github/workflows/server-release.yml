@@ -99,6 +99,31 @@ jobs:
         env:
           TX5DR_DOWNLOAD_BASE_URL: ${{ secrets.OSS_BASE_URL }}
 
+      - name: Verify packaged Image Radio runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEB_FILE=$(find dist -name '*.deb' -type f | head -1)
+          if [ -z "$DEB_FILE" ]; then
+            echo "Server DEB package not found" >&2
+            exit 1
+          fi
+          EXTRACT_DIR=$(mktemp -d)
+          trap 'rm -rf "$EXTRACT_DIR"' EXIT
+          dpkg-deb -x "$DEB_FILE" "$EXTRACT_DIR"
+          APP_ROOT="$EXTRACT_DIR/usr/share/tx5dr"
+          export NODE_PATH="$APP_ROOT/node_modules"
+          (cd "$APP_ROOT/packages/server/dist/scripts" && node -e '
+            const { PNG } = require("pngjs");
+            if (typeof PNG.sync.read !== "function") throw new Error("pngjs unavailable");
+            const rasterwave = require("rasterwave-node");
+            if (rasterwave.sstvModes().length !== 31) throw new Error("rasterwave mode catalog incomplete");
+            Promise.all([
+              new rasterwave.SstvDecoder(12000, { outputMode: "continuousPaper", fallbackMode: "robot36", queueCapacitySamples: 24000 }, () => {}).dispose(),
+              new rasterwave.FaxDecoder(12000, { outputMode: "continuousPaper", continuousAuto: true, queueCapacitySamples: 24000 }, () => {}).dispose(),
+            ]).then(() => console.log("Packaged Image Radio runtime ok")).catch((error) => { console.error(error); process.exit(1); });
+          ')
+
       - name: Prepare artifacts
         run: |
           VERSION="${{ github.event.inputs.version }}"

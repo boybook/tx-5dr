@@ -5,6 +5,8 @@ import type {
   WSSpectrumSubscriptionChangedMessage,
   WSSelectedFrame,
   WSSetOperatorContextMessage,
+  SstvTxCancelCommand,
+  SstvTxStartCommand,
 } from '@tx5dr/contracts';
 import { getApiBaseUrl, getWebSocketUrl } from '../utils/config';
 import { createLogger } from '../utils/logger';
@@ -554,6 +556,18 @@ export class RadioService {
   }
 
   // ===== Voice Mode Methods =====
+
+  subscribeImageRx(enabled: boolean): void {
+    if (this.isConnected) this.wsClient.subscribeImageRx(enabled);
+  }
+
+  startSstvTx(command: SstvTxStartCommand): void {
+    if (this.isConnected) this.wsClient.startSstvTx(command);
+  }
+
+  cancelSstvTx(command: SstvTxCancelCommand): void {
+    if (this.isConnected) this.wsClient.cancelSstvTx(command);
+  }
 
   /**
    * 请求语音 PTT 锁

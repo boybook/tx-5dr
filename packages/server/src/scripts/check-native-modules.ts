@@ -23,6 +23,7 @@ export const NATIVE_MODULES = [
   'bcrypt',
   'node-datachannel',
   'rubato-fft-node',
+  'rasterwave-node',
   'hamlib',
   'icom-wlan-node',
   'node-wav',
@@ -32,6 +33,7 @@ export const NATIVE_MODULES = [
 
 export const DEGRADABLE_NATIVE_MODULES = new Set([
   'node-datachannel',
+  'rasterwave-node',
 ]);
 
 export type NativeModuleImporter = (moduleName: string) => Promise<unknown>;

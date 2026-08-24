@@ -23,6 +23,10 @@ export const PresetFrequencySchema = z.object({
   toneMode: ToneSquelchModeSchema.optional(), // 哑音类型，默认 none
   ctcssToneTenthsHz: z.number().int().positive().optional(), // CTCSS，单位 0.1Hz
   dcsCode: z.number().int().positive().optional(), // DCS 码
+  region: z.enum(['global', 'iaru1', 'iaru2', 'iaru3']).optional(),
+  imagePurpose: z.enum(['activity', 'iss', 'weatherfax']).optional(),
+  audioCenterHz: z.number().int().positive().optional(),
+  carrierFrequency: z.number().positive().optional(),
 }).superRefine((preset, ctx) => {
   const isVoiceFmPreset = preset.mode === 'VOICE' && preset.radioMode?.toUpperCase() === 'FM';
   const hasRepeaterDuplex = preset.repeaterShift === 'minus' || preset.repeaterShift === 'plus';

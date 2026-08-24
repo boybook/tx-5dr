@@ -199,7 +199,7 @@ REMOVE_PACKAGES=(
     react-refresh react-is scheduler csstype
 
     # Build helpers
-    @babel @jridgewell yaml source-map pngjs bluebird rxjs
+    @babel @jridgewell yaml source-map bluebird rxjs
 
     # Testing / profiling
     vitest @vitest chai @statelyai autocannon clinic tsx
@@ -306,6 +306,24 @@ if [[ "$ARCH" == "amd64" ]]; then
     find "$NM" -path "*/prebuilds/linux-arm64" -type d -exec rm -rf {} + 2>/dev/null || true
 elif [[ "$ARCH" == "arm64" ]]; then
     find "$NM" -path "*/prebuilds/linux-x64" -type d -exec rm -rf {} + 2>/dev/null || true
+fi
+
+# napi-rs platform packages: retain only the target Linux glibc binding.
+RASTERWAVE_KEEP="rasterwave-node-linux-${KEEP_PREBUILD#linux-}-gnu"
+for pkg_dir in "$NM"/rasterwave-node-*; do
+    [[ -d "$pkg_dir" ]] || continue
+    [[ "$(basename "$pkg_dir")" == "$RASTERWAVE_KEEP" ]] || rm -rf "$pkg_dir"
+done
+
+for package_name in pngjs rasterwave-node "$RASTERWAVE_KEEP"; do
+    if [[ ! -d "$NM/$package_name" ]]; then
+        err "Missing packaged Image Radio dependency: $package_name"
+        exit 1
+    fi
+done
+if ! find "$NM/$RASTERWAVE_KEEP" -maxdepth 1 -type f -name '*.node' | grep -q .; then
+    err "Missing packaged rasterwave native binding: $RASTERWAVE_KEEP"
+    exit 1
 fi
 
 # onnxruntime-node stores native binaries as bin/napi-v6/<platform>/<arch>.

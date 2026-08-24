@@ -270,7 +270,17 @@ export interface PlayAudioOptions {
   onPlaybackStarted?: () => void;
 }
 
-export type PlaybackKind = 'digital' | 'voice-keyer' | 'tune-tone';
+export type PlaybackKind = 'digital' | 'voice-keyer' | 'sstv' | 'tune-tone';
+
+export interface DeterministicPlaybackSession {
+  readonly sampleRate: number;
+  readonly frameSamples: number;
+  readonly queuedAudioMs: number;
+  write(samples: Float32Array): Promise<void>;
+  start(): Promise<void>;
+  end(): Promise<void>;
+  abort(reason?: string): Promise<void>;
+}
 type OutputSampleFormat = 'float32' | 'int16';
 type OutputChannelMode = 'mono' | 'left' | 'right' | 'both';
 
@@ -2368,6 +2378,184 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
   private isPlaybackStopRequested(playbackId: number): boolean {
     return this.stopRequestedPlaybackIds.has(playbackId);
+  }
+
+  public openDeterministicPlayback(options: PlayAudioOptions & { playbackKind: 'sstv' }): DeterministicPlaybackSession {
+    if (this.playing || this.hasPendingRtAudioPlayback()) throw new Error('audio output is busy');
+    const radioAdapter = this.usingIcomWlanOutput && this.icomWlanAudioAdapter
+      ? { kind: 'icom' as const, adapter: this.icomWlanAudioAdapter }
+      : this.usingTciOutput && this.tciAudioAdapter
+        ? { kind: 'tci' as const, adapter: this.tciAudioAdapter }
+        : null;
+    if (!radioAdapter && !this.usingAndroidOutput && (!this.isOutputting || !this.rtAudioOutput)) {
+      throw new Error('audio output stream not started');
+    }
+
+    const sampleRate = radioAdapter ? this.getInternalSampleRate() : this.outputSampleRate;
+    const frameSamples = radioAdapter
+      ? ICOM_WLAN_TX_CHUNK_SIZE
+      : Math.max(64, this.outputBufferSize || 1024);
+    const highWaterSamples = sampleRate;
+    const lowWaterSamples = Math.round(sampleRate * 0.3);
+    const playbackId = ++this.playbackSequence;
+    const queue: Float32Array[] = [];
+    let queuedSamples = 0;
+    let started = false;
+    let ended = false;
+    let aborted: Error | null = null;
+    let wakeConsumer: (() => void) | null = null;
+    let completion: Promise<void> | null = null;
+    const backpressureWaiters: Array<() => void> = [];
+    let resolveFirstStart!: () => void;
+    let rejectFirstStart!: (error: unknown) => void;
+    const firstStart = new Promise<void>((resolve, reject) => {
+      resolveFirstStart = resolve;
+      rejectFirstStart = reject;
+    });
+    void firstStart.catch(() => undefined);
+
+    const wake = () => {
+      const resolve = wakeConsumer;
+      wakeConsumer = null;
+      resolve?.();
+    };
+    const waitForData = () => new Promise<void>((resolve) => { wakeConsumer = resolve; });
+    const releaseBackpressure = () => {
+      if (queuedSamples > lowWaterSamples) return;
+      for (const resolve of backpressureWaiters.splice(0)) resolve();
+    };
+
+    const pump = async () => {
+      this.playing = true;
+      this.playbackStartTime = Date.now();
+      this.currentPlaybackKind = 'sstv';
+      const hrStart = performance.now();
+      let submittedSamples = 0;
+      let playbackStarted = false;
+      let tciStarted = false;
+      let rtWaiter: RtAudioPlaybackStartWaiter | null = null;
+      const signalStarted = () => {
+        if (playbackStarted) return;
+        playbackStarted = true;
+        options.onPlaybackStarted?.();
+        resolveFirstStart();
+      };
+      try {
+        if (radioAdapter?.kind === 'tci') {
+          await radioAdapter.adapter.beginTransmission();
+          tciStarted = true;
+        }
+        if (!radioAdapter && !this.usingAndroidOutput) {
+          rtWaiter = this.beginRtAudioPlaybackStartWaiter(playbackId, signalStarted);
+        }
+
+        for (;;) {
+          if (aborted) throw aborted;
+          if (this.isPlaybackStopRequested(playbackId)) throw new Error('playback interrupted');
+          const chunk = queue.shift();
+          if (!chunk) {
+            if (ended) break;
+            await waitForData();
+            continue;
+          }
+          queuedSamples -= chunk.length;
+          releaseBackpressure();
+
+          const producedMs = submittedSamples / sampleRate * 1000;
+          const leadMs = producedMs - (performance.now() - hrStart);
+          if (leadMs > 100) await new Promise<void>((resolve) => setTimeout(resolve, Math.min(leadMs - 100, 25)));
+
+          if (radioAdapter) {
+            const output = new Float32Array(chunk.length);
+            for (let index = 0; index < chunk.length; index += 1) {
+              output[index] = Math.max(-1, Math.min(1, chunk[index] * this.volumeGain));
+            }
+            await radioAdapter.adapter.sendAudio(output);
+            signalStarted();
+            if (options.injectIntoMonitor) this.emit('txMonitorAudioData', { samples: output, sampleRate });
+          } else if (this.usingAndroidOutput && this.androidAudioOutput) {
+            if (!await this.androidAudioOutput.write(chunk, this.volumeGain)) throw new Error('Android audio output write failed');
+            signalStarted();
+            if (options.injectIntoMonitor) this.emit('txMonitorAudioData', { samples: chunk, sampleRate });
+          } else if (this.rtAudioOutput && rtWaiter) {
+            const encoded = this.encodeRtAudioOutputChunk(chunk, frameSamples, this.volumeGain, Boolean(options.injectIntoMonitor));
+            this.noteRtAudioChunkPending(rtWaiter);
+            try {
+              this.rtAudioOutput.write(encoded.buffer);
+            } catch (error) {
+              this.rollbackRtAudioChunkPending(rtWaiter);
+              throw error;
+            }
+            if (encoded.monitorChunk) this.emit('txMonitorAudioData', { samples: encoded.monitorChunk, sampleRate });
+          } else {
+            throw new Error('audio output became unavailable');
+          }
+          submittedSamples += chunk.length;
+        }
+
+        if (!playbackStarted) throw new Error('deterministic playback ended before hardware start');
+        const remainingLeadMs = submittedSamples / sampleRate * 1000 - (performance.now() - hrStart);
+        if (radioAdapter?.kind === 'tci') {
+          await radioAdapter.adapter.drainTransmission(Math.max(1000, Math.ceil(remainingLeadMs) + 1000));
+        } else if (remainingLeadMs > 0 && (radioAdapter || this.usingAndroidOutput)) {
+          await new Promise<void>((resolve) => setTimeout(resolve, Math.ceil(remainingLeadMs)));
+        }
+        if (rtWaiter) {
+          this.finishRtAudioPlaybackStartWaiter(rtWaiter);
+          rtWaiter = null;
+          await this.waitForOutputDrain({ timeoutMs: Math.max(2000, Math.ceil(remainingLeadMs) + 2000) });
+        }
+      } catch (error) {
+        rejectFirstStart(error);
+        throw error;
+      } finally {
+        if (rtWaiter) this.finishRtAudioPlaybackStartWaiter(rtWaiter);
+        if (tciStarted && radioAdapter?.kind === 'tci') await radioAdapter.adapter.endTransmission().catch(() => undefined);
+        this.stopRequestedPlaybackIds.delete(playbackId);
+        for (const resolve of backpressureWaiters.splice(0)) resolve();
+        if (this.playbackSequence === playbackId) {
+          this.playing = false;
+          this.currentPlaybackKind = null;
+          this.currentPlaybackPromise = null;
+        }
+      }
+    };
+
+    const session: DeterministicPlaybackSession = {
+      sampleRate,
+      frameSamples,
+      get queuedAudioMs() { return queuedSamples / sampleRate * 1000; },
+      write: async (samples) => {
+        if (ended || aborted) throw aborted ?? new Error('deterministic playback already ended');
+        if (samples.length === 0) return;
+        queue.push(new Float32Array(samples));
+        queuedSamples += samples.length;
+        wake();
+        if (queuedSamples > highWaterSamples) await new Promise<void>((resolve) => backpressureWaiters.push(resolve));
+      },
+      start: async () => {
+        if (!started) {
+          started = true;
+          completion = pump();
+          this.currentPlaybackPromise = completion;
+          void completion.catch(() => undefined);
+        }
+        await firstStart;
+      },
+      end: async () => {
+        ended = true;
+        wake();
+        if (!started) throw new Error('deterministic playback was not started');
+        await completion;
+      },
+      abort: async (reason = 'deterministic playback aborted') => {
+        aborted = new Error(reason);
+        this.stopRequestedPlaybackIds.add(playbackId);
+        wake();
+        await completion?.catch(() => undefined);
+      },
+    };
+    return session;
   }
 
   /**

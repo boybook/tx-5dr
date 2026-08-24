@@ -1,4 +1,4 @@
-import { WSMessageType, ModeDescriptor, type SpectrumKind, type WSSelectedFrame, type WSAccessDeniedData } from '@tx5dr/contracts';
+import { WSMessageType, ModeDescriptor, type SpectrumKind, type WSSelectedFrame, type WSAccessDeniedData, type SstvTxCancelCommand, type SstvTxStartCommand } from '@tx5dr/contracts';
 import { WSMessageHandler } from './WSMessageHandler.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -316,6 +316,18 @@ export class WSClient extends WSMessageHandler {
 
   subscribeSpectrum(kind: SpectrumKind | null): void {
     this.send(WSMessageType.SUBSCRIBE_SPECTRUM, { kind });
+  }
+
+  subscribeImageRx(enabled: boolean): void {
+    this.send(WSMessageType.SUBSCRIBE_IMAGE_RX, { enabled });
+  }
+
+  startSstvTx(command: SstvTxStartCommand): void {
+    this.send(WSMessageType.SSTV_TX_START, command);
+  }
+
+  cancelSstvTx(command: SstvTxCancelCommand): void {
+    this.send(WSMessageType.SSTV_TX_CANCEL, command);
   }
 
   invokeSpectrumControl(id: string, action: 'in' | 'out' | 'toggle'): void {

@@ -1,7 +1,7 @@
 import type { DigitalModeRadioModePreference } from '@tx5dr/contracts';
 import type { ApplyOperatingStateRequest, SetRadioModeOptions } from './connections/IRadioConnection.js';
 
-type EngineMode = 'digital' | 'voice' | 'cw';
+type EngineMode = 'digital' | 'voice' | 'cw' | 'image';
 
 export interface FrequencyRadioModeResolution {
   displayRadioMode?: string;
@@ -41,7 +41,7 @@ export function inferModeOptions(
     return { intent: 'digital' };
   }
 
-  return { intent: engineMode === 'voice' ? 'voice' : engineMode === 'cw' ? 'cw' : 'digital' };
+  return { intent: engineMode === 'voice' || engineMode === 'image' ? 'voice' : engineMode === 'cw' ? 'cw' : 'digital' };
 }
 
 export function resolveFrequencyRadioMode({

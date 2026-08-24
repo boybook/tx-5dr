@@ -361,3 +361,28 @@ section[role="dialog"][data-placement="center"].w-full:not(.max-w-full) {
     width: calc(100% - 3rem);
   }
 }
+
+.image-right-layout {
+  container-type: inline-size;
+}
+
+.image-radio-bottom-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.image-radio-voice-ptt {
+  display: none;
+}
+
+@container (min-width: 36rem) {
+  .image-radio-bottom-controls:not(.image-radio-bottom-controls--fax) {
+    grid-template-columns: 9rem minmax(0, 1fr);
+  }
+
+  .image-radio-voice-ptt {
+    display: block;
+    min-height: 3.5rem;
+    width: 9rem;
+  }
+}

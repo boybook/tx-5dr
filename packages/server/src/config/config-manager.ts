@@ -101,6 +101,13 @@ export interface AppConfig {
     band: string;
     description?: string;
   } | null;
+  lastImageFrequency?: {
+    frequency: number;
+    mode: string;
+    radioMode?: string;
+    band: string;
+    description?: string;
+  } | null;
   // 最后设置的音量增益（旧版全局值，保留用于迁移）
   lastVolumeGain: {
     gain: number; // 线性增益值
@@ -121,7 +128,7 @@ export interface AppConfig {
   /** Custom frequency presets (null/undefined = use built-in defaults, includes all modes: FT8/FT4/VOICE) */
   customFrequencyPresets?: PresetFrequency[] | null;
   /** Last used engine mode ('digital' or 'voice'). Restored on startup. */
-  lastEngineMode?: 'digital' | 'voice' | 'cw';
+  lastEngineMode?: 'digital' | 'voice' | 'cw' | 'image';
   /** Last used digital sub-mode name ('FT8' or 'FT4'). Restored on startup within digital mode. */
   lastDigitalModeName?: string;
   /** Voice mode operator callsign */
@@ -323,14 +330,15 @@ export function validateAppConfigCandidate(value: unknown): Record<string, unkno
   assertOptionalObjectOrNull(value, 'lastSelectedFrequency');
   assertOptionalObjectOrNull(value, 'lastVoiceFrequency');
   assertOptionalObjectOrNull(value, 'lastCWFrequency');
+  assertOptionalObjectOrNull(value, 'lastImageFrequency');
   assertOptionalObjectOrNull(value, 'lastVolumeGain');
   assertOptionalObjectOrNull(value, 'volumeGainMap');
 
   if (value.activeProfileId !== undefined && value.activeProfileId !== null && typeof value.activeProfileId !== 'string') {
     throw new Error('config.activeProfileId must be a string or null');
   }
-  if (value.lastEngineMode !== undefined && value.lastEngineMode !== 'digital' && value.lastEngineMode !== 'voice' && value.lastEngineMode !== 'cw') {
-    throw new Error('config.lastEngineMode must be digital, voice, or cw');
+  if (value.lastEngineMode !== undefined && value.lastEngineMode !== 'digital' && value.lastEngineMode !== 'voice' && value.lastEngineMode !== 'cw' && value.lastEngineMode !== 'image') {
+    throw new Error('config.lastEngineMode must be digital, voice, cw, or image');
   }
   if (value.logLevel !== undefined && !['debug', 'info', 'warn', 'error'].includes(String(value.logLevel))) {
     throw new Error('config.logLevel must be debug, info, warn, or error');
@@ -584,6 +592,7 @@ export class ConfigManager {
       lastSelectedFrequency: config.lastSelectedFrequency,
       lastVoiceFrequency: config.lastVoiceFrequency,
       lastCWFrequency: config.lastCWFrequency,
+      lastImageFrequency: config.lastImageFrequency,
       lastVolumeGain: config.lastVolumeGain,
       volumeGainMap: config.volumeGainMap,
       lastEngineMode: config.lastEngineMode,
@@ -1002,6 +1011,7 @@ export class ConfigManager {
         await this.setRuntimeValue('lastSelectedFrequency', null);
         await this.setRuntimeValue('lastVoiceFrequency', null);
         await this.setRuntimeValue('lastCWFrequency', null);
+        await this.setRuntimeValue('lastImageFrequency', null);
         await this.setRuntimeValue('lastEngineMode', 'digital');
         await this.setRuntimeValue('lastDigitalModeName', 'FT8');
       }
@@ -1432,6 +1442,18 @@ export class ConfigManager {
     await this.mirrorOperatingFieldToActiveProfile({ lastCWFrequency: null });
   }
 
+  getLastImageFrequency(): AppConfig['lastImageFrequency'] {
+    const runtimeValue = this.getRuntimeValue('lastImageFrequency');
+    const value = runtimeValue !== undefined ? runtimeValue : this.config.lastImageFrequency;
+    return value ? { ...value } : null;
+  }
+
+  async updateLastImageFrequency(frequencyConfig: NonNullable<AppConfig['lastImageFrequency']>): Promise<void> {
+    const next = { ...frequencyConfig };
+    await this.setRuntimeValue('lastImageFrequency', next);
+    await this.mirrorOperatingFieldToActiveProfile({ lastImageFrequency: next });
+  }
+
   getProfileOperatingMemory(profileId: string): ProfileOperatingMemory | null {
     const memory = this.getRuntimeValue('profileOperatingMemory')?.[profileId];
     if (!memory) {
@@ -1448,6 +1470,9 @@ export class ConfigManager {
       lastCWFrequency: memory.lastCWFrequency
         ? { ...memory.lastCWFrequency }
         : memory.lastCWFrequency,
+      lastImageFrequency: memory.lastImageFrequency
+        ? { ...memory.lastImageFrequency }
+        : memory.lastImageFrequency,
     };
   }
 
@@ -1459,6 +1484,7 @@ export class ConfigManager {
       lastSelectedFrequency: this.getLastSelectedFrequency(),
       lastVoiceFrequency: this.getLastVoiceFrequency(),
       lastCWFrequency: this.getLastCWFrequency(),
+      lastImageFrequency: this.getLastImageFrequency(),
       lastEngineMode: this.getLastEngineMode(),
       lastDigitalModeName: this.getLastDigitalModeName(),
     });
@@ -1474,6 +1500,7 @@ export class ConfigManager {
       await this.setRuntimeValue('lastSelectedFrequency', null);
       await this.setRuntimeValue('lastVoiceFrequency', null);
       await this.setRuntimeValue('lastCWFrequency', null);
+      await this.setRuntimeValue('lastImageFrequency', null);
       await this.setRuntimeValue('lastEngineMode', 'digital');
       await this.setRuntimeValue('lastDigitalModeName', 'FT8');
       logger.info('No operating memory for profile; cleared global last-frequency state', { profileId });
@@ -1483,6 +1510,7 @@ export class ConfigManager {
     await this.setRuntimeValue('lastSelectedFrequency', memory.lastSelectedFrequency ?? null);
     await this.setRuntimeValue('lastVoiceFrequency', memory.lastVoiceFrequency ?? null);
     await this.setRuntimeValue('lastCWFrequency', memory.lastCWFrequency ?? null);
+    await this.setRuntimeValue('lastImageFrequency', memory.lastImageFrequency ?? null);
     if (memory.lastEngineMode) {
       await this.setRuntimeValue('lastEngineMode', memory.lastEngineMode);
     } else {
@@ -1776,11 +1804,11 @@ export class ConfigManager {
 
   // ==================== Engine mode persistence ====================
 
-  getLastEngineMode(): 'digital' | 'voice' | 'cw' {
+  getLastEngineMode(): 'digital' | 'voice' | 'cw' | 'image' {
     return this.getRuntimeValue('lastEngineMode') ?? this.config.lastEngineMode ?? 'digital';
   }
 
-  async setLastEngineMode(mode: 'digital' | 'voice' | 'cw'): Promise<void> {
+  async setLastEngineMode(mode: 'digital' | 'voice' | 'cw' | 'image'): Promise<void> {
     await this.setRuntimeValue('lastEngineMode', mode);
     await this.mirrorOperatingFieldToActiveProfile({ lastEngineMode: mode });
   }

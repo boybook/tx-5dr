@@ -1,8 +1,5 @@
 import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo } from 'react';
-import { faArrowDown } from '@fortawesome/free-solid-svg-icons';
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
-  Button,
   Chip,
   ScrollShadow
 } from '@heroui/react';
@@ -12,6 +9,7 @@ import { type FrameTableCycleBackgrounds, getHighlightTypeLabels, HighlightType 
 import { useTranslation } from 'react-i18next';
 import { getBadgeColors, hexToRgba } from '../../../utils/colorUtils';
 import { FlagDisplay } from '../../common/FlagDisplay';
+import { ScrollToBottomButton } from '../../common/ScrollToBottomButton';
 import { CallsignInfoPopover } from './CallsignInfoPopover';
 import { BOTTOM_TOLERANCE_PX, TOP_TOLERANCE_PX, getBottomGroupSignature, shouldShowScrollToBottomButton } from './framesTableAutoScroll';
 import { extractBaseCallsign, type GridLocation } from '@tx5dr/core';
@@ -720,17 +718,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
 
         {showScrollToBottomButton && (
           <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center px-3 transition-all duration-150 ease-out">
-            <Button
-              size="sm"
-              variant="light"
-              radius="full"
-              aria-label={t('common:framesTable.scrollToBottom')}
-              className="pointer-events-auto h-7 min-w-0 bg-background/75 px-3 text-xs text-default-500 shadow-sm ring-1 ring-default-200/70 backdrop-blur supports-[backdrop-filter]:bg-background/60"
-              onPress={handleScrollToBottomClick}
-              startContent={<FontAwesomeIcon icon={faArrowDown} className="text-[10px]" />}
-            >
-              {t('common:framesTable.scrollToBottom')}
-            </Button>
+            <ScrollToBottomButton label={t('common:framesTable.scrollToBottom')} onPress={handleScrollToBottomClick} />
           </div>
         )}
       </div>

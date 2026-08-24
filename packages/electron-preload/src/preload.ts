@@ -281,6 +281,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
      */
     writeFile: async (_filePath: string, _data: string) => {
       return ipcRenderer.invoke('fs:writeFile', _filePath, _data);
+    },
+
+    saveFile: async (_options: {
+      title?: string;
+      defaultName: string;
+      filters?: Array<{ name: string; extensions: string[] }>;
+      data: Uint8Array;
+    }): Promise<{ canceled: boolean; filePath?: string }> => {
+      return ipcRenderer.invoke('fs:saveFile', _options);
     }
   },
   
@@ -517,6 +526,12 @@ declare global {
         selectDirectory(options?: { title?: string }): Promise<string | null>;
         readFile(filePath: string): Promise<string>;
         writeFile(filePath: string, data: string): Promise<void>;
+        saveFile(options: {
+          title?: string;
+          defaultName: string;
+          filters?: Array<{ name: string; extensions: string[] }>;
+          data: Uint8Array;
+        }): Promise<{ canceled: boolean; filePath?: string }>;
       };
       app: {
         getVersion(): Promise<string>;

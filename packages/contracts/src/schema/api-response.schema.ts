@@ -132,6 +132,7 @@ export const LastFrequencyResponseSchema = z.object({
     band: z.string(),
     description: z.string().optional(),
   }).nullable().optional(),
+  lastImageFrequency: PresetFrequencySchema.nullable().optional(),
 });
 
 /**

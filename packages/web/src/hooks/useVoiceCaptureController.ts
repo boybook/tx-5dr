@@ -264,7 +264,7 @@ export function useVoiceCaptureController(
   }, []);
 
   useEffect(() => {
-    if (!radioService || engineMode !== 'voice') {
+    if (!radioService || (engineMode !== 'voice' && engineMode !== 'image')) {
       captureRef.current?.stop();
       captureRef.current = null;
       setCaptureState('idle');

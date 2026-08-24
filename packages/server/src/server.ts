@@ -38,6 +38,7 @@ import {
 import { DeviceUiWSServer } from './device-ui/DeviceUiWSServer.js';
 import { deviceUiRoutes } from './device-ui/routes.js';
 import { voiceRoutes } from './routes/voice.js';
+import { imageRadioRoutes } from './routes/image-radio.js';
 import { cwRoutes } from './routes/cw.js';
 import { stationRoutes } from './routes/station.js';
 import { callsignRoutes } from './routes/callsigns.js';
@@ -701,6 +702,9 @@ export async function createServer() {
     await scope.register(callsignRoutes, { prefix: '/api/callsigns' });
   });
   fastify.log.info('Viewer+ routes registered (operators, radio, mode, slotpack, voice, callsigns)');
+
+  // Image RX is public-viewable; mutating routes enforce operator ownership internally.
+  await fastify.register(imageRadioRoutes, { prefix: '/api/image-radio' });
 
   // Operator+ 路由：日志本（细粒度权限由路由内部 preHandler 控制）
   await registerRoleScope(fastify, UserRole.OPERATOR, async (scope) => {

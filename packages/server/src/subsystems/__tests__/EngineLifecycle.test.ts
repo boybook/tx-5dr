@@ -3,7 +3,7 @@ import { EventEmitter } from 'eventemitter3';
 import { EngineLifecycle } from '../EngineLifecycle.js';
 import { ConfigManager } from '../../config/config-manager.js';
 
-function createLifecycle(initialModeName: 'FT8' | 'VOICE' | 'CW' = 'FT8') {
+function createLifecycle(initialModeName: 'FT8' | 'VOICE' | 'CW' | 'SSTV' | 'FAX' = 'FT8') {
   let currentModeName = initialModeName;
   const resourceManager = {
     stopAll: vi.fn(async () => undefined),
@@ -27,6 +27,7 @@ function createLifecycle(initialModeName: 'FT8' | 'VOICE' | 'CW' = 'FT8') {
   const physicalTxCoordinator = {
     forceInterrupt: vi.fn(async () => null),
   };
+  const imageRadioService = { start: vi.fn(), stop: vi.fn() };
 
   const audioSidecar = {
     start: vi.fn(),
@@ -75,6 +76,7 @@ function createLifecycle(initialModeName: 'FT8' | 'VOICE' | 'CW' = 'FT8') {
     getCWDecoderManager: () => ({ start: vi.fn(), stop: vi.fn(), getConfig: () => ({}) } as any),
     getAudioVolumeController: () => ({ restoreGainForCurrentSlot: vi.fn() } as any),
     getAudioSidecar: () => audioSidecar as any,
+    getImageRadioService: () => imageRadioService as any,
     getStatus: () => ({}),
   });
 
@@ -84,7 +86,7 @@ function createLifecycle(initialModeName: 'FT8' | 'VOICE' | 'CW' = 'FT8') {
     decodeQueue,
     radioManager,
     physicalTxCoordinator,
-    setModeName: (modeName: 'FT8' | 'VOICE' | 'CW') => {
+    setModeName: (modeName: 'FT8' | 'VOICE' | 'CW' | 'SSTV' | 'FAX') => {
       currentModeName = modeName;
     },
   };
@@ -196,6 +198,22 @@ describe('EngineLifecycle', () => {
     expect(names).not.toContain('clock');
     expect(names).not.toContain('slotScheduler');
     expect(names).not.toContain('operatorManager');
+  });
+
+  it('uses image resources without digital workers and keeps voice PTT only for SSTV', async () => {
+    const sstv = createLifecycle('SSTV');
+    await sstv.lifecycle.rebuildResourcePlan();
+    expect(sstv.resourceManager.register.mock.calls.map(([config]) => config.name)).toEqual([
+      'icomWlanAudioAdapter', 'tciAudioAdapter', 'openwebrxAudioAdapter',
+      'spectrumScheduler', 'imageRadioService', 'voiceSessionManager',
+    ]);
+
+    const fax = createLifecycle('FAX');
+    await fax.lifecycle.rebuildResourcePlan();
+    expect(fax.resourceManager.register.mock.calls.map(([config]) => config.name)).toEqual([
+      'icomWlanAudioAdapter', 'tciAudioAdapter', 'openwebrxAudioAdapter',
+      'spectrumScheduler', 'imageRadioService',
+    ]);
   });
 
   it('stops only mode runtime resources without disconnecting the CAT session', async () => {

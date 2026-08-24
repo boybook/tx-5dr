@@ -3,6 +3,7 @@ import { Tabs, Tab } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faListUl, faMicrophone, faPuzzlePiece } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
+import type { IconDefinition } from '@fortawesome/fontawesome-svg-core';
 
 interface SplitLayoutContextType {
   switchToRight: () => void;
@@ -29,6 +30,8 @@ interface SplitLayoutProps {
   leftLabel?: string;
   rightLabel?: string;
   extraLabel?: string;
+  leftIcon?: IconDefinition;
+  rightIcon?: IconDefinition;
   className?: string;
 }
 
@@ -77,6 +80,8 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
   leftLabel,
   rightLabel,
   extraLabel,
+  leftIcon = faListUl,
+  rightIcon = faMicrophone,
   className = '',
 }) => {
   const { t } = useTranslation('common');
@@ -244,7 +249,7 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
                 key="left"
                 title={(
                   <div className="flex items-center gap-2">
-                    <FontAwesomeIcon icon={faListUl} className="text-sm" />
+                    <FontAwesomeIcon icon={leftIcon} className="text-sm" />
                     <span>{resolvedLeftLabel}</span>
                   </div>
                 )}
@@ -253,7 +258,7 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
                 key="right"
                 title={(
                   <div className="flex items-center gap-2">
-                    <FontAwesomeIcon icon={faMicrophone} className="text-sm" />
+                    <FontAwesomeIcon icon={rightIcon} className="text-sm" />
                     <span>{resolvedRightLabel}</span>
                   </div>
                 )}

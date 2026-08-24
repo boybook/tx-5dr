@@ -148,6 +148,7 @@ export * from './schema/radio-power-support.js';
 
 // Audio Sidecar Schema
 export * from './schema/audio-sidecar.schema.js';
+export * from './schema/image-radio.schema.js';
 
 // rigctld bridge schema
 export * from './schema/rigctld.schema.js';

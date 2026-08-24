@@ -1,11 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // WebSocket服务器 - 事件处理和消息传递需要使用any类型以保持灵活性
 
-import { ServerMessageKey, WSMessageType, RadioConnectionStatus, UserRole, WriteCapabilityPayloadSchema, SetSplitFrequencyPayloadSchema, TuneToneStartPayloadSchema, SLOT_PACK_HISTORY_LIMIT, type AppAction, type AppSubject } from '@tx5dr/contracts';
+import { ServerMessageKey, WSMessageType, RadioConnectionStatus, UserRole, WriteCapabilityPayloadSchema, SetSplitFrequencyPayloadSchema, TuneToneStartPayloadSchema, SstvTxStartCommandSchema, SstvTxCancelCommandSchema, SLOT_PACK_HISTORY_LIMIT, type AppAction, type AppSubject } from '@tx5dr/contracts';
 import type {
   ClockStatusSummary,
   DecodeErrorInfo,
   FrameMessage,
+  ImageRxEvent,
   JWTPayload,
   ModeDescriptor,
   RadioProfile,
@@ -41,6 +42,7 @@ import { canReadFullProfiles, redactHamlibConfigForRead, redactProfileForRead, r
 const logger = createLogger('WSServer');
 const DECODE_WORKER_UNAVAILABLE_USER_MESSAGE_KEY = 'errors:code.DECODE_WORKER_UNAVAILABLE.userMessage';
 const SPECTRUM_CAPABILITIES_TIMEOUT_MS = 3000;
+const IMAGE_RX_SLOW_CLIENT_BYTES = 256 * 1024;
 const DECODE_WORKER_UNAVAILABLE_SUGGESTION_KEYS = [
   'errors:code.DECODE_WORKER_UNAVAILABLE.suggestions.0',
   'errors:code.DECODE_WORKER_UNAVAILABLE.suggestions.1',
@@ -59,6 +61,7 @@ interface WebSocketInstance {
   send(data: string): void;
   close(code?: number, reason?: string): void;
   readyState: number;
+  bufferedAmount?: number;
 }
 
 export class WSConnection extends WSMessageHandler {
@@ -80,6 +83,8 @@ export class WSConnection extends WSMessageHandler {
   // 记录WebSocket事件监听器,用于清理 (修复内存泄漏)
   private wsListeners: Map<string, (...args: unknown[]) => void> = new Map();
   private spectrumSubscription: SpectrumKind | null = null;
+  private imageRxSubscribed = false;
+  private imageSnapshotRequired = false;
 
   constructor(ws: WebSocketInstance, id: string) {
     super();
@@ -159,6 +164,16 @@ export class WSConnection extends WSMessageHandler {
   get isAlive(): boolean {
     return this.ws.readyState === 1; // WebSocket.OPEN
   }
+
+  setImageRxSubscribed(enabled: boolean): void {
+    this.imageRxSubscribed = enabled;
+    if (!enabled) this.imageSnapshotRequired = false;
+  }
+
+  getImageRxSubscribed(): boolean { return this.imageRxSubscribed; }
+  getBufferedAmount(): number { return this.ws.bufferedAmount ?? 0; }
+  getImageSnapshotRequired(): boolean { return this.imageSnapshotRequired; }
+  setImageSnapshotRequired(required: boolean): void { this.imageSnapshotRequired = required; }
 
   /**
    * 设置启用的操作员列表
@@ -374,6 +389,7 @@ export class WSServer extends WSMessageHandler {
   private spectrumSessionCoordinator: SpectrumSessionCoordinator;
   private slotPackProjectionService: OperatorScopedSlotPackProjectionService;
   private lastRadioConnectedForToast: boolean | null = null;
+  private sstvTxOwners = new Map<string, { sessionId: string; operatorId: string }>();
   private commandHandlers: Partial<Record<WSMessageType, (data: unknown, connectionId: string) => Promise<void> | void>>;
 
   static getInstance(): WSServer | null {
@@ -406,6 +422,9 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.SET_MODE]: (data) => this.handleSetMode((data as any)?.mode),
       [WSMessageType.GET_PLUGIN_RUNTIME_LOG_HISTORY]: (data, id) => this.handleGetPluginRuntimeLogHistory(id, data),
       [WSMessageType.SUBSCRIBE_SPECTRUM]: (data, id) => this.handleSubscribeSpectrum(id, data),
+      [WSMessageType.SUBSCRIBE_IMAGE_RX]: (data, id) => this.handleSubscribeImageRx(id, data),
+      [WSMessageType.SSTV_TX_START]: (data, id) => this.handleSstvTxStart(id, data),
+      [WSMessageType.SSTV_TX_CANCEL]: (data, id) => this.handleSstvTxCancel(id, data),
       [WSMessageType.INVOKE_SPECTRUM_CONTROL]: (data: unknown, id: string) => this.handleInvokeSpectrumControl(id, data),
       [WSMessageType.GET_OPERATORS]: (_data, id) => this.handleGetOperators(id),
       [WSMessageType.SET_OPERATOR_CONTEXT]: (data, id) => this.handleSetOperatorContext(data, id),
@@ -556,6 +575,20 @@ export class WSServer extends WSMessageHandler {
 
     this.digitalRadioEngine.on('systemStatus', (status) => {
       this.broadcastSystemStatus(status);
+    });
+
+    this.digitalRadioEngine.on('imageRadioStatus', (status) => {
+      this.getActiveConnections()
+        .filter((connection) => connection.isHandshakeCompleted() && connection.getImageRxSubscribed())
+        .forEach((connection) => connection.send(WSMessageType.IMAGE_RADIO_STATUS, status));
+    });
+
+    this.digitalRadioEngine.on('imageRxEvent', (event) => this.broadcastImageRxEvent(event));
+    this.digitalRadioEngine.on('sstvTxStatus', (status) => {
+      this.broadcastToMinRole(UserRole.OPERATOR, WSMessageType.SSTV_TX_STATUS, status);
+      if (status.phase === 'completed' || status.phase === 'cancelled' || status.phase === 'error' || status.phase === 'ptt_unknown') {
+        for (const [connectionId, owner] of this.sstvTxOwners) if (owner.sessionId === status.sessionId) this.sstvTxOwners.delete(connectionId);
+      }
     });
 
     bootstrapCoordinator.on('statusChanged', (status) => {
@@ -815,6 +848,7 @@ export class WSServer extends WSMessageHandler {
     [WSMessageType.SET_CLIENT_ENABLED_OPERATORS]: { publicViewer: true, requiresHandshake: true },
     [WSMessageType.SET_CLIENT_SELECTED_OPERATOR]: { publicViewer: true, requiresHandshake: true },
     [WSMessageType.SUBSCRIBE_SPECTRUM]: { publicViewer: true, requiresHandshake: true },
+    [WSMessageType.SUBSCRIBE_IMAGE_RX]: { publicViewer: true, requiresHandshake: true },
     [WSMessageType.GET_PLUGIN_RUNTIME_LOG_HISTORY]: { minRole: UserRole.ADMIN },
     // Capability-based (delegatable from admin)
     [WSMessageType.START_ENGINE]: { ability: { action: 'execute', subject: 'Engine' } },
@@ -835,6 +869,8 @@ export class WSServer extends WSMessageHandler {
     [WSMessageType.SET_VOLUME_GAIN]: { ability: { action: 'manage', subject: 'Operator' } },
     [WSMessageType.SET_VOLUME_GAIN_DB]: { ability: { action: 'manage', subject: 'Operator' } },
     [WSMessageType.VOICE_PTT_REQUEST]: { ability: { action: 'manage', subject: 'Transmission' } },
+    [WSMessageType.SSTV_TX_START]: { ability: { action: 'manage', subject: 'Transmission' } },
+    [WSMessageType.SSTV_TX_CANCEL]: { ability: { action: 'manage', subject: 'Transmission' } },
     [WSMessageType.VOICE_PTT_RELEASE]: { minRole: UserRole.OPERATOR },
     [WSMessageType.VOICE_KEYER_PLAY]: { ability: { action: 'manage', subject: 'Transmission' } },
     [WSMessageType.VOICE_KEYER_STOP]: { minRole: UserRole.OPERATOR },
@@ -874,6 +910,8 @@ export class WSServer extends WSMessageHandler {
     WSMessageType.OPERATOR_QUEUE_REMOVE,
     WSMessageType.OPERATOR_QUEUE_CLEAR,
     WSMessageType.VOICE_PTT_REQUEST,
+    WSMessageType.SSTV_TX_START,
+    WSMessageType.SSTV_TX_CANCEL,
     WSMessageType.VOICE_KEYER_PLAY,
     WSMessageType.CW_KEY_ACTION,
     WSMessageType.CW_TEXT_INPUT,
@@ -1194,6 +1232,89 @@ export class WSServer extends WSMessageHandler {
         reason: 'subscription_failed',
         capabilities,
       });
+    }
+  }
+
+  private handleSubscribeImageRx(connectionId: string, data: unknown): void {
+    const connection = this.getConnection(connectionId);
+    if (!connection) return;
+    const enabled = (data as { enabled?: unknown } | null)?.enabled === true;
+    connection.setImageRxSubscribed(enabled);
+    if (enabled) {
+      connection.send(WSMessageType.IMAGE_RADIO_STATUS, this.digitalRadioEngine.getImageRadioService()?.getStatus() ?? null);
+      const manifest = this.digitalRadioEngine.getImageRadioService()?.getPaperManifest();
+      if (manifest) {
+        connection.send(WSMessageType.IMAGE_RX_EVENT, {
+          type: 'paperStarted',
+          session: manifest.session,
+          pixelFormat: manifest.session.family === 'fax' ? 'gray8' : 'rgb8',
+        });
+        connection.send(WSMessageType.IMAGE_RX_EVENT, {
+          type: 'snapshotRequired',
+          sessionId: manifest.session.sessionId,
+          generation: manifest.session.generation,
+          revision: manifest.session.revision,
+          snapshotUrl: '/api/image-radio/paper/current',
+        });
+      }
+    }
+  }
+
+  private async handleSstvTxStart(connectionId: string, data: unknown): Promise<void> {
+    const connection = this.getConnection(connectionId);
+    if (!connection) return;
+    const parsed = SstvTxStartCommandSchema.safeParse(data);
+    if (!parsed.success) {
+      connection.send(WSMessageType.SSTV_TX_COMMAND_RESULT, {
+        requestId: (data as { requestId?: string } | null)?.requestId ?? '',
+        accepted: false,
+        errorCode: 'IMAGE_TX_INVALID_COMMAND',
+      });
+      return;
+    }
+    this.logOperatorCommand('sstvTxStart', connectionId, parsed.data);
+    const service = this.digitalRadioEngine.getImageRadioService();
+    const result = service
+      ? await service.startSstvTx(parsed.data)
+      : { requestId: parsed.data.requestId, accepted: false, errorCode: 'IMAGE_RADIO_NOT_INITIALIZED' };
+    connection.send(WSMessageType.SSTV_TX_COMMAND_RESULT, result);
+    if (result.accepted && result.sessionId) this.sstvTxOwners.set(connectionId, { sessionId: result.sessionId, operatorId: parsed.data.operatorId });
+  }
+
+  private async handleSstvTxCancel(connectionId: string, data: unknown): Promise<void> {
+    const connection = this.getConnection(connectionId);
+    if (!connection) return;
+    const parsed = SstvTxCancelCommandSchema.safeParse(data);
+    if (!parsed.success) return;
+    this.logOperatorCommand('sstvTxCancel', connectionId, parsed.data);
+    const cancelled = await this.digitalRadioEngine.getImageRadioService()?.cancelSstvTx(parsed.data) ?? false;
+    connection.send(WSMessageType.SSTV_TX_COMMAND_RESULT, {
+      requestId: parsed.data.requestId,
+      accepted: cancelled,
+      sessionId: parsed.data.sessionId,
+      errorCode: cancelled ? undefined : 'IMAGE_TX_STALE_COMMAND',
+    });
+  }
+
+  private broadcastImageRxEvent(event: ImageRxEvent): void {
+    const droppable = event.type === 'rows';
+    for (const connection of this.getActiveConnections()) {
+      if (!connection.isHandshakeCompleted() || !connection.getImageRxSubscribed()) continue;
+      if (droppable && connection.getBufferedAmount() > IMAGE_RX_SLOW_CLIENT_BYTES) {
+        if (!connection.getImageSnapshotRequired()) {
+          connection.setImageSnapshotRequired(true);
+          connection.send(WSMessageType.IMAGE_RX_EVENT, {
+            type: 'snapshotRequired',
+            sessionId: event.sessionId,
+            generation: event.generation,
+            revision: event.revision,
+            snapshotUrl: '/api/image-radio/paper/current',
+          });
+        }
+        continue;
+      }
+      if (event.type !== 'rows') connection.setImageSnapshotRequired(false);
+      connection.send(WSMessageType.IMAGE_RX_EVENT, event);
     }
   }
 
@@ -1848,6 +1969,15 @@ export class WSServer extends WSMessageHandler {
       cwKeyerManager.handleClientDisconnect(id).catch((err) => {
         logger.error('failed to handle cw keyer client disconnect', err);
       });
+      const sstvOwner = this.sstvTxOwners.get(id);
+      if (sstvOwner) {
+        this.sstvTxOwners.delete(id);
+        const imageService = this.digitalRadioEngine.getImageRadioService();
+        const tx = imageService?.getStatus().tx;
+        if (imageService && tx?.sessionId === sstvOwner.sessionId && (tx.phase === 'preparing' || tx.phase === 'waiting_for_lease' || tx.phase === 'keying')) {
+          void imageService.cancelSstvTx({ operatorId: sstvOwner.operatorId, sessionId: sstvOwner.sessionId, expectedRevision: tx.revision });
+        }
+      }
 
       // 广播客户端数量变化（客户端断开连接）
       this.broadcastClientCount();
@@ -1941,7 +2071,9 @@ export class WSServer extends WSMessageHandler {
     const engineMode = this.digitalRadioEngine.getEngineMode();
     const savedFrequency = engineMode === 'voice'
       ? configManager.getLastVoiceFrequency()
-      : configManager.getLastSelectedFrequency();
+      : engineMode === 'image'
+        ? configManager.getLastImageFrequency()
+        : configManager.getLastSelectedFrequency();
     const knownFrequency = radioManager.getKnownFrequency();
     const frequency = knownFrequency ?? savedFrequency?.frequency ?? null;
 

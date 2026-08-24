@@ -51,6 +51,10 @@ interface VoiceQSOLogCardProps {
   onEditComplete?: (updated: QSORecord) => void;
   onDeleteComplete?: (deletedId: string) => void;
   onCancelEdit?: () => void;
+  modeOverride?: string;
+  defaultReport?: string;
+  titleOverride?: string;
+  onCreateComplete?: (created: QSORecord) => void;
 }
 
 /**
@@ -67,6 +71,10 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
   onEditComplete,
   onDeleteComplete,
   onCancelEdit,
+  modeOverride,
+  defaultReport = '59',
+  titleOverride,
+  onCreateComplete,
 }) => {
   const { t } = useTranslation(['voice', 'radio']);
   const radioMode = useRadioModeState();
@@ -76,7 +84,7 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
   const { currentOperatorId, setCurrentOperatorId } = useCurrentOperatorId();
 
   const [internalCollapsed, setInternalCollapsed] = useState(false);
-  const [formData, setFormData] = useState<QSOFormData>(initialFormData);
+  const [formData, setFormData] = useState<QSOFormData>(() => ({ ...initialFormData, rstSent: defaultReport, rstReceived: defaultReport }));
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deletePopoverOpen, setDeletePopoverOpen] = useState(false);
@@ -156,8 +164,8 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
 
     setFormData({
       callsign: editingQSO.callsign,
-      rstSent: editingQSO.reportSent ?? '59',
-      rstReceived: editingQSO.reportReceived ?? '59',
+      rstSent: editingQSO.reportSent ?? defaultReport,
+      rstReceived: editingQSO.reportReceived ?? defaultReport,
       qth: editingQSO.qth ?? '',
       grid: editingQSO.grid ?? '',
       comment: editingQSO.comment ?? editingQSO.notes ?? '',
@@ -168,14 +176,14 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
     if (isNewEditingSelection) {
       setCollapsed(false);
     }
-  }, [editingQSO, setCollapsed]);
+  }, [defaultReport, editingQSO, setCollapsed]);
 
   const updateField = (field: keyof QSOFormData, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
   };
 
   const resetForm = () => {
-    setFormData(initialFormData);
+    setFormData({ ...initialFormData, rstSent: defaultReport, rstReceived: defaultReport });
     setStartTime(null);
     setEndTime(null);
   };
@@ -186,9 +194,9 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
     setIsSubmitting(true);
     try {
       const qsoFrequency = editingQSO ? currentFrequency : (liveFrequency ?? currentFrequency);
-      const qsoMode = editingQSO
+      const qsoMode = modeOverride ?? (editingQSO
         ? (getDisplayMode(editingQSO) || radioMode.currentRadioMode || 'USB')
-        : (radioMode.currentRadioMode || 'USB');
+        : (radioMode.currentRadioMode || 'USB'));
 
       if (editingQSO) {
         // Edit mode: update existing QSO
@@ -199,8 +207,8 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
           mode: qsoMode,
           startTime: startTime ?? editingQSO.startTime,
           endTime: endTime ?? editingQSO.endTime,
-          reportSent: formData.rstSent || '59',
-          reportReceived: formData.rstReceived || '59',
+          reportSent: formData.rstSent || defaultReport,
+          reportReceived: formData.rstReceived || defaultReport,
           qth: formData.qth || undefined,
           grid: formData.grid || undefined,
           comment: formData.comment || undefined,
@@ -220,15 +228,16 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
           mode: qsoMode,
           startTime: startTime || Date.now(),
           endTime: endTime || Date.now(),
-          reportSent: formData.rstSent || '59',
-          reportReceived: formData.rstReceived || '59',
+          reportSent: formData.rstSent || defaultReport,
+          reportReceived: formData.rstReceived || defaultReport,
           messageHistory: [],
           qth: formData.qth || undefined,
           grid: formData.grid || undefined,
           comment: formData.comment || undefined,
         };
 
-        await api.createQSO(myCallsign, body);
+        const result = await api.createQSO(myCallsign, body);
+        if (result.data) onCreateComplete?.(result.data as QSORecord);
 
         addToast({
           title: t('qso.logSuccess'),
@@ -307,7 +316,7 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
             className={`text-default-400 text-xs transition-transform duration-200 ${isCollapsed ? '' : 'rotate-90'}`}
           />
           <span className="text-sm font-semibold">
-            {isEditing ? t('qso.editTitle') : t('qso.title')}
+          {titleOverride ?? (isEditing ? t('qso.editTitle') : t('qso.title'))}
           </span>
         </div>
 

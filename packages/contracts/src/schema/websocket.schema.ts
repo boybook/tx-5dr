@@ -40,6 +40,19 @@ import { SpectrumCapabilitiesSchema, SpectrumFrameSchema, SpectrumKindSchema, Sp
 import type { RealtimeSettingsResponseData } from './realtime.schema.js';
 import type { AndroidOperatorAudioStatus } from './android-operator-audio.schema.js';
 import { ClockStatusSummarySchema } from './system.schema.js';
+import {
+  ImageRadioStatusSchema,
+  ImageRxEventSchema,
+  ImageRxSubscriptionSchema,
+  SstvTxCancelCommandSchema,
+  SstvTxCommandResultSchema,
+  SstvTxStartCommandSchema,
+  SstvTxStatusSchema,
+  type ImageRadioStatus,
+  type ImageRxEvent,
+  type SstvTxCommandResult,
+  type SstvTxStatus,
+} from './image-radio.schema.js';
 
 // WebSocket消息类型枚举
 export enum WSMessageType {
@@ -55,6 +68,13 @@ export enum WSMessageType {
   STOP_ENGINE = 'stopEngine',
   GET_STATUS = 'getStatus',
   SET_MODE = 'setMode',
+  SUBSCRIBE_IMAGE_RX = 'subscribeImageRx',
+  IMAGE_RADIO_STATUS = 'imageRadioStatus',
+  IMAGE_RX_EVENT = 'imageRxEvent',
+  SSTV_TX_START = 'sstvTxStart',
+  SSTV_TX_CANCEL = 'sstvTxCancel',
+  SSTV_TX_STATUS = 'sstvTxStatus',
+  SSTV_TX_COMMAND_RESULT = 'sstvTxCommandResult',
   
   // ===== 引擎事件 =====
   MODE_CHANGED = 'modeChanged',
@@ -254,7 +274,7 @@ export const SystemStatusSchema = z.object({
     connectionHealthy: z.boolean(),
   }).optional(),
   /** 引擎模式：digital（FT8/FT4）、voice（语音通联）或 cw（莫尔斯码） */
-  engineMode: z.enum(['digital', 'voice', 'cw']).default('digital'),
+  engineMode: z.enum(['digital', 'voice', 'cw', 'image']).default('digital'),
   /** 当前电台调制模式（语音模式下使用，如 USB/LSB/FM/AM） */
   currentRadioMode: z.string().optional(),
   /** 引擎状态机当前状态 */
@@ -371,7 +391,7 @@ export const PTTStatusSchema = z.object({
   operatorIds: z.array(z.string()),
   phase: z.enum(['idle', 'starting', 'on_air', 'draining', 'stopping', 'unknown']).optional(),
   frameId: z.string().optional(),
-  source: z.enum(['digital', 'voice', 'voice-keyer', 'cw', 'tune-tone', 'manual', 'test']).optional(),
+  source: z.enum(['digital', 'voice', 'voice-keyer', 'cw', 'sstv', 'tune-tone', 'manual', 'test']).optional(),
 });
 
 export const TuneToneStartPayloadSchema = z.object({
@@ -567,6 +587,41 @@ export const WSPongMessageSchema = WSBaseMessageSchema.extend({
 export const WSModeChangedMessageSchema = WSBaseMessageSchema.extend({
   type: z.literal(WSMessageType.MODE_CHANGED),
   data: ModeDescriptorSchema,
+});
+
+export const WSSubscribeImageRxMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SUBSCRIBE_IMAGE_RX),
+  data: ImageRxSubscriptionSchema,
+});
+
+export const WSImageRadioStatusMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.IMAGE_RADIO_STATUS),
+  data: ImageRadioStatusSchema,
+});
+
+export const WSImageRxEventMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.IMAGE_RX_EVENT),
+  data: ImageRxEventSchema,
+});
+
+export const WSSstvTxStartMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SSTV_TX_START),
+  data: SstvTxStartCommandSchema,
+});
+
+export const WSSstvTxCancelMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SSTV_TX_CANCEL),
+  data: SstvTxCancelCommandSchema,
+});
+
+export const WSSstvTxStatusMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SSTV_TX_STATUS),
+  data: SstvTxStatusSchema,
+});
+
+export const WSSstvTxCommandResultMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SSTV_TX_COMMAND_RESULT),
+  data: SstvTxCommandResultSchema,
 });
 
 export const WSSlotStartMessageSchema = WSBaseMessageSchema.extend({
@@ -1554,6 +1609,13 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSPongMessageSchema,
   // 服务端到客户端
   WSModeChangedMessageSchema,
+  WSSubscribeImageRxMessageSchema,
+  WSImageRadioStatusMessageSchema,
+  WSImageRxEventMessageSchema,
+  WSSstvTxStartMessageSchema,
+  WSSstvTxCancelMessageSchema,
+  WSSstvTxStatusMessageSchema,
+  WSSstvTxCommandResultMessageSchema,
   WSSlotStartMessageSchema,
   WSSubWindowMessageSchema,
   WSSlotPackUpdatedMessageSchema,
@@ -1794,6 +1856,10 @@ export interface DigitalRadioEngineEvents {
   // PTT状态控制事件
   pttStatusChanged: (data: PTTStatus) => void;
   tuneToneStatusChanged: (data: TuneToneStatus) => void;
+  imageRadioStatus: (data: ImageRadioStatus) => void;
+  imageRxEvent: (data: ImageRxEvent) => void;
+  sstvTxStatus: (data: SstvTxStatus) => void;
+  sstvTxCommandResult: (data: SstvTxCommandResult) => void;
 
   // 电台数值表事件
   meterData: (data: MeterData) => void;

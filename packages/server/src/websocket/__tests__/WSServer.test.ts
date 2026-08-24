@@ -145,6 +145,40 @@ describe('WSServer initial frequency snapshot', () => {
   });
 });
 
+describe('WSServer image receive subscription recovery', () => {
+  it('sends session metadata before the active image snapshot', () => {
+    const send = vi.fn();
+    const setImageRxSubscribed = vi.fn();
+    const session = {
+      sessionId: 'fax-page-1', family: 'fax', generation: 4, revision: 7,
+      codecMode: 'ioc576/120', width: 1810, receivedLines: 3, firstAvailableLine: 0, startedAt: 1,
+    };
+    const server = Object.create(WSServer.prototype) as any;
+    server.getConnection = () => ({ send, setImageRxSubscribed });
+    server.digitalRadioEngine = {
+      getImageRadioService: () => ({
+        getStatus: () => ({ currentSession: session }),
+        getPaperManifest: () => ({ session, boundaries: [], segments: [] }),
+      }),
+    };
+
+    server.handleSubscribeImageRx('connection-1', { enabled: true });
+
+    expect(setImageRxSubscribed).toHaveBeenCalledWith(true);
+    expect(send.mock.calls.map(([type]) => type)).toEqual([
+      WSMessageType.IMAGE_RADIO_STATUS,
+      WSMessageType.IMAGE_RX_EVENT,
+      WSMessageType.IMAGE_RX_EVENT,
+    ]);
+    expect(send.mock.calls[1][1]).toMatchObject({
+      type: 'paperStarted', session, pixelFormat: 'gray8',
+    });
+    expect(send.mock.calls[2][1]).toMatchObject({
+      type: 'snapshotRequired', sessionId: session.sessionId, revision: session.revision,
+    });
+  });
+});
+
 describe('WSServer logbook event scoping', () => {
   function createLogbookServer() {
     const server = Object.create(WSServer.prototype) as any;
