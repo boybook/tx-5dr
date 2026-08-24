@@ -1,11 +1,14 @@
 import { api, WSClient } from '@tx5dr/core';
 import type {
+  DigitalRadioEngineEvents,
   OperatorRuntimeSlot,
+  PluginUserActionResultPayload,
   SpectrumKind,
   WSSpectrumSubscriptionChangedMessage,
   WSSelectedFrame,
   WSSetOperatorContextMessage,
 } from '@tx5dr/contracts';
+import { WSMessageType } from '@tx5dr/contracts';
 import { getApiBaseUrl, getWebSocketUrl } from '../utils/config';
 import { createLogger } from '../utils/logger';
 
@@ -380,17 +383,40 @@ export class RadioService {
   }
 
   /**
-   * 发送插件自定义用户动作
+   * 发送插件自定义用户动作，并在主程序回传执行结果后 resolve。
+   *
+   * 返回值为插件 onUserAction hook 的返回值；主程序无回传（旧版本主程序）
+   * 或超时（默认 8 秒）时 resolve null。
    */
   sendPluginUserAction(
     pluginName: string,
     actionId: string,
     operatorId?: string,
     payload?: unknown,
-  ): void {
-    if (this.isConnected) {
-      this.wsClient.send('pluginUserAction', { pluginName, actionId, operatorId, payload });
+    timeoutMs = 8000,
+  ): Promise<unknown> {
+    if (!this.isConnected) {
+      return Promise.resolve(null);
     }
+    return new Promise<unknown>((resolve) => {
+      let settled = false;
+      const finish = (result: unknown): void => {
+        if (settled) return;
+        settled = true;
+        this.wsClient.offWSEvent('pluginUserActionResult', onResult);
+        resolve(result);
+      };
+      const onResult: DigitalRadioEngineEvents['pluginUserActionResult'] = (data: PluginUserActionResultPayload) => {
+        if (data.pluginName !== pluginName || data.actionId !== actionId || data.operatorId !== operatorId) {
+          return;
+        }
+        finish(data.result);
+      };
+      const timer = setTimeout(() => finish(null), timeoutMs);
+      this.wsClient.onWSEvent('pluginUserActionResult', onResult);
+      this.wsClient.send(WSMessageType.PLUGIN_USER_ACTION, { pluginName, actionId, operatorId, payload });
+      if (settled) clearTimeout(timer);
+    });
   }
   
   /**

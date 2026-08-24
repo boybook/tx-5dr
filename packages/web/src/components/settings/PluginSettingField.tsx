@@ -44,14 +44,62 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
   const [optionSearch, setOptionSearch] = React.useState('');
   const [keyedOptionSearch, setKeyedOptionSearch] = React.useState<Record<string, string>>({});
   const [runningActionIds, setRunningActionIds] = React.useState<Set<string>>(new Set());
+  const [actionOutcome, setActionOutcome] = React.useState<{ actionId: string; ok: boolean; text: string } | null>(null);
+  /**
+   * 把 onUserAction 的返回值翻译成按钮下方的反馈文案。
+   * 插件可返回 { ok, messageKey, params, message }，messageKey 走插件自己的
+   * i18n 命名空间；无回传（旧主机）或超时返回 null。
+   */
+  const resolveActionOutcome = (actionId: string, result: unknown): { ok: boolean; text: string } | null => {
+    if (result === undefined || result === null) {
+      return {
+        ok: false,
+        text: i18n.t('settings:plugins.actionNoReply', { defaultValue: 'No response from host' }),
+      };
+    }
+    const record = result as { ok?: unknown; messageKey?: unknown; params?: Record<string, unknown>; message?: unknown };
+    const ok = record.ok !== false;
+    if (typeof record.messageKey === 'string') {
+      const text = i18n.t(record.messageKey, {
+        ns: `plugin:${pluginName}`,
+        ...(record.params ?? {}),
+        defaultValue: typeof record.message === 'string' ? record.message : record.messageKey,
+      });
+      return { ok, text };
+    }
+    if (typeof record.message === 'string') {
+      return { ok, text: record.message };
+    }
+    return ok ? null : {
+      ok: false,
+      text: i18n.t('settings:plugins.actionFailed', { defaultValue: 'Action failed' }),
+    };
+  };
   const runAction = React.useCallback((actionId: string) => {
     if (!onUserAction || runningActionIds.has(actionId)) {
       return;
     }
     setRunningActionIds((prev) => new Set(prev).add(actionId));
+    setActionOutcome((prev) => prev?.actionId === actionId ? null : prev);
     Promise.resolve()
       .then(() => onUserAction(actionId))
-      .catch(() => undefined)
+      .then((result) => {
+        const outcome = resolveActionOutcome(actionId, result);
+        if (outcome) {
+          setActionOutcome({ actionId, ...outcome });
+          // 反馈文案几秒后自动消失，避免遮挡后续操作
+          setTimeout(() => {
+            setActionOutcome((prev) => prev?.actionId === actionId ? null : prev);
+          }, 6000);
+        }
+      })
+      .catch(() => {
+        setActionOutcome({
+          actionId,
+          ok: false,
+          text: i18n.t('settings:plugins.actionFailed', { defaultValue: 'Action failed' }),
+        });
+      })
       .finally(() => {
         setRunningActionIds((prev) => {
           if (!prev.has(actionId)) return prev;
@@ -291,20 +339,28 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
     const spanClass = field.fullWidth ? ' col-span-2' : '';
     if (field.type === 'action') {
       const actionId = `${field.actionId ?? field.key}:${rowIdentity}`;
+      const outcome = actionOutcome?.actionId === actionId ? actionOutcome : undefined;
       return (
-        <div key={field.key} className={`flex items-center justify-between gap-3 rounded-md border border-default-200/60 bg-content1 px-3 py-2${spanClass}`}>
-          {renderLabelWithHelp(fieldLabel, fieldDescription, 'text-sm text-default-700')}
-          <Button
-            size="sm"
-            variant="flat"
-            color="primary"
-            className="h-8 shrink-0"
-            isLoading={runningActionIds.has(actionId)}
-            isDisabled={!onUserAction}
-            onPress={() => runAction(actionId)}
-          >
-            {fieldLabel}
-          </Button>
+        <div key={field.key} className={`rounded-md border border-default-200/60 bg-content1 px-3 py-2${spanClass}`}>
+          <div className="flex items-center justify-between gap-3">
+            {renderLabelWithHelp(fieldLabel, fieldDescription, 'text-sm text-default-700')}
+            <Button
+              size="sm"
+              variant="flat"
+              color="primary"
+              className="h-8 shrink-0"
+              isLoading={runningActionIds.has(actionId)}
+              isDisabled={!onUserAction}
+              onPress={() => runAction(actionId)}
+            >
+              {fieldLabel}
+            </Button>
+          </div>
+          {outcome && (
+            <div className={`mt-1 text-xs ${outcome.ok ? 'text-success-600 dark:text-success-400' : 'text-danger'}`}>
+              {outcome.text}
+            </div>
+          )}
         </div>
       );
     }

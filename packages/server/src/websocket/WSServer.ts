@@ -1307,16 +1307,29 @@ export class WSServer extends WSMessageHandler {
   }
 
   private async handlePluginUserAction(data: any, connectionId: string): Promise<void> {
+    const { pluginName, actionId, operatorId, payload } = data ?? {};
     try {
-      const { pluginName, actionId, operatorId, payload } = data ?? {};
       this.logOperatorCommand('pluginUserAction', connectionId, { operatorId, pluginName, actionId });
-      this.digitalRadioEngine.pluginManager.handlePluginUserAction(
+      const result = await this.digitalRadioEngine.pluginManager.handlePluginUserAction(
         pluginName,
         actionId,
         operatorId,
         payload,
       );
+      // 将插件 onUserAction 的返回值回传发起连接的客户端，供按钮展示成败反馈
+      this.sendToConnection(connectionId, WSMessageType.PLUGIN_USER_ACTION_RESULT, {
+        pluginName,
+        actionId,
+        operatorId,
+        result: result ?? null,
+      });
     } catch (error) {
+      this.sendToConnection(connectionId, WSMessageType.PLUGIN_USER_ACTION_RESULT, {
+        pluginName,
+        actionId,
+        operatorId,
+        result: null,
+      });
       this.handleCommandError(error, 'pluginUserAction');
     }
   }
