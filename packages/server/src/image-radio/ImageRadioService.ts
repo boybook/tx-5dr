@@ -1,0 +1,666 @@
+import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
+import { EventEmitter } from 'eventemitter3';
+import type {
+  ImageFamily,
+  ImageFaxReceiveProfile,
+  ImagePaperBoundary,
+  ImagePaperSaveCommand,
+  ImagePixelFormat,
+  ImageReceiveProfile,
+  ImageRadioStatus,
+  ImageRxEvent,
+  ImageSstvReceiveProfile,
+  SstvTxStatus,
+  SstvTxCommandResult,
+} from '@tx5dr/contracts';
+import type { FaxDecodeEvent, FaxDecoder, SstvDecodeEvent, SstvDecoder, SstvEncoder, SstvMode } from 'rasterwave-node';
+
+import type { AudioStreamManager } from '../audio/AudioStreamManager.js';
+import { createLogger } from '../utils/logger.js';
+import { ImageArtifactStore } from './ImageArtifactStore.js';
+import { rasterwaveRuntime, type RasterwaveRuntime } from './RasterwaveRuntime.js';
+import type { PhysicalTxCoordinator } from '../transmission/PhysicalTxCoordinator.js';
+import type { DeterministicPlaybackSession } from '../audio/AudioStreamManager.js';
+import { ImagePaperSpool, type PaperManifest } from './ImagePaperSpool.js';
+
+const logger = createLogger('ImageRadioService');
+const INPUT_CHUNK_MS = 100;
+const NATIVE_QUEUE_SECONDS = 2;
+const JS_BACKLOG_MS = 500;
+const ROW_FLUSH_MS = 75;
+const DEFAULT_SSTV_RECEIVE_PROFILE: ImageSstvReceiveProfile = { family: 'sstv', strategy: 'auto' };
+const DEFAULT_FAX_FALLBACK: Extract<ImageFaxReceiveProfile, { strategy: 'manual' }> = {
+  family: 'fax', strategy: 'manual', ioc: 'ioc576', lpm: 120,
+  modulation: 'fm', centerHz: 1900, deviationHz: 400,
+};
+const DEFAULT_FAX_RECEIVE_PROFILE: ImageFaxReceiveProfile = { family: 'fax', strategy: 'auto' };
+
+interface ImageRadioServiceEvents {
+  status: (status: ImageRadioStatus) => void;
+  rxEvent: (event: ImageRxEvent) => void;
+  txStatus: (status: SstvTxStatus) => void;
+}
+
+type DecoderInstance = SstvDecoder | FaxDecoder;
+
+interface PendingRow {
+  rowIndex: number;
+  width: number;
+  rowRevision: number;
+  completeness?: 'provisional' | 'final';
+  pixels: Uint8Array;
+}
+
+export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
+  private family: ImageFamily | null = null;
+  private sstvReceiveProfile: ImageSstvReceiveProfile = DEFAULT_SSTV_RECEIVE_PROFILE;
+  private faxReceiveProfile: ImageFaxReceiveProfile = DEFAULT_FAX_RECEIVE_PROFILE;
+  private serviceState: ImageRadioStatus['serviceState'] = 'stopped';
+  private rxState: ImageRadioStatus['rxState'] = 'off';
+  private decoder: DecoderInstance | null = null;
+  private generation = 0;
+  private inputSampleRate = 12_000;
+  private inputChunk = new Float32Array(1_200);
+  private inputChunkOffset = 0;
+  private readonly backlog: Float32Array[] = [];
+  private draining = false;
+  private pendingDiscontinuitySamples = 0;
+  private discontinuities = 0;
+  private readonly pendingArtifactWrites = new Set<Promise<unknown>>();
+  private pendingRows: PendingRow[] = [];
+  private rowFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly audioListener = (samples: Float32Array, sampleRate: number) => this.acceptAudio(samples, sampleRate);
+  private txStatus: SstvTxStatus = {
+    phase: 'idle', revision: 0, samplesEmitted: 0, estimatedTotalSamples: 0,
+  };
+  private readonly txResults = new Map<string, SstvTxCommandResult>();
+  private readonly saveResults = new Map<string, { artifactId: string }>();
+  private activeTx: { sessionId: string; operatorId: string; revision: number; playback: DeterministicPlaybackSession; encoder: SstvEncoder; leaseId?: string } | null = null;
+  private readonly paper: ImagePaperSpool;
+  private nativeLineOffset = 0;
+  private lastFirstAvailableLine = 0;
+
+  constructor(
+    private readonly audioStream: AudioStreamManager,
+    private readonly artifacts: ImageArtifactStore,
+    private readonly physicalTx: PhysicalTxCoordinator,
+    private readonly getFrequency: () => number,
+    private readonly getRadioMode: () => string | undefined,
+    private readonly runtime: RasterwaveRuntime = rasterwaveRuntime,
+    paperSpool?: ImagePaperSpool,
+  ) {
+    super();
+    this.paper = paperSpool ?? new ImagePaperSpool(path.join(tmpdir(), `tx5dr-image-paper-${randomUUID()}`));
+  }
+
+  getStatus(): ImageRadioStatus {
+    const availability = this.runtime.getAvailability();
+    return {
+      serviceState: availability.available ? this.serviceState : 'unavailable',
+      family: this.family,
+      receiveProfile: this.currentReceiveProfile(),
+      rxState: this.rxState,
+      capability: {
+        available: availability.available,
+        reason: availability.reason,
+        sstv: { rx: true, tx: true },
+        fax: { rx: true, tx: false },
+      },
+      currentSession: this.paper.getSession(),
+      tx: this.txStatus,
+      nativeQueuedSamples: Math.max(0, Math.round(this.decoder?.queuedSamples ?? 0)),
+      jsBacklogSamples: this.backlog.reduce((sum, chunk) => sum + chunk.length, 0),
+      discontinuities: this.discontinuities,
+      updatedAt: Date.now(),
+    };
+  }
+
+  getPaperManifest(): PaperManifest | null { return this.paper.getManifest(); }
+
+  renderPaperSegment(boundaryId: string): Promise<Buffer> { return this.paper.renderSegment(boundaryId); }
+
+  async start(family: ImageFamily): Promise<void> {
+    if (this.family === family && this.serviceState === 'ready') {
+      this.emitStatus();
+      return;
+    }
+    await this.stop('mode_changed');
+    await this.paper.initialize();
+    await this.paper.reset();
+    this.nativeLineOffset = 0;
+    this.lastFirstAvailableLine = 0;
+    this.family = family;
+    this.serviceState = 'starting';
+    this.rxState = 'searching';
+    this.generation += 1;
+    this.emitStatus();
+    try {
+      await this.artifacts.initialize();
+      this.createDecoder(family, this.generation);
+      this.audioStream.on('audioData', this.audioListener);
+      this.serviceState = 'ready';
+      this.rxState = 'searching';
+      this.emitStatus();
+    } catch (error) {
+      this.serviceState = 'unavailable';
+      this.rxState = 'error';
+      logger.error('Failed to start image radio decoder', { family, error: error instanceof Error ? error.message : String(error) });
+      this.emitStatus();
+    }
+  }
+
+  async configureSstvReceive(profile: ImageSstvReceiveProfile): Promise<ImageRadioStatus> {
+    if (profile.strategy === 'manual') {
+      const supported = this.runtime.load().sstvModes().some((item) => item.mode === profile.mode);
+      if (!supported) throw new Error('IMAGE_MODE_INVALID');
+    }
+    this.sstvReceiveProfile = profile.strategy === 'auto'
+      ? DEFAULT_SSTV_RECEIVE_PROFILE
+      : { family: 'sstv', strategy: 'manual', mode: profile.mode };
+    if (this.family === 'sstv') {
+      await this.restartDecoder();
+    } else {
+      this.emitStatus();
+    }
+    return this.getStatus();
+  }
+
+  async configureFaxReceive(profile: ImageFaxReceiveProfile): Promise<ImageRadioStatus> {
+    this.faxReceiveProfile = profile.strategy === 'auto'
+      ? DEFAULT_FAX_RECEIVE_PROFILE
+      : { ...profile };
+    if (this.family === 'fax') await this.restartDecoder();
+    else this.emitStatus();
+    return this.getStatus();
+  }
+
+  private createDecoder(family: ImageFamily, generation: number): void {
+    const native = this.runtime.load();
+    this.inputSampleRate = this.audioStream.getInternalSampleRate();
+    this.inputChunk = new Float32Array(Math.max(1, Math.round(this.inputSampleRate * INPUT_CHUNK_MS / 1000)));
+    if (family === 'sstv') {
+      const profile = this.sstvReceiveProfile;
+      this.decoder = new native.SstvDecoder(this.inputSampleRate, {
+        outputMode: 'continuousPaper', fallbackMode: 'robot36',
+        manualMode: profile.strategy === 'manual' ? profile.mode as SstvMode : undefined,
+        detectVis: true, detectSyncTiming: true,
+        queueCapacitySamples: this.inputSampleRate * NATIVE_QUEUE_SECONDS,
+      }, (event) => this.handleSstvEvent(generation, event));
+      return;
+    }
+    const profile = this.faxReceiveProfile.strategy === 'manual' ? this.faxReceiveProfile : DEFAULT_FAX_FALLBACK;
+    this.decoder = new native.FaxDecoder(this.inputSampleRate, {
+      outputMode: 'continuousPaper', continuousAuto: this.faxReceiveProfile.strategy === 'auto',
+      ioc: profile.ioc, lpm: profile.lpm,
+      modulation: { kind: profile.modulation, centerHz: profile.centerHz, deviationHz: profile.deviationHz },
+      queueCapacitySamples: this.inputSampleRate * NATIVE_QUEUE_SECONDS,
+    }, (event) => this.handleFaxEvent(generation, event));
+  }
+
+  private async restartDecoder(): Promise<void> {
+    const family = this.family;
+    if (!family) return;
+    this.audioStream.off('audioData', this.audioListener);
+    this.flushRows();
+    const previous = this.decoder;
+    this.decoder = null;
+    this.generation += 1;
+    this.paper.setGeneration(this.generation);
+    this.nativeLineOffset = this.paper.getSession()?.receivedLines ?? 0;
+    this.backlog.length = 0;
+    this.inputChunkOffset = 0;
+    this.draining = false;
+    this.pendingDiscontinuitySamples = 0;
+    if (previous) {
+      await previous.finish().catch(() => undefined);
+      await previous.dispose().catch(() => undefined);
+    }
+    this.serviceState = 'starting';
+    this.emitStatus();
+    this.createDecoder(family, this.generation);
+    this.audioStream.on('audioData', this.audioListener);
+    this.serviceState = 'ready';
+    this.rxState = 'receiving';
+    this.emitStatus();
+  }
+
+  async stop(reason = 'stopped'): Promise<void> {
+    void reason;
+    this.generation += 1;
+    this.audioStream.off('audioData', this.audioListener);
+    this.flushRows();
+    const decoder = this.decoder;
+    this.decoder = null;
+    this.backlog.length = 0;
+    this.inputChunkOffset = 0;
+    this.draining = false;
+    this.pendingDiscontinuitySamples = 0;
+    if (decoder) {
+      await decoder.finish().catch(() => undefined);
+      await decoder.dispose().catch(() => undefined);
+    }
+    await Promise.allSettled([...this.pendingArtifactWrites]);
+    await this.paper.reset();
+    this.family = null;
+    this.serviceState = 'stopped';
+    this.rxState = 'off';
+    this.emitStatus();
+  }
+
+  reset(): void {
+    if (!this.decoder) return;
+    if (!this.decoder.reset()) {
+      this.pendingDiscontinuitySamples += this.inputChunk.length;
+      return;
+    }
+    this.rxState = 'receiving';
+    this.emitStatus();
+  }
+
+  markSignalLost(): void {
+    if (this.family !== 'fax' || !this.decoder) return;
+    (this.decoder as FaxDecoder).markSignalLost();
+  }
+
+  async startSstvTx(command: { requestId: string; operatorId: string; artifactId: string; mode: string; expectedFrequency: number }): Promise<SstvTxCommandResult> {
+    const previous = this.txResults.get(command.requestId);
+    if (previous) return previous;
+    const reject = (errorCode: string): SstvTxCommandResult => {
+      const result = { requestId: command.requestId, accepted: false, errorCode };
+      this.txResults.set(command.requestId, result);
+      return result;
+    };
+    if (this.family !== 'sstv' || this.serviceState !== 'ready') return reject('IMAGE_NOT_IN_SSTV_MODE');
+    if (this.rxState === 'receiving' || this.activeTx || this.physicalTx.getSnapshot().phase !== 'idle') return reject('PHYSICAL_TX_BUSY');
+    if (Math.round(this.getFrequency()) !== Math.round(command.expectedFrequency)) return reject('IMAGE_FREQUENCY_CHANGED');
+
+    const native = this.runtime.load();
+    const modeInfo = native.sstvModes().find((item) => item.mode === command.mode);
+    if (!modeInfo) return reject('IMAGE_MODE_INVALID');
+    const source = await this.artifacts.readRgbPixels(command.artifactId).catch(() => null);
+    if (!source || source.artifact.direction !== 'tx' || source.artifact.operatorId !== command.operatorId
+      || source.artifact.width !== modeInfo.width || source.artifact.height !== modeInfo.height) {
+      return reject('IMAGE_ARTIFACT_INVALID');
+    }
+
+    const sessionId = randomUUID();
+    const playback = this.audioStream.openDeterministicPlayback({ playbackKind: 'sstv' });
+    const encoder = new native.SstvEncoder(source.pixels, command.mode as SstvMode, playback.sampleRate);
+    this.activeTx = { sessionId, operatorId: command.operatorId, revision: 0, playback, encoder };
+    this.updateTx({
+      phase: 'preparing', sessionId, requestId: command.requestId, operatorId: command.operatorId,
+      artifactId: command.artifactId, mode: command.mode, revision: 0, samplesEmitted: 0,
+      estimatedTotalSamples: encoder.progress.estimatedTotalSamples,
+    });
+    const accepted = { requestId: command.requestId, accepted: true, sessionId };
+    this.txResults.set(command.requestId, accepted);
+    void this.runSstvTx(command, playback, encoder, sessionId);
+    return accepted;
+  }
+
+  async cancelSstvTx(command: { operatorId: string; sessionId: string; expectedRevision: number }): Promise<boolean> {
+    const active = this.activeTx;
+    if (!active || active.sessionId !== command.sessionId || active.operatorId !== command.operatorId || active.revision !== command.expectedRevision) return false;
+    await active.playback.abort('SSTV transmission cancelled');
+    if (active.leaseId && this.physicalTx.getSnapshot().leaseId === active.leaseId) {
+      await this.physicalTx.forceInterrupt('SSTV transmission cancelled');
+    }
+    this.updateTx({ ...this.txStatus, phase: 'cancelled', revision: active.revision + 1 });
+    return true;
+  }
+
+  private acceptAudio(samples: Float32Array, sampleRate: number): void {
+    if (!this.decoder || this.serviceState !== 'ready' || samples.length === 0 || (this.txStatus.phase !== 'idle' && this.txStatus.phase !== 'completed' && this.txStatus.phase !== 'cancelled' && this.txStatus.phase !== 'error')) return;
+    if (sampleRate !== this.inputSampleRate) {
+      this.registerDiscontinuity(samples.length, 'sample_rate_changed');
+      return;
+    }
+    let sourceOffset = 0;
+    while (sourceOffset < samples.length) {
+      const count = Math.min(samples.length - sourceOffset, this.inputChunk.length - this.inputChunkOffset);
+      this.inputChunk.set(samples.subarray(sourceOffset, sourceOffset + count), this.inputChunkOffset);
+      sourceOffset += count;
+      this.inputChunkOffset += count;
+      if (this.inputChunkOffset === this.inputChunk.length) {
+        const ready = this.inputChunk;
+        this.inputChunk = new Float32Array(ready.length);
+        this.inputChunkOffset = 0;
+        this.enqueueInput(ready);
+      }
+    }
+  }
+
+  private enqueueInput(chunk: Float32Array): void {
+    const decoder = this.decoder;
+    if (!decoder) return;
+    if (this.draining || this.backlog.length > 0) {
+      this.queueBacklog(chunk);
+      return;
+    }
+    if (this.pendingDiscontinuitySamples > 0 && !this.sendDiscontinuity()) {
+      this.queueBacklog(chunk);
+      this.beginDrain();
+      return;
+    }
+    if (!decoder.pushF32(chunk)) {
+      this.queueBacklog(chunk);
+      this.beginDrain();
+    }
+  }
+
+  private queueBacklog(chunk: Float32Array): void {
+    const maxChunks = Math.max(1, Math.floor(JS_BACKLOG_MS / INPUT_CHUNK_MS));
+    if (this.backlog.length >= maxChunks) {
+      const dropped = this.backlog.reduce((sum, item) => sum + item.length, 0) + chunk.length;
+      this.backlog.length = 0;
+      this.registerDiscontinuity(dropped, 'input_overrun');
+      return;
+    }
+    this.backlog.push(chunk);
+  }
+
+  private beginDrain(): void {
+    if (this.draining || !this.decoder) return;
+    this.draining = true;
+    const generation = this.generation;
+    void this.decoder.drain().then(() => {
+      if (generation !== this.generation || !this.decoder) return;
+      this.draining = false;
+      if (this.pendingDiscontinuitySamples > 0 && !this.sendDiscontinuity()) {
+        this.beginDrain();
+        return;
+      }
+      while (this.backlog.length > 0) {
+        const next = this.backlog[0];
+        if (!this.decoder.pushF32(next)) {
+          this.beginDrain();
+          return;
+        }
+        this.backlog.shift();
+      }
+      this.emitStatus();
+    }).catch((error) => this.failDecoder(error));
+  }
+
+  private sendDiscontinuity(): boolean {
+    if (!this.decoder || this.pendingDiscontinuitySamples <= 0) return true;
+    const dropped = this.pendingDiscontinuitySamples;
+    const accepted = this.family === 'sstv'
+      ? (this.decoder as SstvDecoder).markDiscontinuity(dropped)
+      : this.decoder.reset();
+    if (accepted) this.pendingDiscontinuitySamples = 0;
+    return accepted;
+  }
+
+  private registerDiscontinuity(samples: number, reason: string): void {
+    void reason;
+    this.pendingDiscontinuitySamples += samples;
+    this.discontinuities += 1;
+    this.emitStatus();
+  }
+
+  private handleSstvEvent(generation: number, event: SstvDecodeEvent): void {
+    if (generation !== this.generation || this.family !== 'sstv') return;
+    if (event.type === 'modeCandidate') {
+      this.rxState = 'acquiring';
+      this.emit('rxEvent', { type: 'signalDetected', family: 'sstv', confidence: event.confidence, candidates: event.candidates, timestamp: Date.now() });
+      this.emitStatus();
+    } else if (event.type === 'rasterBoundary') {
+      this.acceptBoundary({
+        nativeBoundaryId: event.boundaryId, nativeLineIndex: event.lineIndex,
+        codecMode: event.mode, width: event.width, pixelFormat: 'rgb8',
+        kind: event.boundaryKind, trusted: event.trusted,
+        detection: event.detection, nominalHeight: event.nominalHeight,
+      });
+    } else if (event.type === 'rasterLineReady') {
+      this.acceptPaperRow(event.lineIndex, event.pixels.length / 3, event.revision, event.pixels, event.completeness);
+    } else if (event.type === 'transmissionCompleted') {
+      this.trackArtifactWrite(this.savePaperRange(
+        this.nativeLineOffset + event.startLine,
+        this.nativeLineOffset + event.endLine,
+        'protocolEnd', true,
+      ));
+    } else if (event.type === 'protocolObserved') {
+      const width = this.runtime.load().sstvModes().find((mode) => mode.mode === event.mode)?.width ?? this.paper.getSession()?.width ?? 320;
+      this.acceptProtocolMarker(event.mode, 'rgb8', width, event.detection);
+    } else if (event.type === 'error') {
+      this.failDecoder(new Error(event.reason));
+    }
+  }
+
+  private handleFaxEvent(generation: number, event: FaxDecodeEvent): void {
+    if (generation !== this.generation || this.family !== 'fax') return;
+    if (event.type === 'aptDetected') {
+      this.rxState = 'acquiring';
+      this.emit('rxEvent', { type: 'signalDetected', family: 'fax', confidence: 1, candidates: [event.ioc], timestamp: Date.now() });
+      this.emitStatus();
+    } else if (event.type === 'rasterBoundary') {
+      this.acceptBoundary({
+        nativeBoundaryId: event.boundaryId, nativeLineIndex: event.lineIndex,
+        codecMode: `${event.ioc}/${event.lpm}/${event.modulation}`,
+        width: event.width, pixelFormat: 'gray8', kind: event.boundaryKind,
+        trusted: event.trusted, detection: event.boundaryKind,
+      });
+    } else if (event.type === 'rasterLineReady') {
+      this.acceptPaperRow(event.lineIndex, event.width, 0, event.pixels, 'final');
+    } else if (event.type === 'transmissionCompleted') {
+      this.trackArtifactWrite(this.savePaperRange(
+        this.nativeLineOffset + event.startLine,
+        this.nativeLineOffset + event.endLine,
+        'protocolEnd', true,
+      ));
+    } else if (event.type === 'protocolObserved') {
+      this.acceptProtocolMarker(`${event.ioc}/${event.lpm}/${event.modulation}`, 'gray8', event.width, 'aptPhasing');
+    } else if (event.type === 'error') {
+      this.failDecoder(new Error(event.reason));
+    }
+  }
+
+  private currentReceiveProfile(): ImageReceiveProfile | null {
+    if (this.family === 'sstv') return this.sstvReceiveProfile;
+    if (this.family === 'fax') return this.faxReceiveProfile;
+    return null;
+  }
+
+  private acceptBoundary(input: {
+    nativeBoundaryId: number; nativeLineIndex: number; codecMode: string; width: number;
+    pixelFormat: ImagePixelFormat; kind: string; trusted: boolean; detection?: string; nominalHeight?: number;
+  }): void {
+    const lineIndex = this.nativeLineOffset + input.nativeLineIndex;
+    const existing = this.paper.getSession();
+    const kind = existing && input.kind === 'initial' ? 'manualMode' : input.kind as ImagePaperBoundary['kind'];
+    const boundary: ImagePaperBoundary = {
+      boundaryId: `${this.generation}:${input.nativeBoundaryId}`,
+      lineIndex, kind, trusted: input.trusted,
+      codecMode: input.codecMode, width: input.width, pixelFormat: input.pixelFormat,
+      timestamp: Date.now(), detection: input.detection, nominalHeight: input.nominalHeight,
+    };
+    if (!existing) {
+      const session = this.paper.start(this.family!, this.generation, boundary);
+      this.emit('rxEvent', { type: 'paperStarted', session, pixelFormat: input.pixelFormat });
+    } else {
+      this.paper.addBoundary(boundary);
+    }
+    const session = this.paper.getSession()!;
+    this.emit('rxEvent', { type: 'boundary', sessionId: session.sessionId, generation: this.generation, revision: session.revision, boundary });
+    this.rxState = 'receiving';
+    this.emitStatus();
+  }
+
+  private acceptProtocolMarker(codecMode: string, pixelFormat: ImagePixelFormat, width: number, detection: string): void {
+    const session = this.paper.getSession();
+    if (!session) return;
+    const boundary: ImagePaperBoundary = {
+      boundaryId: `${this.generation}:observed:${randomUUID()}`,
+      lineIndex: session.receivedLines, kind: 'protocolObserved', trusted: false,
+      codecMode, width, pixelFormat, timestamp: Date.now(), detection,
+    };
+    this.paper.addMarker(boundary);
+    const updated = this.paper.getSession()!;
+    this.emit('rxEvent', { type: 'boundary', sessionId: updated.sessionId, generation: this.generation, revision: updated.revision, boundary });
+  }
+
+  private acceptPaperRow(nativeLineIndex: number, width: number, rowRevision: number, pixels: Uint8Array, completeness: 'provisional' | 'final'): void {
+    const rowIndex = this.nativeLineOffset + nativeLineIndex;
+    const pixelFormat = this.family === 'fax' ? 'gray8' : 'rgb8';
+    if (!this.paper.appendRow({ lineIndex: rowIndex, width, pixelFormat, revision: rowRevision, pixels })) return;
+    const currentSession = this.paper.getSession();
+    if (currentSession && currentSession.firstAvailableLine > this.lastFirstAvailableLine) {
+      this.lastFirstAvailableLine = currentSession.firstAvailableLine;
+      const marker = this.paper.getManifest()?.boundaries.find((boundary) => boundary.kind === 'truncated');
+      if (marker) this.emit('rxEvent', { type: 'boundary', sessionId: currentSession.sessionId, generation: this.generation, revision: currentSession.revision, boundary: marker });
+    }
+    this.pendingRows.push({ rowIndex, width, rowRevision, completeness, pixels: new Uint8Array(pixels) });
+    if (this.pendingRows.length >= 8) this.flushRows();
+    else if (!this.rowFlushTimer) this.rowFlushTimer = setTimeout(() => this.flushRows(), ROW_FLUSH_MS);
+  }
+
+  private flushRows(): void {
+    if (this.rowFlushTimer) clearTimeout(this.rowFlushTimer);
+    this.rowFlushTimer = null;
+    const session = this.paper.getSession();
+    if (!session || this.pendingRows.length === 0) return;
+    const rows = this.pendingRows.splice(0, 8);
+    this.emit('rxEvent', {
+      type: 'rows', sessionId: session.sessionId, generation: this.generation,
+      revision: session.revision, pixelFormat: this.family === 'fax' ? 'gray8' : 'rgb8',
+      rows: rows.map((row) => ({ rowIndex: row.rowIndex, width: row.width, rowRevision: row.rowRevision, completeness: row.completeness, dataBase64: Buffer.from(row.pixels).toString('base64') })),
+    });
+    if (this.pendingRows.length > 0) this.rowFlushTimer = setTimeout(() => this.flushRows(), 0);
+  }
+
+  async saveCurrentPaper(command: ImagePaperSaveCommand): Promise<{ artifactId: string }> {
+    const previous = this.saveResults.get(command.requestId);
+    if (previous) return previous;
+    const session = this.paper.getSession();
+    if (!session) throw new Error('IMAGE_PAPER_EMPTY');
+    if (command.expectedRevision > session.revision) throw new Error('IMAGE_PAPER_REVISION_CONFLICT');
+    const range = this.paper.latestManualRange();
+    if (!range) throw new Error('IMAGE_PAPER_EMPTY');
+    const result = await this.savePaperRange(range.startLine, range.endLine, 'manual', false, command.operatorId);
+    if (!result) throw new Error('IMAGE_PAPER_SAVE_FAILED');
+    const response = { artifactId: result };
+    this.saveResults.set(command.requestId, response);
+    return response;
+  }
+
+  private async savePaperRange(startLine: number, endLine: number, saveReason: 'manual' | 'protocolEnd', complete: boolean, operatorId?: string): Promise<string | null> {
+    const session = this.paper.getSession();
+    if (!session) return null;
+    try {
+      const snapshot = await this.paper.snapshotRange(startLine, endLine);
+      const artifact = await this.artifacts.save({
+        family: snapshot.family, direction: 'rx', operatorId,
+        codecMode: snapshot.codecMode, pixelFormat: snapshot.pixelFormat,
+        width: snapshot.width, height: snapshot.height, pixels: snapshot.pixels,
+        frequency: this.getFrequency(), radioMode: this.getRadioMode(),
+        complete: complete && !snapshot.truncated, saveReason,
+        captureStartedAt: snapshot.startedAt, captureEndedAt: snapshot.endedAt,
+        truncated: snapshot.truncated,
+      });
+      const current = this.paper.getSession();
+      if (current) this.emit('rxEvent', {
+        type: 'captureSaved', sessionId: current.sessionId, generation: this.generation,
+        revision: current.revision, artifactId: artifact.id, previewUrl: artifact.imageUrl,
+        saveReason, complete: artifact.complete, startLine, endLine,
+      });
+      return artifact.id;
+    } catch (error) {
+      logger.error('Failed to persist paper capture', { error: error instanceof Error ? error.message : String(error) });
+      this.serviceState = 'degraded';
+      this.emitStatus();
+      return null;
+    }
+  }
+
+  private failDecoder(error: unknown): void {
+    logger.error('Image decoder failed', { error: error instanceof Error ? error.message : String(error) });
+    this.serviceState = 'degraded';
+    this.rxState = 'error';
+    this.emitStatus();
+  }
+
+  private trackArtifactWrite(operation: Promise<unknown>): void {
+    this.pendingArtifactWrites.add(operation);
+    void operation.finally(() => this.pendingArtifactWrites.delete(operation));
+  }
+
+  private async runSstvTx(
+    command: { requestId: string; operatorId: string; artifactId: string; mode: string },
+    playback: DeterministicPlaybackSession,
+    encoder: SstvEncoder,
+    sessionId: string,
+  ): Promise<void> {
+    let leaseId: string | undefined;
+    try {
+      const primeSamples = Math.ceil(playback.sampleRate * 0.3);
+      while (!encoder.isFinished && playback.queuedAudioMs * playback.sampleRate / 1000 < primeSamples) {
+        await playback.write(await encoder.readSamples(playback.frameSamples));
+      }
+      this.updateTx({ ...this.txStatus, phase: 'waiting_for_lease', revision: this.txStatus.revision + 1 });
+      leaseId = await this.physicalTx.acquireLease({
+        source: 'sstv', operatorIds: [command.operatorId], reason: `SSTV ${command.mode}`,
+        playbackKind: 'sstv', deferActiveUntilAudio: true,
+        interrupt: () => playback.abort('physical SSTV lease interrupted'),
+        validateStart: () => {
+          if (Math.round(this.getFrequency()) !== Math.round(this.artifacts.get(command.artifactId)?.frequency ?? -1)) {
+            throw new Error('IMAGE_FREQUENCY_CHANGED');
+          }
+        },
+      });
+      if (this.activeTx?.sessionId !== sessionId) throw new Error('SSTV transmission superseded');
+      this.activeTx.leaseId = leaseId;
+      this.updateTx({ ...this.txStatus, phase: 'keying', revision: this.txStatus.revision + 1 });
+      await new Promise<void>((resolve) => setTimeout(resolve, 300));
+      await playback.start();
+      this.physicalTx.markStreamingLeaseActive(leaseId);
+      this.updateTx({ ...this.txStatus, phase: 'on_air', revision: this.txStatus.revision + 1, startedAt: Date.now() });
+
+      while (!encoder.isFinished) {
+        await playback.write(await encoder.readSamples(playback.frameSamples));
+        const progress = encoder.progress;
+        if (this.activeTx) this.activeTx.revision += 1;
+        this.updateTx({
+          ...this.txStatus, revision: this.activeTx?.revision ?? this.txStatus.revision + 1,
+          samplesEmitted: progress.samplesEmitted,
+          estimatedTotalSamples: progress.estimatedTotalSamples,
+          currentRow: progress.currentRow,
+        });
+      }
+      this.physicalTx.markStreamingLeaseDraining(leaseId);
+      this.updateTx({ ...this.txStatus, phase: 'draining', revision: this.txStatus.revision + 1 });
+      await playback.end();
+      await new Promise<void>((resolve) => setTimeout(resolve, 150));
+      const result = await this.physicalTx.releaseLease(leaseId, 'SSTV transmission completed');
+      if (!result.success || !result.physicalConfirmed) throw new Error(result.error ?? result.reason);
+      this.updateTx({ ...this.txStatus, phase: 'completed', revision: this.txStatus.revision + 1 });
+    } catch (error) {
+      await playback.abort(error instanceof Error ? error.message : 'SSTV transmission failed');
+      if (leaseId && this.physicalTx.getSnapshot().leaseId === leaseId) await this.physicalTx.forceInterrupt('SSTV transmission failed');
+      this.updateTx({
+        ...this.txStatus,
+        phase: this.physicalTx.getSnapshot().phase === 'unknown' ? 'ptt_unknown' : 'error',
+        revision: this.txStatus.revision + 1,
+        errorCode: this.runtime.errorCode(error),
+      });
+      logger.error('SSTV transmission failed', { sessionId, error: error instanceof Error ? error.message : String(error) });
+    } finally {
+      await encoder.dispose().catch(() => undefined);
+      if (this.activeTx?.sessionId === sessionId) this.activeTx = null;
+      this.registerDiscontinuity(Math.round(this.inputSampleRate * 0.3), 'local_transmit');
+    }
+  }
+
+  private updateTx(status: SstvTxStatus): void {
+    this.txStatus = status;
+    const activeTx = this.activeTx;
+    if (activeTx && activeTx.sessionId === status.sessionId) activeTx.revision = status.revision;
+    this.emit('txStatus', status);
+    this.emitStatus();
+  }
+
+  private emitStatus(): void { this.emit('status', this.getStatus()); }
+}

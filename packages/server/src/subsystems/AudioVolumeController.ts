@@ -17,12 +17,12 @@ const DEFAULT_GAIN_DB = -10;
  */
 export class AudioVolumeController {
   private currentBand: string = 'Unknown';
-  private currentModeCategory: 'digital' | 'voice' | 'cw' = 'digital';
+  private currentModeCategory: 'digital' | 'voice' | 'cw' | 'image' = 'digital';
 
   constructor(
     private engineEmitter: EventEmitter<DigitalRadioEngineEvents>,
     private audioStreamManager: AudioStreamManager,
-    private getEngineMode: () => 'digital' | 'voice' | 'cw',
+    private getEngineMode: () => 'digital' | 'voice' | 'cw' | 'image',
   ) {}
 
   /**

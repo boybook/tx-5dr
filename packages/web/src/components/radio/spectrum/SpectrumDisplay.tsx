@@ -100,6 +100,7 @@ interface SpectrumDisplayProps {
   onFrequencyBandOverlayCommit?: (id: string, change: FrequencyBandOverlayChange) => void;
   showPopOut?: boolean;
   onPopOutChange?: (isPopedOut: boolean) => void;
+  onCollapsedChange?: (isCollapsed: boolean) => void;
   showMarkers?: boolean;
   topLeftOverlayInset?: {
     top?: number;
@@ -948,6 +949,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   onFrequencyBandOverlayCommit,
   showPopOut = true,
   onPopOutChange,
+  onCollapsedChange,
   showMarkers = true,
   topLeftOverlayInset,
 }) => {
@@ -1008,6 +1010,9 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const hasActiveSpectrumSubscriptionRef = useRef(false);
   const [spectrumRecoveryState, setSpectrumRecoveryState] = useState<SpectrumRecoveryStateSnapshot>(SPECTRUM_RECOVERY_IDLE_STATE);
   const spectrumRecoveryStateRef = useRef<SpectrumRecoveryStateSnapshot>(SPECTRUM_RECOVERY_IDLE_STATE);
+  useEffect(() => {
+    onCollapsedChange?.(isCollapsed);
+  }, [isCollapsed, onCollapsedChange]);
   const updateSpectrumRecoveryState = useCallback((nextState: SpectrumRecoveryStateSnapshot) => {
     if (areSpectrumRecoveryStatesEqual(spectrumRecoveryStateRef.current, nextState)) {
       return;

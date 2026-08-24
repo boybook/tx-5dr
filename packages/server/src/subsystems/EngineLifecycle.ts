@@ -30,6 +30,7 @@ import { RadioError } from '../utils/errors/RadioError.js';
 import { createLogger } from '../utils/logger.js';
 import type { WSJTXDecodeWorkQueue } from '../decode/WSJTXDecodeWorkQueue.js';
 import type { PhysicalTxCoordinator } from '../transmission/PhysicalTxCoordinator.js';
+import type { ImageRadioService } from '../image-radio/ImageRadioService.js';
 
 const logger = createLogger('EngineLifecycle');
 
@@ -56,6 +57,7 @@ export interface EngineLifecycleDeps {
   getCWDecoderManager: () => import('../cw-decoder/index.js').CWDecoderManager;
   getAudioVolumeController: () => AudioVolumeController;
   getAudioSidecar: () => AudioSidecarController;
+  getImageRadioService?: () => ImageRadioService | null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   getStatus: () => any;
 }
@@ -164,10 +166,12 @@ export class EngineLifecycle {
         ? this.buildVoiceModeResourcePlan()
         : mode.name === 'CW'
           ? this.buildCWModeResourcePlan()
-          : this.buildDigitalModeResourcePlan()),
+          : mode.name === 'SSTV' || mode.name === 'FAX'
+            ? this.buildImageModeResourcePlan(mode.name === 'SSTV' ? 'sstv' : 'fax')
+            : this.buildDigitalModeResourcePlan()),
     ];
 
-    logger.info(`Built ${mode.name === 'VOICE' ? 'voice' : mode.name === 'CW' ? 'cw' : 'digital'} resource plan`);
+    logger.info(`Built ${mode.name === 'VOICE' ? 'voice' : mode.name === 'CW' ? 'cw' : mode.name === 'SSTV' || mode.name === 'FAX' ? 'image' : 'digital'} resource plan`);
     return resources;
   }
 
@@ -413,6 +417,36 @@ export class EngineLifecycle {
         optional: false,
       },
     ];
+  }
+
+  private buildImageModeResourcePlan(family: 'sstv' | 'fax'): SimplifiedResourceConfig[] {
+    const service = this.deps.getImageRadioService?.() ?? null;
+    const voiceSessionManager = family === 'sstv' ? this.deps.getVoiceSessionManager() : null;
+    const resources: SimplifiedResourceConfig[] = [{
+      name: 'spectrumScheduler',
+      start: async () => this.deps.spectrumScheduler.start(),
+      stop: async () => this.deps.spectrumScheduler.stop(),
+      priority: 6,
+      dependencies: [],
+      optional: false,
+    }];
+    if (service) resources.push({
+      name: 'imageRadioService',
+      start: async () => service.start(family),
+      stop: async () => service.stop('mode_runtime_stopped'),
+      priority: 7,
+      dependencies: [],
+      optional: true,
+    });
+    if (voiceSessionManager) resources.push({
+      name: 'voiceSessionManager',
+      start: async () => voiceSessionManager.start(),
+      stop: async () => voiceSessionManager.stop(),
+      priority: 8,
+      dependencies: [],
+      optional: false,
+    });
+    return resources;
   }
 
   private buildDigitalModeResourcePlan(): SimplifiedResourceConfig[] {

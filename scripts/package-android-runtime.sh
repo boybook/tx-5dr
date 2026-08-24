@@ -88,7 +88,7 @@ REMOVE_PACKAGES=(
   @internationalized
   postcss autoprefixer lilconfig postcss-load-config
   react-refresh react-is scheduler csstype
-  @babel @jridgewell yaml source-map pngjs bluebird rxjs
+  @babel @jridgewell yaml source-map bluebird rxjs
   vitest @vitest chai @statelyai autocannon clinic tsx
   esquery graphemer espree esrecurse estraverse estree-walker esutils
   acorn acorn-jsx acorn-walk doctrine optionator
@@ -154,6 +154,20 @@ find "$NM" -path '*/prebuilds/darwin-*' -type d -prune -exec rm -rf {} + 2>/dev/
 find "$NM" -path '*/prebuilds/win32-*' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 find "$NM" -path '*/prebuilds/android-*' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 find "$NM" -path '*/prebuilds/linux-x64' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+for pkg_dir in "$NM"/rasterwave-node-*; do
+  [[ -d "$pkg_dir" ]] || continue
+  [[ "$(basename "$pkg_dir")" == "rasterwave-node-linux-arm64-gnu" ]] || rm -rf "$pkg_dir"
+done
+for package_name in pngjs rasterwave-node rasterwave-node-linux-arm64-gnu; do
+  if [[ ! -d "$NM/$package_name" ]]; then
+    echo "Missing packaged Image Radio dependency: $package_name" >&2
+    exit 1
+  fi
+done
+if ! find "$NM/rasterwave-node-linux-arm64-gnu" -maxdepth 1 -type f -name '*.node' | grep -q .; then
+  echo "Missing packaged rasterwave native binding: rasterwave-node-linux-arm64-gnu" >&2
+  exit 1
+fi
 if [[ -d "$NM/onnxruntime-node/bin/napi-v6" ]]; then
   rm -rf "$NM/onnxruntime-node/bin/napi-v6/linux/x64" \
          "$NM/onnxruntime-node/bin/napi-v6/darwin" \

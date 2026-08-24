@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import { NATIVE_MODULES, runNativeModulePreflight } from '../check-native-modules.js';
+import { DEGRADABLE_NATIVE_MODULES, NATIVE_MODULES, runNativeModulePreflight } from '../check-native-modules.js';
 
 describe('native module preflight list', () => {
   it('includes onnxruntime-node so Windows VC runtime issues surface at startup', () => {
     expect(NATIVE_MODULES).toContain('onnxruntime-node');
+  });
+
+  it('preflights rasterwave as a degradable image-radio feature', () => {
+    expect(NATIVE_MODULES).toContain('rasterwave-node');
+    expect(DEGRADABLE_NATIVE_MODULES.has('rasterwave-node')).toBe(true);
   });
 
   it('returns success when all modules import', async () => {

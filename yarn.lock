@@ -6563,6 +6563,7 @@ __metadata:
     "@types/node": "npm:^20.0.0"
     "@types/node-forge": "npm:^1"
     "@types/node-wav": "npm:^0"
+    "@types/pngjs": "npm:^6.0.5"
     "@types/wav": "npm:^1.0.4"
     "@types/ws": "npm:^8.18.1"
     audify: "patch:audify@npm%3A1.10.1#~/.yarn/patches/audify-npm-1.10.1-076cc4cf40.patch"
@@ -6581,6 +6582,8 @@ __metadata:
     node-forge: "npm:^1.4.0"
     node-wav: "npm:^0.0.2"
     onnxruntime-node: "npm:^1.26.0"
+    pngjs: "npm:^7.0.0"
+    rasterwave-node: "npm:0.2.0"
     rubato-fft-node: "npm:^0.1.0"
     serialport: "npm:^13.0.0"
     tci-client-node: "npm:^0.1.2"
@@ -6910,6 +6913,15 @@ __metadata:
     "@types/node": "npm:*"
     xmlbuilder: "npm:>=11.0.1"
   checksum: 10c0/2a929f4482e3bea8c3288a46ae589a2ae2d01df5b7841ead7032d7baa79d79af6c875a5798c90705eea9306c2fb1544d7ed12ab3c905c5626d5dd5dc9f464b94
+  languageName: node
+  linkType: hard
+
+"@types/pngjs@npm:^6.0.5":
+  version: 6.0.5
+  resolution: "@types/pngjs@npm:6.0.5"
+  dependencies:
+    "@types/node": "npm:*"
+  checksum: 10c0/11979d0690e774046d3a1e8cfc613a6b53a613909d81c93831cf253800e93ba1a2d47950979b523aebd4fc023351b644d7f4aa2dfcc027c70816a2968420e7da
   languageName: node
   linkType: hard
 
@@ -16023,6 +16035,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"pngjs@npm:^7.0.0":
+  version: 7.0.0
+  resolution: "pngjs@npm:7.0.0"
+  checksum: 10c0/0d4c7a0fd476a9c33df7d0a2a73e1d56537628a668841f6995c2bca070cf30819f9254a64363266bc14ef2fee47659dd3b4f2b18eec7ab65143015139f497b38
+  languageName: node
+  linkType: hard
+
 "point-in-polygon-hao@npm:^1.1.0":
   version: 1.2.4
   resolution: "point-in-polygon-hao@npm:1.2.4"
@@ -16529,6 +16548,65 @@ __metadata:
     randombytes: "npm:^2.0.5"
     safe-buffer: "npm:^5.1.0"
   checksum: 10c0/11aeed35515872e8f8a2edec306734e6b74c39c46653607f03c68385ab8030e2adcc4215f76b5e4598e028c4750d820afd5c65202527d831d2a5f207fe2bc87c
+  languageName: node
+  linkType: hard
+
+"rasterwave-node-darwin-arm64@npm:0.2.0":
+  version: 0.2.0
+  resolution: "rasterwave-node-darwin-arm64@npm:0.2.0"
+  conditions: os=darwin & cpu=arm64
+  languageName: node
+  linkType: hard
+
+"rasterwave-node-darwin-x64@npm:0.2.0":
+  version: 0.2.0
+  resolution: "rasterwave-node-darwin-x64@npm:0.2.0"
+  conditions: os=darwin & cpu=x64
+  languageName: node
+  linkType: hard
+
+"rasterwave-node-linux-arm64-gnu@npm:0.2.0":
+  version: 0.2.0
+  resolution: "rasterwave-node-linux-arm64-gnu@npm:0.2.0"
+  conditions: os=linux & cpu=arm64 & libc=glibc
+  languageName: node
+  linkType: hard
+
+"rasterwave-node-linux-x64-gnu@npm:0.2.0":
+  version: 0.2.0
+  resolution: "rasterwave-node-linux-x64-gnu@npm:0.2.0"
+  conditions: os=linux & cpu=x64 & libc=glibc
+  languageName: node
+  linkType: hard
+
+"rasterwave-node-win32-x64-msvc@npm:0.2.0":
+  version: 0.2.0
+  resolution: "rasterwave-node-win32-x64-msvc@npm:0.2.0"
+  conditions: os=win32 & cpu=x64
+  languageName: node
+  linkType: hard
+
+"rasterwave-node@npm:0.2.0":
+  version: 0.2.0
+  resolution: "rasterwave-node@npm:0.2.0"
+  dependencies:
+    rasterwave-node-darwin-arm64: "npm:0.2.0"
+    rasterwave-node-darwin-x64: "npm:0.2.0"
+    rasterwave-node-linux-arm64-gnu: "npm:0.2.0"
+    rasterwave-node-linux-x64-gnu: "npm:0.2.0"
+    rasterwave-node-win32-x64-msvc: "npm:0.2.0"
+  dependenciesMeta:
+    rasterwave-node-darwin-arm64:
+      optional: true
+    rasterwave-node-darwin-x64:
+      optional: true
+    rasterwave-node-linux-arm64-gnu:
+      optional: true
+    rasterwave-node-linux-x64-gnu:
+      optional: true
+    rasterwave-node-win32-x64-msvc:
+      optional: true
+  checksum: 10c0/e378ba4892249c6746cfacbfa10fddd97ddae87135635cc61a2d8f82156fc37319c3edbb6050352f01306bb2d0b8f52e1709df769f8c24ea1bb6bc0ac212255f
   languageName: node
   linkType: hard
 

@@ -2678,7 +2678,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   }
 
   private async getSavedStartupOperatingState(): Promise<{
-    engineMode: 'digital' | 'voice' | 'cw';
+    engineMode: 'digital' | 'voice' | 'cw' | 'image';
     frequency: number;
     request: ApplyOperatingStateRequest;
   } | null> {
@@ -2722,6 +2722,22 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       };
     }
 
+    if (engineMode === 'image') {
+      const lastImage = this.configManager.getLastImageFrequency();
+      if (!lastImage || !this.validateSavedStartupFrequency(lastImage.frequency, 'image')) return null;
+      return {
+        engineMode,
+        frequency: lastImage.frequency,
+        request: {
+          frequency: lastImage.frequency,
+          mode: lastImage.radioMode,
+          bandwidth: lastImage.radioMode ? 'nochange' : undefined,
+          options: lastImage.radioMode ? { intent: 'voice' } : undefined,
+          tolerateModeFailure: true,
+        },
+      };
+    }
+
     const lastDigital = this.configManager.getLastSelectedFrequency();
     if (!lastDigital || !this.validateSavedStartupFrequency(lastDigital.frequency, 'digital')) {
       return null;
@@ -2740,7 +2756,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     };
   }
 
-  private validateSavedStartupFrequency(frequency: number, engineMode: 'digital' | 'voice' | 'cw'): boolean {
+  private validateSavedStartupFrequency(frequency: number, engineMode: 'digital' | 'voice' | 'cw' | 'image'): boolean {
     if (!isFrequencyInHamlibRange(frequency)) {
       logger.warn(
         `Invalid saved ${engineMode} frequency detected: ${frequency} Hz `

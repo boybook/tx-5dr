@@ -914,6 +914,13 @@ export class PhysicalTxCoordinator extends EventEmitter<PhysicalTxCoordinatorEve
     this.emitPhase(lease);
   }
 
+  markStreamingLeaseDraining(leaseId: string): void {
+    const lease = this.requireCurrentLease(leaseId);
+    if (lease.stopRequested) throw new PhysicalTxInterruptedError();
+    lease.phase = 'draining';
+    this.emitPhase(lease);
+  }
+
   requestNormalStop(reason: string): 'idle' | 'deferred' {
     const lease = this.activeLease;
     if (!lease) return 'idle';

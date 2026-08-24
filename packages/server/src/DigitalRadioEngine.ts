@@ -115,6 +115,7 @@ import type { PluginRadioCommand, PluginRadioTunerCommand } from '@tx5dr/plugin-
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { ImageArtifactStore, ImagePaperSpool, ImageRadioService, ImageTemplateStore } from './image-radio/index.js';
 
 export interface DeepCWModelPathConfig {
   language?: string;
@@ -237,6 +238,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private physicalTxCoordinator: PhysicalTxCoordinator;
   private operatorIntentCoordinator: OperatorIntentCoordinator;
   private resourceManager: ResourceManager;
+  private imageRadioService: ImageRadioService | null = null;
+  private imageArtifactStore: ImageArtifactStore | null = null;
+  private imageTemplateStore: ImageTemplateStore | null = null;
 
   // 语音模式
   private engineMode: EngineMode = 'digital';
@@ -788,6 +792,22 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     return this.audioStreamManager;
   }
 
+  public getCurrentMode(): ModeDescriptor {
+    return this.currentMode;
+  }
+
+  public getImageRadioService(): ImageRadioService | null {
+    return this.imageRadioService;
+  }
+
+  public getImageArtifactStore(): ImageArtifactStore | null {
+    return this.imageArtifactStore;
+  }
+
+  public getImageTemplateStore(): ImageTemplateStore | null {
+    return this.imageTemplateStore;
+  }
+
   public getDecodeWorkerTelemetrySnapshot(): DecodeWorkerTelemetrySnapshot | undefined {
     return this.realDecodeQueue.getDecodeWorkerTelemetrySnapshot();
   }
@@ -866,6 +886,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     }
     if (this.engineMode === 'cw') {
       return configManager.getLastCWFrequency()?.radioMode ?? 'CW';
+    }
+    if (this.engineMode === 'image') {
+      return configManager.getLastImageFrequency()?.radioMode ?? null;
     }
     return configManager.getLastSelectedFrequency()?.radioMode ?? null;
   }
@@ -1128,7 +1151,24 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     // 更新插件管理器的数据目录（在 initialize 阶段异步获取）
     const dataDir = await tx5drPaths.getDataDir();
+    const cacheDir = await tx5drPaths.getCacheDir();
     this._pluginManager.setDataDir(dataDir);
+    this.imageArtifactStore = new ImageArtifactStore(path.join(dataDir, 'image-radio'));
+    await this.imageArtifactStore.initialize();
+    this.imageTemplateStore = new ImageTemplateStore(path.join(dataDir, 'image-radio'));
+    await this.imageTemplateStore.initialize();
+    this.imageRadioService = new ImageRadioService(
+      this.audioStreamManager,
+      this.imageArtifactStore,
+      this.physicalTxCoordinator,
+      () => this.radioManager.getKnownFrequency() ?? ConfigManager.getInstance().getLastImageFrequency()?.frequency ?? 0,
+      () => this.getCurrentRadioMode() ?? undefined,
+      undefined,
+      new ImagePaperSpool(path.join(cacheDir, 'image-radio-paper')),
+    );
+    this.imageRadioService.on('status', (status) => this.emit('imageRadioStatus', status));
+    this.imageRadioService.on('rxEvent', (event) => this.emit('imageRxEvent', event));
+    this.imageRadioService.on('txStatus', (status) => this.emit('sstvTxStatus', status));
 
     // 加载插件配置
     const pluginsConfig = ConfigManager.getInstance().getPluginsConfig();
@@ -1242,6 +1282,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       getCWDecoderManager: () => this.getCWDecoderManager(),
       getAudioVolumeController: () => this.audioVolumeController,
       getAudioSidecar: () => this.audioSidecar,
+      getImageRadioService: () => this.imageRadioService,
       getStatus: () => this.getStatus(),
     });
     this.engineLifecycle.setVoiceSessionManager(this.voiceSessionManager);
@@ -1316,6 +1357,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       this.currentMode = MODES.CW;
       this.syncCurrentModeToRuntimeComponents('restore-cw-mode');
       logger.info('Restored last engine mode: cw');
+    } else if (lastEngineMode === 'image') {
+      this.engineMode = 'image';
+      this.currentMode = configManager.getLastImageFrequency()?.mode === 'FAX' ? MODES.FAX : MODES.SSTV;
+      this.syncCurrentModeToRuntimeComponents('restore-image-mode');
+      logger.info('Restored last engine mode: image');
     }
 
     this.configureAudioProcessingForCurrentMode('restore-mode');
@@ -1544,6 +1590,17 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         return;
       }
 
+      if (typeof mode === 'object' && (mode.name === 'SSTV' || mode.name === 'FAX')) {
+        if (this.engineMode === 'image' && this.currentMode.name === mode.name) {
+          await this.stopTuneTone('mode unchanged');
+          this.emitStatusSnapshot();
+          return;
+        }
+        const target = mode.name === 'SSTV' ? MODES.SSTV : MODES.FAX;
+        await this.runWithModeChangeGate(() => this.switchEngineMode('image', target));
+        return;
+      }
+
       const digitalMode = mode as ModeDescriptor;
 
       // If switching from voice to digital
@@ -1554,6 +1611,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
       // If switching from CW to digital
       if (this.engineMode === 'cw') {
+        await this.runWithModeChangeGate(() => this.switchEngineMode('digital', digitalMode));
+        return;
+      }
+
+
+      if (this.engineMode === 'image') {
         await this.runWithModeChangeGate(() => this.switchEngineMode('digital', digitalMode));
         return;
       }
@@ -1968,7 +2031,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         }
       : null;
     let engineState = this.engineLifecycle?.getEngineState() ?? EngineState.IDLE;
-    let shouldResumeAfterSwitch = engineState === EngineState.RUNNING || engineState === EngineState.STARTING;
+    let shouldResumeAfterSwitch = engineState === EngineState.RUNNING || engineState === EngineState.STARTING || targetEngineMode === 'image';
     // CW keying can lazy-init its own manager, but RX monitor/decoder still
     // need the engine audio chain. Preserve the user's running/idle intent.
     const comingFromCW = this.engineMode === 'cw';
@@ -2165,6 +2228,19 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       return this.restoreLastVoiceOperatingState(configManager, expectedConnectionGeneration);
     } else if (engineMode === 'cw') {
       return this.restoreLastCWOperatingState(configManager, expectedConnectionGeneration);
+    } else if (engineMode === 'image') {
+      const saved = configManager.getLastImageFrequency();
+      if (!saved) return null;
+      return this.applyModeOperatingState({
+        frequency: saved.frequency,
+        mode: saved.radioMode,
+        bandwidth: saved.radioMode ? 'nochange' : undefined,
+        options: saved.radioMode ? { intent: 'voice' } : undefined,
+        tolerateModeFailure: true,
+      }, expectedConnectionGeneration).then((result) => ({
+        status: result.frequencyApplied && (!saved.radioMode || result.modeApplied) ? 'applied' : result.frequencyApplied ? 'partially-applied' : 'failed',
+        detail: result.modeError?.message,
+      }));
     }
     return this.restoreLastDigitalOperatingState(configManager, mode, expectedConnectionGeneration);
   }
@@ -2606,7 +2682,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   public getStatus() {
     const isRunning = this.engineLifecycle?.getIsRunning() ?? false;
     // Voice and CW modes have no decode slot loop, so mirror engine running state.
-    const isActuallyDecoding = this.engineMode === 'voice' || this.engineMode === 'cw'
+    const isActuallyDecoding = this.engineMode === 'voice' || this.engineMode === 'cw' || this.engineMode === 'image'
       ? isRunning
       : isRunning && (this.slotClock?.isRunning ?? false);
 

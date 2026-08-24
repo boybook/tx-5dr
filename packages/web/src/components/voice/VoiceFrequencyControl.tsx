@@ -28,7 +28,7 @@ import { SplitSettingsPopover } from '../radio/frequency/SplitSettingsPopover';
 import { deriveVoiceRadioModeOptions } from '../../utils/voiceRadioModeOptions';
 
 const logger = createLogger('VoiceFrequencyControl');
-const CURRENT_CUSTOM_VOICE_FREQUENCY_KEY = '__current_custom_voice_frequency__';
+const CURRENT_CUSTOM_FREQUENCY_KEY = '__current_custom_analog_frequency__';
 const CUSTOM_BAND = 'custom';
 
 interface FrequencyPreset {
@@ -51,7 +51,13 @@ interface FrequencyPreset {
  * Large frequency display, radio mode selector (USB/LSB/FM/AM),
  * scrollable preset frequency list with band grouping.
  */
-export const VoiceFrequencyControl: React.FC = () => {
+export interface VoiceFrequencyControlProps {
+  presetMode?: 'VOICE' | 'SSTV' | 'FAX';
+  compact?: boolean;
+  hideTitle?: boolean;
+}
+
+export const VoiceFrequencyControl: React.FC<VoiceFrequencyControlProps> = ({ presetMode = 'VOICE', compact = false, hideTitle = false }) => {
   const { t } = useTranslation('voice');
   const connection = useConnection();
   const { operators } = useOperators();
@@ -179,7 +185,7 @@ export const VoiceFrequencyControl: React.FC = () => {
     try {
       const request: Parameters<typeof setRadioFrequencyWithIntent>[0] = {
         frequency: freq,
-        mode: 'VOICE',
+        mode: presetMode,
         band: overrides?.band ?? 'Custom',
         description: overrides?.description ?? `${(freq / 1000000).toFixed(3)} MHz`,
       };
@@ -194,7 +200,7 @@ export const VoiceFrequencyControl: React.FC = () => {
     } catch (error) {
       logger.error('Failed to set frequency:', error);
     }
-  }, [canWriteTargetFrequency, connection.state.isConnected, resetOperatorsAfterOperatingStateChange]);
+  }, [canWriteTargetFrequency, connection.state.isConnected, presetMode, resetOperatorsAfterOperatingStateChange]);
 
   // Apply a new frequency from digit edits. Updates UI immediately, marks pending,
   // and coalesces rapid consecutive edits via a 50ms trailing debounce.
@@ -266,7 +272,7 @@ export const VoiceFrequencyControl: React.FC = () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const voicePresets: FrequencyPreset[] = presetsResponse.presets
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          .filter((p: any) => p.mode === 'VOICE')
+          .filter((p: any) => p.mode === presetMode)
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           .map((p: any) => ({
             key: String(p.frequency),
@@ -287,7 +293,9 @@ export const VoiceFrequencyControl: React.FC = () => {
 
       // Restore last voice frequency (separate from digital mode frequency)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const lastVoice = (lastFreqResponse as any).lastVoiceFrequency;
+        const lastVoice = presetMode === 'VOICE'
+          ? lastFreqResponse.lastVoiceFrequency
+          : (lastFreqResponse.lastImageFrequency?.mode === presetMode ? lastFreqResponse.lastImageFrequency : null);
       if (lastVoice && lastVoice.frequency) {
         setCurrentFrequency(lastVoice.frequency);
         if (lastVoice.radioMode) setCurrentRadioMode(lastVoice.radioMode);
@@ -306,7 +314,7 @@ export const VoiceFrequencyControl: React.FC = () => {
     } finally {
       setIsLoadingPresets(false);
     }
-  }, [canUseAuthenticatedRest, connection.state.isConnected, formatBandLabel, activeProfileId]);
+  }, [canUseAuthenticatedRest, connection.state.isConnected, formatBandLabel, activeProfileId, presetMode]);
 
   // Load voice frequency presets + restore last frequency
   useEffect(() => {
@@ -380,16 +388,16 @@ export const VoiceFrequencyControl: React.FC = () => {
     }
 
     return {
-      key: CURRENT_CUSTOM_VOICE_FREQUENCY_KEY,
+      key: CURRENT_CUSTOM_FREQUENCY_KEY,
       label: formatFrequencyLabel(currentFrequency),
       frequency: currentFrequency,
       band: CUSTOM_BAND,
-      mode: 'VOICE',
+      mode: presetMode,
       radioMode: currentRadioMode,
       repeaterShift: 'none',
       toneMode: 'none',
     } satisfies FrequencyPreset;
-  }, [currentFrequency, currentRadioMode, formatFrequencyLabel, presets, t]);
+  }, [currentFrequency, currentRadioMode, formatFrequencyLabel, presetMode, presets]);
 
   const currentPresetForEdit = useMemo<PresetFrequency | null>(() => {
     const preset = presets.find(item => item.frequency === currentFrequency);
@@ -398,7 +406,7 @@ export const VoiceFrequencyControl: React.FC = () => {
 
     return {
       band: preset.band,
-      mode: 'VOICE',
+      mode: presetMode,
       radioMode: preset.radioMode ?? currentRadioMode,
       frequency: preset.frequency,
       description: preset.label,
@@ -412,12 +420,12 @@ export const VoiceFrequencyControl: React.FC = () => {
         ? { toneMode: 'dcs' as const, dcsCode: preset.dcsCode }
         : {}),
     };
-  }, [currentFrequency, currentRadioMode, presets]);
+  }, [currentFrequency, currentRadioMode, presetMode, presets]);
 
   const listboxSections = useMemo(() => {
     const entries = Object.entries(groupedPresets);
 
-    if (currentPresetSelection.key !== CURRENT_CUSTOM_VOICE_FREQUENCY_KEY) {
+    if (currentPresetSelection.key !== CURRENT_CUSTOM_FREQUENCY_KEY) {
       return entries;
     }
 
@@ -575,7 +583,7 @@ export const VoiceFrequencyControl: React.FC = () => {
       const supportsFmOptions = preset.radioMode === 'FM';
       const request: Parameters<typeof setRadioFrequencyWithIntent>[0] = {
         frequency: preset.frequency,
-        mode: 'VOICE',
+        mode: presetMode,
         band: preset.band,
         description: preset.label,
         radioMode: preset.radioMode,
@@ -615,17 +623,27 @@ export const VoiceFrequencyControl: React.FC = () => {
   const handleRadioModeChange = (mode: string) => {
     if (!canWriteRadioMode) return;
     setCurrentRadioMode(mode);
-    connection.state.radioService?.setVoiceRadioMode(mode);
+    if (presetMode === 'VOICE') {
+      connection.state.radioService?.setVoiceRadioMode(mode);
+    } else {
+      void setRadioFrequencyWithIntent({
+        frequency: currentFrequency,
+        mode: presetMode,
+        band: currentPresetSelection.band,
+        description: currentPresetSelection.label,
+        radioMode: mode,
+      });
+    }
   };
 
   const handleOpenVoicePresetSettings = useCallback(() => {
     window.dispatchEvent(new CustomEvent('openSettingsModal', {
       detail: {
         tab: 'frequency_presets',
-        frequencyPresetMode: 'VOICE',
+        frequencyPresetMode: presetMode,
       },
     }));
-  }, []);
+  }, [presetMode]);
 
   const handleSaveCurrentFrequencyPreset = useCallback(async (
     preset: PresetFrequency,
@@ -714,16 +732,16 @@ export const VoiceFrequencyControl: React.FC = () => {
   }, [formatFrequencyLabel, loadVoicePresets, t]);
 
   return (
-    <Card className="w-full h-full bg-default-50 dark:bg-default-100/50 border border-default-200 dark:border-default-100" shadow="none">
-      <CardHeader className="pb-1 flex-shrink-0">
-        <div className="flex items-center justify-between w-full">
-          <span className="text-sm font-semibold">{t('frequency.title')}</span>
+    <Card className={`relative w-full h-full bg-default-50 dark:bg-default-100/50 border border-default-200 dark:border-default-100${compact ? ' text-sm' : ''}`} shadow="none">
+      <CardHeader className={hideTitle ? 'absolute right-1 top-1 z-20 w-auto p-1' : 'pb-1 flex-shrink-0'}>
+        <div className={hideTitle ? 'flex items-center' : 'flex w-full items-center justify-between'}>
+          {!hideTitle ? <span className="text-sm font-semibold">{t('frequency.title')}</span> : null}
           <SplitSettingsPopover />
         </div>
       </CardHeader>
-      <CardBody className="pt-1 gap-3 overflow-hidden">
+      <CardBody className={`pt-1 overflow-hidden ${compact ? 'gap-1' : 'gap-3'}`}>
         {/* Interactive frequency display */}
-        <div className="flex-shrink-0 text-center py-2">
+        <div className={`flex-shrink-0 text-center ${compact ? 'py-0' : 'py-2'}`}>
           {showSplitFrequencyControls ? (
             /* Split mode: show RX and TX rows */
             <SplitFrequencyLayout>
@@ -733,7 +751,7 @@ export const VoiceFrequencyControl: React.FC = () => {
                 <div className="flex flex-none items-center justify-center">
                   {frequencyDigits.map((entry, i) => {
                     if (entry.isSeparator) {
-                      return <span key={`rx-sep-${i}`} className="text-3xl mx-0.5 text-default-400 select-none">.</span>;
+                        return <span key={`rx-sep-${i}`} className={`${compact ? 'text-2xl' : 'text-3xl'} mx-0.5 text-default-400 select-none`}>.</span>;
                     }
                     return (
                       <FrequencyDigit
@@ -742,6 +760,8 @@ export const VoiceFrequencyControl: React.FC = () => {
                         placeValue={entry.placeValue}
                         disabled={!canWriteFrequency}
                         isLeadingZero={entry.isLeadingZero}
+                        digitClassName={compact ? 'text-2xl' : undefined}
+                        arrowClassName={compact ? 'h-3 text-[10px]' : undefined}
                         onIncrement={() => changeDigitAtPlace(entry.placeValue, 1)}
                         onDecrement={() => changeDigitAtPlace(entry.placeValue, -1)}
                         onSetDigit={(v) => setDigitAtPlace(entry.placeValue, v)}
@@ -757,7 +777,7 @@ export const VoiceFrequencyControl: React.FC = () => {
                 <div className="flex flex-none items-center justify-center">
                   {canEditSplitTxFrequency ? txFrequencyDigits.map((entry, i) => {
                     if (entry.isSeparator) {
-                      return <span key={`tx-sep-${i}`} className="text-3xl mx-0.5 text-default-400 select-none">.</span>;
+                      return <span key={`tx-sep-${i}`} className={`${compact ? 'text-2xl' : 'text-3xl'} mx-0.5 text-default-400 select-none`}>.</span>;
                     }
                     return (
                       <FrequencyDigit
@@ -766,6 +786,8 @@ export const VoiceFrequencyControl: React.FC = () => {
                         placeValue={entry.placeValue}
                         disabled={!canWriteFrequency || !splitTxFrequencyWritable || !connection.state.isConnected}
                         isLeadingZero={entry.isLeadingZero}
+                        digitClassName={compact ? 'text-2xl' : undefined}
+                        arrowClassName={compact ? 'h-3 text-[10px]' : undefined}
                         onIncrement={() => changeTxDigitAtPlace(entry.placeValue, 1)}
                         onDecrement={() => changeTxDigitAtPlace(entry.placeValue, -1)}
                         onSetDigit={(v) => setTxDigitAtPlace(entry.placeValue, v)}
@@ -789,7 +811,7 @@ export const VoiceFrequencyControl: React.FC = () => {
               <div className="flex flex-none items-center justify-center">
                 {frequencyDigits.map((entry, i) => {
                   if (entry.isSeparator) {
-                    return <span key={`sep-${i}`} className="text-3xl mx-0.5 text-default-400 select-none">.</span>;
+                    return <span key={`sep-${i}`} className={`${compact ? 'text-2xl' : 'text-3xl'} mx-0.5 text-default-400 select-none`}>.</span>;
                   }
                   return (
                     <FrequencyDigit
@@ -798,6 +820,8 @@ export const VoiceFrequencyControl: React.FC = () => {
                       placeValue={entry.placeValue}
                       disabled={!canWriteFrequency}
                       isLeadingZero={entry.isLeadingZero}
+                      digitClassName={compact ? 'text-2xl' : undefined}
+                      arrowClassName={compact ? 'h-3 text-[10px]' : undefined}
                       onIncrement={() => changeDigitAtPlace(entry.placeValue, 1)}
                       onDecrement={() => changeDigitAtPlace(entry.placeValue, -1)}
                       onSetDigit={(v) => setDigitAtPlace(entry.placeValue, v)}
@@ -841,7 +865,7 @@ export const VoiceFrequencyControl: React.FC = () => {
                 if (!canWriteFrequency) return;
                 if (keys === 'all') return;
                 const key = Array.from(keys)[0] as string;
-                if (key === CURRENT_CUSTOM_VOICE_FREQUENCY_KEY) return;
+                if (key === CURRENT_CUSTOM_FREQUENCY_KEY) return;
                 if (key) handlePresetSelect(key);
               }}
               variant="flat"
@@ -870,7 +894,7 @@ export const VoiceFrequencyControl: React.FC = () => {
         </div>
 
         {/* Voice frequency actions */}
-        {canManageFrequencyPresets && (
+        {canManageFrequencyPresets && !compact && (
           <div className="flex-shrink-0">
             <div className="grid gap-2 grid-cols-2">
               <Button
@@ -898,7 +922,7 @@ export const VoiceFrequencyControl: React.FC = () => {
       <FrequencyPresetAddModal
         isOpen={isAddPresetModalOpen}
         presets={presets}
-        initialMode="VOICE"
+        initialMode={presetMode}
         initialRadioMode={currentRadioMode}
         voiceRadioModeOptions={radioModeOptions}
         initialFrequencyHz={currentFrequency}

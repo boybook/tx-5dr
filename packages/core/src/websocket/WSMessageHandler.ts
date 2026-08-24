@@ -25,6 +25,12 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   [WSMessageType.CLOCK_STATUS_CHANGED]: 'clockStatusChanged',
   [WSMessageType.RIGCTLD_STATUS]: 'rigctldStatus',
 
+  // Image radio events
+  [WSMessageType.IMAGE_RADIO_STATUS]: 'imageRadioStatus',
+  [WSMessageType.IMAGE_RX_EVENT]: 'imageRxEvent',
+  [WSMessageType.SSTV_TX_STATUS]: 'sstvTxStatus',
+  [WSMessageType.SSTV_TX_COMMAND_RESULT]: 'sstvTxCommandResult',
+
   // 操作员相关事件
   [WSMessageType.OPERATORS_LIST]: 'operatorsList',
   [WSMessageType.OPERATOR_STATUS_UPDATE]: 'operatorStatusUpdate',

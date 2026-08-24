@@ -627,11 +627,13 @@ export async function radioRoutes(fastify: FastifyInstance) {
   fastify.get('/last-frequency', async (_req, reply) => {
     const lastFrequency = configManager.getLastSelectedFrequency();
     const lastVoiceFrequency = configManager.getLastVoiceFrequency();
+    const lastImageFrequency = configManager.getLastImageFrequency();
     const lastCWFrequency = configManager.getLastCWFrequency();
     return reply.send({
       success: true,
       lastFrequency,
       lastVoiceFrequency,
+      lastImageFrequency,
       lastCWFrequency,
     });
   });
@@ -676,7 +678,13 @@ export async function radioRoutes(fastify: FastifyInstance) {
     }
 
     const effectiveMode = mode
-      || (engine.getEngineMode() === 'voice' ? 'VOICE' : engine.getEngineMode() === 'cw' ? 'CW' : 'FT8');
+      || (engine.getEngineMode() === 'voice'
+        ? 'VOICE'
+        : engine.getEngineMode() === 'cw'
+          ? 'CW'
+          : engine.getEngineMode() === 'image'
+            ? engine.getCurrentMode().name
+            : 'FT8');
     const normalizedRadioMode = normalizeRadioMode(radioMode);
     const activeRadioConfig = configManager.getRadioConfig();
     const radioModeResolution = resolveFrequencyRadioMode({
@@ -703,7 +711,9 @@ export async function radioRoutes(fastify: FastifyInstance) {
       ? configManager.getLastVoiceFrequency()
       : effectiveMode === 'CW'
         ? configManager.getLastCWFrequency()
-        : configManager.getLastSelectedFrequency();
+        : effectiveMode === 'SSTV' || effectiveMode === 'FAX'
+          ? configManager.getLastImageFrequency()
+          : configManager.getLastSelectedFrequency();
     const lastMode = effectiveMode === 'VOICE' || effectiveMode === 'CW'
       ? effectiveMode
       : (lastFrequency as { mode?: string } | null | undefined)?.mode;
@@ -748,6 +758,8 @@ export async function radioRoutes(fastify: FastifyInstance) {
             description,
             ...(normalizedRadioMode ? { radioMode: normalizedRadioMode } : {}),
           });
+        } else if (effectiveMode === 'SSTV' || effectiveMode === 'FAX') {
+          await configManager.updateLastImageFrequency({ frequency, mode: effectiveMode, band, description, ...(normalizedRadioMode ? { radioMode: normalizedRadioMode } : {}) });
         } else {
           const previousFrequency = configManager.getLastSelectedFrequency();
           const nextFrequency: {

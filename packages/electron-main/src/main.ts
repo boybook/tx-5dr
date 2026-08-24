@@ -55,6 +55,7 @@ import {
   VC_REDIST_X64_URL,
   detectWindowsVCRuntime,
 } from './vcRuntime.js';
+import { copyRendererFileBytes, sanitizeRendererSaveFileName } from './rendererFileSave.js';
 
 // 获取当前模块的目录(ESM中的__dirname替代方案)
 // const __filename = fileURLToPath(import.meta.url);
@@ -255,6 +256,13 @@ interface FsSelectFileOptions {
 
 interface FsSelectDirectoryOptions {
   title?: string;
+}
+
+interface FsSaveFileOptions {
+  title?: string;
+  defaultName?: string;
+  filters?: Array<{ name: string; extensions: string[] }>;
+  data?: Uint8Array;
 }
 
 interface CreateMainWindowOptions {
@@ -3780,6 +3788,17 @@ function showOpenDialogForEvent(
   return dialog.showOpenDialog(options);
 }
 
+function showSaveDialogForEvent(
+  event: Electron.IpcMainInvokeEvent,
+  options: Electron.SaveDialogOptions,
+): Promise<Electron.SaveDialogReturnValue> {
+  const parentWindow = getDialogParentWindow(event);
+  if (parentWindow) {
+    return dialog.showSaveDialog(parentWindow, options);
+  }
+  return dialog.showSaveDialog(options);
+}
+
 /**
  * 设置IPC处理器
  */
@@ -3985,6 +4004,23 @@ function setupIpcHandlers() {
     });
 
     return result.canceled ? null : (result.filePaths[0] ?? null);
+  });
+
+  ipcMain.handle('fs:saveFile', async (event, options?: FsSaveFileOptions) => {
+    const data = copyRendererFileBytes(options?.data);
+    const defaultName = sanitizeRendererSaveFileName(options?.defaultName);
+    logger.info(`IPC fs:saveFile requested, bytes=${data.byteLength}`);
+    const result = await showSaveDialogForEvent(event, {
+      title: sanitizeDialogTitle(options?.title),
+      defaultPath: join(app.getPath('downloads'), defaultName),
+      filters: sanitizeFileDialogFilters(options?.filters),
+    });
+    if (result.canceled || !result.filePath) {
+      return { canceled: true };
+    }
+    await fs.promises.writeFile(result.filePath, data);
+    logger.info('IPC fs:saveFile success');
+    return { canceled: false, filePath: result.filePath };
   });
 
   ipcMain.handle('app:getVersion', () => app.getVersion());

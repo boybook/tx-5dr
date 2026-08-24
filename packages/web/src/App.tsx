@@ -5,6 +5,9 @@ import { VoiceLeftLayout } from './layout/VoiceLeftLayout';
 import { VoiceRightLayout } from './layout/VoiceRightLayout';
 import { CWLeftLayout } from './layout/CWLeftLayout';
 import { CWRightLayout } from './layout/CWRightLayout';
+import { ImageLeftLayout } from './layout/ImageLeftLayout';
+import { ImageRightLayout } from './layout/ImageRightLayout';
+import { ImageRadioProvider } from './hooks/useImageRadio';
 import { SplitLayout } from './components/common/SplitLayout';
 import { MainRightPluginPane } from './components/plugins/MainRightPluginPane';
 import { useVisiblePluginPanelsForSlot } from './components/plugins/pluginPanelSlots';
@@ -28,10 +31,13 @@ import { BootstrapStatusChip } from './components/app/BootstrapStatusChip';
 import { ObservabilityConsentBanner } from './components/app/ObservabilityConsentBanner';
 import { useLanguage } from './hooks/useLanguage';
 import { shouldShowServerStatusPage } from './store/radio/connectionView';
+import { useTranslation } from 'react-i18next';
+import { faImages, faPaperPlane, faSatelliteDish } from '@fortawesome/free-solid-svg-icons';
 
 function AppContent() {
+  const { t } = useTranslation('image');
   const { state } = useRadioState();
-  const { pttStatus, engineMode } = state;
+  const { pttStatus, engineMode, currentMode } = state;
   const { profiles, profilesLoaded } = useProfiles();
   const { state: connectionState } = useConnection();
   const { currentOperatorId } = useCurrentOperatorId();
@@ -60,6 +66,7 @@ function AppContent() {
 
   const isVoiceMode = engineMode === 'voice';
   const isCWMode = engineMode === 'cw';
+  const isImageMode = engineMode === 'image';
 
   return (
     <div className="App app-viewport-height relative flex w-full flex-col overflow-hidden">
@@ -76,8 +83,8 @@ function AppContent() {
       )}
 
       <SplitLayout
-        leftContent={isVoiceMode ? <VoiceLeftLayout /> : isCWMode ? <CWLeftLayout /> : <LeftLayout />}
-        rightContent={isVoiceMode ? <VoiceRightLayout /> : isCWMode ? <CWRightLayout /> : <RightLayout />}
+        leftContent={isVoiceMode ? <VoiceLeftLayout /> : isCWMode ? <CWLeftLayout /> : isImageMode ? <ImageLeftLayout /> : <LeftLayout />}
+        rightContent={isVoiceMode ? <VoiceRightLayout /> : isCWMode ? <CWRightLayout /> : isImageMode ? <ImageRightLayout /> : <RightLayout />}
         extraContent={activeOperatorId ? (
           <MainRightPluginPane
             operatorId={activeOperatorId}
@@ -88,6 +95,10 @@ function AppContent() {
         defaultLeftWidth={isVoiceMode ? 30 : 50}
         minLeftWidth={25}
         maxLeftWidth={isVoiceMode ? 50 : 75}
+        leftLabel={isImageMode ? t('receive') : undefined}
+        rightLabel={isImageMode ? (currentMode?.name === 'FAX' ? t('history') : t('transmit')) : undefined}
+        leftIcon={isImageMode ? faSatelliteDish : undefined}
+        rightIcon={isImageMode ? (currentMode?.name === 'FAX' ? faImages : faPaperPlane) : undefined}
         defaultExtraWidth={26}
         minExtraWidth={18}
         maxExtraWidth={38}
@@ -142,7 +153,7 @@ function AuthGate() {
     <AppErrorBoundary>
       <RadioProvider key={authKey}>
         <UpdateNotificationProvider>
-          <AppContent />
+          <ImageRadioProvider><AppContent /></ImageRadioProvider>
           <GlobalShortcutBridge />
           <GlobalModalHost />
         </UpdateNotificationProvider>

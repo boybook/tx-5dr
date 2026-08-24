@@ -165,6 +165,12 @@ interface ElectronAPI {
     selectDirectory(options?: { title?: string }): Promise<string | null>;
     readFile(filePath: string): Promise<string>;
     writeFile(filePath: string, data: string): Promise<void>;
+    saveFile?(options: {
+      title?: string;
+      defaultName: string;
+      filters?: Array<{ name: string; extensions: string[] }>;
+      data: Uint8Array;
+    }): Promise<{ canceled: boolean; filePath?: string }>;
   };
   app?: {
     getVersion(): Promise<string>;

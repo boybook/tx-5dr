@@ -13,6 +13,7 @@ import zhErrors from './locales/zh/errors.json';
 import zhVoice from './locales/zh/voice.json';
 import zhAbout from './locales/zh/about.json';
 import zhGridRegions from './locales/zh/grid-regions.json';
+import zhImage from './locales/zh/image.json';
 
 // 日语语言包
 import jaCommon from './locales/ja/common.json';
@@ -25,6 +26,7 @@ import jaErrors from './locales/ja/errors.json';
 import jaVoice from './locales/ja/voice.json';
 import jaAbout from './locales/ja/about.json';
 import jaGridRegions from './locales/ja/grid-regions.json';
+import jaImage from './locales/ja/image.json';
 
 // 英文语言包
 import enCommon from './locales/en/common.json';
@@ -37,6 +39,7 @@ import enErrors from './locales/en/errors.json';
 import enVoice from './locales/en/voice.json';
 import enAbout from './locales/en/about.json';
 import enGridRegions from './locales/en/grid-regions.json';
+import enImage from './locales/en/image.json';
 
 i18n
   .use(initReactI18next)
@@ -45,7 +48,7 @@ i18n
     fallbackLng: 'zh',
     supportedLngs: [...SUPPORTED_LANGUAGES],
     defaultNS: 'common',
-    ns: ['common', 'toast', 'radio', 'settings', 'logbook', 'auth', 'errors', 'voice', 'about', 'gridRegions'],
+    ns: ['common', 'toast', 'radio', 'settings', 'logbook', 'auth', 'errors', 'voice', 'image', 'about', 'gridRegions'],
     resources: {
       zh: {
         common: zhCommon,
@@ -58,6 +61,7 @@ i18n
         voice: zhVoice,
         about: zhAbout,
         gridRegions: zhGridRegions,
+        image: zhImage,
       },
       ja: {
         common: jaCommon,
@@ -70,6 +74,7 @@ i18n
         voice: jaVoice,
         about: jaAbout,
         gridRegions: jaGridRegions,
+        image: jaImage,
       },
       en: {
         common: enCommon,
@@ -82,6 +87,7 @@ i18n
         voice: enVoice,
         about: enAbout,
         gridRegions: enGridRegions,
+        image: enImage,
       },
     },
     interpolation: {

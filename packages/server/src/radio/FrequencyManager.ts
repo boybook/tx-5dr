@@ -57,14 +57,41 @@ export class FrequencyManager {
     { band: '2m', mode: 'VOICE', radioMode: 'FM', frequency: 145000000, description: '145.000 MHz 2m FM' },
     { band: '70cm', mode: 'VOICE', radioMode: 'FM', frequency: 433000000, description: '433.000 MHz 70cm FM' },
     { band: '70cm', mode: 'VOICE', radioMode: 'FM', frequency: 438500000, description: '438.500 MHz 70cm FM' },
+
+    // ===== SSTV image activity centers (regional, not exclusive channels) =====
+    { band: '80m', mode: 'SSTV', radioMode: 'LSB', frequency: 3730000, description: '3.730 MHz SSTV · IARU 1', region: 'iaru1', imagePurpose: 'activity', audioCenterHz: 1900 },
+    { band: '80m', mode: 'SSTV', radioMode: 'LSB', frequency: 3845000, description: '3.845 MHz SSTV · IARU 2', region: 'iaru2', imagePurpose: 'activity', audioCenterHz: 1900 },
+    { band: '40m', mode: 'SSTV', radioMode: 'LSB', frequency: 7165000, description: '7.165 MHz SSTV · IARU 1', region: 'iaru1', imagePurpose: 'activity', audioCenterHz: 1900 },
+    { band: '40m', mode: 'SSTV', radioMode: 'LSB', frequency: 7171000, description: '7.171 MHz SSTV · IARU 2', region: 'iaru2', imagePurpose: 'activity', audioCenterHz: 1900 },
+    { band: '40m', mode: 'SSTV', radioMode: 'LSB', frequency: 7181000, description: '7.181 MHz SSTV · IARU 2', region: 'iaru2', imagePurpose: 'activity', audioCenterHz: 1900 },
+    { band: '20m', mode: 'SSTV', radioMode: 'USB', frequency: 14227000, description: '14.227 MHz SSTV · Secondary', region: 'global', imagePurpose: 'activity', audioCenterHz: 1900 },
+    { band: '20m', mode: 'SSTV', radioMode: 'USB', frequency: 14230000, description: '14.230 MHz SSTV', region: 'global', imagePurpose: 'activity', audioCenterHz: 1900 },
+    { band: '20m', mode: 'SSTV', radioMode: 'USB', frequency: 14233000, description: '14.233 MHz SSTV · Secondary', region: 'global', imagePurpose: 'activity', audioCenterHz: 1900 },
+    { band: '15m', mode: 'SSTV', radioMode: 'USB', frequency: 21340000, description: '21.340 MHz SSTV', region: 'global', imagePurpose: 'activity', audioCenterHz: 1900 },
+    { band: '10m', mode: 'SSTV', radioMode: 'USB', frequency: 28680000, description: '28.680 MHz SSTV', region: 'global', imagePurpose: 'activity', audioCenterHz: 1900 },
+    { band: '2m', mode: 'SSTV', radioMode: 'FM', frequency: 144500000, description: '144.500 MHz SSTV · IARU 1', region: 'iaru1', imagePurpose: 'activity', audioCenterHz: 1900 },
+    { band: '2m', mode: 'SSTV', radioMode: 'FM', frequency: 145800000, description: '145.800 MHz ISS SSTV RX', region: 'global', imagePurpose: 'iss', audioCenterHz: 1900 },
+
+    // ===== HF weatherfax receiver dial frequencies (carrier minus 1.9 kHz USB) =====
+    { band: '4MHz', mode: 'FAX', radioMode: 'USB', frequency: 4233100, carrierFrequency: 4235000, description: 'NMF Boston 4.235 MHz', region: 'iaru2', imagePurpose: 'weatherfax', audioCenterHz: 1900 },
+    { band: '6MHz', mode: 'FAX', radioMode: 'USB', frequency: 6338600, carrierFrequency: 6340500, description: 'NMF Boston 6.3405 MHz', region: 'iaru2', imagePurpose: 'weatherfax', audioCenterHz: 1900 },
+    { band: '9MHz', mode: 'FAX', radioMode: 'USB', frequency: 9108100, carrierFrequency: 9110000, description: 'NMF Boston 9.110 MHz', region: 'iaru2', imagePurpose: 'weatherfax', audioCenterHz: 1900 },
+    { band: '12MHz', mode: 'FAX', radioMode: 'USB', frequency: 12748100, carrierFrequency: 12750000, description: 'NMF Boston 12.750 MHz', region: 'iaru2', imagePurpose: 'weatherfax', audioCenterHz: 1900 },
   ];
 
   private presets: PresetFrequency[];
 
   constructor(customPresets?: PresetFrequency[] | null) {
-    this.presets = customPresets && customPresets.length > 0
-      ? customPresets
-      : [...FrequencyManager.DEFAULT_PRESETS];
+    if (!customPresets || customPresets.length === 0) {
+      this.presets = [...FrequencyManager.DEFAULT_PRESETS];
+      return;
+    }
+
+    const configuredModes = new Set(customPresets.map((preset) => preset.mode));
+    const missingImageDefaults = FrequencyManager.DEFAULT_PRESETS.filter((preset) => (
+      (preset.mode === 'SSTV' || preset.mode === 'FAX') && !configuredModes.has(preset.mode)
+    ));
+    this.presets = [...customPresets, ...missingImageDefaults];
   }
 
   getPresets(): PresetFrequency[] {

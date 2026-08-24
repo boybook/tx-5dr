@@ -44,6 +44,7 @@ export type PhysicalTxSource =
   | 'voice'
   | 'voice-keyer'
   | 'cw'
+  | 'sstv'
   | 'tune-tone'
   | 'manual'
   | 'test';

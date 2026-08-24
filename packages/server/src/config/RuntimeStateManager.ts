@@ -31,13 +31,15 @@ export interface LastCWFrequencyState {
   band: string;
   description?: string;
 }
+export interface LastImageFrequencyState extends LastSelectedFrequencyState {}
 
 /** Per-radio-profile operating snapshot used when switching profiles. */
 export interface ProfileOperatingMemory {
   lastSelectedFrequency?: LastSelectedFrequencyState | null;
   lastVoiceFrequency?: LastVoiceFrequencyState | null;
   lastCWFrequency?: LastCWFrequencyState | null;
-  lastEngineMode?: 'digital' | 'voice' | 'cw';
+  lastImageFrequency?: LastImageFrequencyState | null;
+  lastEngineMode?: 'digital' | 'voice' | 'cw' | 'image';
   lastDigitalModeName?: string;
 }
 
@@ -45,9 +47,10 @@ export interface RuntimeState {
   lastSelectedFrequency?: LastSelectedFrequencyState | null;
   lastVoiceFrequency?: LastVoiceFrequencyState | null;
   lastCWFrequency?: LastCWFrequencyState | null;
+  lastImageFrequency?: LastImageFrequencyState | null;
   lastVolumeGain?: { gain: number; gainDb: number } | null;
   volumeGainMap?: Record<string, { gain: number; gainDb: number }> | null;
-  lastEngineMode?: 'digital' | 'voice' | 'cw';
+  lastEngineMode?: 'digital' | 'voice' | 'cw' | 'image';
   lastDigitalModeName?: string;
   /** Last digital/voice/CW frequency + mode, keyed by RadioProfile id. */
   profileOperatingMemory?: Record<string, ProfileOperatingMemory> | null;

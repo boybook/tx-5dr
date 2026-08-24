@@ -148,6 +148,26 @@ describe('AudioStreamManager ICOM WLAN output pacing', () => {
     expect(onPlaybackStarted).toHaveBeenCalledTimes(1);
   });
 
+  it('streams deterministic SSTV frames without requiring a complete waveform', async () => {
+    const firstWrite = deferred<void>();
+    const adapter: MockIcomAdapter = {
+      sendAudio: vi.fn().mockImplementationOnce(() => firstWrite.promise).mockResolvedValue(undefined),
+      getSampleRate: vi.fn().mockReturnValue(12000),
+    };
+    const manager = createIcomManager(adapter);
+    const session = manager.openDeterministicPlayback({ playbackKind: 'sstv' });
+    await session.write(new Float32Array(session.frameSamples).fill(0.2));
+    await session.write(new Float32Array(session.frameSamples).fill(0.3));
+    const started = session.start();
+    await vi.waitFor(() => expect(adapter.sendAudio).toHaveBeenCalledTimes(1));
+    expect(manager.isPlaying('sstv')).toBe(true);
+    firstWrite.resolve();
+    await started;
+    await session.end();
+    expect(adapter.sendAudio).toHaveBeenCalledTimes(2);
+    expect(manager.isPlaying()).toBe(false);
+  });
+
   it('classifies an ICOM output send failure as restart-required', async () => {
     const adapter: MockIcomAdapter = {
       sendAudio: vi.fn().mockRejectedValue(new Error('UDP audio transport closed')),

@@ -35,6 +35,7 @@ This turns a single half-duplex transceiver into an effectively full-duplex FT8/
 ### Key Features
 
 - **Digital Modes**: FT8 (15s), FT4 (7.5s), Voice (SSB/FM/AM), with Fox/Hound DXpedition support
+- **Image Radio**: Streaming SSTV receive/transmit with automatic mode detection and progressive scanlines, plus receive-only Radiofax with IOC/LPM acquisition and partial-page preservation
 - **Real-time Spectrum**: GPU-accelerated WebGL waterfall display with zoom/pan
 - **Radio Control**: Hamlib (network/serial), ICOM WLAN (IC-705 WiFi direct), or no-radio monitor mode
 - **OpenWebRX SDR RX**: Connect to remote OpenWebRX receivers for full-duplex decode and dual-cycle TX
@@ -240,7 +241,7 @@ Built on Node.js with performance-critical components running as **native C/C++/
 
 - **Backend**: Fastify, WebSocket, XState v5 state machines, Piscina worker pool (parallel FT8 encode/decode)
 - **Frontend**: React 18, HeroUI, WebGL (spectrum), i18next
-- **Native Binaries**: WSJTX-lib (FT8/FT4 codec), Audify (RtAudio), Hamlib (CAT), SerialPort
+- **Native Binaries**: WSJTX-lib (FT8/FT4 codec), rasterwave-node (SSTV/Radiofax), Audify (RtAudio), Hamlib (CAT), SerialPort
 - **Build**: Turborepo, Yarn 4 workspaces, Electron Forge
 
 ### Core Native Node.js Extensions
@@ -250,6 +251,7 @@ TX-5DR relies on several native Node.js addons for real-time radio operation. Mo
 | Package | Description | Repository |
 |---------|-------------|------------|
 | [wsjtx-lib](https://www.npmjs.com/package/wsjtx-lib) | FT8/FT4 encoder & decoder (WSJT-X Fortran core) | [boybook/wsjtx-lib-nodejs](https://github.com/boybook/wsjtx-lib-nodejs) |
+| [rasterwave-node](https://www.npmjs.com/package/rasterwave-node) | Streaming SSTV encoder/decoder and Radiofax decoder | [boybook/rasterwave-node](https://github.com/boybook/rasterwave-node) |
 | [hamlib](https://www.npmjs.com/package/hamlib) | Node.js bindings for Hamlib (CAT radio control) | [boybook/node-hamlib](https://github.com/boybook/node-hamlib) |
 | [icom-wlan-node](https://www.npmjs.com/package/icom-wlan-node) | ICOM WLAN (IC-705 WiFi) control protocol | [boybook/icom-wlan-node](https://github.com/boybook/icom-wlan-node) |
 | [rubato-fft-node](https://www.npmjs.com/package/rubato-fft-node) | High-performance FFT + sample-rate conversion | [boybook/rubato-fft-node](https://github.com/boybook/rubato-fft-node) |

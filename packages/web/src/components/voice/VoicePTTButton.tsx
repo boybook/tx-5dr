@@ -58,6 +58,7 @@ function ShortcutChevronIcon({ open, className = 'text-white' }: { open: boolean
  */
 interface VoicePTTButtonProps {
   voiceCaptureController: VoiceCaptureController;
+  idleLabel?: string;
 }
 
 const HTTP_PTT_HTTPS_WARNING_BYPASS_KEY = 'tx5dr.voice.ptt.httpHttpsWarningBypass';
@@ -110,7 +111,7 @@ function isVoiceKeyerLockHolder(lockHolder: string | null | undefined): boolean 
   return typeof lockHolder === 'string' && lockHolder.startsWith('voice-keyer:');
 }
 
-export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureController }) => {
+export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureController, idleLabel }) => {
   const { t } = useTranslation(['voice', 'common']);
   const { state: authState } = useAuth();
   const connection = useConnection();
@@ -559,17 +560,18 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
 
   // Button appearance based on state
   const getButtonStyle = (): { buttonClass: string; label: string; subLabel?: string } => {
+    const primaryLabel = idleLabel ?? t('ptt.idle');
     switch (pttState) {
       case 'requesting':
         return {
           buttonClass: 'border-2 border-warning-400 bg-warning-500 text-white shadow-lg shadow-warning-500/50',
-          label: t('ptt.idle'),
+          label: primaryLabel,
           subLabel: t('ptt.requesting'),
         };
       case 'transmitting':
         return {
           buttonClass: 'border-2 border-danger-600 bg-danger-600 text-white shadow-lg shadow-danger-600/50 animate-pulse',
-          label: t('ptt.idle'),
+          label: primaryLabel,
           subLabel: isVoiceKeyerPttLock ? undefined : t('ptt.stopHint', { shortcut: shortcutLabel }),
         };
       case 'locked-by-other':
@@ -581,7 +583,7 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
       default:
         return {
           buttonClass: 'border-0 bg-danger-50/20 text-danger-600 ring-4 ring-inset ring-danger-500/70 shadow-sm shadow-danger-500/10 hover:bg-danger-50/80 hover:ring-danger-600/80 active:bg-danger-100/80 dark:bg-danger-950/10 dark:text-danger-300 dark:ring-danger-400/70 dark:hover:bg-danger-950/25 dark:hover:ring-danger-300/80',
-          label: t('ptt.idle'),
+          label: primaryLabel,
           subLabel: t('ptt.shortcutHint', { shortcut: shortcutLabel }),
         };
     }
