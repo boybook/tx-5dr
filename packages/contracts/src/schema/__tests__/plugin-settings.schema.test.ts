@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { PluginManifestSchema, PluginObjectArrayFieldSchema } from '../plugin.schema';
+import { WSPluginUserActionResultMessageSchema } from '../websocket.schema';
 
 describe('PluginObjectArrayFieldSchema (row-level control fields)', () => {
   it('accepts legacy string/number/boolean rows', () => {
     expect(PluginObjectArrayFieldSchema.parse({ key: 'name', type: 'string', label: 'Name' }).type).toBe('string');
     expect(PluginObjectArrayFieldSchema.parse({ key: 'n', type: 'number', label: 'N' }).type).toBe('number');
     expect(PluginObjectArrayFieldSchema.parse({ key: 'b', type: 'boolean', label: 'B' }).type).toBe('boolean');
+  });
+
+  it('rejects reserved object property names as field keys', () => {
+    for (const key of ['__proto__', 'constructor', 'prototype']) {
+      expect(() => PluginObjectArrayFieldSchema.parse({ key, type: 'string', label: 'X' })).toThrow();
+    }
   });
 
   it('accepts new row control types with options/actionId/fullWidth', () => {
@@ -100,5 +107,24 @@ describe('PluginObjectArrayFieldSchema (row-level control fields)', () => {
       },
     });
     expect(manifest.settings?.targets.itemFields).toHaveLength(6);
+  });
+});
+
+describe('WSPluginUserActionResultMessageSchema', () => {
+  it('validates the round-trip result message shape with a requestId', () => {
+    const message = WSPluginUserActionResultMessageSchema.parse({
+      type: 'pluginUserActionResult',
+      timestamp: new Date().toISOString(),
+      data: {
+        pluginName: 'webhook-push',
+        actionId: 'test:0',
+        operatorId: 'op-1',
+        requestId: 'req-1',
+        result: { ok: true, messageKey: 'testOk', params: { target: 'Primary', status: '200' } },
+      },
+    });
+    expect(message.data.requestId).toBe('req-1');
+    expect(message.data.actionId).toBe('test:0');
+    expect(message.data.result).toMatchObject({ ok: true, messageKey: 'testOk' });
   });
 });

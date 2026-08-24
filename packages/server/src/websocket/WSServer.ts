@@ -28,6 +28,7 @@ import { globalEventBus } from '../utils/EventBus.js';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 import { OpenWebRXStationManager } from '../openwebrx/OpenWebRXStationManager.js';
 import { AuthManager } from '../auth/AuthManager.js';
+import { snapshotPluginData } from '../plugin/plugin-data-boundary.js';
 import { buildAbility, emptyAbility, canWithData, type AppAbility } from '../auth/ability.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { createLogger } from '../utils/logger.js';
@@ -1307,7 +1308,7 @@ export class WSServer extends WSMessageHandler {
   }
 
   private async handlePluginUserAction(data: any, connectionId: string): Promise<void> {
-    const { pluginName, actionId, operatorId, payload } = data ?? {};
+    const { pluginName, actionId, operatorId, requestId, payload } = data ?? {};
     try {
       this.logOperatorCommand('pluginUserAction', connectionId, { operatorId, pluginName, actionId });
       const result = await this.digitalRadioEngine.pluginManager.handlePluginUserAction(
@@ -1317,21 +1318,45 @@ export class WSServer extends WSMessageHandler {
         payload,
       );
       // 将插件 onUserAction 的返回值回传发起连接的客户端，供按钮展示成败反馈
-      this.sendToConnection(connectionId, WSMessageType.PLUGIN_USER_ACTION_RESULT, {
-        pluginName,
-        actionId,
-        operatorId,
-        result: result ?? null,
-      });
+      this.sendPluginUserActionResult(connectionId, pluginName, actionId, operatorId, requestId, result ?? null);
     } catch (error) {
-      this.sendToConnection(connectionId, WSMessageType.PLUGIN_USER_ACTION_RESULT, {
-        pluginName,
-        actionId,
-        operatorId,
-        result: null,
-      });
+      this.sendPluginUserActionResult(connectionId, pluginName, actionId, operatorId, requestId, null);
       this.handleCommandError(error, 'pluginUserAction');
     }
+  }
+
+  /** 插件动作结果回传的大小上限：超过则丢弃，避免单帧内存/带宽尖峰。 */
+  private static readonly MAX_PLUGIN_ACTION_RESULT_BYTES = 64 * 1024;
+
+  /**
+   * 回传插件动作结果：先过 snapshotPluginData('json') 数据边界（与
+   * PluginUIBridge.send 的插件数据出口对齐），失败或超过大小上限时降级为
+   * null，防止恶意/异常插件返回值导致序列化失败或撑爆单帧。
+   */
+  private sendPluginUserActionResult(
+    connectionId: string,
+    pluginName: string,
+    actionId: string,
+    operatorId: string | undefined,
+    requestId: string | undefined,
+    result: unknown,
+  ): void {
+    let safeResult: unknown = result;
+    try {
+      safeResult = snapshotPluginData(result, 'json');
+      if (JSON.stringify(safeResult).length > WSServer.MAX_PLUGIN_ACTION_RESULT_BYTES) {
+        safeResult = null;
+      }
+    } catch {
+      safeResult = null;
+    }
+    this.sendToConnection(connectionId, WSMessageType.PLUGIN_USER_ACTION_RESULT, {
+      pluginName,
+      actionId,
+      operatorId,
+      requestId,
+      result: safeResult,
+    });
   }
 
   /**

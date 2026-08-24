@@ -453,7 +453,7 @@ describe('PluginManager runtime logs', () => {
     const timerManager = (pluginManager as any).instances.get(operator.config.id).get('pausable-tx-control').rawCtx.timers;
     timerManager.onTimerFired('poll');
     await (pluginManager as any).handleSlotStart({ id: 'slot-1', startMs: 0, window: 0 }, null);
-    pluginManager.handlePluginUserAction('pausable-tx-control', 'ping', operator.config.id);
+    await pluginManager.handlePluginUserAction('pausable-tx-control', 'ping', operator.config.id);
 
     const countLogs = (message: string) => pluginManager.getRuntimeLogHistory()
       .filter((entry) => isPluginLogEntry(entry) && entry.pluginName === 'pausable-tx-control' && entry.message === message)
@@ -479,14 +479,16 @@ describe('PluginManager runtime logs', () => {
 
     timerManager.onTimerFired('poll');
     await (pluginManager as any).handleSlotStart({ id: 'slot-2', startMs: 15_000, window: 0 }, null);
-    expect(() => pluginManager.handlePluginUserAction('pausable-tx-control', 'ping', operator.config.id)).toThrow('paused');
+    await expect(pluginManager.handlePluginUserAction('pausable-tx-control', 'ping', operator.config.id))
+      .rejects.toThrow('paused');
     expect(countLogs('timer:poll')).toBe(1);
     expect(countLogs('decode')).toBe(1);
     expect(countLogs('action:ping')).toBe(1);
 
     await pluginManager.setOperatorPluginPaused(operator.config.id, 'pausable-tx-control', false);
     await (pluginManager as any).handleSlotStart({ id: 'slot-3', startMs: 30_000, window: 0 }, null);
-    expect(() => pluginManager.handlePluginUserAction('pausable-tx-control', 'ping', operator.config.id)).not.toThrow();
+    await expect(pluginManager.handlePluginUserAction('pausable-tx-control', 'ping', operator.config.id))
+      .resolves.toBeUndefined();
     expect(countLogs('decode')).toBe(2);
     expect(countLogs('action:ping')).toBe(2);
 

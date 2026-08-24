@@ -386,7 +386,9 @@ export class RadioService {
    * 发送插件自定义用户动作，并在主程序回传执行结果后 resolve。
    *
    * 返回值为插件 onUserAction hook 的返回值；主程序无回传（旧版本主程序）
-   * 或超时（默认 8 秒）时 resolve null。
+   * 或超时（默认 8 秒）时 resolve null。每次调用生成独立 requestId，由服务端
+   * 回显，避免同一 (pluginName, actionId, operatorId) 的并发调用共享监听器
+   * 造成回包错配。
    */
   sendPluginUserAction(
     pluginName: string,
@@ -398,24 +400,45 @@ export class RadioService {
     if (!this.isConnected) {
       return Promise.resolve(null);
     }
+    const requestId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     return new Promise<unknown>((resolve) => {
       let settled = false;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const cleanup = (): void => {
+        if (timer !== null) {
+          clearTimeout(timer);
+          timer = null;
+        }
+        this.wsClient.offWSEvent('pluginUserActionResult', onResult);
+      };
       const finish = (result: unknown): void => {
         if (settled) return;
         settled = true;
-        this.wsClient.offWSEvent('pluginUserActionResult', onResult);
+        cleanup();
         resolve(result);
       };
       const onResult: DigitalRadioEngineEvents['pluginUserActionResult'] = (data: PluginUserActionResultPayload) => {
-        if (data.pluginName !== pluginName || data.actionId !== actionId || data.operatorId !== operatorId) {
+        if (data.requestId !== requestId) {
           return;
         }
         finish(data.result);
       };
-      const timer = setTimeout(() => finish(null), timeoutMs);
+      timer = setTimeout(() => finish(null), timeoutMs);
       this.wsClient.onWSEvent('pluginUserActionResult', onResult);
-      this.wsClient.send(WSMessageType.PLUGIN_USER_ACTION, { pluginName, actionId, operatorId, payload });
-      if (settled) clearTimeout(timer);
+      try {
+        this.wsClient.send(WSMessageType.PLUGIN_USER_ACTION, {
+          pluginName,
+          actionId,
+          operatorId,
+          requestId,
+          payload,
+        });
+      } catch (error) {
+        logger.warn('Failed to send plugin user action', error);
+        finish(null);
+      }
     });
   }
   

@@ -25,6 +25,40 @@ const RESPONSIVE_SETTING_GRID_CLASS = 'grid gap-2 [grid-template-columns:repeat(
 const RESPONSIVE_FIELD_GRID_CLASS = 'grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(100%,10rem),1fr))]';
 const OBJECT_ROW_GRID_CLASS = 'grid gap-2 [grid-template-columns:minmax(0,3fr)_minmax(9rem,1fr)]';
 
+const ACTION_PARAM_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]{0,31}$/;
+/** i18next 保留选项，插件 params 不可覆盖（防御恶意/损坏插件打崩设置页） */
+const ACTION_PARAM_RESERVED = new Set([
+  'ns',
+  'lng',
+  'defaultValue',
+  'escapeValue',
+  'returnObjects',
+  'returnDetails',
+  'count',
+  'context',
+  'interpolation',
+  'keySeparator',
+  'nsSeparator',
+  'pluralSeparator',
+]);
+
+/** 把插件返回的 params 过滤为安全的 i18n 插值变量：仅普通字符串/数字键值。 */
+function sanitizeActionParams(raw: unknown): Record<string, string | number> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return {};
+  }
+  const safe: Record<string, string | number> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (ACTION_PARAM_RESERVED.has(key) || !ACTION_PARAM_PATTERN.test(key)) {
+      continue;
+    }
+    if (typeof value === 'string' || typeof value === 'number') {
+      safe[key] = value;
+    }
+  }
+  return safe;
+}
+
 /**
  * 通用的单个插件设置项渲染组件
  * 根据 descriptor.type 自动选择合适的控件（Switch/Input/Select）
@@ -60,11 +94,15 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
     const record = result as { ok?: unknown; messageKey?: unknown; params?: Record<string, unknown>; message?: unknown };
     const ok = record.ok !== false;
     if (typeof record.messageKey === 'string') {
-      const text = i18n.t(record.messageKey, {
+      const rendered = i18n.t(record.messageKey, {
         ns: `plugin:${pluginName}`,
-        ...(record.params ?? {}),
+        ...sanitizeActionParams(record.params),
         defaultValue: typeof record.message === 'string' ? record.message : record.messageKey,
       });
+      // returnObjects 或损坏的翻译值可能返回非字符串；一律降级为固定文案
+      const text = typeof rendered === 'string'
+        ? rendered
+        : i18n.t('settings:plugins.actionFailed', { defaultValue: 'Action failed' });
       return { ok, text };
     }
     if (typeof record.message === 'string') {

@@ -977,7 +977,7 @@ export class PluginManager {
         snapshotPluginData(payload, 'structured'),
         guardedCtx,
       ),
-    ) as Promise<unknown>;
+    );
   }
 
   requestCall(

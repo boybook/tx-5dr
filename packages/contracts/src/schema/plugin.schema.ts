@@ -140,6 +140,13 @@ export const PluginObjectArrayFieldSchema = z.object({
    */
   fullWidth: z.boolean().optional(),
 }).superRefine((field, ctx) => {
+  if (/^(__proto__|constructor|prototype)$/.test(field.key)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['key'],
+      message: 'Field key must not be a reserved object property name',
+    });
+  }
   if ((field.type === 'radio' || field.type === 'multiselect')
     && (!field.options || field.options.length === 0)) {
     ctx.addIssue({
