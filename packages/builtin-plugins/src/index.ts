@@ -36,6 +36,13 @@ import {
 } from './assisted-qso-queue/index.js';
 
 import {
+  wwDigiStrategyPlugin,
+  wwDigiLocales,
+  wwDigiDirPath,
+  BUILTIN_WW_DIGI_PLUGIN_NAME,
+} from './ww-digi/index.js';
+
+import {
   snrFilterPlugin,
   snrFilterLocales,
   BUILTIN_SNR_FILTER_PLUGIN_NAME,
@@ -139,6 +146,7 @@ export interface BuiltinPluginEntry {
 export {
   BUILTIN_STANDARD_QSO_PLUGIN_NAME,
   BUILTIN_ASSISTED_QSO_QUEUE_PLUGIN_NAME,
+  BUILTIN_WW_DIGI_PLUGIN_NAME,
   BUILTIN_SNR_FILTER_PLUGIN_NAME,
   STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING,
   buildStandardQSODefaultTx6Message,
@@ -168,6 +176,12 @@ export const BUILTIN_PLUGINS: BuiltinPluginEntry[] = [
     locales: assistedQSOQueueLocales,
     enabledByDefault: false,
     settingsNamespace: BUILTIN_STANDARD_QSO_PLUGIN_NAME,
+  },
+  {
+    definition: wwDigiStrategyPlugin,
+    locales: wwDigiLocales,
+    enabledByDefault: false,
+    dirPath: wwDigiDirPath,
   },
   {
     definition: snrFilterPlugin,

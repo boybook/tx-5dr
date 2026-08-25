@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DigitalFrameCoordinator } from '../DigitalFrameCoordinator.js';
+import { buildTrackId } from '../TransmissionIntent.js';
 
 function createCoordinator() {
   let id = 0;
@@ -76,6 +77,73 @@ describe('DigitalFrameCoordinator', () => {
       phase: 'ready',
       participantOperatorIds: ['a', 'b'],
     });
+  });
+
+  it('keeps same-operator streams distinct and does not restore an omitted lane in a complete replacement', () => {
+    const coordinator = createCoordinator();
+    const initial = coordinator.prepareFrame({
+      slotId: 'slot-1',
+      intents: [
+        { operatorId: 'a', streamId: 'lane-1', source: 'plugin', reason: 'parallel batch', text: 'A ONE', decisionEpoch: 1 },
+        { operatorId: 'a', streamId: 'lane-2', source: 'plugin', reason: 'parallel batch', text: 'A TWO', decisionEpoch: 1 },
+        { operatorId: 'a', streamId: 'lane-3', source: 'plugin', reason: 'parallel batch', text: 'A THREE', decisionEpoch: 1 },
+        { operatorId: 'b', source: 'plugin', reason: 'parallel batch', text: 'B DEFAULT', decisionEpoch: 1 },
+      ],
+      playbackStartMs: 500,
+    });
+    const initialFrame = initial.frame!;
+    const initialTrackIds = [
+      buildTrackId('a', 'lane-1'),
+      buildTrackId('a', 'lane-2'),
+      buildTrackId('a', 'lane-3'),
+      buildTrackId('b'),
+    ];
+
+    expect(initialFrame.participantOperatorIds).toEqual(['a', 'b']);
+    expect(initialFrame.participantTrackIds).toEqual(initialTrackIds);
+    expect(initial.intents.map((intent) => intent.trackId)).toEqual(initialTrackIds);
+
+    coordinator.beginEncoding(initialFrame.frameId);
+    initial.intents.forEach((intent, index) => {
+      expect(coordinator.acceptEncodeResult({
+        frameId: initialFrame.frameId,
+        operatorId: intent.operatorId!,
+        streamId: intent.streamId,
+        decisionEpoch: intent.decisionEpoch,
+        revision: initialFrame.revision,
+      })).toBe(true);
+      expect(coordinator.getFrame(initialFrame.frameId)?.phase)
+        .toBe(index === initial.intents.length - 1 ? 'ready' : 'encoding');
+    });
+    commitFrame(coordinator, initialFrame.frameId);
+    coordinator.markOnAir(initialFrame.frameId);
+
+    const replacement = coordinator.prepareFrame({
+      slotId: 'slot-1',
+      intents: [
+        { operatorId: 'a', streamId: 'lane-1', source: 'late-decode', reason: 'lane-2 completed', text: 'A ONE NEXT', decisionEpoch: 2 },
+        { operatorId: 'a', streamId: 'lane-3', source: 'late-decode', reason: 'lane-2 completed', text: 'A THREE NEXT', decisionEpoch: 2 },
+        { operatorId: 'b', source: 'plugin', reason: 'retain other operator', text: 'B DEFAULT', decisionEpoch: 1 },
+      ],
+      nowMs: 1_000,
+      slotEndMs: 15_000,
+      expectedDurationMs: 12_640,
+      playbackStartMs: 500,
+    });
+    const replacementTrackIds = [
+      buildTrackId('a', 'lane-1'),
+      buildTrackId('a', 'lane-3'),
+      buildTrackId('b'),
+    ];
+
+    expect(replacement.action).toBe('restart-current');
+    expect(replacement.frame).toMatchObject({
+      participantOperatorIds: ['a', 'b'],
+      participantTrackIds: replacementTrackIds,
+    });
+    expect(replacement.intents.map((intent) => intent.trackId)).toEqual(replacementTrackIds);
+    expect(replacement.frame?.participantTrackIds).not.toContain(buildTrackId('a', 'lane-2'));
+    expect(coordinator.getPhysicalFrameForSlot('slot-1')?.frameId).toBe(initialFrame.frameId);
   });
 
   it('restarts an on-air frame only when a complete replacement fits the slot', () => {

@@ -77,6 +77,7 @@ function QueueRow({
     return distance === null ? undefined : Math.round(distance);
   }, [myGrid, row.targetGrid]);
   const metadata = React.useMemo(() => [
+    row.audioFrequencyHz === undefined ? null : `${Math.round(row.audioFrequencyHz)} Hz`,
     distanceKm === undefined ? null : `${distanceKm.toLocaleString(i18n.language)} km`,
     row.lastSnr === undefined ? null : `${row.lastSnr > 0 ? '+' : ''}${row.lastSnr} dB`,
     row.lastHeardCyclesAgo === undefined
@@ -85,6 +86,7 @@ function QueueRow({
   ].filter((value): value is string => Boolean(value)), [
     distanceKm,
     i18n.language,
+    row.audioFrequencyHz,
     row.lastHeardCyclesAgo,
     row.lastSnr,
     t,
@@ -204,10 +206,16 @@ export function OperatorQueueTable({ operatorId, queue }: OperatorQueueTableProp
   const { operators } = useOperators();
   const myGrid = operators
     .find((operator) => operator.id === operatorId)?.context.myGrid;
-  const active = queue.rows.find((row) => row.entryId === queue.activeEntryId);
+  const activeEntryIds = React.useMemo(() => new Set(
+    queue.activeEntryIds ?? (queue.activeEntryId ? [queue.activeEntryId] : []),
+  ), [queue.activeEntryId, queue.activeEntryIds]);
+  const active = React.useMemo(
+    () => queue.rows.filter((row) => activeEntryIds.has(row.entryId)),
+    [activeEntryIds, queue.rows],
+  );
   const serverWaiting = React.useMemo(
-    () => queue.rows.filter((row) => row.entryId !== queue.activeEntryId),
-    [queue.activeEntryId, queue.rows],
+    () => queue.rows.filter((row) => !activeEntryIds.has(row.entryId)),
+    [activeEntryIds, queue.rows],
   );
   const [waiting, setWaiting] = React.useState(serverWaiting);
   const waitingRef = React.useRef(waiting);
@@ -283,18 +291,19 @@ export function OperatorQueueTable({ operatorId, queue }: OperatorQueueTableProp
             <span>{t('operator.queue.emptyHint')}</span>
           </div>
         )}
-        {active && (
+        {active.map((row) => (
           <QueueRow
-            row={active}
-            onRemove={() => remove(active.entryId)}
-            onRetry={active.displayState === 'no-response' && active.noResponseCycles !== undefined
-              ? () => retry(active.entryId)
+            key={row.entryId}
+            row={row}
+            onRemove={() => remove(row.entryId)}
+            onRetry={row.displayState === 'no-response' && row.noResponseCycles !== undefined
+              ? () => retry(row.entryId)
               : undefined}
             myGrid={myGrid}
-            isNew={newEntryIds.has(active.entryId)}
-            onEntryAnimationEnd={() => finishEntryAnimation(active.entryId)}
+            isNew={newEntryIds.has(row.entryId)}
+            onEntryAnimationEnd={() => finishEntryAnimation(row.entryId)}
           />
-        )}
+        ))}
         <Reorder.Group
           axis="y"
           role="presentation"

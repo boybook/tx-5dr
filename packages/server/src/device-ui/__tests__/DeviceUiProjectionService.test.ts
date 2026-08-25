@@ -113,6 +113,53 @@ describe('DeviceUiProjectionService', () => {
     configSpy.mockRestore();
   });
 
+  it('projects every current substream transmission before legacy slot content', () => {
+    const engine = createEngine();
+    const service = new DeviceUiProjectionService(engine, { now: () => 100 });
+
+    engine.emit('operatorStatusUpdate', {
+      id: 'op1',
+      isActive: true,
+      isTransmitting: true,
+      isInActivePTT: true,
+      currentSlot: 'TX6',
+      currentTransmissions: [
+        { streamId: 'stream-1', text: 'JA1AAA BG5DRB OL32', audioFrequencyHz: 1200 },
+        { streamId: 'stream-2', text: 'JA2BBB BG5DRB R PM95', audioFrequencyHz: 1320 },
+        { streamId: 'stream-3', text: 'JA3CCC BG5DRB RR73', audioFrequencyHz: 1440 },
+      ],
+      context: { myCall: 'BG5DRB', myGrid: 'OL32', targetCall: 'JA1AAA' },
+      strategy: { name: 'ww-digi', state: 'parallel', availableSlots: ['TX6'] },
+      slots: { TX6: 'STALE LEGACY CQ' },
+    });
+    engine.emit('pttStatusChanged', { isTransmitting: true, operatorIds: ['op1'] });
+
+    expect(service.getSnapshot().ft8.currentTx).toMatchObject({
+      active: true,
+      operatorIds: ['op1'],
+      messages: [
+        'JA1AAA BG5DRB OL32',
+        'JA2BBB BG5DRB R PM95',
+        'JA3CCC BG5DRB RR73',
+      ],
+      lastMessage: 'JA3CCC BG5DRB RR73',
+    });
+
+    engine.emit('operatorStatusUpdate', {
+      id: 'op1',
+      isActive: true,
+      isTransmitting: true,
+      isInActivePTT: true,
+      currentSlot: 'TX6',
+      currentTransmissions: [],
+      context: { myCall: 'BG5DRB', myGrid: 'OL32', targetCall: '' },
+      strategy: { name: 'ww-digi', state: 'TX6', availableSlots: ['TX6'] },
+      slots: { TX6: 'STALE LEGACY CQ' },
+    });
+
+    expect(service.getSnapshot().ft8.currentTx.messages).toEqual([]);
+  });
+
   it('keeps safe defaults when engine getters throw or return incomplete data', () => {
     const engine = createEngine({
       getStatus: vi.fn(() => { throw new Error('status unavailable'); }),

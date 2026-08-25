@@ -6,6 +6,7 @@ import {
   type FrameAudioIdentity,
   type FrameAudioSnapshot,
 } from './FrameAudioRepository.js';
+import { buildTrackId, normalizeStreamId } from '../transmission/TransmissionIntent.js';
 
 const logger = createLogger('AudioMixer');
 
@@ -16,6 +17,9 @@ export interface MixedAudio {
   /** Waveform time already removed from the front of this mix. */
   playbackOffsetMs?: number;
   operatorIds: string[];
+  trackIds?: string[];
+  tracks?: Array<{ operatorId: string; streamId: string; trackId: string; audioFrequencyHz: number }>;
+  mixMetrics?: AudioMixMetrics;
   txDialShiftHz: number;
   frameId: string;
   frameRevision: number;
@@ -26,6 +30,27 @@ export interface AudioFrameMeta {
   frameId: string;
   frameRevision: number;
   slotId: string;
+  streamId?: string;
+  audioFrequencyHz?: number;
+}
+
+export interface AudioMixMetrics {
+  trackCount: number;
+  targetRms: number;
+  actualRms: number;
+  peak: number;
+  crestFactor: number;
+  peakBackoffApplied: boolean;
+  finalLinearGain: number;
+  perTrackGain: Record<string, number>;
+  centerFrequenciesHz: number[];
+  minimumSpacingHz?: number;
+}
+
+export interface AudioMixerOptions {
+  mixingWindowMs?: number;
+  multiSignalRmsBackoffDb?: number;
+  multiSignalPeakCeiling?: number;
 }
 
 /** Mixes immutable, explicitly selected frame snapshots. */
@@ -35,8 +60,16 @@ export class AudioMixer extends EventEmitter {
   private scheduledPlaybackStartMs: number | null = null;
   private scheduledFrame: FrameAudioIdentity | null = null;
 
-  constructor(private readonly mixingWindowMs = 100) {
+  private readonly mixingWindowMs: number;
+  private readonly multiSignalRmsBackoffDb: number;
+  private readonly multiSignalPeakCeiling: number;
+
+  constructor(options: number | AudioMixerOptions = 100) {
     super();
+    const resolved = typeof options === 'number' ? { mixingWindowMs: options } : options;
+    this.mixingWindowMs = resolved.mixingWindowMs ?? 100;
+    this.multiSignalRmsBackoffDb = resolved.multiSignalRmsBackoffDb ?? 6;
+    this.multiSignalPeakCeiling = resolved.multiSignalPeakCeiling ?? 0.95;
   }
 
   addOperatorAudio(
@@ -48,6 +81,8 @@ export class AudioMixer extends EventEmitter {
     txDialShiftHz: number,
     frameMeta: AudioFrameMeta,
   ): void {
+    const streamId = normalizeStreamId(frameMeta.streamId);
+    const trackId = buildTrackId(operatorId, streamId);
     const added = this.repository.putTrack(
       {
         frameId: frameMeta.frameId,
@@ -56,6 +91,9 @@ export class AudioMixer extends EventEmitter {
       },
       {
         operatorId,
+        streamId,
+        trackId,
+        audioFrequencyHz: frameMeta.audioFrequencyHz ?? 0,
         audioData,
         sampleRate,
         slotStartMs,
@@ -67,6 +105,7 @@ export class AudioMixer extends EventEmitter {
     if (!added) {
       logger.debug('Ignored duplicate encoded frame track', {
         operatorId,
+        streamId,
         frameId: frameMeta.frameId,
         frameRevision: frameMeta.frameRevision,
         requestId,
@@ -89,12 +128,12 @@ export class AudioMixer extends EventEmitter {
   cloneFrameTracks(
     source: { frameId: string; frameRevision: number },
     target: AudioFrameMeta,
-    retainedOperatorIds: readonly string[],
+    retainedTrackIds: readonly string[],
   ): FrameAudioSnapshot | null {
     return this.repository.cloneFrame(
       { frameId: source.frameId, revision: source.frameRevision },
       { frameId: target.frameId, revision: target.frameRevision, slotId: target.slotId },
-      retainedOperatorIds,
+      retainedTrackIds,
     );
   }
 
@@ -143,6 +182,9 @@ export class AudioMixer extends EventEmitter {
       }
       return {
         operatorId: track.operatorId,
+        streamId: track.streamId,
+        trackId: track.trackId,
+        audioFrequencyHz: track.audioFrequencyHz,
         samples: skipSamples < samples.length
           ? samples.subarray(skipSamples)
           : new Float32Array(0),
@@ -153,20 +195,69 @@ export class AudioMixer extends EventEmitter {
 
     const maxLength = Math.max(...audible.map((track) => track.samples.length));
     let audioData: Float32Array;
+    let targetRms = 0;
+    let peakBackoffApplied = false;
+    let finalLinearGain = 1;
+    const perTrackGain: Record<string, number> = {};
     if (audible.length === 1) {
       audioData = audible[0].samples;
+      targetRms = this.findRmsLevel(audioData);
+      perTrackGain[audible[0].trackId] = 1;
     } else {
       audioData = new Float32Array(maxLength);
+      const referenceRms = Math.max(...audible.map((track) => this.findRmsLevel(track.samples)));
+      targetRms = referenceRms * 10 ** (-this.multiSignalRmsBackoffDb / 20);
+      const perTrackTargetRms = targetRms / Math.sqrt(audible.length);
       for (const track of audible) {
+        const trackRms = this.findRmsLevel(track.samples);
+        const trackGain = trackRms > 0 ? perTrackTargetRms / trackRms : 0;
+        perTrackGain[track.trackId] = trackGain;
         for (let index = 0; index < track.samples.length; index += 1) {
-          audioData[index] += track.samples[index];
+          audioData[index] += track.samples[index] * trackGain;
         }
       }
-      const peak = this.findPeakLevel(audioData);
-      if (peak > 1) {
-        const ratio = 0.95 / peak;
+
+      const mixedRms = this.findRmsLevel(audioData);
+      if (mixedRms > 0 && targetRms > 0) {
+        const rmsCorrection = targetRms / mixedRms;
+        finalLinearGain *= rmsCorrection;
+        for (let index = 0; index < audioData.length; index += 1) audioData[index] *= rmsCorrection;
+      }
+      const preBackoffPeak = this.findPeakLevel(audioData);
+      if (preBackoffPeak > this.multiSignalPeakCeiling) {
+        const ratio = this.multiSignalPeakCeiling / preBackoffPeak;
+        peakBackoffApplied = true;
+        finalLinearGain *= ratio;
         for (let index = 0; index < audioData.length; index += 1) audioData[index] *= ratio;
       }
+    }
+
+    const actualRms = this.findRmsLevel(audioData);
+    const peak = this.findPeakLevel(audioData);
+    const centerFrequenciesHz = audible
+      .map((track) => track.audioFrequencyHz)
+      .filter((frequency) => Number.isFinite(frequency) && frequency > 0)
+      .sort((left, right) => left - right);
+    let minimumSpacingHz: number | undefined;
+    for (let index = 1; index < centerFrequenciesHz.length; index += 1) {
+      const spacing = centerFrequenciesHz[index] - centerFrequenciesHz[index - 1];
+      minimumSpacingHz = minimumSpacingHz === undefined ? spacing : Math.min(minimumSpacingHz, spacing);
+    }
+    const mixMetrics: AudioMixMetrics = {
+      trackCount: audible.length,
+      targetRms,
+      actualRms,
+      peak,
+      crestFactor: actualRms > 0 ? peak / actualRms : 0,
+      peakBackoffApplied,
+      finalLinearGain,
+      perTrackGain,
+      centerFrequenciesHz,
+      minimumSpacingHz,
+    };
+    if (audible.length > 1) {
+      logger.info('calibrated linear multi-signal mix', mixMetrics);
+      this.emit('mixMetrics', mixMetrics);
     }
 
     return {
@@ -174,7 +265,15 @@ export class AudioMixer extends EventEmitter {
       sampleRate: targetSampleRate,
       duration: audioData.length / targetSampleRate,
       playbackOffsetMs: Math.max(0, elapsedTimeMs),
-      operatorIds: audible.map((track) => track.operatorId),
+      operatorIds: Array.from(new Set(audible.map((track) => track.operatorId))),
+      trackIds: audible.map((track) => track.trackId),
+      tracks: audible.map((track) => ({
+        operatorId: track.operatorId,
+        streamId: track.streamId,
+        trackId: track.trackId,
+        audioFrequencyHz: track.audioFrequencyHz,
+      })),
+      mixMetrics,
       txDialShiftHz: snapshot.txDialShiftHz,
       frameId: snapshot.frameId,
       frameRevision: snapshot.revision,
@@ -236,5 +335,12 @@ export class AudioMixer extends EventEmitter {
     let peak = 0;
     for (const sample of samples) peak = Math.max(peak, Math.abs(sample));
     return peak;
+  }
+
+  private findRmsLevel(samples: Float32Array): number {
+    if (samples.length === 0) return 0;
+    let sumSquares = 0;
+    for (const sample of samples) sumSquares += sample * sample;
+    return Math.sqrt(sumSquares / samples.length);
   }
 }

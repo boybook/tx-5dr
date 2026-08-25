@@ -40,7 +40,7 @@ import { OperatorPluginSettings } from './OperatorPluginSettings';
 import { getAuthHeaders } from '../../utils/authHeaders';
 
 const logger = createLogger('OperatorSettings');
-type EditableOperatorField = 'myCallsign' | 'myGrid';
+type EditableOperatorField = 'myCallsign' | 'myGrid' | 'maxConcurrentStreams';
 const CALLSIGN_MAX_LENGTH = 10;
 
 const normalizeOperatorConfig = (operator: RadioOperatorConfig): RadioOperatorConfig => ({
@@ -86,6 +86,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
       myCallsign: '',
       myGrid: defaultOperatorGrid,
       frequency: undefined, // 频率可选，用于无电台模式设置完整的无线电频率（Hz）
+      maxConcurrentStreams: 3,
       transmitCycles: [0],
       mode: MODES.FT8,
     });
@@ -238,9 +239,11 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
 
     const startFieldEditing = (operator: RadioOperatorConfig, field: EditableOperatorField) => {
       const key = getFieldEditKey(operator.id, field);
-      const initialValue = field === 'myGrid'
-        ? sanitizeGridInput(operator.myGrid)
-        : sanitizeCallsignInput(operator.myCallsign);
+      const initialValue = field === 'maxConcurrentStreams'
+        ? String(operator.maxConcurrentStreams ?? 3)
+        : field === 'myGrid'
+          ? sanitizeGridInput(operator.myGrid)
+          : sanitizeCallsignInput(operator.myCallsign);
 
       setEditingFields(prev => ({ ...prev, [key]: true }));
       setFieldDrafts(prev => ({ ...prev, [key]: initialValue }));
@@ -268,9 +271,11 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
 
     const updateFieldDraft = (operatorId: string, field: EditableOperatorField, value: string) => {
       const key = getFieldEditKey(operatorId, field);
-      const normalizedValue = field === 'myGrid'
-        ? sanitizeGridInput(value)
-        : sanitizeCallsignInput(value);
+      const normalizedValue = field === 'maxConcurrentStreams'
+        ? value.replace(/\D/g, '').slice(0, 1)
+        : field === 'myGrid'
+          ? sanitizeGridInput(value)
+          : sanitizeCallsignInput(value);
       setFieldDrafts(prev => ({
         ...prev,
         [key]: normalizedValue
@@ -280,10 +285,22 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
     const saveFieldEditing = async (operator: RadioOperatorConfig, field: EditableOperatorField) => {
       const key = getFieldEditKey(operator.id, field);
       const rawValue = fieldDrafts[key] ?? '';
-      const normalizedValue = field === 'myGrid' ? sanitizeGridInput(rawValue) : sanitizeCallsignInput(rawValue);
-      const currentValue = field === 'myGrid'
-        ? sanitizeGridInput(operator.myGrid)
-        : sanitizeCallsignInput(operator.myCallsign);
+      const normalizedValue = field === 'maxConcurrentStreams'
+        ? Number(rawValue)
+        : field === 'myGrid'
+          ? sanitizeGridInput(rawValue)
+          : sanitizeCallsignInput(rawValue);
+      const currentValue = field === 'maxConcurrentStreams'
+        ? operator.maxConcurrentStreams ?? 3
+        : field === 'myGrid'
+          ? sanitizeGridInput(operator.myGrid)
+          : sanitizeCallsignInput(operator.myCallsign);
+
+      if (field === 'maxConcurrentStreams'
+          && (!Number.isInteger(normalizedValue) || normalizedValue < 1 || normalizedValue > 5)) {
+        setError(t('settings.maxConcurrentStreamsInvalid'));
+        return;
+      }
 
       if (normalizedValue === currentValue) {
         cancelFieldEditing(operator.id, field);
@@ -342,6 +359,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
           myCallsign: '',
           myGrid: defaultOperatorGrid,
           frequency: undefined, // 频率可选，用于无电台模式设置完整的无线电频率（Hz）
+          maxConcurrentStreams: 3,
           transmitCycles: [0],
           mode: MODES.FT8,
         });
@@ -378,6 +396,9 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
           placeholder?: string;
           description?: string;
           maxLength?: number;
+          type?: React.HTMLInputTypeAttribute;
+          min?: number;
+          max?: number;
         }
       ) => {
         const key = getFieldEditKey(operator.id, field);
@@ -400,6 +421,9 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                       description={options?.description}
                       onValueChange={(nextValue) => updateFieldDraft(operator.id, field, nextValue)}
                       maxLength={options?.maxLength}
+                      type={options?.type}
+                      min={options?.min}
+                      max={options?.max}
                       autoCapitalize="characters"
                     />
                     <Button
@@ -442,7 +466,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
 
       return (
         <div className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {renderEditableField('myCallsign', t('settings.callsign'), operator.myCallsign, {
               placeholder: t('settings.callsignPlaceholder'),
               maxLength: CALLSIGN_MAX_LENGTH
@@ -452,6 +476,17 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
               description: t('settings.gridDesc'),
               maxLength: 8
             })}
+            {renderEditableField(
+              'maxConcurrentStreams',
+              t('settings.maxConcurrentStreams'),
+              String(operator.maxConcurrentStreams ?? 3),
+              {
+                description: t('settings.maxConcurrentStreamsDesc'),
+                type: 'number',
+                min: 1,
+                max: 5,
+              },
+            )}
           </div>
 
           {/* 通联日志同步 */}
@@ -483,7 +518,7 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
     const renderEditMode = (formData: Partial<RadioOperatorConfig>) => {
       return (
         <div className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Input
               label={t('settings.callsign')}
               placeholder={t('settings.callsignPlaceholder')}
@@ -506,6 +541,21 @@ export const OperatorSettings = forwardRef<OperatorSettingsRef, OperatorSettings
                 setNewOperatorData({ ...newOperatorData, myGrid: normalizedGrid });
               }}
               maxLength={8}
+            />
+
+            <Input
+              type="number"
+              min={1}
+              max={5}
+              label={t('settings.maxConcurrentStreams')}
+              description={t('settings.maxConcurrentStreamsDesc')}
+              value={String(formData.maxConcurrentStreams ?? 3)}
+              onValueChange={(value) => {
+                const parsed = Number(value);
+                if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 5) {
+                  setNewOperatorData({ ...newOperatorData, maxConcurrentStreams: parsed });
+                }
+              }}
             />
           </div>
 

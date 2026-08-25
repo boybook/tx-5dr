@@ -66,6 +66,8 @@ export class TransmissionPipeline {
 
     this.lm.listen(encodeQueue, 'encodeComplete', async (result: {
       operatorId: string;
+      streamId?: string;
+      trackId?: string;
       audioData: Float32Array;
       sampleRate: number;
       duration: number;
@@ -256,9 +258,9 @@ export class TransmissionPipeline {
         frameRevision: removal.frame.revision,
         slotId: removal.frame.slotId,
       },
-      removal.remainingOperatorIds,
+      removal.remainingTrackIds,
     );
-    const expected = [...removal.remainingOperatorIds].sort();
+    const expected = [...removal.remainingTrackIds].sort();
     const actual = replacementSnapshot
       ? Array.from(replacementSnapshot.tracks.keys()).sort()
       : [];
@@ -310,12 +312,14 @@ export class TransmissionPipeline {
     logger.error('frame encode failed', {
       frameId: request.frameId,
       operatorId: request.operatorId,
+      streamId: request.streamId,
       error: error.message,
     });
     if (!request.frameId || request.frameRevision === undefined || request.decisionEpoch === undefined) return;
     const failedFrame = this.deps.digitalFrameCoordinator.failEncodeResult({
       frameId: request.frameId,
       operatorId: request.operatorId,
+      streamId: request.streamId,
       decisionEpoch: request.decisionEpoch,
       revision: request.frameRevision,
     }, 'encode failed');
@@ -330,6 +334,8 @@ export class TransmissionPipeline {
 
   private async handleEncodeComplete(result: {
     operatorId: string;
+    streamId?: string;
+    trackId?: string;
     audioData: Float32Array;
     sampleRate: number;
     duration: number;
@@ -344,6 +350,7 @@ export class TransmissionPipeline {
     const accepted = this.deps.digitalFrameCoordinator.acceptEncodeResult({
       frameId: request.frameId,
       operatorId: result.operatorId,
+      streamId: result.streamId,
       decisionEpoch: request.decisionEpoch,
       revision: request.frameRevision,
     });
@@ -371,6 +378,8 @@ export class TransmissionPipeline {
         frameId: request.frameId,
         frameRevision: request.frameRevision,
         slotId: `slot-${slotStartMs}`,
+        streamId: request.streamId,
+        audioFrequencyHz: request.frequency,
       },
     );
     this.deps.transmissionTracker.recordAudioAddedToMixer(result.operatorId);
@@ -422,10 +431,10 @@ export class TransmissionPipeline {
 
     const readyFrame = this.deps.digitalFrameCoordinator.getFrame(mixedAudio.frameId);
     if (readyFrame?.phase !== 'ready') return;
-    const expectedOperators = [...readyFrame.participantOperatorIds].sort();
-    const mixedOperators = [...mixedAudio.operatorIds].sort();
-    if (expectedOperators.length !== mixedOperators.length
-      || expectedOperators.some((operatorId, index) => operatorId !== mixedOperators[index])) {
+    const expectedTracks = [...readyFrame.participantTrackIds].sort();
+    const mixedTracks = [...(mixedAudio.trackIds ?? readyFrame.participantTrackIds)].sort();
+    if (expectedTracks.length !== mixedTracks.length
+      || expectedTracks.some((trackId, index) => trackId !== mixedTracks[index])) {
       this.failCommittedFrame(readyFrame.frameId, mixedAudio, 'mixed frame participants are incomplete');
       return;
     }
@@ -463,6 +472,7 @@ export class TransmissionPipeline {
     const prepared = this.deps.digitalFrameCoordinator.prepareFrameForHandover(
       mixedAudio.frameId,
       mixedAudio.operatorIds,
+      mixedAudio.trackIds ?? readyFrame.participantTrackIds,
     );
     if (!prepared || prepared.phase !== 'prepared') return;
 
@@ -474,6 +484,7 @@ export class TransmissionPipeline {
         await this.replaceCommittedFrameAudio(
           prepared.frameId,
           prepared.participantOperatorIds,
+          prepared.participantTrackIds,
           physicalBefore,
           audioForTransmission,
           onReplacementStarted,
@@ -510,11 +521,11 @@ export class TransmissionPipeline {
               'digital waveform fully consumed while previous audio drained',
             );
           }
-          const refreshedOperators = [...refreshedAudio.operatorIds].sort();
-          const committedOperators = [...committed.participantOperatorIds].sort();
-          if (refreshedOperators.length !== committedOperators.length
-            || refreshedOperators.some((operatorId, index) => operatorId !== committedOperators[index])) {
-            throw new Error('digital frame participants changed while previous audio drained');
+          const refreshedTracks = [...(refreshedAudio.trackIds ?? committed.participantTrackIds)].sort();
+          const committedTracks = [...committed.participantTrackIds].sort();
+          if (refreshedTracks.length !== committedTracks.length
+            || refreshedTracks.some((trackId, index) => trackId !== committedTracks[index])) {
+            throw new Error('digital frame tracks changed while previous audio drained');
           }
           audioForTransmission = refreshedAudio;
           logger.info('Refreshed digital frame after previous audio drained', {
@@ -579,10 +590,10 @@ export class TransmissionPipeline {
         this.deps.operatorManager.deferPreparedFrameToNextSlot(committed.frameId, reason);
         return;
       }
-      const finalOperators = [...finalAudio.operatorIds].sort();
-      const committedOperators = [...committed.participantOperatorIds].sort();
-      if (finalOperators.length !== committedOperators.length
-        || finalOperators.some((operatorId, index) => operatorId !== committedOperators[index])) {
+      const finalTracks = [...(finalAudio.trackIds ?? committed.participantTrackIds)].sort();
+      const committedTracks = [...committed.participantTrackIds].sort();
+      if (finalTracks.length !== committedTracks.length
+        || finalTracks.some((trackId, index) => trackId !== committedTracks[index])) {
         await this.deps.physicalTxCoordinator.forceInterruptLease(
           activeLeaseId,
           'digital frame participants changed before audio start',
@@ -618,6 +629,7 @@ export class TransmissionPipeline {
           diagnosticContext: {
             frameId: prepared.frameId,
             operatorIds: audioForTransmission.operatorIds,
+            mixMetrics: audioForTransmission.mixMetrics,
           },
         },
         tailHoldMs: DIGITAL_TAIL_HOLD_MS,
@@ -671,6 +683,7 @@ export class TransmissionPipeline {
   private async replaceCommittedFrameAudio(
     frameId: string,
     participantOperatorIds: string[],
+    participantTrackIds: string[],
     physical: PhysicalTxSnapshot,
     initialAudio: MixedAudio,
     onReplacementStarted?: () => void,
@@ -698,11 +711,11 @@ export class TransmissionPipeline {
       this.deps.operatorManager.deferPreparedFrameToNextSlot(frameId, reason);
       return;
     }
-    const actualOperators = [...aligned.operatorIds].sort();
-    const expectedOperators = [...participantOperatorIds].sort();
-    if (actualOperators.length !== expectedOperators.length
-      || actualOperators.some((operatorId, index) => operatorId !== expectedOperators[index])) {
-      this.failCommittedFrame(frameId, aligned, 'replacement mix lost one or more frame participants');
+    const actualTracks = [...(aligned.trackIds ?? participantTrackIds)].sort();
+    const expectedTracks = [...participantTrackIds].sort();
+    if (actualTracks.length !== expectedTracks.length
+      || actualTracks.some((trackId, index) => trackId !== expectedTracks[index])) {
+      this.failCommittedFrame(frameId, aligned, 'replacement mix lost one or more frame tracks');
       return;
     }
     if (!this.deps.digitalFrameCoordinator.hasCompleteFrameBudget(
@@ -736,7 +749,7 @@ export class TransmissionPipeline {
       audioData: aligned.audioData,
       sampleRate: aligned.sampleRate,
       playbackOptions: {
-        diagnosticContext: { frameId, operatorIds: aligned.operatorIds },
+        diagnosticContext: { frameId, operatorIds: aligned.operatorIds, mixMetrics: aligned.mixMetrics },
       },
       tailHoldMs: DIGITAL_TAIL_HOLD_MS,
       waveformStartMs,
@@ -812,11 +825,42 @@ export class TransmissionPipeline {
         operatorIds: requeuedOperatorIds,
       });
     }
+    const frame = this.deps.digitalFrameCoordinator.getFrame(frameId);
+    const intents = this.deps.digitalFrameCoordinator.getIntentRequests(frameId);
     this.deps.digitalFrameCoordinator.completeFrame(frameId, result.reason);
     if (result.success) {
-      for (const operatorId of audio.operatorIds) {
-        const text = this.deps.digitalFrameCoordinator.getIntentText(frameId, operatorId);
-        if (text) this.deps.operatorManager.notifyPhysicalTransmissionComplete(operatorId, text);
+      const receiptsByOperator = new Map<string, import('@tx5dr/plugin-api').StreamPhysicalReceipt[]>();
+      const completedTracks = audio.tracks ?? intents.map((intent) => ({
+        operatorId: intent.operatorId,
+        streamId: intent.streamId ?? 'default',
+        trackId: `${intent.operatorId}\u0000${intent.streamId ?? 'default'}`,
+        audioFrequencyHz: intent.audioFrequencyHz ?? 0,
+      }));
+      for (const track of completedTracks) {
+        const intent = intents.find((candidate) => (
+          candidate.operatorId === track.operatorId && (candidate.streamId ?? 'default') === track.streamId
+        ));
+        if (!intent?.text || !frame) continue;
+        const receipts = receiptsByOperator.get(track.operatorId) ?? [];
+        receipts.push({
+          streamId: track.streamId,
+          text: intent.text,
+          audioFrequencyHz: intent.audioFrequencyHz ?? 0,
+          frameId,
+          revision: frame.revision,
+          physicalConfirmed: true,
+        });
+        receiptsByOperator.set(track.operatorId, receipts);
+      }
+      for (const [operatorId, receipts] of receiptsByOperator) {
+        const manager = this.deps.operatorManager as RadioOperatorManager & {
+          notifyPhysicalTransmissionsComplete?: RadioOperatorManager['notifyPhysicalTransmissionsComplete'];
+        };
+        if (typeof manager.notifyPhysicalTransmissionsComplete === 'function') {
+          manager.notifyPhysicalTransmissionsComplete(operatorId, receipts);
+        } else {
+          for (const receipt of receipts) manager.notifyPhysicalTransmissionComplete(operatorId, receipt.text);
+        }
       }
     }
     this.emitFrameTerminal(frameId, audio.operatorIds, {
@@ -896,14 +940,22 @@ export class TransmissionPipeline {
       emitted = new Set();
       this.terminalOperatorsByFrame.set(frameId, emitted);
     }
-    for (const operatorId of operatorIds) {
-      if (emitted.has(operatorId)) continue;
-      emitted.add(operatorId);
+    const intents = this.deps.digitalFrameCoordinator.getIntentRequests(frameId);
+    const terminalTracks = intents.length > 0
+      ? intents.filter((intent) => operatorIds.includes(intent.operatorId))
+      : operatorIds.map((operatorId) => ({ operatorId, streamId: 'default' }));
+    for (const intent of terminalTracks) {
+      const streamId = intent.streamId ?? 'default';
+      const trackId = `${intent.operatorId}\u0000${streamId}`;
+      if (emitted.has(trackId)) continue;
+      emitted.add(trackId);
       this.deps.engineEmitter.emit('transmissionComplete', {
-        operatorId,
+        operatorId: intent.operatorId,
+        streamId,
+        trackId,
         frameId,
         ...result,
-        mixedWith: operatorIds.filter((id) => id !== operatorId),
+        mixedWith: operatorIds.filter((id) => id !== intent.operatorId),
       });
     }
     if (this.terminalOperatorsByFrame.size > 256) {
@@ -937,15 +989,17 @@ export class TransmissionPipeline {
       });
       return;
     }
-    for (const operatorId of frame.participantOperatorIds) {
-      const key = `${frame.frameId}:${snapshot.playbackGeneration}:${operatorId}`;
+    for (const intent of this.deps.digitalFrameCoordinator.getIntentRequests(frame.frameId)) {
+      const streamId = intent.streamId ?? 'default';
+      const key = `${frame.frameId}:${snapshot.playbackGeneration}:${intent.operatorId}:${streamId}`;
       if (this.onAirTransmissionKeys.has(key)) continue;
-      const message = this.deps.digitalFrameCoordinator.getIntentText(frame.frameId, operatorId);
-      const context = this.deps.operatorManager.getTransmissionFactContext(operatorId);
+      const message = intent.text;
+      const context = this.deps.operatorManager.getTransmissionFactContext(intent.operatorId);
       if (!message || !context) continue;
       this.onAirTransmissionKeys.add(key);
       this.deps.engineEmitter.emit('transmissionLog', {
-        operatorId,
+        operatorId: intent.operatorId,
+        streamId,
         frameId: frame.frameId,
         revision: frame.revision,
         playbackGeneration: snapshot.playbackGeneration,
@@ -953,7 +1007,7 @@ export class TransmissionPipeline {
         physicalConfirmed: true,
         time: new Date(slotStartMs).toISOString().slice(11, 19).replace(/:/g, ''),
         message,
-        frequency: context.frequency,
+        frequency: intent.audioFrequencyHz ?? context.frequency,
         slotStartMs,
         replaceExisting: this.deps.digitalFrameCoordinator.getReplacedFrameId(frame.frameId) !== undefined,
         frequencyContext: context.frequencyContext,

@@ -469,6 +469,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       transitionTargetReservation: (operatorId, epoch, targetCallsign) => (
         this._operatorManager.transitionTargetReservation(operatorId, epoch, targetCallsign)
       ),
+      transitionTargetReservations: (operatorId, epoch, targets) => (
+        this._operatorManager.transitionTargetReservations(operatorId, epoch, targets)
+      ),
       releaseTargetReservation: (operatorId, epoch) => {
         this._operatorManager.releaseTargetReservation(operatorId, epoch);
       },

@@ -17,7 +17,12 @@ import {
   shouldRadioOperatorPropsBeEqual,
 } from './radioOperatorProgress';
 import { applyOperatorContextDraft } from './operatorContextDraft';
-import { resolveRadioOperatorCyclePresentation } from './radioOperatorPresentation';
+import {
+  resolveRadioOperatorCurrentTransmissions,
+  resolveRadioOperatorCyclePresentation,
+  resolveRadioOperatorStreamPresentations,
+  summarizeRadioOperatorTransmissions,
+} from './radioOperatorPresentation';
 import {
   OPERATOR_FORCE_STOP_REQUESTED_EVENT,
   type OperatorForceStopRequestedDetail,
@@ -713,6 +718,13 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     currentSlotInfo,
     isCurrentTransmitCycle,
   );
+  const currentTransmissions = resolveRadioOperatorCurrentTransmissions(operatorStatus);
+  const streamPresentations = resolveRadioOperatorStreamPresentations(operatorStatus);
+  const currentTransmissionSummary = summarizeRadioOperatorTransmissions(currentTransmissions);
+  const activeStrategyStatus = pluginStatuses.find((plugin) => plugin.name === operatorStatus.strategy.name);
+  const usesStreamProjection = activeStrategyStatus?.strategyFeatures?.parallelTargetQueue === 1
+    || currentTransmissions.some((transmission) => transmission.streamId !== 'default')
+    || operatorStatus.runtime?.streams !== undefined;
 
   // 处理立即停止发射：移除当前操作员的音频并重混音
   const handleForceStop = () => {
@@ -948,7 +960,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
         )}
         <div className="relative flex items-center justify-between h-full">
           {/* 左侧 - 发射内容或监听状态 */}
-          <div className="flex-1">
+          <div className="min-w-0 flex-1">
             {(() => {
               // 未在解码时，显示操作员呼号
               if (!radio.state.isDecoding) {
@@ -969,7 +981,10 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
               }
 
               return cyclePresentation.isTransmit ? (
-                <div className="font-bold font-mono text-lg text-danger">
+                <div
+                  className="truncate font-mono text-lg font-bold text-danger"
+                  title={cyclePresentation.transmitContent || t('operator.preparingTx')}
+                >
                   {cyclePresentation.transmitContent || t('operator.preparingTx')}
                 </div>
               ) : (
@@ -1252,6 +1267,24 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
             </Button>
           </div>
           
+          {usesStreamProjection ? (
+            <div
+              className="flex min-w-0 flex-1 items-center gap-2 px-2 text-sm"
+              aria-label={t('operator.transmitStreams')}
+            >
+              <span className="shrink-0 text-default-500">
+                {t('operator.transmitStreamsCount', { count: streamPresentations.length })}
+              </span>
+              <span
+                className={`min-w-0 flex-1 truncate font-mono ${
+                  currentTransmissionSummary ? 'text-foreground' : 'text-default-400'
+                }`}
+                title={currentTransmissionSummary || t('operator.noCurrentTransmission')}
+              >
+                {currentTransmissionSummary || t('operator.noCurrentTransmission')}
+              </span>
+            </div>
+          ) : (
           <div className="flex items-center gap-0">
             <Select
               key={`slot-select-${shortcutSelectHighlightToken ?? 'idle'}`}
@@ -1323,6 +1356,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
               </Tooltip>
             )}
           </div>
+          )}
         </div>
         
         {/* 第二行 - Context输入和展开按钮 */}
@@ -1476,7 +1510,59 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
             transitionTimingFunction: 'cubic-bezier(0.23, 1, 0.32, 1)'
           }}
         >
-          {operatorStatus.slots && (
+          {usesStreamProjection ? (
+            <div
+              role="list"
+              aria-label={t('operator.transmitStreams')}
+              className="overflow-hidden rounded-lg bg-content2 text-xs"
+            >
+              <div className="flex h-6 items-center justify-between bg-default-200/70 px-3 text-[10px] font-medium text-default-500">
+                <span>{t('operator.transmitStreams')}</span>
+                <span>{t('operator.transmitStreamsCount', { count: streamPresentations.length })}</span>
+              </div>
+              {streamPresentations.length === 0 ? (
+                <div className="flex h-16 items-center justify-center px-3 text-center text-default-400">
+                  {t('operator.noTransmitStreams')}
+                </div>
+              ) : streamPresentations.map((stream) => {
+                const metadata = [
+                  stream.targetCallsign,
+                  stream.audioFrequencyHz === undefined ? undefined : `${Math.round(stream.audioFrequencyHz)} Hz`,
+                ].filter((value): value is string => Boolean(value));
+                return (
+                  <div
+                    key={stream.streamId}
+                    role="listitem"
+                    className="border-b border-divider px-3 py-2 last:border-b-0"
+                  >
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="shrink-0 font-mono font-medium text-default-600">
+                        {stream.streamId}
+                      </span>
+                      {stream.currentState && (
+                        <span className="min-w-0 truncate font-mono text-default-500" title={stream.currentState}>
+                          {stream.currentState}
+                        </span>
+                      )}
+                      {metadata.length > 0 && (
+                        <span className="ml-auto min-w-0 truncate text-right text-[10px] text-default-400" title={metadata.join(' · ')}>
+                          {metadata.join(' · ')}
+                        </span>
+                      )}
+                    </div>
+                    <div
+                      className={`mt-1 truncate font-mono text-sm ${
+                        stream.text ? 'text-foreground' : 'text-default-400'
+                      }`}
+                      title={stream.text || t('operator.noCurrentTransmission')}
+                    >
+                      {stream.text || t('operator.noCurrentTransmission')}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : operatorStatus.slots ? (
             <div className="space-y-2 py-1 bg-content2 overflow-hidden rounded-lg">
               <div className="grid grid-cols-1 gap-0 text-xs">
                 {Object.entries(operatorStatus.slots).map(([slot, content]) => {
@@ -1535,7 +1621,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                 })}
               </div>
             </div>
-          )}
+          ) : null}
         </div>
 
         {isSelected && <OperatorPluginPanels operatorId={operatorStatus.id} />}

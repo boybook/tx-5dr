@@ -46,8 +46,43 @@ export interface StrategyRuntimeSnapshot {
   availableSlots?: string[];
   /** Host correlation token for QSO persistence; it is not an RF decision epoch. */
   qsoLifecycleEpoch?: number;
+  /** Active protocol lanes owned by a parallel-capable strategy. */
+  streams?: StrategyStreamSnapshot[];
   /** Optional compact projection exposed by queue-capable strategies. */
   queue?: AssistedQueueSnapshot;
+}
+
+/** One independently progressing QSO lane inside an operator strategy. */
+export interface StrategyStreamSnapshot {
+  /** Stable identity within the owning strategy runtime. */
+  streamId: string;
+  /** Current lane state selected by the protocol implementation. */
+  currentState: string;
+  /** Target station currently owned by this lane. */
+  targetCallsign?: string;
+  /** Last accepted target grid, when known. */
+  targetGrid?: string;
+  /** Audio carrier used by this lane in hertz. */
+  audioFrequencyHz: number;
+  /** Lane-local lifecycle epoch used to correlate durable QSO effects. */
+  qsoLifecycleEpoch: number;
+}
+
+/** One independently encoded transmission contributed by a strategy. */
+export interface StrategyTransmission {
+  /** Stable lane identity within one operator. */
+  streamId: string;
+  /** Exact FT8/FT4 text to encode. */
+  text: string;
+  /** Audio carrier frequency in hertz. */
+  audioFrequencyHz: number;
+}
+
+/** Physical confirmation for one transmitted lane in an atomic frame. */
+export interface StreamPhysicalReceipt extends StrategyTransmission {
+  frameId: string;
+  revision: number;
+  physicalConfirmed: true;
 }
 
 /** User-facing phase shown for one row in a queue-capable strategy. */
@@ -99,6 +134,10 @@ export interface AssistedQueueSnapshot {
   version: number;
   /** Entry currently owned by the active QSO lifecycle, when any. */
   activeEntryId?: string;
+  /** Entries currently owned by parallel QSO lifecycles. */
+  activeEntryIds?: string[];
+  /** Maximum number of entries that may be active at once. */
+  maxActiveStreams?: number;
   /** Queue rows in display order. */
   rows: AssistedQueueRow[];
 }
@@ -198,26 +237,40 @@ export interface StrategyQSOCompletionEffect {
   record: QSORecord;
   /** Stable within one strategy runtime generation; distinct from RF decision epochs. */
   lifecycleEpoch: number;
+  /** Lane that produced the completion; omitted by legacy single-lane strategies. */
+  streamId?: string;
+  /** Host persistence behavior requested by the strategy. */
+  persistencePolicy?: 'merge-nearby' | 'preserve-distinct';
+  /** Structured-cloneable source metadata returned with post-commit delivery. */
+  metadata?: Record<string, unknown>;
 }
 
 /** Host acknowledgement for a previously returned QSO completion effect. */
 export interface StrategyQSOCompletionSettlement {
   /** Lifecycle epoch copied from the effect being settled. */
   lifecycleEpoch: number;
-  /** Record ID from the accepted completion effect after Host persistence settles. */
+  /** Record ID from the accepted completion effect, used for correlation. */
   recordId: string;
+  /** Final durable record ID; differs when the Host merged into an existing QSO. */
+  persistedRecordId?: string;
   /** Whether the Host committed the record or the durable operation failed. */
   status: 'committed' | 'failed';
+  /** Lane copied from the accepted completion effect. */
+  streamId?: string;
 }
 
 /** Complete output of one speculative strategy decision. */
 export interface StrategyDecisionResult extends StrategyDecision {
   /** Exact text to queue next, or `null` when this decision should not transmit. */
   transmission: string | null;
+  /** Parallel transmissions. New strategies use this instead of `transmission`. */
+  transmissions?: StrategyTransmission[];
   /** UI/diagnostic snapshot produced from the same post-decision state. */
   snapshot: StrategyRuntimeSnapshot;
   /** Optional QSO persistence effect executed by the Host after acceptance. */
   qsoCompletion?: StrategyQSOCompletionEffect;
+  /** Parallel QSO effects committed in the same accepted decision. */
+  qsoCompletions?: StrategyQSOCompletionEffect[];
   /** Optional cycle selected from the triggering RX frame; applied by the host after target reservation. */
   requestedTransmitCycle?: number;
 }
@@ -265,6 +318,13 @@ export interface StrategyRuntime {
   getTransmitText(): string | null;
 
   /**
+   * Returns every lane that should contribute to the next physical frame.
+   * Legacy runtimes may omit this method; the Host then maps getTransmitText()
+   * to the `default` stream at the operator's configured audio frequency.
+   */
+  getTransmissions?(): StrategyTransmission[];
+
+  /**
    * Requests that the runtime initiate or resume a call to a target station.
    *
    * The optional `lastMessage` provides the frame that triggered the call, which
@@ -310,4 +370,7 @@ export interface StrategyRuntime {
    * Use this to mirror queued text into internal state when needed.
    */
   onTransmissionQueued?(transmission: string): void;
+
+  /** Physical success notification for a complete parallel frame. */
+  onTransmissionsCompleted?(receipts: StreamPhysicalReceipt[]): void;
 }

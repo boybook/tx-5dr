@@ -209,6 +209,7 @@ export class PluginManager {
       interruptOperatorTransmission: deps.interruptOperatorTransmission,
       requestOperatorStrategyStop: deps.requestOperatorStrategyStop ?? (() => undefined),
       transitionTargetReservation: deps.transitionTargetReservation,
+      transitionTargetReservations: deps.transitionTargetReservations,
       releaseTargetReservation: deps.releaseTargetReservation,
       analyzeCallsignForOperator: deps.analyzeCallsignForOperator,
       resolveGrid: deps.resolveGrid,
@@ -217,6 +218,8 @@ export class PluginManager {
       isStoppedDirectCallAutoReplyEnabled: (operatorId) => this.isStoppedDirectCallAutoReplyEnabled(operatorId),
       getStrategyRuntime: (operatorId) => this.getStrategyRuntime(operatorId),
       getStrategyRuntimeGeneration: (operatorId) => this.getStrategyInstance(operatorId)?.generation,
+      getStrategyMaxConcurrentStreams: (operatorId) => this.getStrategyInstance(operatorId)
+        ?.plugin.definition.strategyFeatures?.maxConcurrentStreams,
       invokeStrategyRuntime: (operatorId, operation, callback, options) =>
         this.invokeStrategyRuntime(operatorId, operation, callback, options),
       invokeStrategyRuntimeSync: (operatorId, operation, callback) =>
@@ -589,6 +592,8 @@ export class PluginManager {
     slots?: Record<string, string>;
     context?: Record<string, unknown>;
     availableSlots?: string[];
+    qsoLifecycleEpoch?: number;
+    streams?: import('@tx5dr/plugin-api').StrategyStreamSnapshot[];
     queue?: import('@tx5dr/plugin-api').AssistedQueueSnapshot;
   } {
     const strategyName = this.getResolvedStrategyName(operatorId);
@@ -608,6 +613,8 @@ export class PluginManager {
           ? snapshot.context as Record<string, unknown>
           : undefined,
         availableSlots: snapshot.availableSlots,
+        qsoLifecycleEpoch: snapshot.qsoLifecycleEpoch,
+        streams: snapshot.streams,
         queue: snapshot.queue,
       };
     } catch (err) {
@@ -680,12 +687,15 @@ export class PluginManager {
     request: QueuedStrategyTargetRequest,
     options?: { startIfIdle?: boolean },
   ): Promise<QueuedStrategyMutationResult> {
+    const queueActivation = this.getStrategyInstance(operatorId)
+      ?.plugin.definition.strategyFeatures?.queueActivation ?? 'immediate';
     return this.submitQueueMutation(
       operatorId,
       'enqueue',
       (runtime) => runtime.enqueueTarget(snapshotPluginData(request, 'structured')),
       async ({ beforeSnapshot, result, token, signal }) => {
-        if (options?.startIfIdle !== true
+        if (queueActivation !== 'immediate'
+            || options?.startIfIdle !== true
             || beforeSnapshot.rows.length !== 0
             || result.outcome !== 'accepted') {
           return;
@@ -735,8 +745,10 @@ export class PluginManager {
       },
       async ({ beforeSnapshot, result, token, signal }) => {
         const operator = this.deps.getOperatorById(operatorId);
+        const activeEntryCount = this.getActiveQueueEntryIds(beforeSnapshot).length;
+        const maxActiveStreams = beforeSnapshot.maxActiveStreams ?? 1;
         if (result.outcome !== 'accepted'
-            || beforeSnapshot.activeEntryId
+            || activeEntryCount >= maxActiveStreams
             || !operator?.isTransmitting) {
           return;
         }
@@ -745,8 +757,10 @@ export class PluginManager {
           token,
           signal,
         );
-        if (!decision?.transmission
-            || decision.requestedTransmitCycle !== undefined
+        const hasTransmission = Boolean(decision?.transmission)
+          || (decision?.transmissions?.length ?? 0) > 0;
+        if (!hasTransmission
+            || decision?.requestedTransmitCycle !== undefined
             || signal.aborted
             || !this.intentCoordinator.isCurrent(token)) {
           return;
@@ -770,8 +784,14 @@ export class PluginManager {
       'remove',
       (runtime) => runtime.removeTarget(entryId, expectedVersion),
       async ({ beforeSnapshot, result, token, signal }) => {
-        if (result.outcome !== 'accepted' || beforeSnapshot.activeEntryId !== entryId) return;
-        await this.removeActiveQueueContribution(operatorId, entryId, token, signal, 'removed');
+        if (result.outcome !== 'accepted'
+            || !this.getActiveQueueEntryIds(beforeSnapshot).includes(entryId)) return;
+        await this.refreshQueueTransmissionSet(
+          operatorId,
+          token,
+          signal,
+          'active assisted queue target removed by operator',
+        );
       },
     );
   }
@@ -788,42 +808,42 @@ export class PluginManager {
         return runtime.clearTargets(expectedVersion);
       },
       async ({ beforeSnapshot, result, token, signal }) => {
-        if (result.outcome !== 'accepted' || !beforeSnapshot.activeEntryId) return;
-        await this.removeActiveQueueContribution(
+        if (result.outcome !== 'accepted'
+            || this.getActiveQueueEntryIds(beforeSnapshot).length === 0) return;
+        await this.refreshQueueTransmissionSet(
           operatorId,
-          beforeSnapshot.activeEntryId,
           token,
           signal,
-          'cleared',
+          'assisted queue cleared by operator',
         );
       },
     );
   }
 
-  private async removeActiveQueueContribution(
+  private getActiveQueueEntryIds(snapshot: AssistedQueueSnapshot): string[] {
+    if (snapshot.activeEntryIds) return snapshot.activeEntryIds;
+    return snapshot.activeEntryId ? [snapshot.activeEntryId] : [];
+  }
+
+  private async refreshQueueTransmissionSet(
     operatorId: string,
-    entryId: string,
     token: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken,
     signal: AbortSignal,
-    operation: 'removed' | 'cleared',
+    reason: string,
   ): Promise<void> {
-    this.deps.releaseTargetReservation?.(operatorId);
-    const reason = `active assisted queue target ${operation} by operator`;
-    try {
-      if (this.deps.removeOperatorContribution) {
-        await this.deps.removeOperatorContribution(operatorId, { signal, commandToken: token });
-      } else {
-        this.deps.requestOperatorStrategyStop?.(operatorId, reason);
-      }
-    } catch (error) {
-      logger.warn('Failed to remove active assisted queue target from physical frame', {
-        operatorId,
-        entryId,
-        operation,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      this.deps.requestOperatorStrategyStop?.(operatorId, reason);
-    }
+    const operator = this.deps.getOperatorById(operatorId);
+    if (!operator?.isTransmitting || signal.aborted || !this.intentCoordinator.isCurrent(token)) return;
+    const decision = await this.orchestrator.revalidateQueueExecutionInLane(
+      operatorId,
+      token,
+      signal,
+    );
+    if (!decision || decision.stop || signal.aborted || !this.intentCoordinator.isCurrent(token)) return;
+    this.deps.triggerReEncode?.(operatorId, {
+      source: 'operator-edit',
+      reason,
+      decisionEpoch: token.epoch,
+    });
   }
 
   private async submitQueueMutation(
@@ -953,6 +973,10 @@ export class PluginManager {
     return this.orchestrator.readCurrentTransmission(operatorId);
   }
 
+  getCurrentTransmissions(operatorId: string): import('@tx5dr/plugin-api').StrategyTransmission[] {
+    return this.orchestrator.readCurrentTransmissions(operatorId);
+  }
+
   handlePluginUserAction(
     pluginName: string,
     actionId: string,
@@ -1038,6 +1062,17 @@ export class PluginManager {
         if (signal.aborted || !this.intentCoordinator.isCurrent(token) || !isInvocationCurrent()) return;
         const operator = this.deps.getOperatorById(operatorId);
         if (!operator) throw new Error(`Operator not found: ${operatorId}`);
+
+        const manualInitiation = this.getStrategyInstance(operatorId)
+          ?.plugin.definition.strategyFeatures?.manualInitiation === 1;
+        if (manualInitiation && (
+          command.type === 'start-automation'
+          || command.type === 'request-call'
+          || command.type === 'reply-to-decode'
+          || command.type === 'send-free-text'
+        )) {
+          throw new Error(`manual_initiation_required:${command.type}`);
+        }
 
         switch (command.type) {
           case 'start-automation':
@@ -1211,6 +1246,23 @@ export class PluginManager {
       'onTransmissionQueued',
       (runtime) => {
         runtime.onTransmissionQueued?.(transmission);
+      },
+    );
+  }
+
+  notifyTransmissionsCompleted(
+    operatorId: string,
+    receipts: import('@tx5dr/plugin-api').StreamPhysicalReceipt[],
+  ): void {
+    this.invokeStrategyRuntimeSync(
+      operatorId,
+      'onTransmissionsCompleted',
+      (runtime) => {
+        if (runtime.onTransmissionsCompleted) {
+          runtime.onTransmissionsCompleted(snapshotPluginData(receipts, 'structured'));
+          return;
+        }
+        for (const receipt of receipts) runtime.onTransmissionQueued?.(receipt.text);
       },
     );
   }

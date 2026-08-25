@@ -168,7 +168,7 @@ describe('PluginManager standard-qso late re-decision', () => {
       mode: MODES.FT8,
       myCallsign: options?.myCallsign ?? 'BG4IAJ',
       myGrid: options?.myGrid ?? 'OM96',
-      frequency: 7074000,
+      frequency: 1500,
       transmitCycles: [0],
       maxQSOTimeoutCycles: options?.maxQSOTimeoutCycles ?? 6,
       maxCallAttempts: options?.maxCallAttempts ?? 5,
@@ -208,7 +208,7 @@ describe('PluginManager standard-qso late re-decision', () => {
         pluginManager.requestCall(operatorId, callsign, lastMessage);
       },
       notifyOperatorStatusChanged: options?.notifyOperatorStatusChanged,
-      getRadioFrequency: async () => operator.config.frequency,
+      getRadioFrequency: async () => 7_074_000,
       setRadioFrequency: () => {},
       getRadioBand: () => options?.radioBand ?? '40m',
       getRadioConnected: () => true,
@@ -230,6 +230,15 @@ describe('PluginManager standard-qso late re-decision', () => {
     eventEmitter.on('requestTransmit', ({ operatorId, transmission }) => {
       if (!FT8MessageParser.rawContainsUndecodedCallsign(transmission)) {
         pluginManager.notifyTransmissionQueued(operatorId, transmission);
+      }
+    });
+    eventEmitter.on('requestTransmitBatch', (batch) => {
+      for (const transmission of batch.transmissions) {
+        eventEmitter.emit('requestTransmit', {
+          operatorId: batch.operatorId,
+          transmission: transmission.transmission,
+          decisionEpoch: batch.decisionEpoch,
+        });
       }
     });
     pluginManager.loadConfig({
@@ -563,54 +572,143 @@ describe('PluginManager standard-qso late re-decision', () => {
       expect(operator.isTransmitting).toBe(false);
     });
 
-    it('removes an active target from the physical frame without turning off the main TX switch', async () => {
-      const removeOperatorContribution = vi.fn(async () => undefined);
+    it('retries a target into a spare parallel lane while another lane remains active', async () => {
+      const triggerReEncode = vi.fn();
       const { operator, pluginManager } = await createRuntimeHarness({
         strategy: 'assisted-qso-queue',
-        removeOperatorContribution,
+        maxQSOTimeoutCycles: 1,
+        maxCallAttempts: 1,
+        triggerReEncode,
+        operatorPluginSettings: {
+          'standard-qso': { parallelStreams: 3, maxQSOTimeoutCycles: 1, maxCallAttempts: 1 },
+        },
       });
       const operatorId = operator.config.id;
       await pluginManager.enqueueQueueTarget(operatorId, { callsign: 'JA1AAA' });
-      const slot = createSlotInfo(Date.now());
-      await (pluginManager as any).handleSlotStart(slot, createSlotPack(slot, []));
-      const active = pluginManager.getOperatorRuntimeStatus(operatorId).queue!;
+      const firstSlot = createSlotInfo(0);
+      await (pluginManager as any).handleSlotStart(firstSlot, createSlotPack(firstSlot, []));
+      const failed = pluginManager.getOperatorRuntimeStatus(operatorId).queue!;
+      const failedEntry = failed.rows.find((row) => row.callsign === 'JA1AAA');
+      expect(failedEntry).toMatchObject({ displayState: 'no-response' });
 
-      const result = await pluginManager.removeQueueTarget(
+      pluginManager.setOperatorPluginSettings(operatorId, 'assisted-qso-queue', {
+        ...pluginManager.getOperatorPluginSettings(operatorId, 'assisted-qso-queue'),
+        parallelStreams: 3,
+        maxQSOTimeoutCycles: 6,
+        maxCallAttempts: 5,
+      });
+      await pluginManager.enqueueQueueTarget(operatorId, { callsign: 'JA2BBB' });
+      await pluginManager.resumeQueueExecution(operatorId);
+      const partiallyActive = pluginManager.getOperatorRuntimeStatus(operatorId).queue!;
+      expect(partiallyActive.activeEntryIds).toHaveLength(1);
+      expect(partiallyActive.rows.find((row) => row.callsign === 'JA1AAA'))
+        .toMatchObject({ displayState: 'no-response' });
+      const orchestrator = (pluginManager as any).orchestrator;
+      const revalidate = orchestrator.revalidateQueueExecutionInLane.bind(orchestrator);
+      vi.spyOn(orchestrator, 'revalidateQueueExecutionInLane').mockImplementation(async (...args: unknown[]) => {
+        const decision = await revalidate(...args);
+        return decision ? { ...decision, transmission: null } : decision;
+      });
+      triggerReEncode.mockClear();
+
+      const retried = await pluginManager.retryQueueTarget(
         operatorId,
-        active.activeEntryId!,
-        active.version,
+        failedEntry!.entryId,
+        partiallyActive.version,
       );
 
-      expect(result.outcome).toBe('accepted');
-      expect(result.snapshot.rows).toHaveLength(0);
-      expect(removeOperatorContribution).toHaveBeenCalledWith(operatorId, expect.objectContaining({
-        signal: expect.any(AbortSignal),
-        commandToken: expect.objectContaining({ source: 'manual' }),
+      expect(retried.outcome).toBe('accepted');
+      expect(pluginManager.getOperatorRuntimeStatus(operatorId).queue?.activeEntryIds).toHaveLength(2);
+      expect(pluginManager.getCurrentTransmissions(operatorId)).toHaveLength(2);
+      expect(triggerReEncode).toHaveBeenCalledOnce();
+      expect(triggerReEncode).toHaveBeenCalledWith(operatorId, expect.objectContaining({
+        source: 'operator-edit',
+        reason: 'manual assisted queue retry became executable',
+        decisionEpoch: expect.any(Number),
       }));
-      expect(operator.isTransmitting).toBe(true);
     });
 
-    it('clears the whole queue and removes an active target from the physical frame once', async () => {
+    it('removes stream-2 by replacing the operator transmission set while retaining the other lanes', async () => {
       const removeOperatorContribution = vi.fn(async () => undefined);
+      const triggerReEncode = vi.fn();
       const { operator, pluginManager } = await createRuntimeHarness({
         strategy: 'assisted-qso-queue',
         removeOperatorContribution,
+        triggerReEncode,
+        operatorPluginSettings: {
+          'standard-qso': { parallelStreams: 3 },
+        },
       });
       const operatorId = operator.config.id;
       await pluginManager.enqueueQueueTarget(operatorId, { callsign: 'JA1AAA' });
       await pluginManager.enqueueQueueTarget(operatorId, { callsign: 'JA2BBB' });
-      const slot = createSlotInfo(Date.now());
+      await pluginManager.enqueueQueueTarget(operatorId, { callsign: 'JA3CCC' });
+      const slot = createSlotInfo(0);
       await (pluginManager as any).handleSlotStart(slot, createSlotPack(slot, []));
       const active = pluginManager.getOperatorRuntimeStatus(operatorId).queue!;
+      expect(active.activeEntryIds).toHaveLength(3);
+      expect(pluginManager.getCurrentTransmissions(operatorId).map((item) => item.streamId))
+        .toEqual(['stream-1', 'stream-2', 'stream-3']);
+      triggerReEncode.mockClear();
+
+      const result = await pluginManager.removeQueueTarget(
+        operatorId,
+        active.activeEntryIds![1]!,
+        active.version,
+      );
+
+      expect(result.outcome).toBe('accepted');
+      expect(result.snapshot.rows.map((row) => row.callsign)).toEqual(['JA1AAA', 'JA3CCC']);
+      expect(result.snapshot.activeEntryIds).toHaveLength(2);
+      expect(pluginManager.getCurrentTransmissions(operatorId).map((item) => item.streamId))
+        .toEqual(['stream-1', 'stream-3']);
+      expect(triggerReEncode).toHaveBeenCalledOnce();
+      expect(triggerReEncode).toHaveBeenCalledWith(operatorId, expect.objectContaining({
+        source: 'operator-edit',
+        reason: 'active assisted queue target removed by operator',
+        decisionEpoch: expect.any(Number),
+      }));
+      expect(removeOperatorContribution).not.toHaveBeenCalled();
+      expect(operator.isTransmitting).toBe(true);
+    });
+
+    it('clears every active lane by replacing the complete operator transmission set', async () => {
+      const removeOperatorContribution = vi.fn(async () => undefined);
+      const triggerReEncode = vi.fn();
+      const { operator, pluginManager } = await createRuntimeHarness({
+        strategy: 'assisted-qso-queue',
+        removeOperatorContribution,
+        triggerReEncode,
+        operatorPluginSettings: {
+          'standard-qso': { parallelStreams: 3 },
+        },
+      });
+      const operatorId = operator.config.id;
+      await pluginManager.enqueueQueueTarget(operatorId, { callsign: 'JA1AAA' });
+      await pluginManager.enqueueQueueTarget(operatorId, { callsign: 'JA2BBB' });
+      await pluginManager.enqueueQueueTarget(operatorId, { callsign: 'JA3CCC' });
+      const slot = createSlotInfo(0);
+      await (pluginManager as any).handleSlotStart(slot, createSlotPack(slot, []));
+      const active = pluginManager.getOperatorRuntimeStatus(operatorId).queue!;
+      expect(active.activeEntryIds).toHaveLength(3);
+      triggerReEncode.mockClear();
 
       const result = await pluginManager.clearQueueTargets(operatorId, active.version);
 
-      expect(result).toMatchObject({ outcome: 'accepted', snapshot: { rows: [] } });
-      expect(removeOperatorContribution).toHaveBeenCalledTimes(1);
-      expect(removeOperatorContribution).toHaveBeenCalledWith(operatorId, expect.objectContaining({
-        signal: expect.any(AbortSignal),
-        commandToken: expect.objectContaining({ source: 'manual' }),
+      expect(result).toMatchObject({
+        outcome: 'accepted',
+        snapshot: { rows: [], activeEntryIds: [] },
+      });
+      expect(pluginManager.getCurrentTransmissions(operatorId)).toEqual([
+        expect.objectContaining({ streamId: 'stream-1', text: expect.stringMatching(/^CQ /) }),
+      ]);
+      expect(triggerReEncode).toHaveBeenCalledOnce();
+      expect(triggerReEncode).toHaveBeenCalledWith(operatorId, expect.objectContaining({
+        source: 'operator-edit',
+        reason: 'assisted queue cleared by operator',
+        decisionEpoch: expect.any(Number),
       }));
+      expect(removeOperatorContribution).not.toHaveBeenCalled();
       expect(operator.isTransmitting).toBe(true);
     });
 
@@ -709,6 +807,7 @@ describe('PluginManager standard-qso late re-decision', () => {
         'skipTx1',
         'maxQSOTimeoutCycles',
         'maxCallAttempts',
+        'parallelStreams',
       ]);
       const assistedQuickSettings = pluginManager.getSnapshot().plugins
         .find((plugin) => plugin.name === 'assisted-qso-queue')?.quickSettings;
@@ -716,6 +815,7 @@ describe('PluginManager standard-qso late re-decision', () => {
         'replyToWorkedStations',
         'distinguishWorkedStationsByBand',
         'skipTx1',
+        'parallelStreams',
       ]);
       expect(pluginManager.getOperatorPluginSettings(operator.config.id, 'assisted-qso-queue'))
         .toMatchObject({

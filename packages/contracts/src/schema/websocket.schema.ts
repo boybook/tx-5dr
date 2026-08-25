@@ -20,7 +20,11 @@ import type {
   PluginSystemSnapshot,
 } from './plugin.schema.js';
 import { ModeDescriptorSchema } from './mode.schema.js';
-import { QSORecordSchema, TargetSelectionPriorityModeSchema } from './qso.schema.js';
+import {
+  QSORecordSchema,
+  QSOPersistencePolicySchema,
+  TargetSelectionPriorityModeSchema,
+} from './qso.schema.js';
 import {
   LogBookStatisticsSchema,
   LogbookHealthSchema,
@@ -436,6 +440,23 @@ export const StrategyRuntimeContextSchema = z.object({
 });
 export type StrategyRuntimeContext = z.infer<typeof StrategyRuntimeContextSchema>;
 
+export const StrategyStreamSnapshotSchema = z.object({
+  streamId: z.string().min(1),
+  currentState: z.string(),
+  targetCallsign: z.string().optional(),
+  targetGrid: z.string().optional(),
+  audioFrequencyHz: z.number().min(0).max(5000),
+  qsoLifecycleEpoch: z.number().int().nonnegative(),
+});
+export type StrategyStreamSnapshot = z.infer<typeof StrategyStreamSnapshotSchema>;
+
+export const StrategyTransmissionSchema = z.object({
+  streamId: z.string().min(1),
+  text: z.string().min(1),
+  audioFrequencyHz: z.number().min(0).max(5000),
+});
+export type StrategyTransmission = z.infer<typeof StrategyTransmissionSchema>;
+
 export const AssistedQueueDisplayStateSchema = z.enum([
   'TX1', 'TX2', 'TX3', 'TX4', 'TX5', 'engaged', 'closing', 'paused', 'no-response', 'later', 'review',
 ]);
@@ -457,10 +478,15 @@ export const AssistedQueueRowSchema = z.object({
   targetGrid: z.string().optional(),
   lastSnr: z.number().optional(),
   lastHeardCyclesAgo: z.number().int().nonnegative().optional(),
+  streamId: z.string().optional(),
+  audioFrequencyHz: z.number().optional(),
+  authorizationId: z.string().optional(),
 });
 export const AssistedQueueSnapshotSchema = z.object({
   version: z.number().int().nonnegative(),
   activeEntryId: z.string().optional(),
+  activeEntryIds: z.array(z.string()).optional(),
+  maxActiveStreams: z.number().int().min(1).max(5).optional(),
   rows: z.array(AssistedQueueRowSchema),
 });
 export type AssistedQueueDisplayState = z.infer<typeof AssistedQueueDisplayStateSchema>;
@@ -486,6 +512,7 @@ export const StrategyRuntimeSnapshotSchema = z.object({
   context: StrategyRuntimeContextSchema.optional(),
   availableSlots: z.array(z.string()).optional(),
   qsoLifecycleEpoch: z.number().int().nonnegative().optional(),
+  streams: z.array(StrategyStreamSnapshotSchema).optional(),
   queue: AssistedQueueSnapshotSchema.optional(),
 });
 export type StrategyRuntimeSnapshot = z.infer<typeof StrategyRuntimeSnapshotSchema>;
@@ -787,6 +814,7 @@ export const OperatorStatusSchema = z.object({
   isTransmitting: z.boolean(), // 是否已授予策略自动发射许可（发射开关状态）
   isInActivePTT: z.boolean().optional(), // 该操作员的音频是否正在被实际播放
   hasTransmitIntent: z.boolean().optional(), // 当前策略是否有可在合法周期发射的有效内容
+  currentTransmissions: z.array(StrategyTransmissionSchema).optional(),
   currentSlot: z.string().optional(),
   context: z.object({
     myCall: z.string(),
@@ -1786,7 +1814,9 @@ export type WSGetStatusMessage = z.infer<typeof WSGetStatusMessageSchema>;
 
 export const TransmitRequestSchema = z.object({
   operatorId: z.string(),
+  streamId: z.string().min(1).optional(),
   transmission: z.string(),
+  audioFrequencyHz: z.number().min(0).max(5000).optional(),
   /** 是否覆盖同一操作员在同一时隙的现有 TX 帧（自动重决策时为 true） */
   replaceExisting: z.boolean().optional(),
   source: z.enum(['standard-qso', 'plugin', 'late-decode', 'operator-edit', 'manual']).optional(),
@@ -1797,6 +1827,20 @@ export const TransmitRequestSchema = z.object({
 
 export type TransmitRequest = z.infer<typeof TransmitRequestSchema>;
 
+export const TransmitBatchRequestSchema = z.object({
+  operatorId: z.string(),
+  transmissions: z.array(z.object({
+    streamId: z.string().min(1),
+    transmission: z.string(),
+    audioFrequencyHz: z.number().min(0).max(5000),
+  })).max(5),
+  replaceExisting: z.boolean().optional(),
+  source: z.enum(['standard-qso', 'plugin', 'late-decode', 'operator-edit', 'manual']).optional(),
+  reason: z.string().optional(),
+  decisionEpoch: z.number().int().nonnegative().optional(),
+});
+export type TransmitBatchRequest = z.infer<typeof TransmitBatchRequestSchema>;
+
 // ===== 前端应用事件接口 =====
 
 /**
@@ -1804,6 +1848,8 @@ export type TransmitRequest = z.infer<typeof TransmitRequestSchema>;
  */
 export const TransmissionCompleteInfoSchema = z.object({
   operatorId: z.string(),
+  streamId: z.string().optional(),
+  trackId: z.string().optional(),
   success: z.boolean(),
   frameId: z.string().optional(),
   physicalConfirmed: z.boolean().optional(),
@@ -1837,9 +1883,11 @@ export interface DigitalRadioEngineEvents {
 
   // 发射相关事件
   requestTransmit: (request: TransmitRequest) => void;
+  requestTransmitBatch: (request: TransmitBatchRequest) => void;
   transmissionComplete: (info: TransmissionCompleteInfo) => void;
   transmissionLog: (data: {
     operatorId: string;
+    streamId: string;
     frameId: string;
     revision: number;
     playbackGeneration: number;
@@ -1996,15 +2044,18 @@ export interface DigitalRadioEngineEvents {
   }) => void;
   qsoLifecycleChanged: (data: {
     operatorId: string;
+    streamId?: string;
     lifecycleEpoch: number;
     runtimeGeneration?: number;
   }) => void;
   recordQSO: (data: {
     operatorId: string;
+    streamId?: string;
     qsoLifecycleId?: string;
     qsoLifecycleEpoch?: number;
     qsoRuntimeGeneration?: number;
     qsoRecord: z.infer<typeof QSORecordSchema>;
+    persistencePolicy?: z.infer<typeof QSOPersistencePolicySchema>;
     retryAttemptId?: string;
     resolve?: (record: z.infer<typeof QSORecordSchema>) => void;
     reject?: (error: unknown) => void;

@@ -192,6 +192,36 @@ function createHarness(options: {
 }
 
 describe('TransmissionPipeline lifecycle integration', () => {
+  it('cancels the owning frame when a non-default stream encode fails', () => {
+    const harness = createHarness();
+    const frame = harness.deps.digitalFrameCoordinator.prepareFrame({
+      slotId: 'slot-1',
+      intents: [{
+        operatorId: 'operator-a',
+        streamId: 'stream-2',
+        audioFrequencyHz: 1600,
+        source: 'plugin',
+        reason: 'parallel lane',
+        text: 'A B RR73',
+        decisionEpoch: 2,
+      }],
+    });
+    harness.deps.digitalFrameCoordinator.beginEncoding(frame.frame!.frameId);
+
+    (harness.pipeline as any).handleEncodeError(new Error('encoder failed'), {
+      operatorId: 'operator-a',
+      streamId: 'stream-2',
+      message: 'A B RR73',
+      frequency: 1600,
+      frameId: frame.frame!.frameId,
+      frameRevision: frame.frame!.revision,
+      decisionEpoch: 2,
+    });
+
+    expect(harness.deps.digitalFrameCoordinator.getFrame(frame.frame!.frameId))
+      .toMatchObject({ phase: 'cancelled' });
+  });
+
   it('reports on-air only after PTT confirmation and audio start, then completes once', async () => {
     const harness = createHarness();
     const physicalPhases: Array<{ phase: string; pttConfirmed: boolean }> = [];
@@ -604,7 +634,7 @@ describe('TransmissionPipeline lifecycle integration', () => {
     expect(harness.deps.audioMixer.cloneFrameTracks).toHaveBeenCalledWith(
       { frameId: 'frame-1', frameRevision: 1 },
       { frameId: 'frame-2', frameRevision: 2, slotId: 'slot-0' },
-      ['operator-b'],
+      ['operator-b\u0000default'],
     );
 
     harness.getAudioDone(1).resolve();

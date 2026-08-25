@@ -133,6 +133,14 @@ export interface PluginDefinition<
   strategyFeatures?: {
     /** Declares the `QueuedStrategyRuntime` assisted-target queue contract. */
     targetQueue?: 1;
+    /** Declares support for more than one active target lane. */
+    parallelTargetQueue?: 1;
+    /** Controls whether enqueueing may start a stopped operator. */
+    queueActivation?: 'immediate' | 'operator-toggle';
+    /** Requires every new target to enter through an audited manual queue action. */
+    manualInitiation?: 1;
+    /** Strategy-specific cap applied in addition to the operator cap. */
+    maxConcurrentStreams?: number;
   };
 
   /**
