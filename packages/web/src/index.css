@@ -366,6 +366,42 @@ section[role="dialog"][data-placement="center"].w-full:not(.max-w-full) {
   container-type: inline-size;
 }
 
+.image-history-timeline {
+  container-type: inline-size;
+}
+
+.image-history-group::before {
+  position: absolute;
+  top: 1.25rem;
+  bottom: 1.25rem;
+  left: 0.875rem;
+  width: 1px;
+  content: '';
+  background: hsl(var(--heroui-default-200));
+}
+
+.image-history-entry {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+  gap: 0.625rem;
+  min-height: 4.75rem;
+}
+
+.image-history-thumb {
+  width: 5.5rem;
+  aspect-ratio: 4 / 3;
+}
+
+@container (min-width: 30rem) {
+  .image-history-entry {
+    grid-template-columns: 7rem minmax(0, 1fr);
+  }
+
+  .image-history-thumb {
+    width: 7rem;
+  }
+}
+
 .image-radio-bottom-controls {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

@@ -42,6 +42,10 @@ export class ImageTemplateStore {
     return [...builtInTemplates(), ...this.templates.filter((item) => item.operatorId === operatorId)];
   }
 
+  referencesArtifact(artifactId: string): boolean {
+    return this.templates.some((template) => template.backgroundArtifactId === artifactId);
+  }
+
   async save(operatorId: string, input: Pick<ImageTemplate, 'id' | 'name' | 'backgroundArtifactId' | 'layers'>): Promise<ImageTemplate> {
     await this.initialize();
     const now = Date.now();

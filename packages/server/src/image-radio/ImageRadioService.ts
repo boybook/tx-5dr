@@ -21,6 +21,7 @@ import type { FaxDecodeEvent, FaxDecoder, SstvDecodeEvent, SstvDecoder, SstvEnco
 import type { AudioStreamManager } from '../audio/AudioStreamManager.js';
 import { createLogger } from '../utils/logger.js';
 import { ImageArtifactStore } from './ImageArtifactStore.js';
+import { ImageHistoryStore } from './ImageHistoryStore.js';
 import { rasterwaveRuntime, type RasterwaveRuntime } from './RasterwaveRuntime.js';
 import type { PhysicalTxCoordinator } from '../transmission/PhysicalTxCoordinator.js';
 import type { DeterministicPlaybackSession } from '../audio/AudioStreamManager.js';
@@ -51,7 +52,36 @@ interface PendingRow {
   width: number;
   rowRevision: number;
   completeness?: 'provisional' | 'final';
+  pixelFormat: ImagePixelFormat;
   pixels: Uint8Array;
+}
+
+interface TxPreviewState {
+  decoder: SstvDecoder | null;
+  baseLine: number;
+  mode: SstvMode;
+  width: number;
+  backlog: Float32Array[];
+  backlogSamples: number;
+  maxBacklogSamples: number;
+  draining: boolean;
+  drainPromise: Promise<void> | null;
+  pendingDiscontinuitySamples: number;
+  sampleRate: number;
+  failed: boolean;
+  started: boolean;
+}
+
+interface ActiveSstvTx {
+  sessionId: string;
+  operatorId: string;
+  revision: number;
+  playback: DeterministicPlaybackSession;
+  encoder: SstvEncoder;
+  leaseId?: string;
+  receiveSuspended: boolean;
+  preview?: TxPreviewState;
+  interruptedReceiveCapture: boolean;
 }
 
 export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
@@ -60,6 +90,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
   private faxReceiveProfile: ImageFaxReceiveProfile = DEFAULT_FAX_RECEIVE_PROFILE;
   private serviceState: ImageRadioStatus['serviceState'] = 'stopped';
   private rxState: ImageRadioStatus['rxState'] = 'off';
+  private sstvCaptureActive = false;
   private decoder: DecoderInstance | null = null;
   private generation = 0;
   private inputSampleRate = 12_000;
@@ -78,14 +109,16 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
   };
   private readonly txResults = new Map<string, SstvTxCommandResult>();
   private readonly saveResults = new Map<string, { artifactId: string }>();
-  private activeTx: { sessionId: string; operatorId: string; revision: number; playback: DeterministicPlaybackSession; encoder: SstvEncoder; leaseId?: string } | null = null;
+  private activeTx: ActiveSstvTx | null = null;
   private readonly paper: ImagePaperSpool;
   private nativeLineOffset = 0;
   private lastFirstAvailableLine = 0;
+  private skipNextInitialBoundary = false;
 
   constructor(
     private readonly audioStream: AudioStreamManager,
     private readonly artifacts: ImageArtifactStore,
+    private readonly history: ImageHistoryStore,
     private readonly physicalTx: PhysicalTxCoordinator,
     private readonly getFrequency: () => number,
     private readonly getRadioMode: () => string | undefined,
@@ -103,6 +136,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
       family: this.family,
       receiveProfile: this.currentReceiveProfile(),
       rxState: this.rxState,
+      rxCaptureActive: this.family === 'sstv' && this.sstvCaptureActive,
       capability: {
         available: availability.available,
         reason: availability.reason,
@@ -111,8 +145,8 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
       },
       currentSession: this.paper.getSession(),
       tx: this.txStatus,
-      nativeQueuedSamples: Math.max(0, Math.round(this.decoder?.queuedSamples ?? 0)),
-      jsBacklogSamples: this.backlog.reduce((sum, chunk) => sum + chunk.length, 0),
+      nativeQueuedSamples: Math.max(0, Math.round(this.decoder?.queuedSamples ?? this.activeTx?.preview?.decoder?.queuedSamples ?? 0)),
+      jsBacklogSamples: this.backlog.reduce((sum, chunk) => sum + chunk.length, 0) + (this.activeTx?.preview?.backlogSamples ?? 0),
       discontinuities: this.discontinuities,
       updatedAt: Date.now(),
     };
@@ -133,6 +167,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     this.nativeLineOffset = 0;
     this.lastFirstAvailableLine = 0;
     this.family = family;
+    this.sstvCaptureActive = false;
     this.serviceState = 'starting';
     this.rxState = 'searching';
     this.generation += 1;
@@ -160,7 +195,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     this.sstvReceiveProfile = profile.strategy === 'auto'
       ? DEFAULT_SSTV_RECEIVE_PROFILE
       : { family: 'sstv', strategy: 'manual', mode: profile.mode };
-    if (this.family === 'sstv') {
+    if (this.family === 'sstv' && !this.activeTx) {
       await this.restartDecoder();
     } else {
       this.emitStatus();
@@ -214,6 +249,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     this.inputChunkOffset = 0;
     this.draining = false;
     this.pendingDiscontinuitySamples = 0;
+    this.sstvCaptureActive = false;
     if (previous) {
       await previous.finish().catch(() => undefined);
       await previous.dispose().catch(() => undefined);
@@ -238,6 +274,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     this.inputChunkOffset = 0;
     this.draining = false;
     this.pendingDiscontinuitySamples = 0;
+    this.sstvCaptureActive = false;
     if (decoder) {
       await decoder.finish().catch(() => undefined);
       await decoder.dispose().catch(() => undefined);
@@ -252,6 +289,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
 
   reset(): void {
     if (!this.decoder) return;
+    this.sstvCaptureActive = false;
     if (!this.decoder.reset()) {
       this.pendingDiscontinuitySamples += this.inputChunk.length;
       return;
@@ -265,16 +303,25 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     (this.decoder as FaxDecoder).markSignalLost();
   }
 
-  async startSstvTx(command: { requestId: string; operatorId: string; artifactId: string; mode: string; expectedFrequency: number }): Promise<SstvTxCommandResult> {
+  async startSstvTx(command: { requestId: string; operatorId: string; artifactId: string; mode: string; expectedFrequency: number; interruptActiveCapture?: boolean }): Promise<SstvTxCommandResult> {
     const previous = this.txResults.get(command.requestId);
     if (previous) return previous;
     const reject = (errorCode: string): SstvTxCommandResult => {
       const result = { requestId: command.requestId, accepted: false, errorCode };
       this.txResults.set(command.requestId, result);
+      logger.info('SSTV transmit request rejected', {
+        requestId: command.requestId,
+        errorCode,
+        rxState: this.rxState,
+        rxCaptureActive: this.sstvCaptureActive,
+        txPhase: this.txStatus.phase,
+        physicalTxPhase: this.physicalTx.getSnapshot().phase,
+      });
       return result;
     };
     if (this.family !== 'sstv' || this.serviceState !== 'ready') return reject('IMAGE_NOT_IN_SSTV_MODE');
-    if (this.rxState === 'receiving' || this.activeTx || this.physicalTx.getSnapshot().phase !== 'idle') return reject('PHYSICAL_TX_BUSY');
+    if (this.sstvCaptureActive && command.interruptActiveCapture !== true) return reject('IMAGE_RX_CAPTURE_CONFIRM_REQUIRED');
+    if (this.activeTx || this.physicalTx.getSnapshot().phase !== 'idle') return reject('PHYSICAL_TX_BUSY');
     if (Math.round(this.getFrequency()) !== Math.round(command.expectedFrequency)) return reject('IMAGE_FREQUENCY_CHANGED');
 
     const native = this.runtime.load();
@@ -286,10 +333,18 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
       return reject('IMAGE_ARTIFACT_INVALID');
     }
 
+    const interruptedReceiveCapture = this.sstvCaptureActive;
     const sessionId = randomUUID();
-    const playback = this.audioStream.openDeterministicPlayback({ playbackKind: 'sstv' });
+    const playback = this.audioStream.openDeterministicPlayback({
+      playbackKind: 'sstv',
+      onPlaybackChunk: (samples, sampleRate) => this.acceptTxPreviewAudio(sessionId, samples, sampleRate),
+    });
     const encoder = new native.SstvEncoder(source.pixels, command.mode as SstvMode, playback.sampleRate);
-    this.activeTx = { sessionId, operatorId: command.operatorId, revision: 0, playback, encoder };
+    this.activeTx = {
+      sessionId, operatorId: command.operatorId, revision: 0, playback, encoder,
+      receiveSuspended: false, interruptedReceiveCapture,
+    };
+    if (interruptedReceiveCapture) this.sstvCaptureActive = false;
     this.updateTx({
       phase: 'preparing', sessionId, requestId: command.requestId, operatorId: command.operatorId,
       artifactId: command.artifactId, mode: command.mode, revision: 0, samplesEmitted: 0,
@@ -397,6 +452,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
 
   private registerDiscontinuity(samples: number, reason: string): void {
     void reason;
+    if (this.family === 'sstv') this.sstvCaptureActive = false;
     this.pendingDiscontinuitySamples += samples;
     this.discontinuities += 1;
     this.emitStatus();
@@ -409,6 +465,8 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
       this.emit('rxEvent', { type: 'signalDetected', family: 'sstv', confidence: event.confidence, candidates: event.candidates, timestamp: Date.now() });
       this.emitStatus();
     } else if (event.type === 'rasterBoundary') {
+      if (event.trusted) this.sstvCaptureActive = true;
+      else if (event.boundaryKind === 'protocolEnd' || event.boundaryKind === 'discontinuity' || event.boundaryKind === 'reset') this.sstvCaptureActive = false;
       this.acceptBoundary({
         nativeBoundaryId: event.boundaryId, nativeLineIndex: event.lineIndex,
         codecMode: event.mode, width: event.width, pixelFormat: 'rgb8',
@@ -418,6 +476,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     } else if (event.type === 'rasterLineReady') {
       this.acceptPaperRow(event.lineIndex, event.pixels.length / 3, event.revision, event.pixels, event.completeness);
     } else if (event.type === 'transmissionCompleted') {
+      this.sstvCaptureActive = false;
       this.trackArtifactWrite(this.savePaperRange(
         this.nativeLineOffset + event.startLine,
         this.nativeLineOffset + event.endLine,
@@ -470,6 +529,14 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     pixelFormat: ImagePixelFormat; kind: string; trusted: boolean; detection?: string; nominalHeight?: number;
   }): void {
     const lineIndex = this.nativeLineOffset + input.nativeLineIndex;
+    if (this.skipNextInitialBoundary) {
+      this.skipNextInitialBoundary = false;
+      if (input.kind === 'initial' && input.nativeLineIndex === 0) {
+        this.rxState = 'receiving';
+        this.emitStatus();
+        return;
+      }
+    }
     const existing = this.paper.getSession();
     const kind = existing && input.kind === 'initial' ? 'manualMode' : input.kind as ImagePaperBoundary['kind'];
     const boundary: ImagePaperBoundary = {
@@ -477,10 +544,17 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
       lineIndex, kind, trusted: input.trusted,
       codecMode: input.codecMode, width: input.width, pixelFormat: input.pixelFormat,
       timestamp: Date.now(), detection: input.detection, nominalHeight: input.nominalHeight,
+      source: 'rx',
     };
+    this.commitPaperBoundary(boundary);
+  }
+
+  private commitPaperBoundary(boundary: ImagePaperBoundary): void {
+    this.flushPendingRowsNow();
+    const existing = this.paper.getSession();
     if (!existing) {
-      const session = this.paper.start(this.family!, this.generation, boundary);
-      this.emit('rxEvent', { type: 'paperStarted', session, pixelFormat: input.pixelFormat });
+      const session = this.paper.start(this.family ?? 'sstv', this.generation, boundary);
+      this.emit('rxEvent', { type: 'paperStarted', session, pixelFormat: boundary.pixelFormat });
     } else {
       this.paper.addBoundary(boundary);
     }
@@ -496,7 +570,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     const boundary: ImagePaperBoundary = {
       boundaryId: `${this.generation}:observed:${randomUUID()}`,
       lineIndex: session.receivedLines, kind: 'protocolObserved', trusted: false,
-      codecMode, width, pixelFormat, timestamp: Date.now(), detection,
+      codecMode, width, pixelFormat, timestamp: Date.now(), detection, source: 'rx',
     };
     this.paper.addMarker(boundary);
     const updated = this.paper.getSession()!;
@@ -506,6 +580,10 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
   private acceptPaperRow(nativeLineIndex: number, width: number, rowRevision: number, pixels: Uint8Array, completeness: 'provisional' | 'final'): void {
     const rowIndex = this.nativeLineOffset + nativeLineIndex;
     const pixelFormat = this.family === 'fax' ? 'gray8' : 'rgb8';
+    this.appendPaperRow(rowIndex, width, pixelFormat, rowRevision, pixels, completeness);
+  }
+
+  private appendPaperRow(rowIndex: number, width: number, pixelFormat: ImagePixelFormat, rowRevision: number, pixels: Uint8Array, completeness: 'provisional' | 'final'): void {
     if (!this.paper.appendRow({ lineIndex: rowIndex, width, pixelFormat, revision: rowRevision, pixels })) return;
     const currentSession = this.paper.getSession();
     if (currentSession && currentSession.firstAvailableLine > this.lastFirstAvailableLine) {
@@ -513,7 +591,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
       const marker = this.paper.getManifest()?.boundaries.find((boundary) => boundary.kind === 'truncated');
       if (marker) this.emit('rxEvent', { type: 'boundary', sessionId: currentSession.sessionId, generation: this.generation, revision: currentSession.revision, boundary: marker });
     }
-    this.pendingRows.push({ rowIndex, width, rowRevision, completeness, pixels: new Uint8Array(pixels) });
+    this.pendingRows.push({ rowIndex, width, rowRevision, completeness, pixelFormat, pixels: new Uint8Array(pixels) });
     if (this.pendingRows.length >= 8) this.flushRows();
     else if (!this.rowFlushTimer) this.rowFlushTimer = setTimeout(() => this.flushRows(), ROW_FLUSH_MS);
   }
@@ -526,10 +604,14 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     const rows = this.pendingRows.splice(0, 8);
     this.emit('rxEvent', {
       type: 'rows', sessionId: session.sessionId, generation: this.generation,
-      revision: session.revision, pixelFormat: this.family === 'fax' ? 'gray8' : 'rgb8',
+      revision: session.revision, pixelFormat: rows[0].pixelFormat,
       rows: rows.map((row) => ({ rowIndex: row.rowIndex, width: row.width, rowRevision: row.rowRevision, completeness: row.completeness, dataBase64: Buffer.from(row.pixels).toString('base64') })),
     });
     if (this.pendingRows.length > 0) this.rowFlushTimer = setTimeout(() => this.flushRows(), 0);
+  }
+
+  private flushPendingRowsNow(): void {
+    while (this.pendingRows.length > 0) this.flushRows();
   }
 
   async saveCurrentPaper(command: ImagePaperSaveCommand): Promise<{ artifactId: string }> {
@@ -552,6 +634,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     if (!session) return null;
     try {
       const snapshot = await this.paper.snapshotRange(startLine, endLine);
+      if (snapshot.source !== 'rx') throw new Error('IMAGE_PAPER_RANGE_NOT_RECEIVED');
       const artifact = await this.artifacts.save({
         family: snapshot.family, direction: 'rx', operatorId,
         codecMode: snapshot.codecMode, pixelFormat: snapshot.pixelFormat,
@@ -561,6 +644,12 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
         captureStartedAt: snapshot.startedAt, captureEndedAt: snapshot.endedAt,
         truncated: snapshot.truncated,
       });
+      try {
+        await this.history.recordReceived(artifact);
+      } catch (error) {
+        await this.artifacts.delete(artifact.id).catch(() => undefined);
+        throw error;
+      }
       const current = this.paper.getSession();
       if (current) this.emit('rxEvent', {
         type: 'captureSaved', sessionId: current.sessionId, generation: this.generation,
@@ -580,12 +669,209 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     logger.error('Image decoder failed', { error: error instanceof Error ? error.message : String(error) });
     this.serviceState = 'degraded';
     this.rxState = 'error';
+    this.sstvCaptureActive = false;
     this.emitStatus();
   }
 
   private trackArtifactWrite(operation: Promise<unknown>): void {
     this.pendingArtifactWrites.add(operation);
     void operation.finally(() => this.pendingArtifactWrites.delete(operation));
+  }
+
+  private async suspendReceiveForLocalTx(sessionId: string): Promise<void> {
+    const active = this.activeTx;
+    if (!active || active.sessionId !== sessionId || active.receiveSuspended) return;
+    active.receiveSuspended = true;
+    const decoder = this.decoder;
+    this.decoder = null;
+    const interruptedCapture = active.interruptedReceiveCapture;
+    this.sstvCaptureActive = false;
+    this.inputChunkOffset = 0;
+    this.backlog.length = 0;
+    this.draining = false;
+    this.pendingDiscontinuitySamples = 0;
+    if (decoder) {
+      await decoder.drain().catch((error) => {
+        logger.warn('Failed to drain SSTV receive decoder before local transmit', error);
+      });
+      this.flushRows();
+    }
+    this.generation += 1;
+    this.paper.setGeneration(this.generation);
+    if (decoder) {
+      await decoder.finish().catch(() => undefined);
+      await decoder.dispose().catch(() => undefined);
+    }
+    this.discontinuities += 1;
+    if (interruptedCapture) {
+      const session = this.paper.getSession();
+      if (session?.width && session.codecMode) {
+        this.commitPaperBoundary({
+          boundaryId: `tx:${sessionId}:rx-interrupted`, lineIndex: session.receivedLines,
+          kind: 'discontinuity', trusted: false, codecMode: session.codecMode,
+          width: session.width, pixelFormat: 'rgb8', timestamp: Date.now(),
+          detection: 'local_transmit_interrupt', source: 'rx', txSessionId: sessionId,
+        });
+      }
+    }
+  }
+
+  private startLocalTxPreview(sessionId: string, mode: SstvMode, width: number, sampleRate: number): void {
+    const active = this.activeTx;
+    if (!active || active.sessionId !== sessionId || this.family !== 'sstv') return;
+    const baseLine = this.paper.getSession()?.receivedLines ?? 0;
+    this.commitPaperBoundary({
+      boundaryId: `tx:${sessionId}:start`, lineIndex: baseLine,
+      kind: 'localTxStart', trusted: false, codecMode: mode,
+      width, pixelFormat: 'rgb8', timestamp: Date.now(), detection: 'local_tx',
+      source: 'localTx', txSessionId: sessionId,
+    });
+    const preview: TxPreviewState = {
+      decoder: null, baseLine, mode, width, sampleRate,
+      backlog: [], backlogSamples: 0, maxBacklogSamples: Math.max(1, Math.round(sampleRate * JS_BACKLOG_MS / 1000)),
+      draining: false, drainPromise: null, pendingDiscontinuitySamples: 0,
+      failed: false, started: true,
+    };
+    active.preview = preview;
+    try {
+      const native = this.runtime.load();
+      preview.decoder = new native.SstvDecoder(sampleRate, {
+        outputMode: 'continuousPaper', fallbackMode: mode, manualMode: mode,
+        detectVis: true, detectSyncTiming: true,
+        queueCapacitySamples: sampleRate * NATIVE_QUEUE_SECONDS,
+      }, (event) => this.handleLocalTxPreviewEvent(sessionId, event));
+    } catch (error) {
+      preview.failed = true;
+      logger.warn('Failed to start local SSTV transmit preview decoder', error);
+    }
+  }
+
+  private acceptTxPreviewAudio(sessionId: string, samples: Float32Array, sampleRate: number): void {
+    const preview = this.activeTx?.sessionId === sessionId ? this.activeTx.preview : undefined;
+    if (!preview || preview.failed || !preview.decoder || sampleRate !== preview.sampleRate || samples.length === 0) return;
+    if (!preview.draining && preview.backlog.length === 0) {
+      try {
+        if (preview.decoder.pushF32(samples)) return;
+      } catch (error) {
+        this.failLocalTxPreview(preview, error);
+        return;
+      }
+    }
+    if (preview.backlogSamples + samples.length > preview.maxBacklogSamples) {
+      preview.pendingDiscontinuitySamples += preview.backlogSamples + samples.length;
+      preview.backlog.length = 0;
+      preview.backlogSamples = 0;
+    } else {
+      preview.backlog.push(new Float32Array(samples));
+      preview.backlogSamples += samples.length;
+    }
+    this.beginLocalTxPreviewDrain(preview);
+  }
+
+  private beginLocalTxPreviewDrain(preview: TxPreviewState): void {
+    if (preview.draining || preview.failed || !preview.decoder) return;
+    preview.draining = true;
+    const decoder = preview.decoder;
+    preview.drainPromise = (async () => {
+      try {
+        for (;;) {
+          await decoder.drain();
+          if (preview.pendingDiscontinuitySamples > 0) {
+            if (!decoder.markDiscontinuity(preview.pendingDiscontinuitySamples)) continue;
+            preview.pendingDiscontinuitySamples = 0;
+          }
+          let blocked = false;
+          while (preview.backlog.length > 0) {
+            const chunk = preview.backlog[0];
+            if (!decoder.pushF32(chunk)) {
+              blocked = true;
+              break;
+            }
+            preview.backlog.shift();
+            preview.backlogSamples -= chunk.length;
+          }
+          if (!blocked && preview.backlog.length === 0) break;
+        }
+      } catch (error) {
+        this.failLocalTxPreview(preview, error);
+      } finally {
+        preview.draining = false;
+        preview.drainPromise = null;
+      }
+    })();
+  }
+
+  private handleLocalTxPreviewEvent(sessionId: string, event: SstvDecodeEvent): void {
+    const preview = this.activeTx?.sessionId === sessionId ? this.activeTx.preview : undefined;
+    if (!preview || preview.failed) return;
+    if (event.type === 'rasterLineReady') {
+      this.appendPaperRow(preview.baseLine + event.lineIndex, event.pixels.length / 3, 'rgb8', event.revision, event.pixels, event.completeness);
+    } else if (event.type === 'error') {
+      this.failLocalTxPreview(preview, new Error(event.reason));
+    }
+  }
+
+  private failLocalTxPreview(preview: TxPreviewState, error: unknown): void {
+    if (preview.failed) return;
+    preview.failed = true;
+    preview.backlog.length = 0;
+    preview.backlogSamples = 0;
+    logger.warn('Local SSTV transmit preview stopped; physical transmit continues', error);
+  }
+
+  private async finishLocalTxPreviewAndResume(sessionId: string, outcome: 'completed' | 'interrupted'): Promise<void> {
+    const active = this.activeTx;
+    if (!active || active.sessionId !== sessionId) return;
+    const preview = active.preview;
+    if (!preview && !active.receiveSuspended) return;
+    if (preview?.decoder) {
+      if (preview.drainPromise) await preview.drainPromise.catch(() => undefined);
+      if (!preview.failed && (preview.backlog.length > 0 || preview.pendingDiscontinuitySamples > 0)) {
+        this.beginLocalTxPreviewDrain(preview);
+        if (preview.drainPromise) await preview.drainPromise.catch(() => undefined);
+      }
+      if (!preview.failed) await preview.decoder.finish().catch((error) => this.failLocalTxPreview(preview, error));
+      this.flushRows();
+      await preview.decoder.dispose().catch(() => undefined);
+      preview.decoder = null;
+    }
+    active.preview = undefined;
+
+    if (this.family !== 'sstv' || this.serviceState !== 'ready') {
+      active.receiveSuspended = false;
+      return;
+    }
+
+    this.generation += 1;
+    this.paper.setGeneration(this.generation);
+    this.nativeLineOffset = this.paper.getSession()?.receivedLines ?? 0;
+    if (preview?.started) {
+      const receiveMode = this.sstvReceiveProfile.strategy === 'manual' ? this.sstvReceiveProfile.mode as SstvMode : 'robot36';
+      let receiveWidth = preview.width;
+      try {
+        receiveWidth = this.runtime.load().sstvModes().find((item) => item.mode === receiveMode)?.width ?? receiveWidth;
+      } catch (error) {
+        logger.warn('Failed to resolve restored SSTV mode width after local transmit', error);
+      }
+      this.commitPaperBoundary({
+        boundaryId: `tx:${sessionId}:end`, lineIndex: this.nativeLineOffset,
+        kind: 'localTxEnd', trusted: false, codecMode: receiveMode,
+        width: receiveWidth, pixelFormat: 'rgb8', timestamp: Date.now(),
+        detection: preview.failed ? 'local_tx_preview_failed' : 'local_tx', source: 'rx',
+        txSessionId: sessionId, txOutcome: outcome,
+      });
+      this.skipNextInitialBoundary = true;
+    }
+    if (active.receiveSuspended && this.family === 'sstv' && this.serviceState === 'ready') {
+      try {
+        this.createDecoder('sstv', this.generation);
+        this.rxState = 'receiving';
+      } catch (error) {
+        this.failDecoder(error);
+      }
+    }
+    active.receiveSuspended = false;
+    this.emitStatus();
   }
 
   private async runSstvTx(
@@ -595,6 +881,10 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     sessionId: string,
   ): Promise<void> {
     let leaseId: string | undefined;
+    let historyId: string | undefined;
+    let historyWrite: Promise<boolean> | undefined;
+    let previewFinalized = false;
+    let previewOutcome: 'completed' | 'interrupted' = 'interrupted';
     try {
       const primeSamples = Math.ceil(playback.sampleRate * 0.3);
       while (!encoder.isFinished && playback.queuedAudioMs * playback.sampleRate / 1000 < primeSamples) {
@@ -614,10 +904,24 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
       if (this.activeTx?.sessionId !== sessionId) throw new Error('SSTV transmission superseded');
       this.activeTx.leaseId = leaseId;
       this.updateTx({ ...this.txStatus, phase: 'keying', revision: this.txStatus.revision + 1 });
+      await this.suspendReceiveForLocalTx(sessionId);
+      const modeInfo = this.runtime.load().sstvModes().find((item) => item.mode === command.mode);
+      if (modeInfo) this.startLocalTxPreview(sessionId, command.mode as SstvMode, modeInfo.width, playback.sampleRate);
       await new Promise<void>((resolve) => setTimeout(resolve, 300));
       await playback.start();
       this.physicalTx.markStreamingLeaseActive(leaseId);
-      this.updateTx({ ...this.txStatus, phase: 'on_air', revision: this.txStatus.revision + 1, startedAt: Date.now() });
+      const startedAt = Date.now();
+      historyId = randomUUID();
+      const artifact = this.artifacts.get(command.artifactId);
+      historyWrite = artifact
+        ? this.history.recordTransmitStarted({ id: historyId, artifact, operatorId: command.operatorId, sessionId, startedAt })
+          .then(() => true)
+          .catch((error) => {
+            logger.error('Failed to persist SSTV transmit history', { sessionId, error: error instanceof Error ? error.message : String(error) });
+            return false;
+          })
+        : Promise.resolve(false);
+      this.updateTx({ ...this.txStatus, phase: 'on_air', historyId, revision: this.txStatus.revision + 1, startedAt });
 
       while (!encoder.isFinished) {
         await playback.write(await encoder.readSamples(playback.frameSamples));
@@ -636,21 +940,49 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
       await new Promise<void>((resolve) => setTimeout(resolve, 150));
       const result = await this.physicalTx.releaseLease(leaseId, 'SSTV transmission completed');
       if (!result.success || !result.physicalConfirmed) throw new Error(result.error ?? result.reason);
+      if (historyId && await historyWrite) {
+        await this.history.finishTransmit(historyId, 'completed').catch((error) => {
+          logger.error('Failed to complete SSTV transmit history', { sessionId, error: error instanceof Error ? error.message : String(error) });
+        });
+      }
+      previewOutcome = 'completed';
+      try {
+        await this.finishLocalTxPreviewAndResume(sessionId, 'completed');
+        previewFinalized = true;
+      } catch (previewError) {
+        logger.warn('Failed to finish local SSTV transmit preview after successful transmit', previewError);
+      }
       this.updateTx({ ...this.txStatus, phase: 'completed', revision: this.txStatus.revision + 1 });
     } catch (error) {
       await playback.abort(error instanceof Error ? error.message : 'SSTV transmission failed');
       if (leaseId && this.physicalTx.getSnapshot().leaseId === leaseId) await this.physicalTx.forceInterrupt('SSTV transmission failed');
+      const errorCode = this.txStatus.phase === 'cancelled' ? 'IMAGE_TX_CANCELLED' : this.runtime.errorCode(error);
+      if (historyId && await historyWrite) {
+        await this.history.finishTransmit(historyId, 'interrupted', errorCode).catch((historyError) => {
+          logger.error('Failed to interrupt SSTV transmit history', { sessionId, error: historyError instanceof Error ? historyError.message : String(historyError) });
+        });
+      }
+      try {
+        await this.finishLocalTxPreviewAndResume(sessionId, 'interrupted');
+        previewFinalized = true;
+      } catch (previewError) {
+        logger.warn('Failed to finish local SSTV transmit preview after transmit error', previewError);
+      }
       this.updateTx({
         ...this.txStatus,
-        phase: this.physicalTx.getSnapshot().phase === 'unknown' ? 'ptt_unknown' : 'error',
+        phase: this.txStatus.phase === 'cancelled' ? 'cancelled' : this.physicalTx.getSnapshot().phase === 'unknown' ? 'ptt_unknown' : 'error',
         revision: this.txStatus.revision + 1,
-        errorCode: this.runtime.errorCode(error),
+        errorCode,
       });
       logger.error('SSTV transmission failed', { sessionId, error: error instanceof Error ? error.message : String(error) });
     } finally {
+      if (!previewFinalized) {
+        await this.finishLocalTxPreviewAndResume(sessionId, previewOutcome).catch((error) => {
+          logger.warn('Failed to finish local SSTV transmit preview', error);
+        });
+      }
       await encoder.dispose().catch(() => undefined);
       if (this.activeTx?.sessionId === sessionId) this.activeTx = null;
-      this.registerDiscontinuity(Math.round(this.inputSampleRate * 0.3), 'local_transmit');
     }
   }
 

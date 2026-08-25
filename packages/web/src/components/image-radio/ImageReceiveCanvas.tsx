@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Button, Select, SelectItem } from '@heroui/react';
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
@@ -6,18 +6,19 @@ import { faFloppyDisk, faSatelliteDish } from '@fortawesome/free-solid-svg-icons
 import { UserRole, type ImagePaperBoundary, type ImageReceiveProfile } from '@tx5dr/contracts';
 import { useTranslation } from 'react-i18next';
 
-import { useImageRadio } from '../../hooks/useImageRadio';
+import { useImageRadioControls, useImageRadioReceive } from '../../hooks/useImageRadio';
 import { useHasMinRole } from '../../store/authStore';
 import { useCurrentOperatorId } from '../../store/radioStore';
 import { ScrollToBottomButton } from '../common/ScrollToBottomButton';
 import { buildPaperLayout, paperBottomTarget, visiblePaperItems } from './imagePaperVirtualLayout';
+import { ImagePaperRowStore, writePaperRowsToRgba } from './ImagePaperRowStore';
 
 const PAPER_CHUNK_LINES = 256;
 
 function boundaryHeight(boundary: ImagePaperBoundary): number {
   if (boundary.kind === 'initial') return 0;
-  if (boundary.kind === 'vis' || boundary.kind === 'syncTiming' || boundary.kind === 'aptPhasing' || boundary.kind === 'manualMode') return 18;
-  if (boundary.kind === 'protocolEnd') return 10;
+  if (boundary.kind === 'vis' || boundary.kind === 'syncTiming' || boundary.kind === 'aptPhasing' || boundary.kind === 'manualMode' || boundary.kind === 'localTxStart') return 18;
+  if (boundary.kind === 'protocolEnd' || boundary.kind === 'localTxEnd') return 10;
   return 4;
 }
 
@@ -26,6 +27,8 @@ function boundaryColor(boundary: ImagePaperBoundary): string | null {
   if (boundary.kind === 'syncTiming' || boundary.kind === 'aptPhasing' || boundary.kind === 'manualMode') return '#22d3ee';
   if (boundary.kind === 'truncated') return '#f59e0b';
   if (boundary.kind === 'protocolObserved') return '#ef4444';
+  if (boundary.kind === 'localTxStart') return '#ef4444';
+  if (boundary.kind === 'localTxEnd') return '#71717a';
   return null;
 }
 
@@ -41,22 +44,24 @@ function PaperDivider({ boundary }: { boundary: ImagePaperBoundary }) {
   );
 }
 
-function PaperChunk({
-  startLine, endLine, displayWidth, pixelFormat, rows,
-  snapshot, snapshotStartLine, markers, renderRevision,
+const PaperChunk = memo(function PaperChunk({
+  startLine, endLine, displayWidth, sourceWidth, pixelFormat, rowStore,
+  snapshot, snapshotStartLine, markers, contentRevision, isTail, source,
 }: {
-  startLine: number; endLine: number; displayWidth: number; pixelFormat: 'rgb8' | 'gray8';
-  rows: Map<number, { width: number; pixels: Uint8Array }>;
+  startLine: number; endLine: number; displayWidth: number; sourceWidth: number; pixelFormat: 'rgb8' | 'gray8';
+  rowStore: ImagePaperRowStore;
   snapshot?: HTMLImageElement; snapshotStartLine: number;
-  markers: ImagePaperBoundary[]; renderRevision: number;
+  markers: ImagePaperBoundary[]; contentRevision: number; isTail: boolean; source: 'rx' | 'localTx';
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const sourceCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const imageDataRef = useRef<ImageData | null>(null);
   useEffect(() => {
-    void renderRevision;
     const canvas = canvasRef.current;
     const height = Math.max(1, endLine - startLine);
     if (!canvas) return;
-    canvas.width = displayWidth; canvas.height = height;
+    if (canvas.width !== displayWidth) canvas.width = displayWidth;
+    if (canvas.height !== height) canvas.height = height;
     const context = canvas.getContext('2d', { alpha: false });
     if (!context) return;
     context.fillStyle = '#000'; context.fillRect(0, 0, displayWidth, height);
@@ -64,46 +69,68 @@ function PaperChunk({
       const sourceY = Math.max(0, startLine - snapshotStartLine);
       context.drawImage(snapshot, 0, sourceY, snapshot.naturalWidth, height, 0, 0, displayWidth, height);
     }
-    const sourceCanvas = document.createElement('canvas'); sourceCanvas.height = 1;
-    for (const [line, row] of rows) {
-      if (line < startLine || line >= endLine) continue;
-      sourceCanvas.width = row.width;
-      const sourceContext = sourceCanvas.getContext('2d', { alpha: false });
-      if (!sourceContext) continue;
-      const channels = pixelFormat === 'rgb8' ? 3 : 1;
-      const data = new Uint8ClampedArray(row.width * 4);
-      for (let x = 0; x < row.width; x += 1) {
-        const target = x * 4;
-        if (channels === 3) {
-          const source = x * 3;
-          data[target] = row.pixels[source]; data[target + 1] = row.pixels[source + 1]; data[target + 2] = row.pixels[source + 2];
-        } else {
-          data[target] = row.pixels[x]; data[target + 1] = row.pixels[x]; data[target + 2] = row.pixels[x];
-        }
-        data[target + 3] = 255;
+
+    if (!imageDataRef.current || imageDataRef.current.width !== sourceWidth || imageDataRef.current.height !== height) {
+      imageDataRef.current = new ImageData(sourceWidth, height);
+    }
+    writePaperRowsToRgba(imageDataRef.current.data, sourceWidth, startLine, endLine, pixelFormat, rowStore);
+    if (sourceWidth === displayWidth && !snapshot) {
+      context.putImageData(imageDataRef.current, 0, 0);
+    } else {
+      let sourceCanvas = sourceCanvasRef.current;
+      if (!sourceCanvas) {
+        sourceCanvas = document.createElement('canvas');
+        sourceCanvasRef.current = sourceCanvas;
       }
-      sourceContext.putImageData(new ImageData(data, row.width, 1), 0, 0);
-      context.drawImage(sourceCanvas, 0, 0, row.width, 1, 0, line - startLine, displayWidth, 1);
+      if (sourceCanvas.width !== sourceWidth) sourceCanvas.width = sourceWidth;
+      if (sourceCanvas.height !== height) sourceCanvas.height = height;
+      const sourceContext = sourceCanvas.getContext('2d', { alpha: true });
+      if (!sourceContext) return;
+      sourceContext.putImageData(imageDataRef.current, 0, 0);
+      context.drawImage(sourceCanvas, 0, 0, sourceWidth, height, 0, 0, displayWidth, height);
     }
-    for (const marker of markers) {
-      if (marker.lineIndex < startLine || marker.lineIndex >= endLine) continue;
-      const color = boundaryColor(marker);
-      if (!color) continue;
-      context.fillStyle = color;
-      context.fillRect(0, marker.lineIndex - startLine, Math.round(displayWidth * 0.28), 3);
+    if (!isTail) {
+      imageDataRef.current = null;
+      if (sourceCanvasRef.current) {
+        sourceCanvasRef.current.width = 1;
+        sourceCanvasRef.current.height = 1;
+      }
+      sourceCanvasRef.current = null;
     }
-  }, [displayWidth, endLine, markers, pixelFormat, renderRevision, rows, snapshot, snapshotStartLine, startLine]);
-  return <canvas ref={canvasRef} className="block h-auto w-full [image-rendering:auto]" style={{ contentVisibility: 'auto', containIntrinsicSize: `auto ${Math.max(1, endLine - startLine)}px` }} />;
-}
+  }, [contentRevision, displayWidth, endLine, isTail, pixelFormat, rowStore, snapshot, snapshotStartLine, sourceWidth, startLine]);
+  return (
+    <div className="relative h-full w-full">
+      <canvas ref={canvasRef} className="block h-auto w-full [image-rendering:auto]" style={{ contentVisibility: 'auto', containIntrinsicSize: `auto ${Math.max(1, endLine - startLine)}px` }} />
+      {source === 'localTx' ? <div className="pointer-events-none absolute inset-y-0 left-0 w-0.5 bg-danger" /> : null}
+      {markers.map((marker) => {
+        const color = boundaryColor(marker);
+        if (!color || marker.lineIndex < startLine || marker.lineIndex >= endLine) return null;
+        return <div key={marker.boundaryId} className="pointer-events-none absolute left-0 h-[3px] w-[28%]" style={{ top: `${(marker.lineIndex - startLine) / Math.max(1, endLine - startLine) * 100}%`, backgroundColor: color }} />;
+      })}
+    </div>
+  );
+}, (previous, next) => (
+  previous.startLine === next.startLine
+  && previous.endLine === next.endLine
+  && previous.displayWidth === next.displayWidth
+  && previous.sourceWidth === next.sourceWidth
+  && previous.pixelFormat === next.pixelFormat
+  && previous.rowStore === next.rowStore
+  && previous.snapshot === next.snapshot
+  && previous.snapshotStartLine === next.snapshotStartLine
+  && previous.contentRevision === next.contentRevision
+  && previous.isTail === next.isTail
+  && previous.source === next.source
+  && previous.markers.length === next.markers.length
+  && previous.markers.every((marker, index) => marker.boundaryId === next.markers[index]?.boundaryId && marker.lineIndex === next.markers[index]?.lineIndex)
+));
 
 export function ImageReceiveCanvas() {
   const { t } = useTranslation('image');
   const canConfigure = useHasMinRole(UserRole.OPERATOR);
   const { currentOperatorId } = useCurrentOperatorId();
-  const {
-    session, rowsRef, boundaries, segmentSnapshots, renderRevision,
-    status, modes, configureReceive, saveCurrentPaper,
-  } = useImageRadio();
+  const { session, rowStore, boundaries, segmentSnapshots } = useImageRadioReceive();
+  const { status, txStatus, modes, configureReceive, saveCurrentPaper } = useImageRadioControls();
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const followTailRef = useRef(true);
   const snapshotImagesRef = useRef(new Map<string, HTMLImageElement>());
@@ -166,7 +193,6 @@ export function ImageReceiveCanvas() {
     const ordered = boundaries.filter((boundary) => boundary.lineIndex >= session.firstAvailableLine).sort((a, b) => a.lineIndex - b.lineIndex || a.timestamp - b.timestamp);
     const structural = ordered.filter((boundary) => !markerKinds.has(boundary.kind));
     const markers = ordered.filter((boundary) => markerKinds.has(boundary.kind));
-    const displayWidth = session.family === 'fax' ? 1_810 : 800;
     return structural.flatMap((boundary, index) => {
       const startLine = Math.max(boundary.lineIndex, session.firstAvailableLine);
       const endLine = Math.max(startLine, structural[index + 1]?.lineIndex ?? session.receivedLines);
@@ -175,7 +201,7 @@ export function ImageReceiveCanvas() {
         chunks.push({ startLine: start, endLine: Math.min(endLine, start + PAPER_CHUNK_LINES) });
       }
       return [{
-        boundary, displayWidth, chunks,
+        boundary, displayWidth: boundary.width, chunks,
         snapshot: snapshotImagesRef.current.get(boundary.boundaryId),
         markers: markers.filter((marker) => marker.lineIndex >= startLine && marker.lineIndex < endLine),
       }];
@@ -191,8 +217,10 @@ export function ImageReceiveCanvas() {
   }, [paperSections, viewport.width]);
 
   const paperOffset = Math.max(0, viewport.height - paperLayout.height);
-  const overscan = viewport.height;
+  const overscan = Math.min(256, viewport.height * 0.35);
   const visibleItems = visiblePaperItems(paperLayout.items, paperOffset, viewport.scrollTop, viewport.height, overscan);
+  const txActive = txStatus?.phase === 'preparing' || txStatus?.phase === 'waiting_for_lease'
+    || txStatus?.phase === 'keying' || txStatus?.phase === 'on_air' || txStatus?.phase === 'draining';
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -215,7 +243,7 @@ export function ImageReceiveCanvas() {
     const target = paperBottomTarget(paperLayout.height, viewport.height);
     element.scrollTop = target;
     setViewport((current) => current.scrollTop === target ? current : { ...current, scrollTop: target });
-  }, [boundaries, imageRevision, paperLayout.height, renderRevision, session?.receivedLines, viewport.height]);
+  }, [boundaries, imageRevision, paperLayout.height, session?.receivedLines, viewport.height]);
 
   const handleScroll = () => {
     const viewport = scrollRef.current;
@@ -259,10 +287,13 @@ export function ImageReceiveCanvas() {
               {item.kind === 'divider' ? <PaperDivider boundary={item.boundary} /> : (
                 <PaperChunk
                   startLine={item.startLine} endLine={item.endLine}
-                  displayWidth={item.data.displayWidth} pixelFormat={item.data.boundary.pixelFormat}
-                  rows={rowsRef.current} snapshot={item.data.snapshot}
+                  displayWidth={item.data.displayWidth} sourceWidth={item.data.boundary.width}
+                  pixelFormat={item.data.boundary.pixelFormat} rowStore={rowStore}
                   snapshotStartLine={item.data.boundary.lineIndex}
-                  markers={item.data.markers} renderRevision={renderRevision + imageRevision}
+                  markers={item.data.markers} snapshot={item.data.snapshot}
+                  contentRevision={rowStore.rangeRevision(item.startLine, item.endLine) + imageRevision}
+                  isTail={item.endLine === session.receivedLines}
+                  source={item.data.boundary.source ?? 'rx'}
                 />
               )}
             </div>
@@ -271,7 +302,7 @@ export function ImageReceiveCanvas() {
       </div>
       <div className="pointer-events-none absolute inset-x-2 top-2 z-[2] flex items-start justify-between gap-2">
         <div className="pointer-events-auto flex h-8 min-w-0 items-center gap-1 rounded-medium bg-black/70 px-1 text-xs text-white">
-          {session ? <span className="max-w-36 truncate px-1 font-mono">{session.codecMode ?? t('auto')} · {session.receivedLines}</span> : null}
+          {session ? <span className="max-w-36 truncate px-1 font-mono">{txActive ? `TX · ${txStatus?.mode ?? session.codecMode ?? t('auto')}` : `${session.codecMode ?? t('auto')} · ${session.receivedLines}`}</span> : null}
           <Button isIconOnly size="sm" variant="light" className="h-7 min-h-7 w-7 min-w-7 text-white data-[hover=true]:bg-white/15" isDisabled={!session || !currentOperatorId || isSaving} isLoading={isSaving} onPress={() => void handleSave()} aria-label={t('savePaper')} title={t('savePaper')}>
             <FontAwesomeIcon icon={faFloppyDisk} />
           </Button>
@@ -282,7 +313,11 @@ export function ImageReceiveCanvas() {
             isDisabled={!canConfigure || isChangingProfile} selectedKeys={new Set([selectedMode])}
             onSelectionChange={(keys) => void changeProfile(String(Array.from(keys)[0] ?? 'auto'))}
             className="pointer-events-auto w-40 sm:w-48"
-            classNames={{ trigger: 'h-8 min-h-8 bg-black/70 text-white data-[hover=true]:bg-black/80', value: 'text-xs text-white', selectorIcon: 'text-white' }}
+            classNames={{
+              trigger: 'h-8 min-h-8 bg-black/70 text-white data-[hover=true]:bg-black/80 [&_[data-slot=value]]:!text-white',
+              value: 'text-xs !text-white',
+              selectorIcon: 'text-white',
+            }}
           >
             <SelectItem key="auto" textValue={t('auto')}>{t('auto')}</SelectItem>
             {status.receiveProfile.family === 'sstv'

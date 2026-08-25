@@ -5,6 +5,7 @@ import path from 'node:path';
 import type {
   ImageFamily,
   ImagePaperBoundary,
+  ImagePaperSource,
   ImagePixelFormat,
   ImageSessionSummary,
 } from '@tx5dr/contracts';
@@ -39,6 +40,7 @@ export interface PaperRangeSnapshot {
   startedAt: number;
   endedAt: number;
   truncated: boolean;
+  source: ImagePaperSource;
 }
 
 export interface PaperManifest {
@@ -163,15 +165,21 @@ export class ImagePaperSpool {
   latestManualRange(): { startLine: number; endLine: number } | null {
     const session = this.session;
     if (!session || session.receivedLines <= session.firstAvailableLine) return null;
-    const anchor = [...this.segments].reverse().find((segment) => (
-      segment.boundary.trusted
-      || segment.boundary.kind === 'protocolEnd'
-      || segment.boundary.kind === 'manualMode'
-      || segment.boundary.kind === 'initial'
-      || segment.boundary.kind === 'truncated'
-    ));
-    const startLine = Math.max(session.firstAvailableLine, anchor?.boundary.lineIndex ?? session.firstAvailableLine);
-    return session.receivedLines > startLine ? { startLine, endLine: session.receivedLines } : null;
+    for (let index = this.segments.length - 1; index >= 0; index -= 1) {
+      const segment = this.segments[index];
+      if ((segment.boundary.source ?? 'rx') !== 'rx') continue;
+      const isAnchor = segment.boundary.trusted
+        || segment.boundary.kind === 'protocolEnd'
+        || segment.boundary.kind === 'manualMode'
+        || segment.boundary.kind === 'initial'
+        || segment.boundary.kind === 'truncated'
+        || segment.boundary.kind === 'localTxEnd';
+      if (!isAnchor) continue;
+      const startLine = Math.max(session.firstAvailableLine, segment.boundary.lineIndex);
+      const endLine = Math.min(session.receivedLines, this.segments[index + 1]?.boundary.lineIndex ?? session.receivedLines);
+      if (endLine > startLine) return { startLine, endLine };
+    }
+    return null;
   }
 
   async snapshotRange(startLine: number, endLine: number): Promise<PaperRangeSnapshot> {
@@ -210,6 +218,7 @@ export class ImagePaperSpool {
       startedAt: segment.boundary.timestamp,
       endedAt: Date.now(),
       truncated: startLine < segment.boundary.lineIndex || startLine <= session.firstAvailableLine && session.firstAvailableLine > 0,
+      source: segment.boundary.source ?? 'rx',
     };
   }
 

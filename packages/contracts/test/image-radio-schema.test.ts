@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   EngineModeSchema,
   ImageRadioCapabilitySchema,
+  ImageHistoryRecordSchema,
+  ImageComposerBackgroundSchema,
+  ImagePaperBoundarySchema,
   ImageReceiveProfileSchema,
   ImageTemplateSchema,
   SstvTxStartCommandSchema,
@@ -34,5 +37,39 @@ describe('image radio contracts', () => {
     const layer = { id: 'line', text: '{MYCALL}', x: 0, y: 0, width: 1, height: 0.2, fontSize: 0.1, color: '#ffffff', align: 'center' };
     expect(() => ImageTemplateSchema.parse({ id: 't', name: 'T', layers: Array.from({ length: 17 }, (_, index) => ({ ...layer, id: String(index) })), createdAt: 1, updatedAt: 1 })).toThrow();
     expect(SstvTxStartCommandSchema.parse({ requestId: 'request-1', operatorId: 'op', artifactId: 'a', mode: 'robot36', expectedFrequency: 14_230_000 }).requestId).toBe('request-1');
+    expect(SstvTxStartCommandSchema.parse({ requestId: 'request-2', operatorId: 'op', artifactId: 'a', mode: 'robot36', expectedFrequency: 14_230_000, interruptActiveCapture: true }).interruptActiveCapture).toBe(true);
+  });
+
+  it('separates received captures from real transmit history', () => {
+    expect(ImageHistoryRecordSchema.parse({
+      id: 'rx', artifactId: 'image', family: 'sstv', direction: 'rx', occurredAt: 1,
+      saveReason: 'manual', complete: false, truncated: false,
+    }).direction).toBe('rx');
+    expect(ImageHistoryRecordSchema.parse({
+      id: 'tx', artifactId: 'image', family: 'sstv', direction: 'tx', operatorId: 'op',
+      sessionId: 'session', occurredAt: 1, startedAt: 1, outcome: 'completed',
+    }).direction).toBe('tx');
+    expect(() => ImageHistoryRecordSchema.parse({
+      id: 'tx', artifactId: 'image', family: 'sstv', direction: 'tx',
+      sessionId: 'session', occurredAt: 1, startedAt: 1, outcome: 'completed',
+    })).toThrow();
+  });
+
+  it('distinguishes local transmit paper segments from received content', () => {
+    const boundary = ImagePaperBoundarySchema.parse({
+      boundaryId: 'tx:start', lineIndex: 12, kind: 'localTxStart', trusted: false,
+      codecMode: 'robot36', width: 320, pixelFormat: 'rgb8', timestamp: 1,
+      source: 'localTx', txSessionId: 'tx-1',
+    });
+    expect(boundary).toMatchObject({ kind: 'localTxStart', source: 'localTx', txSessionId: 'tx-1' });
+  });
+
+  it('validates per-operator composer background metadata', () => {
+    expect(ImageComposerBackgroundSchema.parse({
+      operatorId: 'op', width: 1024, height: 512, updatedAt: 1, imageUrl: '/background.png',
+    }).operatorId).toBe('op');
+    expect(() => ImageComposerBackgroundSchema.parse({
+      operatorId: '', width: 1024, height: 512, updatedAt: 1, imageUrl: '/background.png',
+    })).toThrow();
   });
 });

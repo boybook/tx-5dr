@@ -49,6 +49,24 @@ describe('ImagePaperSpool', () => {
     expect(spool.latestManualRange()).toEqual({ startLine: 4, endLine: 5 });
   });
 
+  it('never includes local transmit preview rows in a received manual range', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'tx5dr-paper-spool-'));
+    dirs.push(dir);
+    const spool = new ImagePaperSpool(dir);
+    await spool.initialize();
+    spool.start('sstv', 1, boundary('initial', 0, false));
+    for (let line = 0; line < 4; line += 1) spool.appendRow({ lineIndex: line, width: 4, pixelFormat: 'rgb8', revision: 0, pixels: new Uint8Array(12) });
+    spool.addBoundary({ ...boundary('tx-start', 4, false), kind: 'localTxStart', source: 'localTx' as const, txSessionId: 'tx-1' });
+    for (let line = 4; line < 6; line += 1) spool.appendRow({ lineIndex: line, width: 4, pixelFormat: 'rgb8', revision: 0, pixels: new Uint8Array(12) });
+    expect(spool.latestManualRange()).toEqual({ startLine: 0, endLine: 4 });
+
+    spool.addBoundary({ ...boundary('tx-end', 6, false), kind: 'localTxEnd', source: 'rx' as const, txSessionId: 'tx-1', txOutcome: 'completed' as const });
+    expect(spool.latestManualRange()).toEqual({ startLine: 0, endLine: 4 });
+    spool.appendRow({ lineIndex: 6, width: 4, pixelFormat: 'rgb8', revision: 0, pixels: new Uint8Array(12) });
+    expect(spool.latestManualRange()).toEqual({ startLine: 6, endLine: 7 });
+    expect((await spool.snapshotRange(4, 6)).source).toBe('localTx');
+  });
+
   it('drops old chunks at the independent cache quota and reports truncation', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'tx5dr-paper-spool-'));
     dirs.push(dir);
