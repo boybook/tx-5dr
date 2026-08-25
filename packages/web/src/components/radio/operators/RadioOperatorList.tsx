@@ -9,9 +9,11 @@ import { RadioOperator } from './RadioOperator';
 import { useTranslation } from 'react-i18next';
 import {
   deriveSameCallsignStandardFrequencyWarning,
+  deriveWwDigiStandardFrequencyRestriction,
   formatSameCallsignWarningCallsigns,
 } from '../../../utils/standardDigitalFrequencyWarning';
 import { usePluginSnapshot } from '../../../hooks/usePluginSnapshot';
+import { formatFrequencyMHz } from '../../../utils/frequencyMHz';
 
 interface RadioOperatorListProps {
   onCreateOperator?: () => void; // 创建操作员的回调
@@ -35,6 +37,18 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
   const standardFrequencyWarningCallsigns = standardFrequencyWarning
     ? formatSameCallsignWarningCallsigns(standardFrequencyWarning.groups)
     : '';
+  const wwDigiRestriction = React.useMemo(
+    () => deriveWwDigiStandardFrequencyRestriction(
+      operators,
+      currentMode?.name,
+      currentRadioFrequency,
+    ),
+    [operators, currentMode?.name, currentRadioFrequency],
+  );
+  const restrictedWwDigiOperatorIds = React.useMemo(
+    () => new Set(wwDigiRestriction?.operatorIds ?? []),
+    [wwDigiRestriction],
+  );
 
   // 连接后请求操作员列表
   React.useEffect(() => {
@@ -100,6 +114,19 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
 
   return (
     <div className="space-y-4">
+      {wwDigiRestriction && (
+        <Alert
+          color="warning"
+          variant="flat"
+          title={t('operator.wwDigiStandardFrequencyBlockedTitle')}
+          className="text-xs"
+        >
+          {t('operator.wwDigiStandardFrequencyBlockedDesc', {
+            mode: wwDigiRestriction.modeName,
+            frequency: formatFrequencyMHz(wwDigiRestriction.standardFrequency),
+          })}
+        </Alert>
+      )}
       {standardFrequencyWarning && (
         <Alert
           color="warning"
@@ -117,6 +144,7 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
           key={operator.id}
           operatorStatus={operator}
           pluginStatuses={pluginSnapshot.plugins}
+          isWwDigiStandardFrequencyBlocked={restrictedWwDigiOperatorIds.has(operator.id)}
         />
       ))}
     </div>

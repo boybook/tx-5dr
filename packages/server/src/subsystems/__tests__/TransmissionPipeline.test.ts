@@ -26,6 +26,7 @@ function createHarness(options: {
   stopPlayback?: Promise<void>;
   playbackStartMs?: number;
   operatorIds?: string[];
+  validateDigitalFrameStart?: (operatorIds: readonly string[]) => void;
 } = {}) {
   const engineEmitter = new EventEmitter();
   const encodeQueue = new EventEmitter();
@@ -133,6 +134,9 @@ function createHarness(options: {
     getCompensationMs: () => 0,
     onBeforeStartPTT: vi.fn(async () => {
       if (options.beforeStart) await options.beforeStart;
+    }),
+    validateDigitalFrameStart: vi.fn((operatorIds: readonly string[]) => {
+      options.validateDigitalFrameStart?.(operatorIds);
     }),
   };
   const pipeline = new TransmissionPipeline(deps as never);
@@ -256,6 +260,22 @@ describe('TransmissionPipeline lifecycle integration', () => {
     });
     expect(harness.deps.operatorManager.notifyPhysicalTransmissionComplete)
       .toHaveBeenCalledWith('operator-a', 'A B 73');
+  });
+
+  it('revalidates the digital frame after encoding and before asserting PTT', async () => {
+    const validateStart = vi.fn(() => {
+      throw new Error('WW Digi is unavailable on the standard FT8 dial frequency 14.074 MHz');
+    });
+    const harness = createHarness({ validateDigitalFrameStart: validateStart });
+
+    await (harness.pipeline as any).handleMixedAudioReady(harness.mixedAudio);
+
+    expect(validateStart).toHaveBeenCalledWith(['operator-a']);
+    expect(harness.setPTT).not.toHaveBeenCalled();
+    expect(harness.playAudio).not.toHaveBeenCalled();
+    expect(harness.deps.digitalFrameCoordinator.getFrame('frame-1')).toMatchObject({
+      phase: 'terminal',
+    });
   });
 
   it('requeues a severe output failure for the next transmit cycle without reporting success', () => {
@@ -543,6 +563,62 @@ describe('TransmissionPipeline lifecycle integration', () => {
     expect(completions.filter((event) => event.frameId === 'frame-2')).toEqual([
       expect.objectContaining({ success: true, physicalConfirmed: true }),
     ]);
+    expect(harness.setPTT.mock.calls.map(([active]) => active)).toEqual([true, false]);
+  });
+
+  it('revalidates an active-lease replacement before changing its audio', async () => {
+    let blocked = false;
+    const stopPlayback = deferred<void>();
+    const harness = createHarness({
+      stopPlayback: stopPlayback.promise,
+      validateDigitalFrameStart: () => {
+        if (blocked) throw new Error('WW Digi is unavailable on the standard FT8 dial frequency');
+      },
+    });
+    const initialHandling = (harness.pipeline as any).handleMixedAudioReady(harness.mixedAudio);
+    await vi.waitFor(() => expect(harness.playAudio).toHaveBeenCalledTimes(1));
+
+    const replacement = harness.deps.digitalFrameCoordinator.prepareFrame({
+      slotId: 'slot-0',
+      intents: [{
+        operatorId: 'operator-a',
+        source: 'late-decode',
+        reason: 'late correction after dial change',
+        text: 'A B RR73',
+        decisionEpoch: 2,
+      }],
+      nowMs: 1_000,
+      slotEndMs: 15_000,
+      expectedDurationMs: 1_000,
+      playbackStartMs: 500,
+    });
+    harness.deps.digitalFrameCoordinator.beginEncoding(replacement.frame!.frameId);
+    harness.deps.digitalFrameCoordinator.acceptEncodeResult({
+      frameId: replacement.frame!.frameId,
+      operatorId: 'operator-a',
+      decisionEpoch: replacement.intents[0].decisionEpoch,
+      revision: replacement.frame!.revision,
+    });
+    const replacementAudio = {
+      ...harness.mixedAudio,
+      frameId: replacement.frame!.frameId,
+      frameRevision: replacement.frame!.revision,
+    };
+    harness.setFrameMix(replacement.frame!.frameId, replacement.frame!.revision, replacementAudio);
+
+    const replacementHandling = (harness.pipeline as any).handleMixedAudioReady(replacementAudio);
+    await vi.waitFor(() => expect(harness.deps.audioStreamManager.stopCurrentPlayback).toHaveBeenCalledOnce());
+    blocked = true;
+    stopPlayback.resolve();
+    await Promise.all([initialHandling, replacementHandling]);
+
+    expect(harness.playAudio).toHaveBeenCalledTimes(1);
+    expect(harness.deps.digitalFrameCoordinator.getFrame(replacement.frame!.frameId)).toMatchObject({
+      phase: 'terminal',
+    });
+    expect(harness.deps.physicalTxCoordinator.getSnapshot()).toMatchObject({
+      phase: 'idle',
+    });
     expect(harness.setPTT.mock.calls.map(([active]) => active)).toEqual([true, false]);
   });
 

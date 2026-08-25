@@ -447,6 +447,8 @@
     "notInitialized": "未初始化",
     "standardFrequencyMultiTxTitle": "禁止同呼号同周期多路发射",
     "standardFrequencyMultiTxDesc": "这是 FT8/FT4 标准频率下的违规发射行为，请立刻停止其中一路发射或调整到不同周期。涉及呼号：{{callsigns}}。",
+    "wwDigiStandardFrequencyBlockedTitle": "标准频率下不可使用 WW Digi",
+    "wwDigiStandardFrequencyBlockedDesc": "当前拨盘位于 {{mode}} 标准通联频率 {{frequency}} MHz。请切换到非标准频率后再开启 WW Digi 发射。",
     "autoCallPausedTitle": "自动起呼已暂停",
     "autoCallPausedDesc": "已暂停 {{count}} 个自动起呼插件。",
     "pauseAllAutoCall": "全部暂停自动起呼",

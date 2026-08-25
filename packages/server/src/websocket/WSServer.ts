@@ -1484,6 +1484,7 @@ export class WSServer extends WSMessageHandler {
     try {
       const { operatorId } = data;
       this.logOperatorCommand('startOperator', connectionId, { operatorId });
+      this.digitalRadioEngine.operatorManager.assertWwDigiFrequencyAllowed([operatorId]);
       await this.digitalRadioEngine.pluginManager.resumeTransmitControlPlugins(operatorId);
       this.digitalRadioEngine.operatorManager.startOperator(operatorId);
       logger.debug(`operator started: ${operatorId}`);

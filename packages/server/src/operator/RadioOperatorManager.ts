@@ -27,7 +27,12 @@ import {
   sanitizeCallsignInput,
   sanitizeGridInput,
 } from '@tx5dr/contracts';
-import { CycleUtils, getBandFromFrequency } from '@tx5dr/core';
+import {
+  CycleUtils,
+  getBandFromFrequency,
+  getStandardDigitalFrequencyMatch,
+  type StandardDigitalFrequencyMatch,
+} from '@tx5dr/core';
 import { ConfigManager } from '../config/config-manager.js';
 import { LogManager } from '../log/LogManager.js';
 import { resolveQsoComment } from '@tx5dr/plugin-api';
@@ -53,6 +58,7 @@ type QueuedTransmitRequest = TransmitRequest & {
 
 const DEFAULT_MAX_SAME_TRANSMISSION_COUNT = 20;
 const SAME_TRANSMISSION_GUARD_RESET_REASON = 'same transmission guard limit';
+const WW_DIGI_STRATEGY_NAME = 'ww-digi';
 const DISTINCT_QSO_BATCH_MAX_REPLANS = 2;
 const AP_DECODE_QSO_PROGRESS: Record<string, number | undefined> = {
   TX3: 3,
@@ -222,6 +228,62 @@ export class RadioOperatorManager {
     }
 
     return baseFreq > 1_000_000 ? getBandFromFrequency(baseFreq) : 'Unknown';
+  }
+
+  private getWwDigiStandardFrequencyRestriction(
+    operatorId: string,
+    mode: ModeDescriptor = this.getCurrentMode(),
+  ): StandardDigitalFrequencyMatch | null {
+    if (this._pluginManager?.getOperatorRuntimeStatus(operatorId)?.strategyName !== WW_DIGI_STRATEGY_NAME) {
+      return null;
+    }
+
+    let frequency: number | null = null;
+    try {
+      frequency = this.getKnownRadioFrequency?.() ?? null;
+    } catch {
+      frequency = null;
+    }
+    return getStandardDigitalFrequencyMatch(mode.name, frequency);
+  }
+
+  private describeWwDigiStandardFrequencyRestriction(match: StandardDigitalFrequencyMatch): string {
+    return `WW Digi is unavailable on the standard ${match.modeName} dial frequency `
+      + `${match.standardFrequency / 1_000_000} MHz`;
+  }
+
+  assertWwDigiFrequencyAllowed(
+    operatorIds: readonly string[],
+    mode: ModeDescriptor = this.getCurrentMode(),
+  ): void {
+    for (const operatorId of operatorIds) {
+      const restriction = this.getWwDigiStandardFrequencyRestriction(operatorId, mode);
+      if (restriction) {
+        throw new Error(this.describeWwDigiStandardFrequencyRestriction(restriction));
+      }
+    }
+  }
+
+  private stopWwDigiForStandardFrequency(
+    operatorId: string,
+    match: StandardDigitalFrequencyMatch,
+  ): void {
+    logger.warn('Stopped WW Digi before RF admission on a standard digital frequency', {
+      operatorId,
+      ...match,
+    });
+    this.eventEmitter.emit('textMessage', {
+      title: 'WW Digi unavailable',
+      text: this.describeWwDigiStandardFrequencyRestriction(match),
+      color: 'warning',
+      timeout: 8000,
+      key: 'wwDigiStandardFrequencyBlocked',
+      params: {
+        mode: match.modeName,
+        frequency: String(match.standardFrequency / 1_000_000),
+      },
+    });
+    this.stopOperator(operatorId);
   }
 
   // 📊 Day13优化：记录上次发射的操作员状态哈希，用于去重
@@ -1260,6 +1322,7 @@ export class RadioOperatorManager {
     if (!operator) {
       throw new Error(`operator ${operatorId} not found`);
     }
+    this.assertWwDigiFrequencyAllowed([operatorId]);
     if ([...this.unsavedQsoAttempts.values()].some(attempt => attempt.operatorId === operatorId)) {
       throw new LogbookOperationError(
         'LOGBOOK_MAINTENANCE',
@@ -1711,6 +1774,15 @@ export class RadioOperatorManager {
     for (const group of admissionGroups) {
       const operator = this.operators.get(group.operatorId);
       if (!operator?.isTransmitting) continue;
+
+      const standardFrequencyRestriction = this.getWwDigiStandardFrequencyRestriction(
+        group.operatorId,
+        currentMode,
+      );
+      if (standardFrequencyRestriction) {
+        this.stopWwDigiForStandardFrequency(group.operatorId, standardFrequencyRestriction);
+        continue;
+      }
 
       const currentEpoch = this.intentCoordinator.getCurrentEpoch(group.operatorId);
       const stale = group.requests.find((request) => request.decisionEpoch !== currentEpoch);

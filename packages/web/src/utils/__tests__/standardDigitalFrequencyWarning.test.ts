@@ -2,6 +2,7 @@ import type { OperatorStatus } from '@tx5dr/contracts';
 import { describe, expect, it } from 'vitest';
 import {
   deriveSameCallsignStandardFrequencyWarning,
+  deriveWwDigiStandardFrequencyRestriction,
   getStandardDigitalFrequencyMatch,
 } from '../standardDigitalFrequencyWarning';
 
@@ -91,5 +92,31 @@ describe('standardDigitalFrequencyWarning utils', () => {
     expect(warning?.groups).toEqual([
       { callsign: 'BI7ALG', cycles: [1], operatorIds: ['operator-a', 'operator-b'] },
     ]);
+  });
+
+  it('restricts assigned WW Digi operators on a standard frequency', () => {
+    expect(deriveWwDigiStandardFrequencyRestriction([
+      createOperator({
+        id: 'ww-digi-operator',
+        isTransmitting: false,
+        strategy: { name: 'ww-digi', state: 'TX6', availableSlots: ['TX6'] },
+      }),
+      createOperator({ id: 'standard-operator' }),
+    ], 'FT8', 14_074_000)).toEqual({
+      modeName: 'FT8',
+      standardFrequency: 14_074_000,
+      operatorIds: ['ww-digi-operator'],
+    });
+  });
+
+  it('does not restrict WW Digi away from standard frequencies', () => {
+    const operator = createOperator({
+      strategy: { name: 'ww-digi', state: 'TX6', availableSlots: ['TX6'] },
+    });
+
+    expect(deriveWwDigiStandardFrequencyRestriction([operator], 'FT8', 14_090_000)).toBeNull();
+    expect(deriveWwDigiStandardFrequencyRestriction([
+      createOperator(),
+    ], 'FT8', 14_074_000)).toBeNull();
   });
 });

@@ -435,6 +435,8 @@
     "notInitialized": "初期化されていません",
     "standardFrequencyMultiTxTitle": "同一のコールサイン・ピリオドで複数のチャネルを送信することは禁止されています",
     "standardFrequencyMultiTxDesc": "これはFT8/FT4の標準周波数での不正送信行為です。いずれかの送信を直ちに停止するか、別のサイクルに調整してください。関与するコールサイン: {{callsigns}}。",
+    "wwDigiStandardFrequencyBlockedTitle": "標準周波数では WW Digi を使用できません",
+    "wwDigiStandardFrequencyBlockedDesc": "現在のダイヤルは {{mode}} の標準交信周波数 {{frequency}} MHz です。WW Digi の送信を有効にする前に標準外の周波数へ移動してください。",
     "autoCallPausedTitle": "自動呼び出しは一時停止中",
     "autoCallPausedDesc": "{{count}} 件の自動呼び出しプラグインを一時停止中です。",
     "pauseAllAutoCall": "すべて一時停止",
