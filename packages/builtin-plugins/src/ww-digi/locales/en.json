@@ -1,0 +1,17 @@
+{
+  "strategyOverview": "WW Digi contest",
+  "strategyOverviewDesc": "Every target must be selected by the operator. Up to three authorized QSOs can run in parallel.",
+  "contestYear": "Contest year",
+  "contestYearDesc": "WW Digi edition used to isolate the contest log and submission period.",
+  "parallelStreams": "Parallel QSOs",
+  "parallelStreamsDesc": "Maximum active WW Digi contacts (1-3).",
+  "maxAttempts": "Retry limit",
+  "maxAttemptsDesc": "Maximum unanswered transmissions per target.",
+  "location": "Cabrillo location",
+  "locationDesc": "ARRL/RAC section for US/Canada; other stations default to DX.",
+  "categoryBand": "Entry band",
+  "categoryBandDesc": "All contacts remain in the submitted log.",
+  "categoryPower": "Power category",
+  "categoryPowerDesc": "WW Digi entry power category.",
+  "contestLogTitle": "WW Digi log"
+}

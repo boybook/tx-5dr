@@ -20,6 +20,7 @@ export const RadioOperatorConfigSchema = z.object({
   myCallsign: OperatorCallsignSchema,
   myGrid: OperatorGridSchema.optional(),
   frequency: z.number().min(0).max(1000000000, '频率必须在0-1GHz之间').default(1000), // 音频偏移频率（Hz），默认1000Hz，创建时自动分配不重复值
+  maxConcurrentStreams: z.number().int().min(1).max(5).optional(),
   transmitCycles: z.array(z.number().min(0).max(1)).default([0]), // 0=偶数周期，1=奇数周期
   mode: ModeDescriptorSchema.optional(),
   logBookId: z.string().optional(), // 连接的日志本ID，如果未指定则使用默认日志本

@@ -118,6 +118,9 @@ export function convertQSOToADIF(qso: QSORecord, options?: {
   if (qso.grid) {
     adifFields.push(`<gridsquare:${qso.grid.length}>${qso.grid}`);
   }
+  if (qso.contestId) {
+    adifFields.push(`<contest_id:${qso.contestId.length}>${qso.contestId}`);
+  }
   if (qso.dxccId) {
     const value = String(qso.dxccId);
     adifFields.push(`<dxcc:${value.length}>${value}`);
@@ -289,6 +292,7 @@ export function parseADIFRecord(recordStr: string, source: string = 'adif'): QSO
       myGrid: fields.my_gridsquare || '',
       qth: fields.qth || undefined,
       comment,
+      contestId: fields.contest_id || undefined,
       notes: fields.notes || fields.note || undefined,
       messageHistory,
     };

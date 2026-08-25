@@ -6,12 +6,15 @@ import type {
   TransmissionIntent,
   TransmissionIntentSource,
 } from './TransmissionIntent.js';
+import { buildTrackId, normalizeStreamId } from './TransmissionIntent.js';
 
 export interface TransmissionIntentRequest {
   operatorId: string;
+  streamId?: string;
   source: TransmissionIntentSource;
   reason: string;
   text?: string;
+  audioFrequencyHz?: number;
   decisionEpoch: number;
 }
 
@@ -19,6 +22,7 @@ export interface PrepareDigitalFrameRequest {
   slotId: string;
   intents: TransmissionIntentRequest[];
   participantOperatorIds?: string[];
+  participantTrackIds?: string[];
   nowMs?: number;
   slotEndMs?: number;
   expectedDurationMs?: number;
@@ -39,12 +43,14 @@ export interface PreparedParticipantRemoval {
   replacedFrame: FrameLease | null;
   frame: FrameLease | null;
   remainingOperatorIds: string[];
+  remainingTrackIds: string[];
   reason: string;
 }
 
 export interface EncodeResultIdentity {
   frameId: string;
   operatorId: string;
+  streamId?: string;
   decisionEpoch: number;
   revision: number;
 }
@@ -57,8 +63,8 @@ export interface DigitalFrameCoordinatorEvents {
 
 interface MutableFrame extends FrameLease {
   intents: Map<string, TransmissionIntent>;
-  expectedEncodeOperators: Set<string>;
-  completedEncodeOperators: Set<string>;
+  expectedEncodeTracks: Set<string>;
+  completedEncodeTracks: Set<string>;
   preparationAction: FramePreparationAction;
   slotEndMs?: number;
   expectedDurationMs?: number;
@@ -125,23 +131,28 @@ export class DigitalFrameCoordinator extends EventEmitter<DigitalFrameCoordinato
       this.cancelFrameInternal(candidate, 'superseded before handover');
     }
 
-    const participants = Array.from(new Set([
+    const participantOperatorIds = Array.from(new Set([
       ...(request.participantOperatorIds ?? []),
       ...request.intents.map((intent) => intent.operatorId),
+    ]));
+    const participantTrackIds = Array.from(new Set([
+      ...(request.participantTrackIds ?? []),
+      ...intents.map((intent) => intent.trackId),
     ]));
     const revision = this.nextSlotRevision(request.slotId);
     const frame: MutableFrame = {
       frameId: this.idFactory(),
       slotId: request.slotId,
-      participantOperatorIds: participants,
+      participantOperatorIds,
+      participantTrackIds,
       decisionEpoch: Math.max(...intents.map((intent) => intent.decisionEpoch)),
       revision,
       phase: 'requested',
       terminalEmitted: false,
       superseded: false,
-      intents: new Map(intents.map((intent) => [intent.operatorId!, intent])),
-      expectedEncodeOperators: new Set(request.intents.map((intent) => intent.operatorId)),
-      completedEncodeOperators: new Set(),
+      intents: new Map(intents.map((intent) => [intent.trackId, intent])),
+      expectedEncodeTracks: new Set(intents.map((intent) => intent.trackId)),
+      completedEncodeTracks: new Set(),
       preparationAction: action,
       slotEndMs: request.slotEndMs,
       expectedDurationMs: request.expectedDurationMs,
@@ -160,7 +171,8 @@ export class DigitalFrameCoordinator extends EventEmitter<DigitalFrameCoordinato
 
   acceptEncodeResult(identity: EncodeResultIdentity): boolean {
     const frame = this.frames.get(identity.frameId);
-    const intent = frame?.intents.get(identity.operatorId);
+    const trackId = buildTrackId(identity.operatorId, identity.streamId);
+    const intent = frame?.intents.get(trackId);
     const staleReason = this.getEncodeStaleReason(frame, intent, identity);
     if (staleReason) {
       this.staleCallbackDiscardCount += 1;
@@ -168,9 +180,9 @@ export class DigitalFrameCoordinator extends EventEmitter<DigitalFrameCoordinato
       return false;
     }
     const current = frame as MutableFrame;
-    current.completedEncodeOperators.add(identity.operatorId);
-    if (Array.from(current.expectedEncodeOperators)
-      .every((operatorId) => current.completedEncodeOperators.has(operatorId))) {
+    current.completedEncodeTracks.add(trackId);
+    if (Array.from(current.expectedEncodeTracks)
+      .every((candidateTrackId) => current.completedEncodeTracks.has(candidateTrackId))) {
       current.phase = 'ready';
       this.emitChanged(current, 'all expected encodes completed');
     }
@@ -179,7 +191,7 @@ export class DigitalFrameCoordinator extends EventEmitter<DigitalFrameCoordinato
 
   failEncodeResult(identity: EncodeResultIdentity, reason: string): FrameLease | null {
     const frame = this.frames.get(identity.frameId);
-    const intent = frame?.intents.get(identity.operatorId);
+    const intent = frame?.intents.get(buildTrackId(identity.operatorId, identity.streamId));
     const staleReason = this.getEncodeStaleReason(frame, intent, identity);
     if (staleReason) {
       this.staleCallbackDiscardCount += 1;
@@ -190,10 +202,15 @@ export class DigitalFrameCoordinator extends EventEmitter<DigitalFrameCoordinato
     return this.snapshot(frame as MutableFrame);
   }
 
-  prepareFrameForHandover(frameId: string, participantOperatorIds?: string[]): FrameLease | null {
+  prepareFrameForHandover(
+    frameId: string,
+    participantOperatorIds?: string[],
+    participantTrackIds?: string[],
+  ): FrameLease | null {
     const frame = this.frames.get(frameId);
     if (!frame || frame.phase !== 'ready') return frame ? this.snapshot(frame) : null;
     if (participantOperatorIds) frame.participantOperatorIds = Array.from(new Set(participantOperatorIds));
+    if (participantTrackIds) frame.participantTrackIds = Array.from(new Set(participantTrackIds));
     frame.phase = 'prepared';
     this.emitChanged(frame, 'immutable mixed frame prepared');
     return this.snapshot(frame);
@@ -268,16 +285,23 @@ export class DigitalFrameCoordinator extends EventEmitter<DigitalFrameCoordinato
         replacedFrame: source ? this.snapshot(source) : null,
         frame: null,
         remainingOperatorIds: source?.participantOperatorIds ?? [],
+        remainingTrackIds: source?.participantTrackIds ?? [],
         reason: 'operator is not part of the physical frame',
       };
     }
-    const remainingOperatorIds = source.participantOperatorIds.filter((id) => id !== operatorId);
-    if (remainingOperatorIds.length === 0) {
+    const remainingTrackIds = source.participantTrackIds.filter((trackId) => (
+      source.intents.get(trackId)?.operatorId !== operatorId
+    ));
+    const remainingOperatorIds = Array.from(new Set(
+      remainingTrackIds.flatMap((trackId) => source.intents.get(trackId)?.operatorId ?? []),
+    ));
+    if (remainingTrackIds.length === 0) {
       return {
         action: 'stop-physical',
         replacedFrame: this.snapshot(source),
         frame: null,
         remainingOperatorIds,
+        remainingTrackIds,
         reason,
       };
     }
@@ -287,6 +311,7 @@ export class DigitalFrameCoordinator extends EventEmitter<DigitalFrameCoordinato
         replacedFrame: this.snapshot(source),
         frame: null,
         remainingOperatorIds,
+        remainingTrackIds,
         reason: `physical frame phase is ${source.phase}`,
       };
     }
@@ -295,22 +320,25 @@ export class DigitalFrameCoordinator extends EventEmitter<DigitalFrameCoordinato
       pending.superseded = true;
       this.cancelFrameInternal(pending, 'superseded by explicit participant removal');
     }
-    const intents = remainingOperatorIds
-      .map((id) => source.intents.get(id))
+    const intents = remainingTrackIds
+      .map((trackId) => source.intents.get(trackId))
       .filter((intent): intent is TransmissionIntent => Boolean(intent))
       .map((intent) => this.materializeIntent({
         operatorId: intent.operatorId!,
+        streamId: intent.streamId,
         source: intent.source,
         reason,
         text: intent.text,
+        audioFrequencyHz: intent.audioFrequencyHz,
         decisionEpoch: intent.decisionEpoch,
       }, source.slotId, source.frameId));
-    if (intents.length !== remainingOperatorIds.length) {
+    if (intents.length !== remainingTrackIds.length) {
       return {
         action: 'deferred',
         replacedFrame: this.snapshot(source),
         frame: null,
         remainingOperatorIds,
+        remainingTrackIds,
         reason: 'one or more retained participants have no transmission intent',
       };
     }
@@ -318,14 +346,15 @@ export class DigitalFrameCoordinator extends EventEmitter<DigitalFrameCoordinato
       frameId: this.idFactory(),
       slotId: source.slotId,
       participantOperatorIds: remainingOperatorIds,
+      participantTrackIds: remainingTrackIds,
       decisionEpoch: Math.max(...intents.map((intent) => intent.decisionEpoch)),
       revision: this.nextSlotRevision(source.slotId),
       phase: 'ready',
       terminalEmitted: false,
       superseded: false,
-      intents: new Map(intents.map((intent) => [intent.operatorId!, intent])),
-      expectedEncodeOperators: new Set(),
-      completedEncodeOperators: new Set(),
+      intents: new Map(intents.map((intent) => [intent.trackId, intent])),
+      expectedEncodeTracks: new Set(),
+      completedEncodeTracks: new Set(),
       preparationAction: 'restart-current',
       slotEndMs: source.slotEndMs,
       expectedDurationMs: source.expectedDurationMs,
@@ -340,6 +369,7 @@ export class DigitalFrameCoordinator extends EventEmitter<DigitalFrameCoordinato
       replacedFrame: this.snapshot(source),
       frame: this.snapshot(replacement),
       remainingOperatorIds,
+      remainingTrackIds,
       reason,
     };
   }
@@ -398,9 +428,11 @@ export class DigitalFrameCoordinator extends EventEmitter<DigitalFrameCoordinato
     if (!frame) return [];
     return Array.from(frame.intents.values()).map((intent) => ({
       operatorId: intent.operatorId!,
+      streamId: intent.streamId,
       source: intent.source,
       reason: intent.reason,
       text: intent.text,
+      audioFrequencyHz: intent.audioFrequencyHz,
       decisionEpoch: intent.decisionEpoch,
     }));
   }
@@ -428,8 +460,8 @@ export class DigitalFrameCoordinator extends EventEmitter<DigitalFrameCoordinato
     return frame ? this.getPlaybackOffset(frame, nowMs) : 0;
   }
 
-  getIntentText(frameId: string, operatorId: string): string | undefined {
-    return this.frames.get(frameId)?.intents.get(operatorId)?.text;
+  getIntentText(frameId: string, operatorId: string, streamId?: string): string | undefined {
+    return this.frames.get(frameId)?.intents.get(buildTrackId(operatorId, streamId))?.text;
   }
 
   getReplacedFrameId(frameId: string): string | undefined {
@@ -478,10 +510,13 @@ export class DigitalFrameCoordinator extends EventEmitter<DigitalFrameCoordinato
   ): TransmissionIntent {
     return {
       operatorId: request.operatorId,
+      streamId: normalizeStreamId(request.streamId),
+      trackId: buildTrackId(request.operatorId, request.streamId),
       source: request.source,
       reason: request.reason,
       slotId,
       text: request.text,
+      audioFrequencyHz: request.audioFrequencyHz,
       decisionEpoch: request.decisionEpoch,
       replacesFrameId,
     };
@@ -577,6 +612,7 @@ export class DigitalFrameCoordinator extends EventEmitter<DigitalFrameCoordinato
       frameId: frame.frameId,
       slotId: frame.slotId,
       participantOperatorIds: [...frame.participantOperatorIds],
+      participantTrackIds: [...frame.participantTrackIds],
       decisionEpoch: frame.decisionEpoch,
       revision: frame.revision,
       phase: frame.phase,

@@ -83,6 +83,7 @@ export class PluginStorageProvider implements FlushableKVStore {
       await this.store.set(this.data, { defer });
     } catch (err) {
       logger.error(`Failed to save plugin storage: ${this.filePath}`, err);
+      if (!defer) throw err;
     }
   }
 

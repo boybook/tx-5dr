@@ -438,8 +438,7 @@ export class DeviceUiProjectionService {
         .map((status) => status.id);
     const messages = operatorIds
       .map((id) => this.operatorStatuses.get(id))
-      .map((status) => currentOperatorMessage(status))
-      .filter((message): message is string => Boolean(message));
+      .flatMap((status) => currentOperatorMessages(status));
 
     this.snapshot.ft8.currentTx = {
       active: this.pttStatus.isTransmitting || operatorIds.length > 0,
@@ -723,18 +722,23 @@ export class DeviceUiProjectionService {
   }
 }
 
-function currentOperatorMessage(status: OperatorStatus | undefined): string | null {
-  if (!status) return null;
+function currentOperatorMessages(status: OperatorStatus | undefined): string[] {
+  if (!status) return [];
+  if (status.currentTransmissions) {
+    return status.currentTransmissions
+      .map((transmission) => stringOrNull(transmission.text))
+      .filter((message): message is string => Boolean(message));
+  }
   const slot = status.currentSlot;
   if (slot && status.slots && slot in status.slots) {
     const message = status.slots[slot as keyof NonNullable<OperatorStatus['slots']>];
-    if (message) return message;
+    if (message) return [message];
   }
   if (status.runtime?.slots && slot && slot in status.runtime.slots) {
     const message = status.runtime.slots[slot as keyof NonNullable<NonNullable<OperatorStatus['runtime']>['slots']>];
-    if (message) return message;
+    if (message) return [message];
   }
-  return null;
+  return [];
 }
 
 function toFrameSnapshot(frame: SlotPack['frames'][number], slotPack: SlotPack): DeviceUiFrameSnapshot {

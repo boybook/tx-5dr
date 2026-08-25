@@ -14,6 +14,8 @@ export interface EncodeRequest {
   message: string;
   frequency: number;
   operatorId: string;
+  streamId?: string;
+  trackId?: string;
   mode?: 'FT8' | 'FT4';
   slotStartMs?: number; // 时隙开始时间戳
   timeSinceSlotStartMs?: number; // 从时隙开始到现在经过的时间（毫秒）
@@ -26,6 +28,8 @@ export interface EncodeRequest {
 
 export interface EncodeResult {
   operatorId: string;
+  streamId?: string;
+  trackId?: string;
   audioData: Float32Array;
   sampleRate: number;
   duration: number;
@@ -68,6 +72,7 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
       this.pending.push({ request, resolve });
       logger.debug('encode request queued', {
         operatorId: request.operatorId,
+        streamId: request.streamId,
         message: request.message,
         frequency: request.frequency,
         mode: request.mode || 'FT8',
@@ -172,6 +177,8 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
 
       logger.debug('encode complete', {
         operatorId: request.operatorId,
+        streamId: request.streamId,
+        trackId: request.trackId,
         duration: `${duration.toFixed(2)}s`,
         amplitude: `[${minSample.toFixed(4)}, ${maxSample.toFixed(4)}]`,
         processingTimeMs: processingTimeMs.toFixed(2),
@@ -179,6 +186,8 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
 
       const encodeResult: EncodeResult & { request?: EncodeRequest } = {
         operatorId: request.operatorId,
+        streamId: request.streamId,
+        trackId: request.trackId,
         audioData: finalAudio,
         sampleRate,
         duration,

@@ -1,0 +1,17 @@
+{
+  "strategyOverview": "WW Digi コンテスト",
+  "strategyOverviewDesc": "すべての相手局はオペレータが手動で選択します。最大3局を並行して運用できます。",
+  "contestYear": "コンテスト年",
+  "contestYearDesc": "ログと提出期間を分離する WW Digi の開催年です。",
+  "parallelStreams": "並行 QSO",
+  "parallelStreamsDesc": "同時に進行する WW Digi QSO 数（1-3）。",
+  "maxAttempts": "再送上限",
+  "maxAttemptsDesc": "相手から応答がない場合の最大送信回数。",
+  "location": "Cabrillo ロケーション",
+  "locationDesc": "米国・カナダは ARRL/RAC セクションを入力し、それ以外は DX が既定です。",
+  "categoryBand": "エントリーバンド",
+  "categoryBandDesc": "送信ログには全バンドの QSO が残ります。",
+  "categoryPower": "パワー部門",
+  "categoryPowerDesc": "WW Digi のパワーカテゴリ。",
+  "contestLogTitle": "WW Digi ログ"
+}

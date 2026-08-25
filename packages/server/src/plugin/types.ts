@@ -118,6 +118,11 @@ export interface DecisionOrchestratorDeps {
   interruptOperatorTransmission: (operatorId: string) => Promise<void>;
   requestOperatorStrategyStop?: (operatorId: string, reason: string) => void;
   transitionTargetReservation?: (operatorId: string, epoch: number, targetCallsign?: string) => boolean;
+  transitionTargetReservations?: (
+    operatorId: string,
+    epoch: number,
+    targets: Array<{ streamId: string; targetCallsign: string }>,
+  ) => boolean;
   releaseTargetReservation?: (operatorId: string, epoch?: number) => void;
   analyzeCallsignForOperator?: (
     operatorId: string,
@@ -146,6 +151,7 @@ export interface DecisionOrchestratorDeps {
   markQueueExecutionValidated?: (operatorId: string) => void;
   getStrategyRuntime: (operatorId: string) => import('@tx5dr/plugin-api').StrategyRuntime | undefined;
   getStrategyRuntimeGeneration: (operatorId: string) => number | undefined;
+  getStrategyMaxConcurrentStreams?: (operatorId: string) => number | undefined;
   invokeStrategyRuntime: <T>(
     operatorId: string,
     operation: string,
@@ -227,6 +233,11 @@ export interface PluginManagerDeps {
   interruptOperatorTransmission: (operatorId: string) => Promise<void>;
   requestOperatorStrategyStop?: (operatorId: string, reason: string) => void;
   transitionTargetReservation?: (operatorId: string, epoch: number, targetCallsign?: string) => boolean;
+  transitionTargetReservations?: (
+    operatorId: string,
+    epoch: number,
+    targets: Array<{ streamId: string; targetCallsign: string }>,
+  ) => boolean;
   releaseTargetReservation?: (operatorId: string, epoch?: number) => void;
   removeOperatorContribution?: (
     operatorId: string,

@@ -1,6 +1,7 @@
 import {
   OperatorConfig,
   QSORecord,
+  type QSOPersistencePolicy,
   DigitalRadioEngineEvents,
   MODES,
   ModeDescriptor,
@@ -21,15 +22,18 @@ interface RadioOperatorEvents extends DigitalRadioEngineEvents {
     }) => void;
     qsoLifecycleChanged: (data: {
         operatorId: string;
+        streamId?: string;
         lifecycleEpoch: number;
         runtimeGeneration?: number;
     }) => void;
     recordQSO: (data: {
         operatorId: string;
+        streamId?: string;
         qsoLifecycleId?: string;
         qsoLifecycleEpoch?: number;
         qsoRuntimeGeneration?: number;
         qsoRecord: QSORecord;
+        persistencePolicy?: QSOPersistencePolicy;
         retryAttemptId?: string;
         resolve?: (record: QSORecord) => void;
         reject?: (error: unknown) => void;
@@ -147,17 +151,21 @@ export class RadioOperator {
     }
 
     recordQSOLog(qsoRecord: QSORecord, options?: {
+        streamId?: string;
         retryAttemptId?: string;
         qsoLifecycleId?: string;
         qsoLifecycleEpoch?: number;
         qsoRuntimeGeneration?: number;
+        persistencePolicy?: QSOPersistencePolicy;
     }): Promise<QSORecord> {
         return new Promise<QSORecord>((resolve, reject) => {
             this._eventEmitter.emit('recordQSO', {
                 operatorId: this._config.id,
+                streamId: options?.streamId,
                 qsoLifecycleId: options?.qsoLifecycleId,
                 qsoLifecycleEpoch: options?.qsoLifecycleEpoch,
                 qsoRuntimeGeneration: options?.qsoRuntimeGeneration,
+                persistencePolicy: options?.persistencePolicy,
                 qsoRecord,
                 retryAttemptId: options?.retryAttemptId,
                 resolve,

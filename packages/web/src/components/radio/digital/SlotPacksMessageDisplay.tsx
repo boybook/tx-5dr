@@ -10,6 +10,7 @@ import { useCallsignFilterRules } from '../../../hooks/useCallsignFilterRules';
 import { usePluginSnapshot } from '../../../hooks/usePluginSnapshot';
 import {
   buildQueueCallsignOrder,
+  isQueueTargetAction,
   resolveOperatorTargetAction,
   submitOperatorTarget,
 } from '../operators/operatorQueuePresentation';
@@ -40,7 +41,7 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
     [pluginSnapshot.plugins, selectedOperator],
   );
   const queueCallsignOrder = useMemo(
-    () => targetAction === 'enqueue'
+    () => isQueueTargetAction(targetAction)
       ? buildQueueCallsignOrder(selectedOperator?.runtime?.queue)
       : {},
     [selectedOperator?.runtime?.queue, targetAction],

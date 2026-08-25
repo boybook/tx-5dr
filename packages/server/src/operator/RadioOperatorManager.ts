@@ -7,15 +7,18 @@ import {
   ClockSourceSystem,
   FT8MessageParser,
   LogbookOperationError,
+  type ILogProvider,
 } from '@tx5dr/core';
 import {
   type RadioOperatorConfig,
   type OperatorConfig,
   type TransmitRequest,
+  type TransmitBatchRequest,
   type DigitalRadioEngineEvents,
   type ModeDescriptor,
   type LogBookInfo,
   type QSORecord,
+  type QSOPersistencePolicy,
   type SlotPack,
   type FrameMessage,
   type DecodeApContext,
@@ -39,15 +42,18 @@ import path from 'node:path';
 import { DigitalFrameCoordinator } from '../transmission/DigitalFrameCoordinator.js';
 import { OperatorIntentCoordinator } from '../transmission/OperatorIntentCoordinator.js';
 import { TargetReservationCoordinator } from '../transmission/TargetReservationCoordinator.js';
+import { buildTrackId, normalizeStreamId } from '../transmission/TransmissionIntent.js';
 
 const logger = createLogger('RadioOperatorManager');
 
 type QueuedTransmitRequest = TransmitRequest & {
   waitForTransmitCycle?: boolean;
+  completeOperatorSet?: boolean;
 };
 
 const DEFAULT_MAX_SAME_TRANSMISSION_COUNT = 20;
 const SAME_TRANSMISSION_GUARD_RESET_REASON = 'same transmission guard limit';
+const DISTINCT_QSO_BATCH_MAX_REPLANS = 2;
 const AP_DECODE_QSO_PROGRESS: Record<string, number | undefined> = {
   TX3: 3,
   TX4: 4,
@@ -63,6 +69,17 @@ function normalizeApGrid(value: string | undefined): string | undefined {
   const normalized = value?.trim().toUpperCase();
   if (!normalized || normalized.length < 4) return undefined;
   return normalized;
+}
+
+function isLogbookRevisionConflict(error: unknown): boolean {
+  return !!error
+    && typeof error === 'object'
+    && 'code' in error
+    && (error as { code?: unknown }).code === 'LOGBOOK_REVISION_CONFLICT';
+}
+
+function qsoLifecycleKey(operatorId: string, streamId?: string): string {
+  return `${operatorId}\0${streamId?.trim() ?? ''}`;
 }
 
 function normalizeOperatorContext(context: any): any {
@@ -99,6 +116,14 @@ interface SameTransmissionGuardState {
   lastCountedSlotStartMs: number;
 }
 
+interface SameTransmissionGuardEvaluation {
+  allowed: boolean;
+  guardKey?: string;
+  nextState?: SameTransmissionGuardState;
+  attemptedCount?: number;
+  maxCount?: number;
+}
+
 export interface UnsavedQsoAttempt {
   attemptId: string;
   operatorId: string;
@@ -107,6 +132,8 @@ export interface UnsavedQsoAttempt {
   qsoLifecycleId?: string;
   qsoLifecycleEpoch?: number;
   qsoRuntimeGeneration?: number;
+  streamId?: string;
+  persistencePolicy?: QSOPersistencePolicy;
   createdAt: number;
 }
 
@@ -247,19 +274,64 @@ export class RadioOperatorManager {
       }
       this.pendingTransmissions.push({
         ...request,
+        streamId: normalizeStreamId(request.streamId),
         decisionEpoch: request.decisionEpoch ?? this.intentCoordinator.getCurrentEpoch(request.operatorId),
       });
     };
     this.eventEmitter.on('requestTransmit', handleRequestTransmit);
     this.eventListeners.set('requestTransmit', handleRequestTransmit);
 
+    const handleRequestTransmitBatch = (request: TransmitBatchRequest) => {
+      if (this.transmissionMaintenanceReason) return;
+      const operator = this.operators.get(request.operatorId);
+      if (!operator) return;
+      const maxStreams = operator.config.maxConcurrentStreams ?? 3;
+      const uniqueStreamIds = new Set(request.transmissions.map((item) => normalizeStreamId(item.streamId)));
+      if (request.transmissions.length > maxStreams || uniqueStreamIds.size !== request.transmissions.length) {
+        logger.warn('Rejected invalid operator transmission set', {
+          operatorId: request.operatorId,
+          transmissionCount: request.transmissions.length,
+          maxStreams,
+        });
+        return;
+      }
+
+      this.pendingTransmissions = this.pendingTransmissions.filter(
+        (candidate) => candidate.operatorId !== request.operatorId,
+      );
+      if (request.transmissions.length === 0) {
+        if (request.replaceExisting) {
+          this.requestStrategyStop(request.operatorId, request.reason ?? 'operator transmission set became empty');
+        }
+        return;
+      }
+      const decisionEpoch = request.decisionEpoch ?? this.intentCoordinator.getCurrentEpoch(request.operatorId);
+      for (const transmission of request.transmissions) {
+        this.pendingTransmissions.push({
+          operatorId: request.operatorId,
+          streamId: normalizeStreamId(transmission.streamId),
+          transmission: transmission.transmission,
+          audioFrequencyHz: transmission.audioFrequencyHz,
+          replaceExisting: request.replaceExisting,
+          source: request.source,
+          reason: request.reason,
+          decisionEpoch,
+          completeOperatorSet: true,
+        });
+      }
+    };
+    this.eventEmitter.on('requestTransmitBatch', handleRequestTransmitBatch);
+    this.eventListeners.set('requestTransmitBatch', handleRequestTransmitBatch);
+
     // 监听记录QSO事件
     const handleRecordQSO = async (data: {
       operatorId: string;
+      streamId?: string;
       qsoLifecycleId?: string;
       qsoLifecycleEpoch?: number;
       qsoRuntimeGeneration?: number;
       qsoRecord: QSORecord;
+      persistencePolicy?: QSOPersistencePolicy;
       retryAttemptId?: string;
       resolve?: (record: QSORecord) => void;
       reject?: (error: unknown) => void;
@@ -279,23 +351,51 @@ export class RadioOperatorManager {
       try {
         logger.debug(`Recording QSO: ${data.qsoRecord.callsign} (operator: ${data.operatorId})`);
 
-        const pendingAttempt = this.getUnsavedQsoForOperator(data.operatorId);
-        if (pendingAttempt && data.retryAttemptId !== pendingAttempt.attemptId) {
+        const retryAttempt = data.retryAttemptId
+          ? this.unsavedQsoAttempts.get(data.retryAttemptId)
+          : undefined;
+        const pendingAttempts = this.getUnsavedQsosForOperator(data.operatorId);
+        if (pendingAttempts.length > 0 && !data.retryAttemptId) {
           const error = new LogbookOperationError(
             'LOGBOOK_MAINTENANCE',
             'Resolve the existing unsaved QSO before recording another contact',
+          );
+          const logBookId = this.logManager.getOperatorLogBookId(data.operatorId)
+            ?? `operator-${data.operatorId}`;
+          const attemptId = this.rememberUnsavedQso(
+            data.operatorId,
+            logBookId,
+            data.qsoRecord,
+            data.qsoLifecycleId,
+            data.qsoLifecycleEpoch,
+            data.qsoRuntimeGeneration,
+            data.persistencePolicy,
+            data.streamId,
           );
           if (this.isCurrentQsoLifecycle(
             data.operatorId,
             data.qsoLifecycleEpoch,
             data.qsoRuntimeGeneration,
+            data.streamId,
           )) {
             this.pauseOperatorAfterLogbookFailure(data.operatorId);
           }
+          this.eventEmitter.emit('logbookWriteFailed' as any, {
+            logBookId,
+            operatorId: data.operatorId,
+            attemptId,
+            unsavedCount: this.getUnsavedQsosForOperator(data.operatorId).length,
+            error: {
+              code: error.code,
+              message: error.message,
+              occurredAt: Date.now(),
+            },
+          });
           data.reject?.(error);
           return;
         }
-        if (data.retryAttemptId && data.retryAttemptId !== pendingAttempt?.attemptId) {
+        if (data.retryAttemptId
+            && (!retryAttempt || retryAttempt.operatorId !== data.operatorId)) {
           const error = new LogbookOperationError(
             'LOGBOOK_UNSAVED_QSO_NOT_FOUND',
             'The unsaved QSO retry attempt no longer exists',
@@ -322,6 +422,8 @@ export class RadioOperatorManager {
               data.qsoLifecycleId,
               data.qsoLifecycleEpoch,
               data.qsoRuntimeGeneration,
+              data.persistencePolicy,
+              data.streamId,
             ),
             unsavedCount: 1,
             error: {
@@ -336,6 +438,7 @@ export class RadioOperatorManager {
             data.operatorId,
             data.qsoLifecycleEpoch,
             data.qsoRuntimeGeneration,
+            data.streamId,
           )) {
             this.pauseOperatorAfterLogbookFailure(data.operatorId);
           }
@@ -382,7 +485,10 @@ export class RadioOperatorManager {
         // Retain the exact first candidate so an explicit retry cannot silently
         // rebuild a different history, report, or frequency later.
         this.preparedQsoCandidates.set(persistenceKey, completedQSO);
-        const mergeCandidate = await this.findMergeCandidate(logBook.provider, completedQSO);
+        const persistencePolicy = data.persistencePolicy ?? 'merge-nearby';
+        const mergeCandidate = persistencePolicy === 'merge-nearby'
+          ? await this.findMergeCandidate(logBook.provider, completedQSO)
+          : null;
 
         let persistedQSO: QSORecord;
         let eventName: 'qsoRecordAdded' | 'qsoRecordUpdated' = 'qsoRecordAdded';
@@ -395,6 +501,10 @@ export class RadioOperatorManager {
           logger.debug(`Updating existing QSO ${mergeCandidate.id} in logbook ${logBook.name}: ${mergedQSO.callsign} @ ${new Date(mergedQSO.startTime).toISOString()} (${mergedQSO.frequency}Hz)`);
           persistedQSO = await logBook.provider.updateQSO(mergeCandidate.id, updates, data.operatorId);
           eventName = 'qsoRecordUpdated';
+        } else if (persistencePolicy === 'preserve-distinct') {
+          logger.debug(`Saving distinct QSO to logbook ${logBook.name}: ${completedQSO.callsign} @ ${new Date(completedQSO.startTime).toISOString()} (${completedQSO.frequency}Hz)`);
+          persistedQSO = await this.addDistinctQSO(logBook.provider, completedQSO, data.operatorId);
+          shouldAutoSync = true;
         } else {
           logger.debug(`Saving QSO to logbook ${logBook.name}: ${completedQSO.callsign} @ ${new Date(completedQSO.startTime).toISOString()} (${completedQSO.frequency}Hz)`);
           persistedQSO = await logBook.provider.addQSO(completedQSO, data.operatorId);
@@ -418,14 +528,21 @@ export class RadioOperatorManager {
           mode: persistedQSO.mode,
         });
 
-        this.clearUnsavedQsoForLifecycle(data.operatorId, data.qsoLifecycleId);
+        if (data.retryAttemptId) {
+          this.unsavedQsoAttempts.delete(data.retryAttemptId);
+        } else {
+          this.clearUnsavedQsoForLifecycle(data.operatorId, data.qsoLifecycleId, data.qsoRecord.id);
+        }
         this.preparedQsoCandidates.delete(persistenceKey);
         if (this.isCurrentQsoLifecycle(
           data.operatorId,
           data.qsoLifecycleEpoch,
           data.qsoRuntimeGeneration,
+          data.streamId,
         )) {
-          this.operators.get(data.operatorId)?.clearLogbookFailureBlock();
+          if (this.getUnsavedQsosForOperator(data.operatorId).length === 0) {
+            this.operators.get(data.operatorId)?.clearLogbookFailureBlock();
+          }
         }
         if (this.qsoPersistenceInFlight.get(data.operatorId) === persistenceKey) {
           this.qsoPersistenceInFlight.delete(data.operatorId);
@@ -484,12 +601,15 @@ export class RadioOperatorManager {
           data.qsoLifecycleId,
           data.qsoLifecycleEpoch,
           data.qsoRuntimeGeneration,
+          data.persistencePolicy,
+          data.streamId,
         );
         this.preparedQsoCandidates.delete(persistenceKey);
         if (this.isCurrentQsoLifecycle(
           data.operatorId,
           data.qsoLifecycleEpoch,
           data.qsoRuntimeGeneration,
+          data.streamId,
         )) {
           this.pauseOperatorAfterLogbookFailure(data.operatorId);
         }
@@ -498,7 +618,7 @@ export class RadioOperatorManager {
           logBookId: this.logManager.getOperatorLogBookId(data.operatorId) ?? `operator-${data.operatorId}`,
           operatorId: data.operatorId,
           attemptId,
-          unsavedCount: 1,
+          unsavedCount: this.getUnsavedQsosForOperator(data.operatorId).length,
           error: {
             code: operationError?.code ?? 'LOGBOOK_WRITE_FAILED',
             message: error instanceof Error ? error.message : String(error),
@@ -518,10 +638,11 @@ export class RadioOperatorManager {
 
     const handleQsoLifecycleChanged = (data: {
       operatorId: string;
+      streamId?: string;
       lifecycleEpoch: number;
       runtimeGeneration?: number;
     }) => {
-      this.activeQsoLifecycles.set(data.operatorId, {
+      this.activeQsoLifecycles.set(qsoLifecycleKey(data.operatorId, data.streamId), {
         epoch: data.lifecycleEpoch,
         runtimeGeneration: data.runtimeGeneration,
       });
@@ -710,6 +831,7 @@ export class RadioOperatorManager {
       myCallsign: config.myCallsign,
       myGrid: config.myGrid || '',
       frequency: config.frequency,
+      maxConcurrentStreams: config.maxConcurrentStreams ?? 3,
       transmitCycles: config.transmitCycles,
       maxQSOTimeoutCycles: 0,
       maxCallAttempts: 0,
@@ -774,6 +896,7 @@ export class RadioOperatorManager {
     
     this.operators.delete(operatorId);
     this.targetReservations.releaseOperator(operatorId);
+    this.clearActiveQsoLifecycles(operatorId);
     this.clearSameTransmissionGuard(operatorId);
     this._pluginManager?.removeInstancesForOperator(operatorId);
     logger.info(`Operator removed: ${operatorId}`);
@@ -896,9 +1019,11 @@ export class RadioOperatorManager {
     const operators = [];
     for (const [id, operator] of this.operators.entries()) {
       const runtimeState = this._pluginManager?.getOperatorRuntimeStatus(id);
-      const hasTransmitIntent = operator.isTransmitting
-        && this._pluginManager?.isQueueExecutionSuspended?.(id) !== true
-        && Boolean(this._pluginManager?.getCurrentTransmission?.(id));
+      const queueExecutionSuspended = this._pluginManager?.isQueueExecutionSuspended?.(id) === true;
+      const currentTransmissions = operator.isTransmitting && !queueExecutionSuspended
+        ? this._pluginManager?.getCurrentTransmissions?.(id) ?? []
+        : [];
+      const hasTransmitIntent = currentTransmissions.length > 0;
       const currentSlot = runtimeState?.currentSlot ?? 'TX6';
       const slots = runtimeState?.slots;
       let targetGrid = String(runtimeState?.context?.targetGrid ?? '');
@@ -928,6 +1053,7 @@ export class RadioOperatorManager {
         isTransmitting: operator.isTransmitting,
         isInActivePTT: this.activeTransmissionOperatorIds.has(id),
         hasTransmitIntent,
+        currentTransmissions,
         currentSlot,
         context: {
           myCall: operator.config.myCallsign,
@@ -948,6 +1074,8 @@ export class RadioOperatorManager {
           slots,
           context: runtimeState.context as any,
           availableSlots: runtimeState.availableSlots,
+          qsoLifecycleEpoch: runtimeState.qsoLifecycleEpoch,
+          streams: runtimeState.streams,
           queue: runtimeState.queue,
         } : undefined,
         slots,
@@ -1198,13 +1326,16 @@ export class RadioOperatorManager {
         qsoLifecycleId: attempt.qsoLifecycleId,
         qsoLifecycleEpoch: attempt.qsoLifecycleEpoch,
         qsoRuntimeGeneration: attempt.qsoRuntimeGeneration,
+        streamId: attempt.streamId,
+        persistencePolicy: attempt.persistencePolicy,
       })
       .then((persisted) => {
         if (this.isCurrentQsoLifecycle(
           attempt.operatorId,
           attempt.qsoLifecycleEpoch,
           attempt.qsoRuntimeGeneration,
-        )) {
+          attempt.streamId,
+        ) && this.getUnsavedQsosForOperator(attempt.operatorId).length === 0) {
           this._pluginManager?.resetOperatorPluginRuntime(
             attempt.operatorId,
             'unsaved QSO durably persisted by explicit retry',
@@ -1234,11 +1365,13 @@ export class RadioOperatorManager {
       );
     }
     this.unsavedQsoAttempts.delete(attempt.attemptId);
-    this.operators.get(attempt.operatorId)?.clearLogbookFailureBlock();
-    this._pluginManager?.resetOperatorPluginRuntime(
-      attempt.operatorId,
-      'unsaved QSO explicitly discarded',
-    );
+    if (this.getUnsavedQsosForOperator(attempt.operatorId).length === 0) {
+      this.operators.get(attempt.operatorId)?.clearLogbookFailureBlock();
+      this._pluginManager?.resetOperatorPluginRuntime(
+        attempt.operatorId,
+        'unsaved QSO explicitly discarded',
+      );
+    }
   }
 
   private requireUnsavedAttempt(
@@ -1262,8 +1395,14 @@ export class RadioOperatorManager {
     qsoLifecycleId?: string,
     qsoLifecycleEpoch?: number,
     qsoRuntimeGeneration?: number,
+    persistencePolicy?: QSOPersistencePolicy,
+    streamId?: string,
   ): string {
-    const existing = this.getUnsavedQsoForOperator(operatorId);
+    const existing = this.getUnsavedQsosForOperator(operatorId).find((attempt) => (
+      qsoLifecycleId !== undefined
+        ? attempt.qsoLifecycleId === qsoLifecycleId
+        : attempt.qsoRecord.id === record.id
+    ));
     if (existing) return existing.attemptId;
     const attemptId = randomUUID();
     this.unsavedQsoAttempts.set(attemptId, {
@@ -1274,19 +1413,27 @@ export class RadioOperatorManager {
       qsoLifecycleId,
       qsoLifecycleEpoch,
       qsoRuntimeGeneration,
+      streamId,
+      persistencePolicy,
       createdAt: Date.now(),
     });
     return attemptId;
   }
 
-  private getUnsavedQsoForOperator(operatorId: string): UnsavedQsoAttempt | undefined {
-    return [...this.unsavedQsoAttempts.values()].find(attempt => attempt.operatorId === operatorId);
+  private getUnsavedQsosForOperator(operatorId: string): UnsavedQsoAttempt[] {
+    return [...this.unsavedQsoAttempts.values()].filter(attempt => attempt.operatorId === operatorId);
   }
 
-  private clearUnsavedQsoForLifecycle(operatorId: string, qsoLifecycleId?: string): void {
+  private clearUnsavedQsoForLifecycle(
+    operatorId: string,
+    qsoLifecycleId?: string,
+    qsoRecordId?: string,
+  ): void {
     for (const [attemptId, attempt] of this.unsavedQsoAttempts) {
       if (attempt.operatorId === operatorId
-          && (qsoLifecycleId === undefined || attempt.qsoLifecycleId === qsoLifecycleId)) {
+          && (qsoLifecycleId !== undefined
+            ? attempt.qsoLifecycleId === qsoLifecycleId
+            : attempt.qsoRecord.id === qsoRecordId)) {
         this.unsavedQsoAttempts.delete(attemptId);
       }
     }
@@ -1296,14 +1443,22 @@ export class RadioOperatorManager {
     operatorId: string,
     lifecycleEpoch?: number,
     runtimeGeneration?: number,
+    streamId?: string,
   ): boolean {
     if (lifecycleEpoch === undefined) return true;
-    const active = this.activeQsoLifecycles.get(operatorId);
+    const active = this.activeQsoLifecycles.get(qsoLifecycleKey(operatorId, streamId));
     if (!active) return true;
     if (active.epoch !== lifecycleEpoch) return false;
     return runtimeGeneration === undefined
       || active.runtimeGeneration === undefined
       || active.runtimeGeneration === runtimeGeneration;
+  }
+
+  private clearActiveQsoLifecycles(operatorId: string): void {
+    const prefix = `${operatorId}\0`;
+    for (const key of this.activeQsoLifecycles.keys()) {
+      if (key.startsWith(prefix)) this.activeQsoLifecycles.delete(key);
+    }
   }
 
   private pauseOperatorAfterLogbookFailure(operatorId: string): void {
@@ -1347,43 +1502,67 @@ export class RadioOperatorManager {
   }
 
   private clearSameTransmissionGuard(operatorId: string): void {
-    this.sameTransmissionGuardStates.delete(operatorId);
+    const prefix = `${operatorId}\u0000`;
+    for (const key of this.sameTransmissionGuardStates.keys()) {
+      if (key.startsWith(prefix)) this.sameTransmissionGuardStates.delete(key);
+    }
   }
 
-  private shouldAllowTransmission(
+  private evaluateSameTransmissionGuard(
     operatorId: string,
+    streamId: string,
     transmission: string,
     slotStartMs: number,
-  ): boolean {
+  ): SameTransmissionGuardEvaluation {
     const canonicalMessage = this.canonicalizeTransmissionMessage(transmission);
     if (!canonicalMessage) {
-      return true;
+      return { allowed: true };
     }
 
-    const previous = this.sameTransmissionGuardStates.get(operatorId);
+    const guardKey = buildTrackId(operatorId, streamId);
+    const previous = this.sameTransmissionGuardStates.get(guardKey);
     if (!previous || previous.canonicalMessage !== canonicalMessage) {
-      this.sameTransmissionGuardStates.set(operatorId, {
-        canonicalMessage,
-        count: 1,
-        lastCountedSlotStartMs: slotStartMs,
-      });
-      return true;
+      return {
+        allowed: true,
+        guardKey,
+        nextState: { canonicalMessage, count: 1, lastCountedSlotStartMs: slotStartMs },
+      };
     }
 
     if (previous.lastCountedSlotStartMs === slotStartMs) {
-      return true;
+      return { allowed: true, guardKey };
     }
 
     const nextCount = previous.count + 1;
     const maxCount = this.getMaxSameTransmissionCount();
     if (nextCount > maxCount) {
-      this.stopOperatorAfterSameTransmissionLimit(operatorId, transmission, nextCount, maxCount);
-      return false;
+      return {
+        allowed: false,
+        guardKey,
+        attemptedCount: nextCount,
+        maxCount,
+      };
     }
 
-    previous.count = nextCount;
-    previous.lastCountedSlotStartMs = slotStartMs;
-    return true;
+    return {
+      allowed: true,
+      guardKey,
+      nextState: {
+        canonicalMessage,
+        count: nextCount,
+        lastCountedSlotStartMs: slotStartMs,
+      },
+    };
+  }
+
+  private commitSameTransmissionGuardEvaluations(
+    evaluations: readonly SameTransmissionGuardEvaluation[],
+  ): void {
+    for (const evaluation of evaluations) {
+      if (evaluation.guardKey && evaluation.nextState) {
+        this.sameTransmissionGuardStates.set(evaluation.guardKey, evaluation.nextState);
+      }
+    }
   }
 
   private stopOperatorAfterSameTransmissionLimit(
@@ -1456,8 +1635,13 @@ export class RadioOperatorManager {
     this.pendingTransmissions = [];
 
     const slotId = `slot-${slotStartMs}`;
-    const latestByOperator = new Map<string, QueuedTransmitRequest>();
-    for (const request of requests) latestByOperator.set(request.operatorId, request);
+    const completeSetOperators = new Set(
+      requests.filter((request) => request.completeOperatorSet).map((request) => request.operatorId),
+    );
+    const latestByTrack = new Map<string, QueuedTransmitRequest>();
+    for (const request of requests) {
+      latestByTrack.set(buildTrackId(request.operatorId, request.streamId), request);
+    }
 
     // A physical mixed frame is atomic. A correction for one participant must
     // re-encode every remaining participant so no track from the old revision
@@ -1466,12 +1650,15 @@ export class RadioOperatorManager {
     if (currentFrame && requests.length > 0) {
       const currentIntents = this.digitalFrameCoordinator.getIntentRequests(currentFrame.frameId);
       for (const intent of currentIntents) {
-        if (latestByOperator.has(intent.operatorId)) continue;
+        const trackId = buildTrackId(intent.operatorId, intent.streamId);
+        if (completeSetOperators.has(intent.operatorId) || latestByTrack.has(trackId)) continue;
         const transmission = intent.text ?? this._pluginManager?.getCurrentTransmission(intent.operatorId);
         if (!transmission) continue;
-        latestByOperator.set(intent.operatorId, {
+        latestByTrack.set(trackId, {
           operatorId: intent.operatorId,
+          streamId: normalizeStreamId(intent.streamId),
           transmission,
+          audioFrequencyHz: intent.audioFrequencyHz,
           replaceExisting: true,
           source: intent.source === 'persistence' || intent.source === 'device'
             ? 'plugin'
@@ -1481,7 +1668,7 @@ export class RadioOperatorManager {
         });
       }
     }
-    const uniqueRequests = Array.from(latestByOperator.values()).map((request) => currentFrame
+    const uniqueRequests = Array.from(latestByTrack.values()).map((request) => currentFrame
       ? {
           ...request,
           replaceExisting: true,
@@ -1492,37 +1679,103 @@ export class RadioOperatorManager {
       logger.warn(`Superseded transmit requests detected: ${requests.length} -> ${uniqueRequests.length}`);
     }
 
-    const waitingForTransmitCycle: QueuedTransmitRequest[] = [];
-    const eligibleRequests = uniqueRequests.filter((request) => {
-      const operator = this.operators.get(request.operatorId);
-      if (!operator?.isTransmitting) return false;
-      if (request.decisionEpoch !== this.intentCoordinator.getCurrentEpoch(request.operatorId)) {
-        logger.debug('Discarded stale queued transmission intent', {
+    const admissionGroups: Array<{
+      operatorId: string;
+      completeOperatorSet: boolean;
+      requests: QueuedTransmitRequest[];
+    }> = [];
+    const completeGroupsByOperator = new Map<string, typeof admissionGroups[number]>();
+    for (const request of uniqueRequests) {
+      if (!completeSetOperators.has(request.operatorId)) {
+        admissionGroups.push({
           operatorId: request.operatorId,
-          requestEpoch: request.decisionEpoch,
-          currentEpoch: this.intentCoordinator.getCurrentEpoch(request.operatorId),
+          completeOperatorSet: false,
+          requests: [request],
         });
-        return false;
+        continue;
       }
-      if (request.waitForTransmitCycle && !CycleUtils.isOperatorTransmitCycleFromMs(
+      let group = completeGroupsByOperator.get(request.operatorId);
+      if (!group) {
+        group = { operatorId: request.operatorId, completeOperatorSet: true, requests: [] };
+        completeGroupsByOperator.set(request.operatorId, group);
+        admissionGroups.push(group);
+      }
+      group.requests.push(request);
+    }
+
+    const waitingForTransmitCycle: QueuedTransmitRequest[] = [];
+    const admittedGroups: Array<{
+      requests: QueuedTransmitRequest[];
+      guardEvaluations: SameTransmissionGuardEvaluation[];
+    }> = [];
+    for (const group of admissionGroups) {
+      const operator = this.operators.get(group.operatorId);
+      if (!operator?.isTransmitting) continue;
+
+      const currentEpoch = this.intentCoordinator.getCurrentEpoch(group.operatorId);
+      const stale = group.requests.find((request) => request.decisionEpoch !== currentEpoch);
+      if (stale) {
+        logger.debug('Discarded stale queued transmission intent set', {
+          operatorId: group.operatorId,
+          completeOperatorSet: group.completeOperatorSet,
+          requestEpoch: stale.decisionEpoch,
+          currentEpoch,
+        });
+        continue;
+      }
+
+      const isTransmitCycle = CycleUtils.isOperatorTransmitCycleFromMs(
         operator.getTransmitCycles(),
         slotStartMs,
         currentMode.slotMs,
-      )) {
-        waitingForTransmitCycle.push(request);
-        return false;
+      );
+      if (!isTransmitCycle && group.requests.some((request) => request.waitForTransmitCycle)) {
+        waitingForTransmitCycle.push(...group.requests);
+        continue;
       }
-      if (!this.shouldAllowTransmission(request.operatorId, request.transmission, slotStartMs)) return false;
-      if (FT8MessageParser.rawContainsUndecodedCallsign(request.transmission)) {
-        logger.warn(`Refusing undecoded placeholder transmission: operator=${request.operatorId}`);
-        return false;
+
+      const placeholder = group.requests.find((request) => (
+        FT8MessageParser.rawContainsUndecodedCallsign(request.transmission)
+      ));
+      if (placeholder) {
+        logger.warn('Refusing operator transmission set containing an undecoded placeholder', {
+          operatorId: group.operatorId,
+          streamId: normalizeStreamId(placeholder.streamId),
+          completeOperatorSet: group.completeOperatorSet,
+        });
+        continue;
       }
-      return true;
-    });
+
+      const guardEvaluations = group.requests.map((request) => this.evaluateSameTransmissionGuard(
+        request.operatorId,
+        normalizeStreamId(request.streamId),
+        request.transmission,
+        slotStartMs,
+      ));
+      const rejectedGuardIndex = guardEvaluations.findIndex((evaluation) => !evaluation.allowed);
+      if (rejectedGuardIndex >= 0) {
+        const rejectedRequest = group.requests[rejectedGuardIndex]!;
+        const rejected = guardEvaluations[rejectedGuardIndex]!;
+        this.stopOperatorAfterSameTransmissionLimit(
+          group.operatorId,
+          rejectedRequest.transmission,
+          rejected.attemptedCount!,
+          rejected.maxCount!,
+        );
+        continue;
+      }
+
+      // Reject an internally invalid complete set without suppressing otherwise
+      // independent operators that can still contribute to this physical frame.
+      if (!this.validateMultiTrackFrequencies(group.requests, currentMode.name)) continue;
+      admittedGroups.push({ requests: group.requests, guardEvaluations });
+    }
     if (waitingForTransmitCycle.length > 0) {
       this.requeueForNextSlot(waitingForTransmitCycle, 'waiting for operator transmit cycle');
     }
+    const eligibleRequests = admittedGroups.flatMap((group) => group.requests);
     if (eligibleRequests.length === 0) return;
+    if (!this.validateMultiTrackFrequencies(eligibleRequests, currentMode.name)) return;
 
     const playbackStartMs = slotStartMs + Math.max(
       0,
@@ -1533,9 +1786,11 @@ export class RadioOperatorManager {
       slotId,
       intents: eligibleRequests.map((request) => ({
         operatorId: request.operatorId,
+        streamId: normalizeStreamId(request.streamId),
         source: request.source ?? (request.replaceExisting ? 'late-decode' : 'plugin'),
         reason: request.reason ?? (request.replaceExisting ? 'replace existing frame' : 'slot transmission'),
         text: request.transmission,
+        audioFrequencyHz: request.audioFrequencyHz,
         decisionEpoch: request.decisionEpoch
           ?? this.intentCoordinator.getCurrentEpoch(request.operatorId),
       })),
@@ -1553,6 +1808,9 @@ export class RadioOperatorManager {
       this.requeueForNextSlot(eligibleRequests, prepared.reason ?? 'complete frame does not fit current slot');
       return;
     }
+    this.commitSameTransmissionGuardEvaluations(
+      admittedGroups.flatMap((group) => group.guardEvaluations),
+    );
     this.digitalFrameCoordinator.beginEncoding(prepared.frame.frameId);
 
     const slotShiftHz = this.resolveSlotTxDialShift(
@@ -1563,11 +1821,13 @@ export class RadioOperatorManager {
 
     for (const request of eligibleRequests) {
       const operatorId = request.operatorId;
+      const streamId = normalizeStreamId(request.streamId);
       const transmission = request.transmission;
       const operator = this.operators.get(operatorId)!;
-      const frequency = operator.config.frequency || 0;
-      const intent = prepared.intents.find((candidate) => candidate.operatorId === operatorId)!;
-      const requestId = `${prepared.frame.frameId}:${operatorId}:${intent.decisionEpoch}`;
+      const frequency = request.audioFrequencyHz ?? operator.config.frequency ?? 0;
+      const trackId = buildTrackId(operatorId, streamId);
+      const intent = prepared.intents.find((candidate) => candidate.trackId === trackId)!;
+      const requestId = `${prepared.frame.frameId}:${trackId}:${intent.decisionEpoch}`;
       if (this.transmissionTracker) {
         this.transmissionTracker.startTransmission(operatorId, slotId, playbackStartMs);
         this.transmissionTracker.updatePhase(operatorId, 'preparing' as any);
@@ -1582,6 +1842,8 @@ export class RadioOperatorManager {
 
       void this.encodeQueue.push({
         operatorId,
+        streamId,
+        trackId,
         message: transmission,
         frequency: encodeFrequency,
         mode: currentMode.name === 'FT4' ? 'FT4' : 'FT8',
@@ -1596,6 +1858,48 @@ export class RadioOperatorManager {
     }
   }
 
+  private validateMultiTrackFrequencies(
+    requests: QueuedTransmitRequest[],
+    modeName: string,
+  ): boolean {
+    if (requests.length <= 1) return true;
+    const minimumSpacingHz = modeName.toUpperCase() === 'FT4' ? 100 : 60;
+    const frequencies = requests.map((request) => ({
+      operatorId: request.operatorId,
+      streamId: normalizeStreamId(request.streamId),
+      frequency: request.audioFrequencyHz
+        ?? this.operators.get(request.operatorId)?.config.frequency
+        ?? 0,
+    })).sort((left, right) => left.frequency - right.frequency);
+    const invalidRange = frequencies.find((item) => item.frequency < 100 || item.frequency > 5000);
+    let conflict: { left: typeof frequencies[number]; right: typeof frequencies[number] } | undefined;
+    for (let index = 1; index < frequencies.length; index += 1) {
+      if (frequencies[index].frequency - frequencies[index - 1].frequency < minimumSpacingHz) {
+        conflict = { left: frequencies[index - 1], right: frequencies[index] };
+        break;
+      }
+    }
+    if (!invalidRange && !conflict) return true;
+
+    logger.warn('Rejected multi-signal frame with unsafe audio-frequency layout', {
+      modeName,
+      minimumSpacingHz,
+      invalidRange,
+      conflict,
+    });
+    this.eventEmitter.emit('textMessage', {
+      title: 'Multi-signal frequency conflict',
+      text: conflict
+        ? `Audio carriers must be at least ${minimumSpacingHz} Hz apart.`
+        : 'Audio carriers must stay between 100 and 5000 Hz.',
+      color: 'warning',
+      timeout: 8000,
+      key: 'multiSignalFrequencyConflict',
+      params: { minimumSpacingHz: String(minimumSpacingHz) },
+    });
+    return false;
+  }
+
   /**
    * 虚拟频率：计算/复用本时隙统一的 dial 平移量（Hz）。
    * - 按 slotStartMs 冻结：同一时隙首次计算后固定，保证中途加入的操作员复用同一 shift，
@@ -1605,7 +1909,7 @@ export class RadioOperatorManager {
    */
   private resolveSlotTxDialShift(
     slotStartMs: number,
-    requests: TransmitRequest[],
+    requests: QueuedTransmitRequest[],
     enabled: boolean,
   ): number {
     if (this.currentSlotTxDialShift?.slotStartMs === slotStartMs) {
@@ -1615,9 +1919,10 @@ export class RadioOperatorManager {
     let shiftHz = 0;
     if (enabled) {
       const freqs = requests
-        .map((r) => this.operators.get(r.operatorId))
-        .filter((op): op is RadioOperator => !!op && op.isTransmitting)
-        .map((op) => op.config.frequency || 0)
+        .filter((request) => this.operators.get(request.operatorId)?.isTransmitting)
+        .map((request) => request.audioFrequencyHz
+          ?? this.operators.get(request.operatorId)?.config.frequency
+          ?? 0)
         .filter((f) => f > 0);
 
       if (freqs.length > 0) {
@@ -1697,11 +2002,11 @@ export class RadioOperatorManager {
       slotStartMs,
       mode.slotMs,
     );
-    const transmission = operator?.isTransmitting
-      ? this._pluginManager?.getCurrentTransmission(operatorId)
-      : null;
+    const transmissions = operator?.isTransmitting
+      ? this._pluginManager?.getCurrentTransmissions(operatorId) ?? []
+      : [];
 
-    if (!operator?.isTransmitting || !isTransmitCycle || !transmission) {
+    if (!operator?.isTransmitting || !isTransmitCycle || transmissions.length === 0) {
       const outcome = this.requestStrategyStop(operatorId, mutation.reason);
       logger.debug('Operator frame mutation removed or deferred its current contribution', {
         operatorId,
@@ -1709,7 +2014,7 @@ export class RadioOperatorManager {
         outcome,
         isTransmitting: operator?.isTransmitting ?? false,
         isTransmitCycle,
-        hasTransmission: Boolean(transmission),
+        hasTransmission: transmissions.length > 0,
       });
       return;
     }
@@ -1762,9 +2067,8 @@ export class RadioOperatorManager {
       return;
     }
 
-    // 生成发射内容
-    const transmission = this._pluginManager?.getCurrentTransmission(operatorId);
-    if (!transmission) {
+    const transmissions = this._pluginManager?.getCurrentTransmissions(operatorId) ?? [];
+    if (transmissions.length === 0) {
       logger.debug(`Operator ${operatorId} has no transmission content`);
       return;
     }
@@ -1773,9 +2077,13 @@ export class RadioOperatorManager {
 
     // 将发射请求加入队列（仅入队，交由统一的队列消费层处理）
     const currentFrame = this.digitalFrameCoordinator.getCurrentFrameForSlot(`slot-${currentSlotStartMs}`);
-    const request: TransmitRequest = {
+    const request: TransmitBatchRequest = {
       operatorId,
-      transmission,
+      transmissions: transmissions.map((item) => ({
+        streamId: item.streamId,
+        transmission: item.text,
+        audioFrequencyHz: item.audioFrequencyHz,
+      })),
       // Any new intent inside an already prepared/physical frame must rebuild
       // the complete mixed frame. Otherwise a double-click or a mid-slot TX
       // toggle would silently drop the other participants from the waveform.
@@ -1789,7 +2097,20 @@ export class RadioOperatorManager {
       decisionEpoch: options?.decisionEpoch
         ?? this.intentCoordinator.getCurrentEpoch(operatorId),
     };
-    this.pendingTransmissions.push(request);
+    this.pendingTransmissions = this.pendingTransmissions.filter((candidate) => candidate.operatorId !== operatorId);
+    for (const transmission of request.transmissions) {
+      this.pendingTransmissions.push({
+        operatorId,
+        streamId: transmission.streamId,
+        transmission: transmission.transmission,
+        audioFrequencyHz: transmission.audioFrequencyHz,
+        replaceExisting: request.replaceExisting,
+        source: request.source,
+        reason: request.reason,
+        decisionEpoch: request.decisionEpoch,
+        completeOperatorSet: true,
+      });
+    }
 
     // 由统一的队列消费层处理：构造当前时隙信息并消费队列
     // 这样可以确保：
@@ -1876,7 +2197,9 @@ export class RadioOperatorManager {
         if (!intent.text || !this.operators.get(intent.operatorId)?.isTransmitting) continue;
         this.pendingTransmissions.push({
           operatorId: intent.operatorId,
+          streamId: normalizeStreamId(intent.streamId),
           transmission: intent.text,
+          audioFrequencyHz: intent.audioFrequencyHz,
           replaceExisting: true,
           source: intent.source === 'persistence' || intent.source === 'device'
             ? 'plugin'
@@ -1895,6 +2218,13 @@ export class RadioOperatorManager {
     return outcome;
   }
 
+  notifyPhysicalTransmissionsComplete(
+    operatorId: string,
+    receipts: import('@tx5dr/plugin-api').StreamPhysicalReceipt[],
+  ): void {
+    this._pluginManager?.notifyTransmissionsCompleted?.(operatorId, receipts);
+  }
+
   notifyPhysicalTransmissionComplete(operatorId: string, transmission: string): void {
     this._pluginManager?.notifyTransmissionQueued?.(operatorId, transmission);
   }
@@ -1907,7 +2237,9 @@ export class RadioOperatorManager {
       if (!intent.text) return [];
       return [{
         operatorId: intent.operatorId,
+        streamId: normalizeStreamId(intent.streamId),
         transmission: intent.text,
+        audioFrequencyHz: intent.audioFrequencyHz,
         replaceExisting: true,
         source: intent.source === 'persistence' || intent.source === 'device'
           ? 'plugin' as const
@@ -1935,7 +2267,9 @@ export class RadioOperatorManager {
       }
       return [{
         operatorId: intent.operatorId,
+        streamId: normalizeStreamId(intent.streamId),
         transmission: intent.text,
+        audioFrequencyHz: intent.audioFrequencyHz,
         replaceExisting: true,
         source: intent.source === 'persistence' || intent.source === 'device'
           ? 'plugin' as const
@@ -1945,24 +2279,25 @@ export class RadioOperatorManager {
       }];
     });
     this.requeueForNextSlot(requests, reason);
-    return requests.map((request) => request.operatorId);
+    return Array.from(new Set(requests.map((request) => request.operatorId)));
   }
 
   private requeueForNextSlot(requests: QueuedTransmitRequest[], reason: string): void {
-    const byOperator = new Map(
-      this.pendingTransmissions.map((request) => [request.operatorId, request]),
+    const byTrack = new Map(
+      this.pendingTransmissions.map((request) => [buildTrackId(request.operatorId, request.streamId), request]),
     );
     for (const request of requests) {
       if (!this.operators.get(request.operatorId)?.isTransmitting) continue;
-      if (byOperator.has(request.operatorId)) continue;
-      byOperator.set(request.operatorId, {
+      const trackId = buildTrackId(request.operatorId, request.streamId);
+      if (byTrack.has(trackId)) continue;
+      byTrack.set(trackId, {
         ...request,
         replaceExisting: true,
         reason: `deferred to next slot: ${reason}`,
         waitForTransmitCycle: true,
       });
     }
-    this.pendingTransmissions = Array.from(byOperator.values());
+    this.pendingTransmissions = Array.from(byTrack.values());
   }
 
   /**
@@ -2172,6 +2507,7 @@ export class RadioOperatorManager {
       operator.stop();
       this.operators.delete(id);
       this.targetReservations.releaseOperator(id);
+      this.clearActiveQsoLifecycles(id);
       this.clearSameTransmissionGuard(id);
       logger.info(`Operator removed: ${id}`);
     }
@@ -2292,6 +2628,7 @@ export class RadioOperatorManager {
 
     this.operators.clear();
     this.targetReservations.clear();
+    this.activeQsoLifecycles.clear();
     this.pendingTransmissions = [];
     this.sameTransmissionGuardStates.clear();
 
@@ -2416,6 +2753,8 @@ export class RadioOperatorManager {
       strategyName: status.strategy?.name,
       strategyState: status.strategy?.state,
       runtimeQueue: status.runtime?.queue,
+      runtimeStreams: status.runtime?.streams,
+      currentTransmissions: status.currentTransmissions,
       slots: status.slots,
       transmitCycles: status.transmitCycles,
     };
@@ -2491,6 +2830,21 @@ export class RadioOperatorManager {
     return this.targetReservations.tryTransition({
       stationCallsign: operator.config.myCallsign,
       targetCallsign,
+      operatorId,
+      epoch,
+    });
+  }
+
+  transitionTargetReservations(
+    operatorId: string,
+    epoch: number,
+    targets: Array<{ streamId: string; targetCallsign: string }>,
+  ): boolean {
+    const operator = this.operators.get(operatorId);
+    if (!operator) return false;
+    return this.targetReservations.tryReplaceOperatorTargets({
+      stationCallsign: operator.config.myCallsign,
+      targets,
       operatorId,
       epoch,
     });
@@ -2689,6 +3043,32 @@ export class RadioOperatorManager {
     } catch (error) {
       logger.warn(`Failed to parse frame while rebuilding QSO history: "${frame.message}"`, error);
       return false;
+    }
+  }
+
+  private async addDistinctQSO(
+    provider: ILogProvider,
+    qsoRecord: QSORecord,
+    operatorId: string,
+  ): Promise<QSORecord> {
+    for (let replanCount = 0; ; replanCount += 1) {
+      const snapshot = await provider.readQsoSnapshot();
+      try {
+        const result = await provider.applyQsoBatch(
+          [{ type: 'add', record: qsoRecord }],
+          { expectedRevision: snapshot.revision },
+          operatorId,
+        );
+        const outcome = result.outcomes.find((candidate) => candidate.inputIndex === 0);
+        if (!outcome || outcome.status !== 'added') {
+          throw new Error('Distinct QSO batch completed without an added record outcome');
+        }
+        return outcome.record;
+      } catch (error) {
+        if (!isLogbookRevisionConflict(error) || replanCount >= DISTINCT_QSO_BATCH_MAX_REPLANS) {
+          throw error;
+        }
+      }
     }
   }
 

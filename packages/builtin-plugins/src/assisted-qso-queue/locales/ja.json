@@ -2,5 +2,7 @@
   "pluginName": "アシストキュー",
   "pluginDescription": "選択した相手局と直接呼び出した局を標準 FT8/FT4 QSO 手順で順番に処理します",
   "strategyOverview": "アシストキューの説明",
-  "strategyOverviewDesc": "メッセージ一覧の相手局をダブルクリックすると手動で追加できます。信頼できる直接呼び出しは自動で追加され、標準 FT8/FT4 手順で順番に交信します。"
+  "strategyOverviewDesc": "メッセージ一覧の相手局をダブルクリックすると手動で追加できます。信頼できる直接呼び出しは自動で追加され、標準 FT8/FT4 手順で順番に交信します。",
+  "parallelStreams": "並列 QSO 数",
+  "parallelStreamsDesc": "同時に進行する標準 FT8/FT4 QSO 数です。既定値は 1、最大 3 です。"
 }

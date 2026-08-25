@@ -187,6 +187,7 @@ export class ClockCoordinator {
 
     this.lm.listen(engineEmitter, 'transmissionLog', (data: {
       operatorId: string;
+      streamId?: string;
       time: string;
       message: string;
       frequency: number;
@@ -204,7 +205,8 @@ export class ClockCoordinator {
         data.message,
         data.frequency,
         data.slotStartMs,
-        data.replaceExisting
+        data.replaceExisting,
+        data.streamId,
       );
     });
 

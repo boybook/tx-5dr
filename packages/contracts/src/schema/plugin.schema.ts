@@ -19,6 +19,10 @@ export type PluginType = z.infer<typeof PluginTypeSchema>;
 
 export const StrategyFeaturesSchema = z.object({
   targetQueue: z.literal(1).optional(),
+  parallelTargetQueue: z.literal(1).optional(),
+  queueActivation: z.enum(['immediate', 'operator-toggle']).optional(),
+  manualInitiation: z.literal(1).optional(),
+  maxConcurrentStreams: z.number().int().min(1).max(5).optional(),
 }).optional();
 export type StrategyFeatures = z.infer<typeof StrategyFeaturesSchema>;
 
