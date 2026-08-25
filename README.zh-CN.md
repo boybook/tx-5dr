@@ -104,6 +104,31 @@ sudo bash /usr/share/tx5dr/install.sh
 | `tx5dr logs` | 跟踪服务日志（`--nginx` 查看 nginx 日志） |
 | `tx5dr doctor --fix` | 运行诊断并自动修复安全的环境配置 |
 
+### 公网域名升级后无法进入
+
+新版本会校验浏览器的 Web Origin。使用反向代理、FRP 或端口映射从公网域名访问时，必须把完整 Origin（`http://` 或 `https://`、域名以及非默认端口）加入允许列表。被拒绝的页面会显示当前 Origin 和恢复步骤；也可以直接通过 SSH 修改配置：
+
+```bash
+sudo tx5dr stop
+sudoedit /var/lib/tx5dr/config/auth.json
+```
+
+在现有 `remoteAccess` 对象中只修改以下两个字段，其他连接数和超时字段保持原样：
+
+```json
+"preset": "public",
+"allowedOrigins": ["http://radio.example.com:8076"]
+```
+
+Origin 必须与浏览器地址的协议、主机和端口完全一致，不能包含路径、查询参数或末尾斜杠。HTTP 可以使用，但不会加密令牌和控制数据，部分浏览器的麦克风/WebRTC 功能也可能受限；HTTPS 仍然建议使用，但不强制。多个公网入口可在数组中逐项填写。保存后先检查 JSON 语法，再启动服务：
+
+```bash
+sudo node -e "JSON.parse(require('fs').readFileSync('/var/lib/tx5dr/config/auth.json', 'utf8')); console.log('auth.json OK')"
+sudo tx5dr start
+```
+
+如果 `/etc/tx5dr/config.env` 中的 `TX5DR_CONFIG_DIR` 已被修改，请编辑该目录下的 `auth.json`。Docker Compose 默认对应宿主机的 `./data/config/auth.json`，修改前应先停止容器。
+
 ### 服务关系
 
 Linux 服务器版并不是单个独立进程。一键安装脚本会自动安装并编排以下几个组件：

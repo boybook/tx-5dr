@@ -17,7 +17,6 @@ import {
   UserRole,
   USER_ROLE_LEVEL,
   AuthConfigSchema,
-  isSecureRemoteAccessOrigin,
   normalizeRemoteAccessOrigin,
   RemoteAccessSecurityConfigSchema,
 } from '@tx5dr/contracts';
@@ -52,6 +51,18 @@ export class AuthManagerError extends Error {
     super(message ?? code);
     this.name = 'AuthManagerError';
   }
+}
+
+function validatePublicRemoteAccess(config: AuthConfig): AuthConfig {
+  if (config.remoteAccess.preset !== 'public') return config;
+  if (config.remoteAccess.allowedOrigins.length === 0) {
+    throw new AuthManagerError('PUBLIC_ORIGIN_REQUIRED', 'Managed public deployment requires at least one allowed web origin');
+  }
+  return config;
+}
+
+function parseAuthConfig(value: unknown): AuthConfig {
+  return validatePublicRemoteAccess(AuthConfigSchema.parse(value));
 }
 
 export class AuthManager {
@@ -110,7 +121,7 @@ export class AuthManager {
     }
     this.configStore = new JsonFileStore<AuthConfig>(this.configPath, {
       defaultValue: () => AuthConfigSchema.parse({}),
-      validate: (value) => AuthConfigSchema.parse(value),
+      validate: parseAuthConfig,
       backups: 3,
     });
     this.config = await this.configStore.load();
@@ -635,17 +646,15 @@ export class AuthManager {
       ...presetDefaults,
       ...effectiveSecurityUpdates,
     });
-    if (nextRemoteAccess.preset === 'public') {
+    const validatedRemoteAccess = validatePublicRemoteAccess({
+      ...this.config,
+      remoteAccess: nextRemoteAccess,
+    }).remoteAccess;
+    if (validatedRemoteAccess.preset === 'public') {
       const normalizedOrigins = [...new Set(nextRemoteAccess.allowedOrigins.flatMap(value => {
         const normalized = normalizeRemoteAccessOrigin(value);
         return normalized ? [normalized] : [];
       }))];
-      if (normalizedOrigins.length === 0) {
-        throw new AuthManagerError('PUBLIC_ORIGIN_REQUIRED', 'Managed public deployment requires at least one allowed web origin');
-      }
-      if (nextRemoteAccess.allowedOrigins.some(value => !isSecureRemoteAccessOrigin(value))) {
-        throw new AuthManagerError('PUBLIC_ORIGIN_INSECURE', 'Public web origins must use HTTPS; HTTP is limited to private or loopback addresses');
-      }
       nextRemoteAccess.allowedOrigins = normalizedOrigins;
     }
     this.config.remoteAccess = nextRemoteAccess;

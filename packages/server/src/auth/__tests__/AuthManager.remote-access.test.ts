@@ -89,24 +89,64 @@ describe('AuthManager remote access migration', () => {
     await expect(manager.initialize()).rejects.toThrow('Unable to recover JSON file');
   });
 
-  it('requires an explicit secure origin for managed public deployment', async () => {
+  it('requires an explicit origin for managed public deployment and accepts HTTP', async () => {
     const manager = AuthManager.getInstance();
     await manager.initialize();
 
     await expect(manager.updateRemoteAccessConfig({ preset: 'public', allowedOrigins: [] }))
       .rejects.toMatchObject({ code: 'PUBLIC_ORIGIN_REQUIRED' });
-    await expect(manager.updateRemoteAccessConfig({ preset: 'public', allowedOrigins: ['http://radio.example.com'] }))
-      .rejects.toMatchObject({ code: 'PUBLIC_ORIGIN_INSECURE' });
 
     const updated = await manager.updateRemoteAccessConfig({
       preset: 'public',
-      allowedOrigins: ['https://radio.example.com/'],
+      allowedOrigins: ['http://radio.example.com/'],
     });
     expect(updated).toMatchObject({
       preset: 'public',
-      allowedOrigins: ['https://radio.example.com'],
+      allowedOrigins: ['http://radio.example.com'],
       maxConnections: 128,
       maxConnectionsPerIp: 32,
+    });
+  });
+
+  it('loads a manually configured secure public origin', async () => {
+    writeFileSync(path.join(configDir, 'auth.json'), JSON.stringify({
+      enabled: true,
+      allowPublicViewing: false,
+      remoteAccess: {
+        preset: 'public',
+        allowedOrigins: ['https://radio.example.com'],
+      },
+      jwtSecret: 'existing-secret',
+      tokens: [],
+    }));
+
+    const manager = AuthManager.getInstance();
+    await manager.initialize();
+
+    expect(manager.getRemoteAccessConfig()).toMatchObject({
+      preset: 'public',
+      allowedOrigins: ['https://radio.example.com'],
+    });
+  });
+
+  it('loads a manually configured HTTP public origin', async () => {
+    writeFileSync(path.join(configDir, 'auth.json'), JSON.stringify({
+      enabled: true,
+      allowPublicViewing: false,
+      remoteAccess: {
+        preset: 'public',
+        allowedOrigins: ['http://radio.example.com'],
+      },
+      jwtSecret: 'existing-secret',
+      tokens: [],
+    }));
+
+    const manager = AuthManager.getInstance();
+    await manager.initialize();
+
+    expect(manager.getRemoteAccessConfig()).toMatchObject({
+      preset: 'public',
+      allowedOrigins: ['http://radio.example.com'],
     });
   });
 });

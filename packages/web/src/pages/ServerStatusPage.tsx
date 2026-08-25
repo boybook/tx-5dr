@@ -22,6 +22,10 @@ export function ServerStatusPage({ isConnecting, connectError, radioService, acc
     try { return typeof window !== 'undefined' && window.navigator.userAgent.includes('Electron'); } catch { return false; }
   })();
   const isDev = import.meta.env.DEV;
+  const isOriginDenied = accessDenied?.reason === 'origin_not_allowed';
+  const browserOrigin = (() => {
+    try { return typeof window !== 'undefined' ? window.location.origin : ''; } catch { return ''; }
+  })();
 
   const handleRetry = async () => {
     if (!radioService) return;
@@ -70,6 +74,92 @@ export function ServerStatusPage({ isConnecting, connectError, radioService, acc
       <div className="app-viewport-min-height w-full overflow-y-auto flex flex-col items-center justify-center gap-4 bg-background px-6 py-6">
         <Spinner size="lg" color="primary" />
         <p className="text-default-500 text-sm">{t('common:serverStatus.connecting')}</p>
+      </div>
+    );
+  }
+
+  if (isOriginDenied) {
+    const originExample = browserOrigin || 'https://radio.example.com';
+    return (
+      <div className="app-viewport-min-height w-full overflow-y-auto bg-background px-6 py-10">
+        <main className="mx-auto flex w-full max-w-2xl flex-col gap-6">
+          <div className="flex items-start gap-4">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-warning-50">
+              <FontAwesomeIcon icon={faTriangleExclamation} className="text-warning text-xl" />
+            </div>
+            <div>
+              <h1 className="text-xl font-semibold text-foreground">
+                {t('common:serverStatus.originDenied.title')}
+              </h1>
+              <p className="mt-1 text-sm text-default-500">
+                {t('common:serverStatus.originDenied.subtitle')}
+              </p>
+            </div>
+          </div>
+
+          <section className="border-y border-default-200 py-4">
+            <p className="text-xs font-medium text-default-500">
+              {t('common:serverStatus.originDenied.currentAddress')}
+            </p>
+            <code className="mt-2 block break-all rounded bg-default-100 px-3 py-2 text-sm text-foreground">
+              {originExample}
+            </code>
+          </section>
+
+          <section>
+            <h2 className="text-sm font-semibold text-foreground">
+              {t('common:serverStatus.originDenied.linuxTitle')}
+            </h2>
+            <ol className="mt-3 list-decimal space-y-4 pl-5 text-sm text-default-600">
+              <li>{t('common:serverStatus.originDenied.ssh')}</li>
+              <li>
+                <p>{t('common:serverStatus.originDenied.stop')}</p>
+                <code className="mt-2 block overflow-x-auto rounded bg-default-100 px-3 py-2 text-xs text-foreground">
+                  sudo tx5dr stop
+                </code>
+              </li>
+              <li>
+                <p>{t('common:serverStatus.originDenied.edit')}</p>
+                <code className="mt-2 block overflow-x-auto rounded bg-default-100 px-3 py-2 text-xs text-foreground">
+                  sudoedit /var/lib/tx5dr/config/auth.json
+                </code>
+              </li>
+              <li>
+                <p>{t('common:serverStatus.originDenied.fields')}</p>
+                <pre className="mt-2 overflow-x-auto rounded bg-default-100 px-3 py-2 text-xs text-foreground"><code>{`"preset": "public",
+"allowedOrigins": ["${originExample}"]`}</code></pre>
+                <p className="mt-2 text-xs text-warning-700">
+                  {t('common:serverStatus.originDenied.preserve')}
+                </p>
+              </li>
+              <li>
+                <p>{t('common:serverStatus.originDenied.start')}</p>
+                <code className="mt-2 block overflow-x-auto rounded bg-default-100 px-3 py-2 text-xs text-foreground">
+                  sudo tx5dr start
+                </code>
+              </li>
+            </ol>
+          </section>
+
+          <p className="text-xs text-default-500">
+            {t('common:serverStatus.originDenied.dockerHint')}
+          </p>
+
+          <Button
+            color="primary"
+            variant="flat"
+            startContent={
+              isRetrying
+                ? <Spinner size="sm" color="current" />
+                : <FontAwesomeIcon icon={faRotateRight} />
+            }
+            onPress={handleRetry}
+            isDisabled={isRetrying}
+            className="w-full sm:w-auto"
+          >
+            {isRetrying ? t('common:serverStatus.retrying') : t('common:serverStatus.originDenied.retry')}
+          </Button>
+        </main>
       </div>
     );
   }

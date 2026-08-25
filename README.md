@@ -105,6 +105,31 @@ sudo bash /usr/share/tx5dr/install.sh
 | `tx5dr logs` | Follow server logs (`--nginx` for nginx) |
 | `tx5dr doctor --fix` | Run diagnostics and apply safe environment fixes |
 
+### Public domain stops working after an upgrade
+
+Current releases validate the browser Web Origin. If you access TX-5DR through a reverse proxy, FRP, or port mapping, add the complete Origin (`http://` or `https://`, hostname, and any non-default port) to the allowlist. The rejected page now shows the current Origin and recovery steps. You can also update the configuration directly over SSH:
+
+```bash
+sudo tx5dr stop
+sudoedit /var/lib/tx5dr/config/auth.json
+```
+
+Change only these two fields inside the existing `remoteAccess` object. Keep its existing connection-limit and timeout fields:
+
+```json
+"preset": "public",
+"allowedOrigins": ["http://radio.example.com:8076"]
+```
+
+The Origin must exactly match the browser's scheme, host, and port, and cannot contain a path, query string, or trailing slash. HTTP is accepted, but it does not encrypt tokens or control traffic and some browser microphone/WebRTC features may be limited. HTTPS remains recommended, not required. Put each public entry in the array if you use more than one. Validate the JSON before starting the service:
+
+```bash
+sudo node -e "JSON.parse(require('fs').readFileSync('/var/lib/tx5dr/config/auth.json', 'utf8')); console.log('auth.json OK')"
+sudo tx5dr start
+```
+
+If `TX5DR_CONFIG_DIR` in `/etc/tx5dr/config.env` has been customized, edit `auth.json` in that directory instead. The default Docker Compose host path is `./data/config/auth.json`; stop the container before editing it.
+
 ### Service Layout
 
 Linux Server is not a single standalone process. The installer sets up and wires together:

@@ -12,7 +12,7 @@ describe('remote access origins', () => {
     expect(normalizeRemoteAccessOrigin('https://user:pass@radio.example.com')).toBeNull();
   });
 
-  it('requires HTTPS for public hosts while allowing private-network HTTP', () => {
+  it('identifies origins with transport security without enforcing public-access policy', () => {
     expect(isSecureRemoteAccessOrigin('https://radio.example.com')).toBe(true);
     expect(isSecureRemoteAccessOrigin('http://radio.example.com')).toBe(false);
     expect(isSecureRemoteAccessOrigin('http://203.0.113.10:8076')).toBe(false);
