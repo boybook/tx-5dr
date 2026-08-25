@@ -6,6 +6,8 @@ import {
   ImageHistoryRecordSchema,
   ImageComposerBackgroundSchema,
   ImagePaperBoundarySchema,
+  ImageFaxCalibrationSchema,
+  FaxCalibrationSetCommandSchema,
   ImageReceiveProfileSchema,
   ImageTemplateSchema,
   SstvTxStartCommandSchema,
@@ -70,6 +72,23 @@ describe('image radio contracts', () => {
     }).operatorId).toBe('op');
     expect(() => ImageComposerBackgroundSchema.parse({
       operatorId: '', width: 1024, height: 512, updatedAt: 1, imageUrl: '/background.png',
+    })).toThrow();
+  });
+
+  it('bounds FAX calibration commands and control points', () => {
+    const calibration = ImageFaxCalibrationSchema.parse({
+      boundaryId: 'fax:1', revision: 2, autoEnabled: true,
+      autoPoints: [{ revision: 1, referenceLine: 10, phasePixels: 2, clockPpm: 25, confidence: 0.8, source: 'phasing', status: 'locked' }],
+      manualPhasePixels: 0, manualClockPpm: 0, updatedAt: 1,
+    });
+    expect(calibration.autoPoints[0].clockPpm).toBe(25);
+    expect(FaxCalibrationSetCommandSchema.parse({
+      requestId: 'r', operatorId: 'op', sessionId: 's', boundaryId: 'fax:1', expectedRevision: 2,
+      autoEnabled: true, phasePixels: 10, clockPpm: 5000,
+    }).clockPpm).toBe(5000);
+    expect(() => FaxCalibrationSetCommandSchema.parse({
+      requestId: 'r', operatorId: 'op', sessionId: 's', boundaryId: 'fax:1', expectedRevision: 2,
+      autoEnabled: true, phasePixels: 10, clockPpm: 5001,
     })).toThrow();
   });
 });

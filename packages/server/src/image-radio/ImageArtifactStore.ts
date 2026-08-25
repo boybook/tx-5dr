@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-import { ImageArtifactSchema, type ImageArtifact, type ImageFamily, type ImagePixelFormat } from '@tx5dr/contracts';
+import { ImageArtifactSchema, type ImageArtifact, type ImageFamily, type ImagePixelFormat, type ImageFaxCalibration } from '@tx5dr/contracts';
 import { PNG } from 'pngjs';
 
 import { SafeFileWriter, loadJsonWithRecovery } from '../utils/persistence/index.js';
@@ -30,6 +30,7 @@ export interface SaveArtifactInput {
   captureStartedAt?: number;
   captureEndedAt?: number;
   truncated?: boolean;
+  faxCalibration?: ImageFaxCalibration;
 }
 
 export class ImageArtifactStore {
@@ -124,7 +125,7 @@ export class ImageArtifactStore {
       }
       png.data[out + 3] = 255;
     }
-    const encoded = PNG.sync.write(png, { colorType: 6 });
+    const encoded = await encodePng(png);
     const id = randomUUID();
     const artifact: ImageArtifact = {
       id,
@@ -146,6 +147,7 @@ export class ImageArtifactStore {
       contentHash: createHash('sha256').update(encoded).digest('hex'),
       createdAt: Date.now(),
       imageUrl: `/api/image-radio/artifacts/${id}/image`,
+      faxCalibration: input.faxCalibration,
     };
     await this.writer.writeFile(this.imagePath(id), encoded, { backups: 0 });
     this.artifacts.set(id, artifact);
@@ -242,4 +244,14 @@ export class ImageArtifactStore {
     }
     if (changed) await this.persistIndex();
   }
+}
+
+function encodePng(png: PNG): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    png.pack()
+      .on('data', (chunk: Buffer) => chunks.push(chunk))
+      .once('error', reject)
+      .once('end', () => resolve(Buffer.concat(chunks)));
+  });
 }

@@ -1035,12 +1035,13 @@ export const api = {
     return apiRequest(`/image-radio/artifacts/${encodePathSegment(id)}`, { method: 'DELETE' }, apiBase);
   },
 
-  async getImagePaperManifest(apiBase?: string): Promise<{ success: boolean; manifest: { session: import('@tx5dr/contracts').ImageSessionSummary; boundaries: import('@tx5dr/contracts').ImagePaperBoundary[]; segments: Array<{ boundaryId: string; startLine: number; endLine: number; width: number; pixelFormat: import('@tx5dr/contracts').ImagePixelFormat; snapshotUrl: string }> } }> {
+  async getImagePaperManifest(apiBase?: string): Promise<{ success: boolean; manifest: { session: import('@tx5dr/contracts').ImageSessionSummary; boundaries: import('@tx5dr/contracts').ImagePaperBoundary[]; segments: Array<{ boundaryId: string; startLine: number; endLine: number; width: number; pixelFormat: import('@tx5dr/contracts').ImagePixelFormat; snapshotUrl: string; calibration?: import('@tx5dr/contracts').ImageFaxCalibration }> } }> {
     return apiRequest('/image-radio/paper/current', { cache: 'no-store' }, apiBase);
   },
 
-  async getImagePaperSegmentSnapshot(boundaryId: string, apiBase?: string): Promise<Blob> {
-    return apiBlobRequest(`/image-radio/paper/segments/${encodePathSegment(boundaryId)}/snapshot`, { cache: 'no-store' }, apiBase);
+  async getImagePaperSegmentSnapshot(boundaryId: string, calibrationRevision?: number, apiBase?: string): Promise<Blob> {
+    const revision = calibrationRevision === undefined ? '' : `?calibrationRevision=${encodeURIComponent(String(calibrationRevision))}`;
+    return apiBlobRequest(`/image-radio/paper/segments/${encodePathSegment(boundaryId)}/snapshot${revision}`, { cache: 'no-store' }, apiBase);
   },
 
   async saveCurrentImagePaper(command: import('@tx5dr/contracts').ImagePaperSaveCommand, apiBase?: string): Promise<{ success: boolean; artifactId: string }> {

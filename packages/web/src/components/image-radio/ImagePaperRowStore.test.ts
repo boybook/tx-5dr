@@ -52,4 +52,18 @@ describe('ImagePaperRowStore', () => {
     expect([...rgba]).toEqual([1, 2, 3, 255]);
     expect([...decodeImageRowBase64('AQID')]).toEqual([1, 2, 3]);
   });
+
+  it('applies FAX phase correction across nominal paper rows', () => {
+    const store = new ImagePaperRowStore();
+    store.set(0, { width: 4, pixels: new Uint8Array([0, 1, 2, 3]), rowRevision: 0 });
+    store.set(1, { width: 4, pixels: new Uint8Array([4, 5, 6, 7]), rowRevision: 0 });
+    const rgba = new Uint8ClampedArray(8 * 4);
+    writePaperRowsToRgba(rgba, 4, 0, 2, 'gray8', store, {
+      boundaryId: 'fax', revision: 1, autoEnabled: true,
+      autoPoints: [{ revision: 1, referenceLine: 0, phasePixels: 1, clockPpm: 0, confidence: 1, source: 'manual', status: 'locked' }],
+      manualPhasePixels: 0, manualClockPpm: 0, updatedAt: 1,
+    }, 0);
+    expect([rgba[0], rgba[4], rgba[8], rgba[12], rgba[16], rgba[20], rgba[24], rgba[28]])
+      .toEqual([255, 0, 1, 2, 3, 4, 5, 6]);
+  });
 });

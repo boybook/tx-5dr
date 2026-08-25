@@ -1,9 +1,9 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { api } from '@tx5dr/core';
-import type { ImagePaperBoundary, ImageRadioStatus, ImageReceiveProfile, ImageRxEvent, ImageSessionSummary, ImageSstvModeInfo, ImageTemplate, SstvTxCommandResult, SstvTxStatus } from '@tx5dr/contracts';
+import type { FaxCalibrationCommandResult, ImageFaxCalibration, ImagePaperBoundary, ImageRadioStatus, ImageReceiveProfile, ImageRxEvent, ImageSessionSummary, ImageSstvModeInfo, ImageTemplate, SstvTxCommandResult, SstvTxStatus } from '@tx5dr/contracts';
 
-import { useConnection, useRadioModeState } from '../store/radioStore';
+import { useConnection, useCurrentOperatorId, useRadioModeState } from '../store/radioStore';
 import { decodeImageRowBase64, ImagePaperRowStore } from '../components/image-radio/ImagePaperRowStore';
 
 interface ImageRadioReceiveContextValue {
@@ -12,6 +12,7 @@ interface ImageRadioReceiveContextValue {
   rowStore: ImagePaperRowStore;
   boundaries: ImagePaperBoundary[];
   segmentSnapshots: Map<string, string>;
+  faxCalibrations: Map<string, ImageFaxCalibration>;
 }
 
 interface ImageRadioControlContextValue {
@@ -22,6 +23,8 @@ interface ImageRadioControlContextValue {
   templates: ImageTemplate[];
   configureReceive: (profile: ImageReceiveProfile) => Promise<void>;
   saveCurrentPaper: (operatorId: string) => Promise<void>;
+  setFaxCalibration: (calibration: ImageFaxCalibration, autoEnabled: boolean, phasePixels: number, clockPpm: number) => void;
+  resetFaxCalibration: (calibration: ImageFaxCalibration) => void;
   refreshTemplates: (operatorId?: string) => Promise<void>;
 }
 
@@ -33,6 +36,7 @@ const ImageRadioControlContext = createContext<ImageRadioControlContextValue | n
 export function ImageRadioProvider({ children }: { children: ReactNode }) {
   const connection = useConnection();
   const radioMode = useRadioModeState();
+  const { currentOperatorId } = useCurrentOperatorId();
   const [status, setStatus] = useState<ImageRadioStatus | null>(null);
   const [txStatus, setTxStatus] = useState<SstvTxStatus | null>(null);
   const [txCommandResult, setTxCommandResult] = useState<SstvTxCommandResult | null>(null);
@@ -42,9 +46,11 @@ export function ImageRadioProvider({ children }: { children: ReactNode }) {
   const [templates, setTemplates] = useState<ImageTemplate[]>([]);
   const [boundaries, setBoundaries] = useState<ImagePaperBoundary[]>([]);
   const [segmentSnapshots, setSegmentSnapshots] = useState(new Map<string, string>());
+  const [faxCalibrations, setFaxCalibrations] = useState(new Map<string, ImageFaxCalibration>());
   const sessionRef = useRef<ImageSessionSummary | null>(null);
   const rowStoreRef = useRef(new ImagePaperRowStore());
   const segmentSnapshotUrlsRef = useRef(new Set<string>());
+  const segmentSnapshotsRef = useRef(new Map<string, string>());
 
   const applyStatus = useCallback((value: ImageRadioStatus | null) => {
     setStatus(value);
@@ -56,6 +62,8 @@ export function ImageRadioProvider({ children }: { children: ReactNode }) {
       for (const url of segmentSnapshotUrlsRef.current) URL.revokeObjectURL(url);
       segmentSnapshotUrlsRef.current.clear();
       setSegmentSnapshots(new Map());
+      segmentSnapshotsRef.current.clear();
+      setFaxCalibrations(new Map());
       setPixelFormat(current.family === 'fax' ? 'gray8' : 'rgb8');
     }
     sessionRef.current = current;
@@ -78,6 +86,28 @@ export function ImageRadioProvider({ children }: { children: ReactNode }) {
     await api.saveCurrentImagePaper({ requestId: crypto.randomUUID(), operatorId, expectedRevision: current.revision });
   }, []);
 
+  const setFaxCalibration = useCallback((calibration: ImageFaxCalibration, autoEnabled: boolean, phasePixels: number, clockPpm: number) => {
+    const current = sessionRef.current;
+    if (!current) return;
+    const service = connection.state.radioService;
+    if (!service || !currentOperatorId) return;
+    service.setFaxCalibration({
+      requestId: crypto.randomUUID(), operatorId: currentOperatorId, sessionId: current.sessionId,
+      boundaryId: calibration.boundaryId, expectedRevision: calibration.revision,
+      autoEnabled, phasePixels, clockPpm,
+    });
+  }, [connection.state.radioService, currentOperatorId]);
+
+  const resetFaxCalibration = useCallback((calibration: ImageFaxCalibration) => {
+    const current = sessionRef.current;
+    const service = connection.state.radioService;
+    if (!current || !service || !currentOperatorId) return;
+    service.resetFaxCalibration({
+      requestId: crypto.randomUUID(), operatorId: currentOperatorId, sessionId: current.sessionId,
+      boundaryId: calibration.boundaryId, expectedRevision: calibration.revision,
+    });
+  }, [connection.state.radioService, currentOperatorId]);
+
   useEffect(() => {
     if (radioMode.engineMode !== 'image') return;
     void api.getImageRadioStatus().then((result) => applyStatus(result.status));
@@ -98,6 +128,7 @@ export function ImageRadioProvider({ children }: { children: ReactNode }) {
         setSession(event.session);
         setPixelFormat(event.pixelFormat);
         setBoundaries([]);
+        setFaxCalibrations(new Map());
       } else if (event.type === 'boundary') {
         if (event.boundary.kind === 'truncated') {
           rowStoreRef.current.deleteBefore(event.boundary.lineIndex);
@@ -126,20 +157,42 @@ export function ImageRadioProvider({ children }: { children: ReactNode }) {
           sessionRef.current = next;
           return next;
         });
+      } else if (event.type === 'faxCalibration') {
+        setFaxCalibrations((current) => new Map(current).set(event.calibration.boundaryId, event.calibration));
+        if (segmentSnapshotsRef.current.has(event.calibration.boundaryId)) void api.getImagePaperSegmentSnapshot(event.calibration.boundaryId, event.calibration.revision).then((blob) => {
+          const url = URL.createObjectURL(blob);
+          setSegmentSnapshots((current) => {
+            const previous = current.get(event.calibration.boundaryId);
+            if (previous) URL.revokeObjectURL(previous);
+            segmentSnapshotUrlsRef.current.delete(previous ?? '');
+            segmentSnapshotUrlsRef.current.add(url);
+            const next = new Map(current).set(event.calibration.boundaryId, url);
+            segmentSnapshotsRef.current = next;
+            return next;
+          });
+        }).catch(() => undefined);
+        setSession((current) => {
+          if (!current) return current;
+          const next = { ...current, revision: event.revision };
+          sessionRef.current = next;
+          return next;
+        });
       } else if (event.type === 'snapshotRequired') {
         void api.getImagePaperManifest().then(async (result) => {
           if (!result.success) return;
           sessionRef.current = result.manifest.session;
           setSession(result.manifest.session);
           setBoundaries(result.manifest.boundaries);
+          setFaxCalibrations(new Map(result.manifest.segments.flatMap((segment) => segment.calibration ? [[segment.boundaryId, segment.calibration] as const] : [])));
           const snapshots = new Map<string, string>();
           await Promise.all(result.manifest.segments.filter((segment) => segment.endLine > segment.startLine).map(async (segment) => {
-            const blob = await api.getImagePaperSegmentSnapshot(segment.boundaryId);
+            const blob = await api.getImagePaperSegmentSnapshot(segment.boundaryId, segment.calibration?.revision);
             snapshots.set(segment.boundaryId, URL.createObjectURL(blob));
           }));
           setSegmentSnapshots((current) => {
             for (const url of current.values()) URL.revokeObjectURL(url);
             segmentSnapshotUrlsRef.current = new Set(snapshots.values());
+            segmentSnapshotsRef.current = snapshots;
             return snapshots;
           });
         }).catch(() => undefined);
@@ -156,6 +209,11 @@ export function ImageRadioProvider({ children }: { children: ReactNode }) {
     ws.onWSEvent('imageRxEvent', onRxEvent);
     ws.onWSEvent('sstvTxStatus', onTxStatus);
     ws.onWSEvent('sstvTxCommandResult', onTxCommandResult);
+    const onFaxCalibrationResult = (result: FaxCalibrationCommandResult) => {
+      if (!result.accepted || !result.calibration) return;
+      setFaxCalibrations((current) => new Map(current).set(result.calibration!.boundaryId, result.calibration!));
+    };
+    ws.onWSEvent('faxCalibrationCommandResult', onFaxCalibrationResult);
     service.subscribeImageRx(true);
     return () => {
       service.subscribeImageRx(false);
@@ -163,6 +221,7 @@ export function ImageRadioProvider({ children }: { children: ReactNode }) {
       ws.offWSEvent('imageRxEvent', onRxEvent);
       ws.offWSEvent('sstvTxStatus', onTxStatus);
       ws.offWSEvent('sstvTxCommandResult', onTxCommandResult);
+      ws.offWSEvent('faxCalibrationCommandResult', onFaxCalibrationResult);
     };
   }, [applyStatus, connection.state.isReady, connection.state.radioService, radioMode.engineMode]);
 
@@ -171,13 +230,13 @@ export function ImageRadioProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const receiveValue = useMemo(() => ({
-    session, pixelFormat, rowStore: rowStoreRef.current, boundaries, segmentSnapshots,
-  }), [session, pixelFormat, boundaries, segmentSnapshots]);
+    session, pixelFormat, rowStore: rowStoreRef.current, boundaries, segmentSnapshots, faxCalibrations,
+  }), [session, pixelFormat, boundaries, segmentSnapshots, faxCalibrations]);
   const controlValue = useMemo(() => ({
     status, txStatus, txCommandResult,
     modes, templates, refreshTemplates,
-    configureReceive, saveCurrentPaper,
-  }), [status, txStatus, txCommandResult, modes, templates, refreshTemplates, configureReceive, saveCurrentPaper]);
+    configureReceive, saveCurrentPaper, setFaxCalibration, resetFaxCalibration,
+  }), [status, txStatus, txCommandResult, modes, templates, refreshTemplates, configureReceive, saveCurrentPaper, setFaxCalibration, resetFaxCalibration]);
 
   return (
     <ImageRadioControlContext.Provider value={controlValue}>

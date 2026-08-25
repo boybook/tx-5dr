@@ -130,9 +130,32 @@ export const ImagePaperBoundarySchema = z.object({
 });
 export type ImagePaperBoundary = z.infer<typeof ImagePaperBoundarySchema>;
 
+export const ImageFaxCalibrationPointSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  referenceLine: z.number().int().nonnegative(),
+  phasePixels: z.number().finite(),
+  clockPpm: z.number().finite(),
+  confidence: z.number().min(0).max(1),
+  source: z.enum(['nominal', 'phasing', 'deadSector', 'manual']),
+  status: z.enum(['nominal', 'acquiring', 'locked', 'tracking', 'degraded']),
+});
+export type ImageFaxCalibrationPoint = z.infer<typeof ImageFaxCalibrationPointSchema>;
+
+export const ImageFaxCalibrationSchema = z.object({
+  boundaryId: z.string().min(1),
+  revision: z.number().int().nonnegative(),
+  autoEnabled: z.boolean(),
+  autoPoints: z.array(ImageFaxCalibrationPointSchema).max(256),
+  manualPhasePixels: z.number().finite(),
+  manualClockPpm: z.number().finite(),
+  updatedAt: z.number(),
+});
+export type ImageFaxCalibration = z.infer<typeof ImageFaxCalibrationSchema>;
+
 export const ImageRxEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('paperStarted'), session: ImageSessionSummarySchema, pixelFormat: ImagePixelFormatSchema }),
   z.object({ type: z.literal('boundary'), sessionId: z.string(), generation: z.number().int().nonnegative(), revision: z.number().int().nonnegative(), boundary: ImagePaperBoundarySchema }),
+  z.object({ type: z.literal('faxCalibration'), sessionId: z.string(), generation: z.number().int().nonnegative(), revision: z.number().int().nonnegative(), calibration: ImageFaxCalibrationSchema }),
   z.object({ type: z.literal('signalDetected'), family: ImageFamilySchema, confidence: z.number().min(0).max(1), candidates: z.array(z.string()), timestamp: z.number() }),
   z.object({ type: z.literal('imageStarted'), session: ImageSessionSummarySchema, pixelFormat: ImagePixelFormatSchema, detection: z.string().optional(), confidence: z.number().min(0).max(1).optional() }),
   z.object({ type: z.literal('rows'), sessionId: z.string(), generation: z.number().int().nonnegative(), revision: z.number().int().nonnegative(), pixelFormat: ImagePixelFormatSchema, rows: z.array(ImageRowPatchSchema).min(1).max(8) }),
@@ -164,6 +187,7 @@ export const ImageArtifactSchema = z.object({
   contentHash: z.string(),
   createdAt: z.number(),
   imageUrl: z.string(),
+  faxCalibration: ImageFaxCalibrationSchema.optional(),
 });
 export type ImageArtifact = z.infer<typeof ImageArtifactSchema>;
 
@@ -267,3 +291,24 @@ export const ImagePaperSaveCommandSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
 });
 export type ImagePaperSaveCommand = z.infer<typeof ImagePaperSaveCommandSchema>;
+
+const FaxCalibrationCommandBaseSchema = z.object({
+  requestId: z.string().min(1).max(128),
+  operatorId: z.string().min(1),
+  sessionId: z.string().min(1),
+  boundaryId: z.string().min(1),
+  expectedRevision: z.number().int().nonnegative(),
+});
+export const FaxCalibrationSetCommandSchema = FaxCalibrationCommandBaseSchema.extend({
+  autoEnabled: z.boolean(),
+  phasePixels: z.number().finite(),
+  clockPpm: z.number().finite().min(-5000).max(5000),
+});
+export type FaxCalibrationSetCommand = z.infer<typeof FaxCalibrationSetCommandSchema>;
+export const FaxCalibrationResetCommandSchema = FaxCalibrationCommandBaseSchema;
+export type FaxCalibrationResetCommand = z.infer<typeof FaxCalibrationResetCommandSchema>;
+export const FaxCalibrationCommandResultSchema = z.object({
+  requestId: z.string(), accepted: z.boolean(),
+  calibration: ImageFaxCalibrationSchema.optional(), errorCode: z.string().optional(),
+});
+export type FaxCalibrationCommandResult = z.infer<typeof FaxCalibrationCommandResultSchema>;

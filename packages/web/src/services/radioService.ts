@@ -7,6 +7,8 @@ import type {
   WSSetOperatorContextMessage,
   SstvTxCancelCommand,
   SstvTxStartCommand,
+  FaxCalibrationSetCommand,
+  FaxCalibrationResetCommand,
 } from '@tx5dr/contracts';
 import { getApiBaseUrl, getWebSocketUrl } from '../utils/config';
 import { createLogger } from '../utils/logger';
@@ -567,6 +569,14 @@ export class RadioService {
 
   cancelSstvTx(command: SstvTxCancelCommand): void {
     if (this.isConnected) this.wsClient.cancelSstvTx(command);
+  }
+
+  setFaxCalibration(command: FaxCalibrationSetCommand): void {
+    if (this.isConnected) this.wsClient.setFaxCalibration(command);
+  }
+
+  resetFaxCalibration(command: FaxCalibrationResetCommand): void {
+    if (this.isConnected) this.wsClient.resetFaxCalibration(command);
   }
 
   /**

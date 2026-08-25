@@ -44,12 +44,16 @@ import {
   ImageRadioStatusSchema,
   ImageRxEventSchema,
   ImageRxSubscriptionSchema,
+  FaxCalibrationCommandResultSchema,
+  FaxCalibrationResetCommandSchema,
+  FaxCalibrationSetCommandSchema,
   SstvTxCancelCommandSchema,
   SstvTxCommandResultSchema,
   SstvTxStartCommandSchema,
   SstvTxStatusSchema,
   type ImageRadioStatus,
   type ImageRxEvent,
+  type FaxCalibrationCommandResult,
   type SstvTxCommandResult,
   type SstvTxStatus,
 } from './image-radio.schema.js';
@@ -75,6 +79,9 @@ export enum WSMessageType {
   SSTV_TX_CANCEL = 'sstvTxCancel',
   SSTV_TX_STATUS = 'sstvTxStatus',
   SSTV_TX_COMMAND_RESULT = 'sstvTxCommandResult',
+  FAX_CALIBRATION_SET = 'faxCalibrationSet',
+  FAX_CALIBRATION_RESET = 'faxCalibrationReset',
+  FAX_CALIBRATION_COMMAND_RESULT = 'faxCalibrationCommandResult',
   
   // ===== 引擎事件 =====
   MODE_CHANGED = 'modeChanged',
@@ -622,6 +629,21 @@ export const WSSstvTxStatusMessageSchema = WSBaseMessageSchema.extend({
 export const WSSstvTxCommandResultMessageSchema = WSBaseMessageSchema.extend({
   type: z.literal(WSMessageType.SSTV_TX_COMMAND_RESULT),
   data: SstvTxCommandResultSchema,
+});
+
+export const WSFaxCalibrationSetMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.FAX_CALIBRATION_SET),
+  data: FaxCalibrationSetCommandSchema,
+});
+
+export const WSFaxCalibrationResetMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.FAX_CALIBRATION_RESET),
+  data: FaxCalibrationResetCommandSchema,
+});
+
+export const WSFaxCalibrationCommandResultMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.FAX_CALIBRATION_COMMAND_RESULT),
+  data: FaxCalibrationCommandResultSchema,
 });
 
 export const WSSlotStartMessageSchema = WSBaseMessageSchema.extend({
@@ -1616,6 +1638,9 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSSstvTxCancelMessageSchema,
   WSSstvTxStatusMessageSchema,
   WSSstvTxCommandResultMessageSchema,
+  WSFaxCalibrationSetMessageSchema,
+  WSFaxCalibrationResetMessageSchema,
+  WSFaxCalibrationCommandResultMessageSchema,
   WSSlotStartMessageSchema,
   WSSubWindowMessageSchema,
   WSSlotPackUpdatedMessageSchema,
@@ -1860,6 +1885,7 @@ export interface DigitalRadioEngineEvents {
   imageRxEvent: (data: ImageRxEvent) => void;
   sstvTxStatus: (data: SstvTxStatus) => void;
   sstvTxCommandResult: (data: SstvTxCommandResult) => void;
+  faxCalibrationCommandResult: (data: FaxCalibrationCommandResult) => void;
 
   // 电台数值表事件
   meterData: (data: MeterData) => void;
