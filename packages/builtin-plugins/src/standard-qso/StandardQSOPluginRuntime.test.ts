@@ -546,3 +546,27 @@ describe('StandardQSOPluginRuntime partial-decode `<...>` handling', () => {
     expect(snapshot.slots?.TX5).toBe('');
   });
 });
+
+describe('StandardQSOPluginRuntime target validation', () => {
+  it('refuses a requestCall targeting the operator callsign', () => {
+    const runtime = new StandardQSOPluginRuntime(createOperator({ myCallsign: 'BG5DRB/P' }));
+
+    expect(runtime.requestCall(' bg5drb ', undefined)).toBe(false);
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.currentState).toBe('TX6');
+    expect(snapshot.context?.targetCallsign).toBeUndefined();
+    expect(snapshot.slots).toMatchObject({ TX1: '', TX2: '', TX3: '', TX4: '', TX5: '' });
+  });
+
+  it('rejects an own-callsign context patch without changing the active QSO', () => {
+    const runtime = new StandardQSOPluginRuntime(createOperator({ myCallsign: 'BG5DRB' }));
+    expect(runtime.requestCall('JA1ABC', undefined)).toBe(true);
+    const before = runtime.getSnapshot();
+
+    runtime.patchContext({ targetCallsign: 'bg5drb/P', reportSent: -3 });
+
+    const after = runtime.getSnapshot();
+    expect(after).toEqual(before);
+  });
+});
