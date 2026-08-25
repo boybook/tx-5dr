@@ -183,12 +183,25 @@ export const FrequencyPresetAddModal: React.FC<FrequencyPresetAddModalProps> = (
 
     const displayBand = normalizedBand === CUSTOM_BAND ? t('freqPresets.customBand') : normalizedBand;
     const description = newDescription.trim() || `${formatFrequencyMHz(frequencyHz)} MHz ${displayBand}`;
+    const preserveModeMetadata = editingPreset?.mode === newMode;
+    const assignedOffsetHz = preserveModeMetadata && editingPreset.assignedFrequency !== undefined
+      ? editingPreset.assignedFrequency - editingPreset.frequency
+      : null;
+    const legacyCarrierOffsetHz = preserveModeMetadata && editingPreset.carrierFrequency !== undefined
+      ? editingPreset.carrierFrequency - editingPreset.frequency
+      : null;
     const newPreset: PresetFrequency = {
       band: normalizedBand,
       mode: newMode,
       radioMode: newRadioMode,
       frequency: frequencyHz,
       description,
+      ...(preserveModeMetadata && editingPreset.region ? { region: editingPreset.region } : {}),
+      ...(preserveModeMetadata && editingPreset.imagePurpose ? { imagePurpose: editingPreset.imagePurpose } : {}),
+      ...(preserveModeMetadata && editingPreset.audioCenterHz ? { audioCenterHz: editingPreset.audioCenterHz } : {}),
+      ...(preserveModeMetadata && editingPreset.faxEmission ? { faxEmission: editingPreset.faxEmission } : {}),
+      ...(assignedOffsetHz !== null ? { assignedFrequency: frequencyHz + assignedOffsetHz } : {}),
+      ...(legacyCarrierOffsetHz !== null ? { carrierFrequency: frequencyHz + legacyCarrierOffsetHz } : {}),
       ...(supportsFmOptions && newRepeaterShift !== 'none'
         ? { repeaterShift: newRepeaterShift, repeaterOffsetHz }
         : {}),

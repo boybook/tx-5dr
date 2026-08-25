@@ -44,6 +44,12 @@ interface FrequencyPreset {
   toneMode?: 'none' | 'ctcss' | 'dcs';
   ctcssToneTenthsHz?: number;
   dcsCode?: number;
+  region?: 'global' | 'iaru1' | 'iaru2' | 'iaru3';
+  imagePurpose?: 'activity' | 'iss' | 'weatherfax';
+  audioCenterHz?: number;
+  assignedFrequency?: number;
+  faxEmission?: 'J3C' | 'F3C' | 'F1C';
+  carrierFrequency?: number;
 }
 
 /**
@@ -287,6 +293,12 @@ export const VoiceFrequencyControl: React.FC<VoiceFrequencyControlProps> = ({ pr
             toneMode: p.toneMode,
             ctcssToneTenthsHz: p.ctcssToneTenthsHz,
             dcsCode: p.dcsCode,
+            region: p.region,
+            imagePurpose: p.imagePurpose,
+            audioCenterHz: p.audioCenterHz,
+            assignedFrequency: p.assignedFrequency,
+            faxEmission: p.faxEmission,
+            carrierFrequency: p.carrierFrequency,
           }))
           .sort((a, b) => a.frequency - b.frequency);
         setPresets(voicePresets);
@@ -411,6 +423,12 @@ export const VoiceFrequencyControl: React.FC<VoiceFrequencyControlProps> = ({ pr
       radioMode: preset.radioMode ?? currentRadioMode,
       frequency: preset.frequency,
       description: preset.label,
+      ...(preset.region ? { region: preset.region } : {}),
+      ...(preset.imagePurpose ? { imagePurpose: preset.imagePurpose } : {}),
+      ...(preset.audioCenterHz ? { audioCenterHz: preset.audioCenterHz } : {}),
+      ...(preset.assignedFrequency ? { assignedFrequency: preset.assignedFrequency } : {}),
+      ...(preset.faxEmission ? { faxEmission: preset.faxEmission } : {}),
+      ...(preset.carrierFrequency ? { carrierFrequency: preset.carrierFrequency } : {}),
       ...(supportsFmOptions && preset.repeaterShift && preset.repeaterShift !== 'none'
         ? { repeaterShift: preset.repeaterShift, repeaterOffsetHz: preset.repeaterOffsetHz }
         : {}),

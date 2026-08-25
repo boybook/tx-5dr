@@ -131,6 +131,22 @@ describe('PresetFrequencySchema dial frequency precision', () => {
     expect(parsed.frequency).toBe(4_233_100);
   });
 
+  it('accepts marine FAX assigned-frequency and emission metadata', () => {
+    const parsed = PresetFrequencySchema.parse({
+      band: '4MHz',
+      mode: 'FAX',
+      radioMode: 'USB',
+      frequency: 4_197_850,
+      assignedFrequency: 4_199_750,
+      audioCenterHz: 1_900,
+      faxEmission: 'F3C',
+      imagePurpose: 'weatherfax',
+    });
+
+    expect(parsed.assignedFrequency).toBe(4_199_750);
+    expect(parsed.faxEmission).toBe('F3C');
+  });
+
   it('rejects fractional-Hz and out-of-range preset frequencies', () => {
     expect(() => PresetFrequencySchema.parse({
       band: '20m',
