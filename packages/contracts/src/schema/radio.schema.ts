@@ -26,7 +26,9 @@ export const PresetFrequencySchema = z.object({
   region: z.enum(['global', 'iaru1', 'iaru2', 'iaru3']).optional(),
   imagePurpose: z.enum(['activity', 'iss', 'weatherfax']).optional(),
   audioCenterHz: z.number().int().positive().optional(),
-  carrierFrequency: z.number().positive().optional(),
+  assignedFrequency: z.number().int().positive().max(1_000_000_000).optional(),
+  faxEmission: z.enum(['J3C', 'F3C', 'F1C']).optional(),
+  carrierFrequency: z.number().positive().optional(), // Legacy field; use assignedFrequency for published WEFAX channels.
 }).superRefine((preset, ctx) => {
   const isVoiceFmPreset = preset.mode === 'VOICE' && preset.radioMode?.toUpperCase() === 'FM';
   const hasRepeaterDuplex = preset.repeaterShift === 'minus' || preset.repeaterShift === 'plus';

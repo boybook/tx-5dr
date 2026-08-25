@@ -1,5 +1,111 @@
 import type { PresetFrequency } from '@tx5dr/contracts';
 
+const MARINE_FAX_AUDIO_CENTER_HZ = 1_900;
+
+interface MarineFaxStationDefinition {
+  callSign: string;
+  location: string;
+  region: NonNullable<PresetFrequency['region']>;
+  emission: NonNullable<PresetFrequency['faxEmission']>;
+  channels: ReadonlyArray<{ assignedFrequency: number; callSign?: string }>;
+}
+
+// NWS Worldwide Marine Radiofacsimile Broadcast Schedules, March 2025.
+// The publication lists assigned frequencies. A transceiver feeding a PC
+// decoder in USB mode tunes 1.9 kHz below the assigned frequency.
+const MARINE_FAX_STATIONS: readonly MarineFaxStationDefinition[] = [
+  {
+    callSign: 'JMH', location: 'Tokyo', region: 'iaru3', emission: 'J3C',
+    channels: [
+      { callSign: 'JMH', assignedFrequency: 3_622_500 },
+      { callSign: 'JMH2', assignedFrequency: 7_795_000 },
+      { callSign: 'JMH4', assignedFrequency: 13_988_500 },
+    ],
+  },
+  {
+    callSign: 'HLL2', location: 'Seoul', region: 'iaru3', emission: 'J3C',
+    channels: [3_585_000, 5_857_500, 7_433_500, 9_165_000, 13_570_000]
+      .map((assignedFrequency) => ({ assignedFrequency })),
+  },
+  {
+    callSign: 'XSQ', location: 'Guangzhou', region: 'iaru3', emission: 'F3C',
+    channels: [4_199_750, 8_412_500, 12_629_250, 16_826_250]
+      .map((assignedFrequency) => ({ assignedFrequency })),
+  },
+  {
+    callSign: 'NOJ', location: 'Kodiak', region: 'iaru2', emission: 'J3C',
+    channels: [2_054_000, 4_298_000, 8_459_000, 12_412_500]
+      .map((assignedFrequency) => ({ assignedFrequency })),
+  },
+  {
+    callSign: 'NMC', location: 'Pt Reyes', region: 'iaru2', emission: 'J3C',
+    channels: [4_346_000, 8_682_000, 12_786_000, 17_151_200, 22_527_000]
+      .map((assignedFrequency) => ({ assignedFrequency })),
+  },
+  {
+    callSign: 'NMG', location: 'New Orleans', region: 'iaru2', emission: 'J3C',
+    channels: [4_317_900, 8_503_900, 12_789_900, 17_146_400]
+      .map((assignedFrequency) => ({ assignedFrequency })),
+  },
+  {
+    callSign: 'NMF', location: 'Boston', region: 'iaru2', emission: 'J3C',
+    channels: [4_235_000, 6_340_500, 9_110_000, 12_750_000]
+      .map((assignedFrequency) => ({ assignedFrequency })),
+  },
+  {
+    callSign: 'KVM70', location: 'Honolulu', region: 'iaru2', emission: 'J3C',
+    channels: [9_982_500, 11_090_000, 16_135_000]
+      .map((assignedFrequency) => ({ assignedFrequency })),
+  },
+  {
+    callSign: 'VMC', location: 'Charleville', region: 'iaru3', emission: 'J3C',
+    channels: [2_628_000, 5_100_000, 11_030_000, 13_920_000, 20_469_000]
+      .map((assignedFrequency) => ({ assignedFrequency })),
+  },
+  {
+    callSign: 'VMW', location: 'Wiluna', region: 'iaru3', emission: 'J3C',
+    channels: [5_755_000, 7_535_000, 10_555_000, 15_615_000, 18_060_000]
+      .map((assignedFrequency) => ({ assignedFrequency })),
+  },
+  {
+    callSign: 'DDH3', location: 'Hamburg', region: 'iaru1', emission: 'F1C',
+    channels: [
+      { callSign: 'DDH3', assignedFrequency: 3_855_000 },
+      { callSign: 'DDK3', assignedFrequency: 7_880_000 },
+      { callSign: 'DDK6', assignedFrequency: 13_882_500 },
+    ],
+  },
+  {
+    callSign: 'GYA', location: 'Northwood', region: 'iaru1', emission: 'J3C',
+    channels: [2_618_500, 4_610_000, 8_040_000, 11_086_500]
+      .map((assignedFrequency) => ({ assignedFrequency })),
+  },
+];
+
+function formatAssignedFrequencyMHz(frequency: number): string {
+  const [whole, fraction = ''] = (frequency / 1_000_000).toFixed(6).split('.');
+  return `${whole}.${fraction.replace(/0+$/, '').padEnd(3, '0')}`;
+}
+
+function buildMarineFaxPresets(): PresetFrequency[] {
+  return MARINE_FAX_STATIONS.flatMap((station) => station.channels.map((channel) => {
+    const callSign = channel.callSign ?? station.callSign;
+    const assignedFrequency = channel.assignedFrequency;
+    return {
+      band: `${Math.floor(assignedFrequency / 1_000_000)}MHz`,
+      mode: 'FAX',
+      radioMode: 'USB',
+      frequency: assignedFrequency - MARINE_FAX_AUDIO_CENTER_HZ,
+      assignedFrequency,
+      faxEmission: station.emission,
+      description: `${callSign} ${station.location} ${formatAssignedFrequencyMHz(assignedFrequency)} MHz`,
+      region: station.region,
+      imagePurpose: 'weatherfax',
+      audioCenterHz: MARINE_FAX_AUDIO_CENTER_HZ,
+    } satisfies PresetFrequency;
+  }));
+}
+
 export class FrequencyManager {
   static readonly DEFAULT_PRESETS: PresetFrequency[] = [
     // ===== FT8 / FT4 数字模式 =====
@@ -72,11 +178,8 @@ export class FrequencyManager {
     { band: '2m', mode: 'SSTV', radioMode: 'FM', frequency: 144500000, description: '144.500 MHz SSTV · IARU 1', region: 'iaru1', imagePurpose: 'activity', audioCenterHz: 1900 },
     { band: '2m', mode: 'SSTV', radioMode: 'FM', frequency: 145800000, description: '145.800 MHz ISS SSTV RX', region: 'global', imagePurpose: 'iss', audioCenterHz: 1900 },
 
-    // ===== HF weatherfax receiver dial frequencies (carrier minus 1.9 kHz USB) =====
-    { band: '4MHz', mode: 'FAX', radioMode: 'USB', frequency: 4233100, carrierFrequency: 4235000, description: 'NMF Boston 4.235 MHz', region: 'iaru2', imagePurpose: 'weatherfax', audioCenterHz: 1900 },
-    { band: '6MHz', mode: 'FAX', radioMode: 'USB', frequency: 6338600, carrierFrequency: 6340500, description: 'NMF Boston 6.3405 MHz', region: 'iaru2', imagePurpose: 'weatherfax', audioCenterHz: 1900 },
-    { band: '9MHz', mode: 'FAX', radioMode: 'USB', frequency: 9108100, carrierFrequency: 9110000, description: 'NMF Boston 9.110 MHz', region: 'iaru2', imagePurpose: 'weatherfax', audioCenterHz: 1900 },
-    { band: '12MHz', mode: 'FAX', radioMode: 'USB', frequency: 12748100, carrierFrequency: 12750000, description: 'NMF Boston 12.750 MHz', region: 'iaru2', imagePurpose: 'weatherfax', audioCenterHz: 1900 },
+    // ===== Worldwide marine weatherfax USB dial frequencies =====
+    ...buildMarineFaxPresets(),
   ];
 
   private presets: PresetFrequency[];
@@ -88,10 +191,25 @@ export class FrequencyManager {
     }
 
     const configuredModes = new Set(customPresets.map((preset) => preset.mode));
+    const defaultFaxByFrequency = new Map(
+      FrequencyManager.DEFAULT_PRESETS
+        .filter((preset) => preset.mode === 'FAX')
+        .map((preset) => [preset.frequency, preset]),
+    );
+    const enrichedCustomPresets = customPresets.map((preset) => {
+      const matchingDefault = preset.mode === 'FAX' ? defaultFaxByFrequency.get(preset.frequency) : undefined;
+      return matchingDefault ? { ...matchingDefault, ...preset } : preset;
+    });
+    const configuredFaxFrequencies = new Set(
+      enrichedCustomPresets
+        .filter((preset) => preset.mode === 'FAX')
+        .map((preset) => preset.frequency),
+    );
     const missingImageDefaults = FrequencyManager.DEFAULT_PRESETS.filter((preset) => (
-      (preset.mode === 'SSTV' || preset.mode === 'FAX') && !configuredModes.has(preset.mode)
+      (preset.mode === 'SSTV' && !configuredModes.has('SSTV'))
+      || (preset.mode === 'FAX' && !configuredFaxFrequencies.has(preset.frequency))
     ));
-    this.presets = [...customPresets, ...missingImageDefaults];
+    this.presets = [...enrichedCustomPresets, ...missingImageDefaults];
   }
 
   getPresets(): PresetFrequency[] {
