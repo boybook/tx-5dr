@@ -1346,11 +1346,10 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
             this.logger.warn('requestCall ignored while QSO durability is unsettled', { callsign });
             return false;
         }
-        if (isUndecodedCallsignPlaceholder(callsign)) {
-            this.logger.warn(`requestCall: refusing undecoded placeholder callsign ${callsign}`);
+        this.syncOperatorConfig();
+        if (!this.canAcceptTargetCallsign(callsign, 'requestCall')) {
             return false;
         }
-        this.syncOperatorConfig();
         this.logger.debug(`requestCall: myCallsign=${this.operator.config.myCallsign}, target=${callsign}`, lastMessage);
         this.clearPost73RetryContext('manual requestCall');
         if (!lastMessage) {
@@ -1569,8 +1568,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
 
     patchContext(patch: Partial<StrategyRuntimeContext>): void {
         this.syncOperatorConfig();
-        if (patch.targetCallsign && isUndecodedCallsignPlaceholder(patch.targetCallsign)) {
-            this.logger.warn(`patchContext: refusing undecoded placeholder callsign ${patch.targetCallsign}`);
+        if (patch.targetCallsign && !this.canAcceptTargetCallsign(patch.targetCallsign, 'patchContext')) {
             return;
         }
         if (patch.targetCallsign
@@ -1603,6 +1601,18 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         if (needsSlotUpdate) {
             this.updateSlots();
         }
+    }
+
+    private canAcceptTargetCallsign(callsign: string, operation: 'requestCall' | 'patchContext'): boolean {
+        if (isUndecodedCallsignPlaceholder(callsign)) {
+            this.logger.warn(`${operation}: refusing undecoded placeholder callsign ${callsign}`);
+            return false;
+        }
+        if (callsignMatches(callsign, this.operator.config.myCallsign)) {
+            this.logger.warn(`${operation}: refusing own callsign as target ${callsign}`);
+            return false;
+        }
+        return true;
     }
 
     setState(state: SlotsIndex): void {
