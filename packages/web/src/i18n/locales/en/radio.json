@@ -447,6 +447,8 @@
     "notInitialized": "Not initialized",
     "standardFrequencyMultiTxTitle": "Same-callsign same-cycle multi-TX is prohibited",
     "standardFrequencyMultiTxDesc": "This is a prohibited transmission on standard FT8/FT4 frequencies. Stop one transmitter immediately or move it to a different cycle. Callsign: {{callsigns}}.",
+    "wwDigiStandardFrequencyBlockedTitle": "WW Digi is unavailable on standard frequencies",
+    "wwDigiStandardFrequencyBlockedDesc": "The current dial is the standard {{mode}} calling frequency, {{frequency}} MHz. Move to a non-standard frequency before enabling WW Digi transmission.",
     "autoCallPausedTitle": "Auto-call is paused",
     "autoCallPausedDesc": "{{count}} auto-call plugin(s) paused.",
     "pauseAllAutoCall": "Pause all auto-call",

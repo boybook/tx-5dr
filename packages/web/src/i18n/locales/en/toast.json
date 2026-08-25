@@ -51,6 +51,10 @@
       "title": "Stopped: repeated message",
       "description": "Operator {{operatorId}} was stopped before sending the same message again (attempt {{attemptedCount}}, limit {{maxCount}}) to avoid repeatedly occupying the frequency: {{transmission}}"
     },
+    "wwDigiStandardFrequencyBlocked": {
+      "title": "WW Digi transmission stopped",
+      "description": "WW Digi cannot transmit on the standard {{mode}} calling frequency, {{frequency}} MHz. Move to a non-standard frequency before restarting it."
+    },
     "repeaterDuplexUnsupported": {
       "title": "Repeater DUP not applied",
       "description": "Switched to {{frequency}} MHz, but this radio does not support repeater DUP control or the DUP setting failed. {{reason}}"

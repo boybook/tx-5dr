@@ -43,6 +43,7 @@ export interface TransmissionPipelineDeps {
   getCurrentMode: () => ModeDescriptor;
   getCompensationMs: () => number;
   onBeforeStartPTT?: () => Promise<void>;
+  validateDigitalFrameStart?: (operatorIds: readonly string[]) => void;
 }
 
 /**
@@ -536,6 +537,7 @@ export class TransmissionPipeline {
         },
         deferActiveUntilAudio: true,
         validateStart: () => {
+          this.deps.validateDigitalFrameStart?.(audioForTransmission.operatorIds);
           const nowMs = this.deps.clockSource.now();
           if (!this.deps.digitalFrameCoordinator.hasCompleteFrameBudget(
             committed.frameId,
@@ -739,6 +741,8 @@ export class TransmissionPipeline {
       return;
     }
 
+    this.deps.validateDigitalFrameStart?.(participantOperatorIds);
+
     const audioForTransmission = aligned;
     const result = await this.deps.physicalTxCoordinator.replaceAudioOnLease(physical.leaseId, {
       frameId,
@@ -757,6 +761,9 @@ export class TransmissionPipeline {
       expectedLeaseEpoch: physical.epoch,
       expectedPlaybackGeneration: physical.playbackGeneration,
       expectedFrameId: physical.frameId,
+      validateStart: () => {
+        this.deps.validateDigitalFrameStart?.(participantOperatorIds);
+      },
       onHandoverCommitted: () => {
         const committed = this.deps.digitalFrameCoordinator.commitFrame(frameId);
         if (committed?.phase !== 'committed') {

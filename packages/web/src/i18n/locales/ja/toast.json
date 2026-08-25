@@ -51,6 +51,10 @@
       "title": "停止中: メッセージが重複しています",
       "description": "オペレーター {{operatorId}} が {{attemptedCount}} 時間同じメッセージを送信しようとすると、周波数の繰り返し占有を避けるために自動的に停止されました (最大 {{maxCount}} 回): {{transmission}}"
     },
+    "wwDigiStandardFrequencyBlocked": {
+      "title": "WW Digi の送信を停止しました",
+      "description": "WW Digi は {{mode}} の標準交信周波数 {{frequency}} MHz では送信できません。標準外の周波数へ移動してから再開してください。"
+    },
     "repeaterDuplexUnsupported": {
       "title": "リピータ周波数オフセットは効果がありません",
       "description": "{{frequency}} MHz に切り替えましたが、現在の無線はリピーター周波数オフセットをサポートしていないか、設定できませんでした。 {{reason}}"

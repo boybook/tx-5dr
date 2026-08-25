@@ -42,6 +42,7 @@ const logger = createLogger('RadioOperator');
 interface RadioOperatorProps {
   operatorStatus: OperatorStatus;
   pluginStatuses: PluginStatus[];
+  isWwDigiStandardFrequencyBlocked?: boolean;
 }
 
 type RuntimeSlotContents = Partial<Record<OperatorRuntimeSlot, string>>;
@@ -66,7 +67,11 @@ function createRuntimeSlotContents(slots: OperatorStatus['slots']): RuntimeSlotC
   };
 }
 
-export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operatorStatus, pluginStatuses }) => {
+export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
+  operatorStatus,
+  pluginStatuses,
+  isWwDigiStandardFrequencyBlocked = false,
+}) => {
   const { t } = useTranslation('radio');
   const connection = useConnection();
   const radio = useRadioState();
@@ -919,6 +924,10 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       return;
     }
 
+    if (isSelected && isWwDigiStandardFrequencyBlocked) {
+      return;
+    }
+
     logger.debug('Switch value changed:', { isSelected, operatorId: operatorStatus.id });
     if (connection.state.radioService) {
       if (isSelected) {
@@ -1033,7 +1042,9 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                       event.preventDefault();
                     }
                   }}
-                  title={hasAutoCallControlStatus
+                  title={isWwDigiStandardFrequencyBlocked && !operatorStatus.isTransmitting
+                    ? t('operator.wwDigiStandardFrequencyBlockedTitle')
+                    : hasAutoCallControlStatus
                     ? (isAutoCallControlPaused
                       ? t('operator.autoCallPausedTitle', 'Auto-call is paused')
                       : t('operator.autoCallStatus', 'Auto-call enabled'))
@@ -1045,7 +1056,8 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                     size="sm"
                     color="danger"
                     classNames={pttSwitchClassNames}
-                    isDisabled={!connection.state.isConnected}
+                    isDisabled={!connection.state.isConnected
+                      || (isWwDigiStandardFrequencyBlocked && !operatorStatus.isTransmitting)}
                     aria-label={t('operator.toggleTx')}
                   />
                 </div>
@@ -1632,4 +1644,5 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
 }, (prevProps, nextProps) => (
   shouldRadioOperatorPropsBeEqual(prevProps.operatorStatus, nextProps.operatorStatus)
   && prevProps.pluginStatuses === nextProps.pluginStatuses
+  && prevProps.isWwDigiStandardFrequencyBlocked === nextProps.isWwDigiStandardFrequencyBlocked
 )); 

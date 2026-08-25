@@ -2554,6 +2554,91 @@ describe('RadioOperatorManager operator status payloads', () => {
   });
 });
 
+describe('RadioOperatorManager WW Digi standard-frequency restriction', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('refuses to start WW Digi on a standard dial frequency', async () => {
+    let strategyName = 'ww-digi';
+    let dialFrequency = 14_074_000;
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      getKnownRadioFrequency: () => dialFrequency,
+    });
+    await manager.addOperator({
+      id: 'op1',
+      myCallsign: 'BG5DRB',
+      myGrid: 'PM01',
+      frequency: 1500,
+      transmitCycles: [0],
+    } as RadioOperatorConfig);
+    manager.setPluginManager({
+      getOperatorRuntimeStatus: vi.fn(() => ({ strategyName, currentSlot: 'TX6' })),
+      getCurrentTransmissions: vi.fn(() => []),
+    } as any);
+
+    expect(() => manager.startOperator('op1')).toThrow(
+      'WW Digi is unavailable on the standard FT8 dial frequency 14.074 MHz',
+    );
+    expect(manager.getOperatorById('op1')?.isTransmitting).toBe(false);
+
+    strategyName = 'standard-qso';
+    expect(() => manager.startOperator('op1')).not.toThrow();
+    expect(manager.getOperatorById('op1')?.isTransmitting).toBe(true);
+    manager.stopOperator('op1');
+
+    strategyName = 'ww-digi';
+    dialFrequency = 14_090_000;
+    expect(() => manager.startOperator('op1')).not.toThrow();
+    expect(manager.getOperatorById('op1')?.isTransmitting).toBe(true);
+  });
+
+  it('stops a bypassed WW Digi operator before RF encoding', async () => {
+    const encodeQueue = { push: vi.fn() };
+    const { manager, eventEmitter } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      encodeQueue,
+      getKnownRadioFrequency: () => 14_074_000,
+    });
+    await manager.addOperator({
+      id: 'op1',
+      myCallsign: 'BG5DRB',
+      myGrid: 'PM01',
+      frequency: 1500,
+      maxConcurrentStreams: 3,
+      transmitCycles: [0],
+    } as RadioOperatorConfig);
+    manager.setPluginManager({
+      getOperatorRuntimeStatus: vi.fn(() => ({ strategyName: 'ww-digi', currentSlot: 'parallel' })),
+      getCurrentTransmissions: vi.fn(() => []),
+      suspendQueueExecution: vi.fn(),
+    } as any);
+    manager.start();
+    manager.getOperatorById('op1')!.start();
+
+    const textMessageSpy = vi.fn();
+    eventEmitter.on('textMessage', textMessageSpy);
+    eventEmitter.emit('requestTransmitBatch', {
+      operatorId: 'op1',
+      transmissions: [
+        { streamId: 'stream-1', transmission: 'JA1AAA BG5DRB PM01', audioFrequencyHz: 1400 },
+        { streamId: 'stream-2', transmission: 'JA2BBB BG5DRB PM01', audioFrequencyHz: 1600 },
+      ],
+      source: 'plugin',
+    });
+
+    manager.processPendingTransmissions(createSlotInfo(0));
+
+    expect(encodeQueue.push).not.toHaveBeenCalled();
+    expect(manager.getOperatorById('op1')?.isTransmitting).toBe(false);
+    expect(textMessageSpy).toHaveBeenCalledWith(expect.objectContaining({
+      key: 'wwDigiStandardFrequencyBlocked',
+      params: { mode: 'FT8', frequency: '14.074' },
+    }));
+  });
+});
+
 describe('RadioOperatorManager transmission acceptance notification', () => {
   afterEach(() => {
     vi.restoreAllMocks();
