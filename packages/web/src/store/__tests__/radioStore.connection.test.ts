@@ -82,6 +82,19 @@ describe('radioStore connection reducer', () => {
     expect(shouldShowServerStatusPage(deniedState)).toBe(true);
   });
 
+  it('shows origin recovery even after the client was previously ready', () => {
+    const readyState = connectionReducer(
+      connectionReducer(initialConnectionState, { type: 'connected' }),
+      { type: 'handshakeComplete' },
+    );
+    const deniedState = connectionReducer(readyState, {
+      type: 'disconnected',
+      payload: { reason: 'origin_not_allowed' },
+    });
+
+    expect(shouldShowServerStatusPage(deniedState)).toBe(true);
+  });
+
   it('force reconnects when reusing an already open singleton service', () => {
     expect(getRadioServiceBootstrapAction({ isConnected: true, isConnecting: false })).toBe('forceReconnect');
   });

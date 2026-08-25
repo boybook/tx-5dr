@@ -1,5 +1,4 @@
 import {
-  isSecureRemoteAccessOrigin,
   normalizeRemoteAccessOrigin,
   type RemoteAccessSecurityStatus,
   type RemoteAccessPreset,
@@ -37,7 +36,7 @@ export function validateRemoteAccessDraft(
   if (settings.allowedOrigins.length === 0 || settings.allowedOrigins.every(value => !value.trim())) {
     return 'originRequired';
   }
-  return settings.allowedOrigins.some(value => !isSecureRemoteAccessOrigin(value))
+  return settings.allowedOrigins.some(value => !normalizeRemoteAccessOrigin(value))
     ? 'originInvalid'
     : null;
 }

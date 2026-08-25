@@ -1,8 +1,9 @@
 import type { ConnectionState } from './types';
 
 export function shouldShowServerStatusPage(connection: ConnectionState): boolean {
-  const capacityDenied = connection.accessDenied?.reason === 'capacity_reached'
-    || connection.accessDenied?.reason === 'ip_limit_reached';
+  const stableDeniedPage = connection.accessDenied?.reason === 'capacity_reached'
+    || connection.accessDenied?.reason === 'ip_limit_reached'
+    || connection.accessDenied?.reason === 'origin_not_allowed';
 
-  return capacityDenied || !connection.wasEverReady;
+  return stableDeniedPage || !connection.wasEverReady;
 }

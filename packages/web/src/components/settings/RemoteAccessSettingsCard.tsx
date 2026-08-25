@@ -7,7 +7,6 @@ import {
   normalizeRemoteAccessOrigin,
   REMOTE_ACCESS_PRESET_LIMITS,
 } from './remoteAccessDraft';
-import { isSecureRemoteAccessOrigin } from '@tx5dr/contracts';
 
 const PRESETS: RemoteAccessPreset[] = ['local', 'lan', 'public'];
 
@@ -145,13 +144,13 @@ export function RemoteAccessSettingsCard({
 
             <div className="space-y-3">
               {settings.allowedOrigins.map((origin, index) => {
-                const invalid = origin.length > 0 && (!normalizeRemoteAccessOrigin(origin) || !isSecureRemoteAccessOrigin(origin));
+                const invalid = origin.length > 0 && !normalizeRemoteAccessOrigin(origin);
                 return (
                   <div key={index} className="flex items-start gap-2">
                     <Input
                       className="flex-1"
                       label={t('system.remoteAccessWebAddress', { index: index + 1 })}
-                      placeholder="https://radio.example.com"
+                      placeholder="http://radio.example.com:8076"
                       value={origin}
                       isInvalid={invalid}
                       errorMessage={invalid ? t('system.remoteAccessOriginInvalid') : undefined}

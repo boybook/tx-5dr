@@ -285,7 +285,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     try {
       updated = await authManager.updateRemoteAccessConfig(body);
     } catch (error) {
-      if (error instanceof AuthManagerError && ['PUBLIC_ORIGIN_REQUIRED', 'PUBLIC_ORIGIN_INSECURE'].includes(error.code)) {
+      if (error instanceof AuthManagerError && error.code === 'PUBLIC_ORIGIN_REQUIRED') {
         return reply.code(400).send({
           success: false,
           error: { code: error.code, message: error.message, userMessage: error.message },
