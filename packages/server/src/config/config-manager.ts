@@ -125,7 +125,7 @@ export interface AppConfig {
   logLevel?: 'debug' | 'info' | 'warn' | 'error';
   /** Decode window settings per mode (preset or custom timing) */
   decodeWindowSettings?: DecodeWindowSettings;
-  /** Custom frequency presets (null/undefined = use built-in defaults, includes all modes: FT8/FT4/VOICE) */
+  /** Custom frequency presets (null/undefined = use built-in defaults for every supported preset mode) */
   customFrequencyPresets?: PresetFrequency[] | null;
   /** Last used engine mode ('digital' or 'voice'). Restored on startup. */
   lastEngineMode?: 'digital' | 'voice' | 'cw' | 'image';

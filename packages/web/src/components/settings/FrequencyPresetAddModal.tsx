@@ -20,8 +20,9 @@ import {
   formatDcsCode,
 } from '../../utils/toneSquelch';
 import { FALLBACK_VOICE_RADIO_MODES, normalizeVoiceRadioMode } from '../../utils/voiceRadioModeOptions';
+import { formatFrequencyMHz, parseFrequencyMHzToHz } from '../../utils/frequencyMHz';
 
-const MODE_OPTIONS = ['FT8', 'FT4', 'VOICE'];
+const MODE_OPTIONS = ['FT8', 'FT4', 'VOICE', 'SSTV', 'FAX'];
 const REPEATER_SHIFT_OPTIONS = ['none', 'minus', 'plus'] as const;
 const TONE_SQUELCH_OPTIONS = ['none', 'ctcss', 'dcs'] as const;
 const CUSTOM_BAND = 'custom';
@@ -73,9 +74,9 @@ export const FrequencyPresetAddModal: React.FC<FrequencyPresetAddModalProps> = (
     setNewRadioMode(editingPreset?.radioMode ?? initialRadioMode);
     setNewFreqMHz(
       editingPreset?.frequency
-        ? (editingPreset.frequency / 1_000_000).toFixed(3)
+        ? formatFrequencyMHz(editingPreset.frequency)
         : initialFrequencyHz
-          ? (initialFrequencyHz / 1_000_000).toFixed(3)
+          ? formatFrequencyMHz(initialFrequencyHz)
           : '',
     );
     setNewRepeaterShift((editingPreset?.repeaterShift ?? 'none') as RepeaterShiftOption);
@@ -98,17 +99,15 @@ export const FrequencyPresetAddModal: React.FC<FrequencyPresetAddModalProps> = (
   }, [editingPreset, initialFrequencyHz, initialMode, initialRadioMode, isOpen]);
 
   const inferredBand = useMemo(() => {
-    const freqValue = parseFloat(newFreqMHz);
-    if (!Number.isFinite(freqValue) || freqValue <= 0) {
+    const frequencyHz = parseFrequencyMHzToHz(newFreqMHz);
+    if (frequencyHz === null) {
       return null;
     }
-    const frequencyHz = Math.round(freqValue * 1_000_000);
     const band = getBandFromFrequency(frequencyHz);
     return band && band !== 'Unknown' ? band : null;
   }, [newFreqMHz]);
   const hasValidFrequencyInput = useMemo(() => {
-    const freqValue = parseFloat(newFreqMHz);
-    return Number.isFinite(freqValue) && freqValue > 0;
+    return parseFrequencyMHzToHz(newFreqMHz) !== null;
   }, [newFreqMHz]);
   const bandLabel = useMemo(
     () => inferredBand ?? (hasValidFrequencyInput ? t('freqPresets.customBand') : t('freqPresets.bandAutoPending')),
@@ -132,11 +131,12 @@ export const FrequencyPresetAddModal: React.FC<FrequencyPresetAddModalProps> = (
 
   const handleAdd = async () => {
     setAddError('');
-    const freqValue = parseFloat(newFreqMHz);
-    if (isNaN(freqValue) || freqValue <= 0) {
+    const frequencyHz = parseFrequencyMHzToHz(newFreqMHz);
+    if (frequencyHz === null) {
       setAddError(t('freqPresets.invalidFrequency'));
       return;
     }
+    const freqValue = frequencyHz / 1_000_000;
     if (freqValue < 0.1 || freqValue > 1000) {
       setAddError(t('freqPresets.frequencyRange'));
       return;
@@ -168,17 +168,21 @@ export const FrequencyPresetAddModal: React.FC<FrequencyPresetAddModalProps> = (
       }
     }
 
-    const frequencyHz = Math.round(freqValue * 1_000_000);
     const band = getBandFromFrequency(frequencyHz);
     const normalizedBand = band && band !== 'Unknown' ? band : CUSTOM_BAND;
 
-    if (presets.some(p => p.frequency === frequencyHz && p.frequency !== editingPreset?.frequency)) {
+    const isCurrentPreset = (preset: PresetFrequency) => Boolean(
+      editingPreset
+      && preset.mode === editingPreset.mode
+      && preset.frequency === editingPreset.frequency
+    );
+    if (presets.some(p => p.mode === newMode && p.frequency === frequencyHz && !isCurrentPreset(p))) {
       setAddError(t('freqPresets.duplicate'));
       return;
     }
 
     const displayBand = normalizedBand === CUSTOM_BAND ? t('freqPresets.customBand') : normalizedBand;
-    const description = newDescription.trim() || `${freqValue.toFixed(3)} MHz ${displayBand}`;
+    const description = newDescription.trim() || `${formatFrequencyMHz(frequencyHz)} MHz ${displayBand}`;
     const newPreset: PresetFrequency = {
       band: normalizedBand,
       mode: newMode,
@@ -285,7 +289,8 @@ export const FrequencyPresetAddModal: React.FC<FrequencyPresetAddModalProps> = (
               if (addError) setAddError('');
             }}
             type="number"
-            step="0.001"
+            inputMode="decimal"
+            step="0.000001"
             description={t('freqPresets.frequencyRange')}
             isInvalid={!!addError}
             errorMessage={addError}

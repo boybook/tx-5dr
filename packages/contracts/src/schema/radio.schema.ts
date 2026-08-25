@@ -14,9 +14,9 @@ export const ToneSquelchModeSchema = z.enum(['none', 'ctcss', 'dcs']);
 /** Saved dial-frequency preset with band, digital mode and radio modulation. */
 export const PresetFrequencySchema = z.object({
   band: z.string(),
-  mode: z.string(), // 协议模式，如 FT8, FT4
+  mode: z.string(), // 协议模式，如 FT8、FT4、VOICE、SSTV、FAX
   radioMode: z.string().optional(), // 电台调制模式，如 USB, LSB, AM, FM
-  frequency: z.number(),
+  frequency: z.number().int().positive().max(1_000_000_000), // 拨盘频率，单位 Hz（MHz 输入最多 6 位小数）
   description: z.string().optional(),
   repeaterShift: RepeaterShiftSchema.optional(), // 中继差频方向，默认 none
   repeaterOffsetHz: z.number().int().positive().optional(), // 中继偏移，单位 Hz

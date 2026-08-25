@@ -119,6 +119,32 @@ describe('PresetFrequencySchema repeater DUP fields', () => {
   });
 });
 
+describe('PresetFrequencySchema dial frequency precision', () => {
+  it('accepts integer-Hz presets represented by up to six MHz decimal places', () => {
+    const parsed = PresetFrequencySchema.parse({
+      band: '4MHz',
+      mode: 'FAX',
+      radioMode: 'USB',
+      frequency: 4_233_100,
+    });
+
+    expect(parsed.frequency).toBe(4_233_100);
+  });
+
+  it('rejects fractional-Hz and out-of-range preset frequencies', () => {
+    expect(() => PresetFrequencySchema.parse({
+      band: '20m',
+      mode: 'SSTV',
+      frequency: 14_230_000.5,
+    })).toThrow();
+    expect(() => PresetFrequencySchema.parse({
+      band: 'custom',
+      mode: 'VOICE',
+      frequency: 1_000_000_001,
+    })).toThrow();
+  });
+});
+
 describe('PresetFrequencySchema tone squelch fields', () => {
   it('accepts CTCSS tone presets with positive 0.1 Hz values', () => {
     const parsed = PresetFrequencySchema.parse({

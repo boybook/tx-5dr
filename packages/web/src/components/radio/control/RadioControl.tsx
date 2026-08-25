@@ -40,6 +40,7 @@ import {
 } from '../../../realtime/realtimeConnectivity';
 import { resetOperatorsForOperatingStateChange } from '../../../utils/operatorReset';
 import { setRadioFrequencyWithIntent } from '../../../utils/radioFrequencyIntent';
+import { formatFrequencyMHz } from '../../../utils/frequencyMHz';
 import {
   loadRealtimeAudioCodecPreference,
   saveRealtimeAudioCodecPreference,
@@ -1138,7 +1139,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const frequencyOptions: FrequencyOption[] = response.presets.map((preset: any) => ({
             key: String(preset.frequency),
-            label: preset.description || `${formatBandLabel(preset.band)} ${(preset.frequency / 1000000).toFixed(3)} MHz`,
+            label: preset.description || `${formatBandLabel(preset.band)} ${formatFrequencyMHz(preset.frequency)} MHz`,
             frequency: preset.frequency,
             band: preset.band,
             mode: preset.mode,
@@ -1524,7 +1525,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
 
   // 格式化频率显示 (Hz -> MHz)
   const formatFrequencyDisplay = (frequencyHz: number): string => {
-    return (frequencyHz / 1000000).toFixed(3);
+    return formatFrequencyMHz(frequencyHz);
   };
 
   const buildCurrentCustomFrequencyOption = React.useCallback((
