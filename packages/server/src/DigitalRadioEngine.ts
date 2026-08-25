@@ -115,7 +115,7 @@ import type { PluginRadioCommand, PluginRadioTunerCommand } from '@tx5dr/plugin-
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { ImageArtifactStore, ImagePaperSpool, ImageRadioService, ImageTemplateStore } from './image-radio/index.js';
+import { ImageArtifactStore, ImageComposerBackgroundStore, ImageHistoryStore, ImagePaperSpool, ImageRadioService, ImageTemplateStore } from './image-radio/index.js';
 
 export interface DeepCWModelPathConfig {
   language?: string;
@@ -240,6 +240,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private resourceManager: ResourceManager;
   private imageRadioService: ImageRadioService | null = null;
   private imageArtifactStore: ImageArtifactStore | null = null;
+  private imageComposerBackgroundStore: ImageComposerBackgroundStore | null = null;
+  private imageHistoryStore: ImageHistoryStore | null = null;
   private imageTemplateStore: ImageTemplateStore | null = null;
 
   // 语音模式
@@ -804,6 +806,14 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     return this.imageArtifactStore;
   }
 
+  public getImageComposerBackgroundStore(): ImageComposerBackgroundStore | null {
+    return this.imageComposerBackgroundStore;
+  }
+
+  public getImageHistoryStore(): ImageHistoryStore | null {
+    return this.imageHistoryStore;
+  }
+
   public getImageTemplateStore(): ImageTemplateStore | null {
     return this.imageTemplateStore;
   }
@@ -1155,11 +1165,18 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this._pluginManager.setDataDir(dataDir);
     this.imageArtifactStore = new ImageArtifactStore(path.join(dataDir, 'image-radio'));
     await this.imageArtifactStore.initialize();
+    this.imageComposerBackgroundStore = new ImageComposerBackgroundStore(path.join(dataDir, 'image-radio'));
+    await this.imageComposerBackgroundStore.initialize();
+    this.imageHistoryStore = new ImageHistoryStore(path.join(dataDir, 'image-radio'));
+    await this.imageHistoryStore.initialize();
+    await this.imageHistoryStore.reconcileReceivedArtifacts(this.imageArtifactStore.listAll());
+    this.imageArtifactStore.setRemovalListener((artifactId) => this.imageHistoryStore!.removeByArtifact(artifactId));
     this.imageTemplateStore = new ImageTemplateStore(path.join(dataDir, 'image-radio'));
     await this.imageTemplateStore.initialize();
     this.imageRadioService = new ImageRadioService(
       this.audioStreamManager,
       this.imageArtifactStore,
+      this.imageHistoryStore,
       this.physicalTxCoordinator,
       () => this.radioManager.getKnownFrequency() ?? ConfigManager.getInstance().getLastImageFrequency()?.frequency ?? 0,
       () => this.getCurrentRadioMode() ?? undefined,

@@ -1009,6 +1009,20 @@ export const api = {
     return apiRequest(`/image-radio/artifacts${params.size ? `?${params}` : ''}`, undefined, apiBase);
   },
 
+  async getImageHistory(query: { family?: 'sstv' | 'fax'; direction?: 'all' | 'rx' | 'tx'; operatorId?: string; limit?: number; cursor?: string } = {}, apiBase?: string): Promise<{ success: boolean; entries: import('@tx5dr/contracts').ImageHistoryEntry[]; nextCursor?: string }> {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) if (value !== undefined) params.set(key, String(value));
+    return apiRequest(`/image-radio/history${params.size ? `?${params}` : ''}`, undefined, apiBase);
+  },
+
+  async updateImageHistoryRecord(id: string, patch: { qsoId: string }, apiBase?: string): Promise<{ success: boolean; record: import('@tx5dr/contracts').ImageHistoryRecord }> {
+    return apiRequest(`/image-radio/history/${encodePathSegment(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }, apiBase);
+  },
+
+  async deleteImageHistoryRecord(id: string, apiBase?: string): Promise<{ success: boolean }> {
+    return apiRequest(`/image-radio/history/${encodePathSegment(id)}`, { method: 'DELETE' }, apiBase);
+  },
+
   async getImageArtifactBlob(id: string, apiBase?: string): Promise<Blob> {
     return apiBlobRequest(`/image-radio/artifacts/${encodePathSegment(id)}/image`, undefined, apiBase);
   },
@@ -1039,6 +1053,20 @@ export const api = {
     const form = new FormData();
     form.append('file', input.file, 'sstv.png');
     return apiRequest(`/image-radio/artifacts/sstv?${params}`, { method: 'POST', body: form }, apiBase);
+  },
+
+  async getImageComposerBackground(operatorId: string, apiBase?: string): Promise<{ success: boolean; background: import('@tx5dr/contracts').ImageComposerBackground | null }> {
+    return apiRequest(`/image-radio/composer-backgrounds/${encodePathSegment(operatorId)}`, { cache: 'no-store' }, apiBase);
+  },
+
+  async getImageComposerBackgroundBlob(operatorId: string, apiBase?: string): Promise<Blob> {
+    return apiBlobRequest(`/image-radio/composer-backgrounds/${encodePathSegment(operatorId)}/image`, { cache: 'no-store' }, apiBase);
+  },
+
+  async saveImageComposerBackground(operatorId: string, file: Blob, apiBase?: string): Promise<{ success: boolean; background: import('@tx5dr/contracts').ImageComposerBackground }> {
+    const form = new FormData();
+    form.append('file', file, 'background.png');
+    return apiRequest(`/image-radio/composer-backgrounds/${encodePathSegment(operatorId)}`, { method: 'PUT', body: form }, apiBase);
   },
 
   async getImageTemplates(operatorId?: string, apiBase?: string): Promise<{ success: boolean; templates: import('@tx5dr/contracts').ImageTemplate[] }> {

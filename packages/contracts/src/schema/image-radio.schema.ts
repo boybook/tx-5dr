@@ -74,6 +74,7 @@ export const SstvTxStatusSchema = z.object({
   requestId: z.string().optional(),
   operatorId: z.string().optional(),
   artifactId: z.string().optional(),
+  historyId: z.string().optional(),
   mode: z.string().optional(),
   revision: z.number().int().nonnegative().default(0),
   samplesEmitted: z.number().int().nonnegative().default(0),
@@ -89,6 +90,7 @@ export const ImageRadioStatusSchema = z.object({
   family: ImageFamilySchema.nullable(),
   receiveProfile: ImageReceiveProfileSchema.nullable(),
   rxState: ImageRxStateSchema,
+  rxCaptureActive: z.boolean().default(false),
   capability: ImageRadioCapabilitySchema,
   currentSession: ImageSessionSummarySchema.nullable(),
   tx: SstvTxStatusSchema,
@@ -110,8 +112,11 @@ export const ImageRowPatchSchema = z.object({
 export const ImagePaperBoundaryKindSchema = z.enum([
   'initial', 'vis', 'syncTiming', 'aptPhasing', 'protocolEnd',
   'manualMode', 'discontinuity', 'reset', 'truncated', 'protocolObserved',
+  'localTxStart', 'localTxEnd',
 ]);
 export type ImagePaperBoundaryKind = z.infer<typeof ImagePaperBoundaryKindSchema>;
+export const ImagePaperSourceSchema = z.enum(['rx', 'localTx']);
+export type ImagePaperSource = z.infer<typeof ImagePaperSourceSchema>;
 
 export const ImagePaperBoundarySchema = z.object({
   boundaryId: z.string(), lineIndex: z.number().int().nonnegative(),
@@ -119,6 +124,9 @@ export const ImagePaperBoundarySchema = z.object({
   codecMode: z.string(), width: z.number().int().positive(),
   pixelFormat: ImagePixelFormatSchema, timestamp: z.number(),
   detection: z.string().optional(), nominalHeight: z.number().int().positive().optional(),
+  source: ImagePaperSourceSchema.optional(),
+  txSessionId: z.string().optional(),
+  txOutcome: z.enum(['completed', 'interrupted']).optional(),
 });
 export type ImagePaperBoundary = z.infer<typeof ImagePaperBoundarySchema>;
 
@@ -159,6 +167,40 @@ export const ImageArtifactSchema = z.object({
 });
 export type ImageArtifact = z.infer<typeof ImageArtifactSchema>;
 
+const ImageHistoryRecordBaseSchema = z.object({
+  id: z.string(),
+  artifactId: z.string(),
+  family: ImageFamilySchema,
+  operatorId: z.string().optional(),
+  occurredAt: z.number(),
+  qsoId: z.string().optional(),
+});
+
+export const ImageHistoryRecordSchema = z.discriminatedUnion('direction', [
+  ImageHistoryRecordBaseSchema.extend({
+    direction: z.literal('rx'),
+    saveReason: z.enum(['manual', 'protocolEnd']),
+    complete: z.boolean(),
+    truncated: z.boolean().default(false),
+  }),
+  ImageHistoryRecordBaseSchema.extend({
+    direction: z.literal('tx'),
+    operatorId: z.string().min(1),
+    sessionId: z.string().min(1),
+    startedAt: z.number(),
+    endedAt: z.number().optional(),
+    outcome: z.enum(['transmitting', 'completed', 'interrupted']),
+    errorCode: z.string().optional(),
+  }),
+]);
+export type ImageHistoryRecord = z.infer<typeof ImageHistoryRecordSchema>;
+
+export const ImageHistoryEntrySchema = z.object({
+  record: ImageHistoryRecordSchema,
+  artifact: ImageArtifactSchema,
+});
+export type ImageHistoryEntry = z.infer<typeof ImageHistoryEntrySchema>;
+
 export const ImageTemplateTextLayerSchema = z.object({
   id: z.string().min(1).max(64),
   text: z.string().max(256),
@@ -185,6 +227,15 @@ export const ImageTemplateSchema = z.object({
 });
 export type ImageTemplate = z.infer<typeof ImageTemplateSchema>;
 
+export const ImageComposerBackgroundSchema = z.object({
+  operatorId: z.string().min(1),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  updatedAt: z.number(),
+  imageUrl: z.string(),
+});
+export type ImageComposerBackground = z.infer<typeof ImageComposerBackgroundSchema>;
+
 export const ImageRxSubscriptionSchema = z.object({ enabled: z.boolean() });
 export const SstvTxStartCommandSchema = z.object({
   requestId: z.string().min(1).max(128),
@@ -192,6 +243,7 @@ export const SstvTxStartCommandSchema = z.object({
   artifactId: z.string().min(1),
   mode: z.string().min(1),
   expectedFrequency: z.number().positive(),
+  interruptActiveCapture: z.boolean().optional(),
 });
 export type SstvTxStartCommand = z.infer<typeof SstvTxStartCommandSchema>;
 export const SstvTxCancelCommandSchema = z.object({

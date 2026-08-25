@@ -155,7 +155,8 @@ describe('AudioStreamManager ICOM WLAN output pacing', () => {
       getSampleRate: vi.fn().mockReturnValue(12000),
     };
     const manager = createIcomManager(adapter);
-    const session = manager.openDeterministicPlayback({ playbackKind: 'sstv' });
+    const onPlaybackChunk = vi.fn();
+    const session = manager.openDeterministicPlayback({ playbackKind: 'sstv', onPlaybackChunk });
     await session.write(new Float32Array(session.frameSamples).fill(0.2));
     await session.write(new Float32Array(session.frameSamples).fill(0.3));
     const started = session.start();
@@ -165,7 +166,27 @@ describe('AudioStreamManager ICOM WLAN output pacing', () => {
     await started;
     await session.end();
     expect(adapter.sendAudio).toHaveBeenCalledTimes(2);
+    expect(onPlaybackChunk).toHaveBeenCalledTimes(2);
+    expect(onPlaybackChunk.mock.calls[0][0]).toEqual(adapter.sendAudio.mock.calls[0][0]);
+    expect(onPlaybackChunk.mock.calls[1][0]).toEqual(adapter.sendAudio.mock.calls[1][0]);
+    expect(onPlaybackChunk.mock.calls[0][1]).toBe(12_000);
     expect(manager.isPlaying()).toBe(false);
+  });
+
+  it('does not fail deterministic output when its playback observer throws', async () => {
+    const adapter: MockIcomAdapter = {
+      sendAudio: vi.fn().mockResolvedValue(undefined),
+      getSampleRate: vi.fn().mockReturnValue(12000),
+    };
+    const manager = createIcomManager(adapter);
+    const session = manager.openDeterministicPlayback({
+      playbackKind: 'sstv',
+      onPlaybackChunk: () => { throw new Error('preview failed'); },
+    });
+    await session.write(new Float32Array(session.frameSamples));
+    await session.start();
+    await expect(session.end()).resolves.toBeUndefined();
+    expect(adapter.sendAudio).toHaveBeenCalledTimes(1);
   });
 
   it('classifies an ICOM output send failure as restart-required', async () => {

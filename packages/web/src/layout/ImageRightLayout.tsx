@@ -3,7 +3,7 @@ import { Tab, Tabs } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faImages, faPaperPlane } from '@fortawesome/free-solid-svg-icons';
 
-import { ImageArtifactGallery } from '../components/image-radio/ImageArtifactGallery';
+import { ImageHistoryTimeline } from '../components/image-radio/ImageHistoryTimeline';
 import { SstvComposer } from '../components/image-radio/SstvComposer';
 import { VoiceQSOLogCard } from '../components/voice/VoiceQSOLogCard';
 import { VoicePTTButton } from '../components/voice/VoicePTTButton';
@@ -14,7 +14,7 @@ import { ServerHealthButton } from '../components/system/ServerHealthButton';
 import { useConnection, useRadioModeState } from '../store/radioStore';
 import { useVoiceCaptureController } from '../hooks/useVoiceCaptureController';
 import { useTranslation } from 'react-i18next';
-import { useImageRadio } from '../hooks/useImageRadio';
+import { useImageRadioControls } from '../hooks/useImageRadio';
 import { api } from '@tx5dr/core';
 
 export function ImageRightLayout() {
@@ -24,7 +24,7 @@ export function ImageRightLayout() {
   const isFax = radioMode.currentMode?.name === 'FAX';
   const [selectedTab, setSelectedTab] = useState<'history' | 'transmit'>('history');
   const [qsoCollapsed, setQsoCollapsed] = useState(true);
-  const { txStatus } = useImageRadio();
+  const { txStatus } = useImageRadioControls();
   const voiceCaptureController = useVoiceCaptureController(connection.state.radioService, radioMode.engineMode);
 
   useEffect(() => {
@@ -65,7 +65,7 @@ export function ImageRightLayout() {
         </div>
       </div>
       <div className="min-h-0 flex-1 px-2 md:px-5">
-        {selectedTab === 'transmit' && !isFax ? <SstvComposer /> : <ImageArtifactGallery />}
+        {selectedTab === 'transmit' && !isFax ? <SstvComposer /> : <ImageHistoryTimeline />}
       </div>
       {!isFax ? (
         <div className="flex-shrink-0 px-2 pb-2 md:px-5">
@@ -76,7 +76,7 @@ export function ImageRightLayout() {
             defaultReport="595"
             titleOverride="SSTV QSO"
             onCreateComplete={(qso) => {
-              if (txStatus?.phase === 'completed' && txStatus.artifactId) void api.updateImageArtifact(txStatus.artifactId, { qsoId: qso.id });
+              if (txStatus?.phase === 'completed' && txStatus.historyId) void api.updateImageHistoryRecord(txStatus.historyId, { qsoId: qso.id });
             }}
           />
         </div>

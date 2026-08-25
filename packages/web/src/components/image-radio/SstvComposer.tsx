@@ -7,14 +7,17 @@ import { api } from '@tx5dr/core';
 import type { ImageTemplateTextLayer } from '@tx5dr/contracts';
 import { useTranslation } from 'react-i18next';
 
-import { useImageRadio } from '../../hooks/useImageRadio';
+import { useImageRadioControls } from '../../hooks/useImageRadio';
 import { useConnection, useCurrentOperatorId, useOperators, useRadioModeState } from '../../store/radioStore';
+import { fitComposerBackgroundSize } from './composerBackground';
+import { sstvTxErrorTranslationKey } from './sstvTxCommand';
 
 type TextLayer = ImageTemplateTextLayer;
+type PreparedSstvTx = { artifactId: string; operatorId: string; mode: string; expectedFrequency: number };
 
 export function SstvComposer() {
   const { t } = useTranslation('image');
-  const { modes, templates, refreshTemplates, txStatus } = useImageRadio();
+  const { status, modes, templates, refreshTemplates, txStatus, txCommandResult } = useImageRadioControls();
   const connection = useConnection();
   const radio = useRadioModeState();
   const { currentOperatorId } = useCurrentOperatorId();
@@ -29,16 +32,24 @@ export function SstvComposer() {
   const [note, setNote] = useState('');
   const [fit, setFit] = useState<'contain' | 'cover'>('cover');
   const [background, setBackground] = useState<ImageBitmap | null>(null);
+  const [backgroundSaving, setBackgroundSaving] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [templateSaveOpen, setTemplateSaveOpen] = useState(false);
   const [deleteTemplateId, setDeleteTemplateId] = useState<string | null>(null);
   const [deletingTemplate, setDeletingTemplate] = useState(false);
   const [templateName, setTemplateName] = useState('');
   const [sending, setSending] = useState(false);
+  const [pendingRequestId, setPendingRequestId] = useState<string | null>(null);
+  const [captureConfirmOpen, setCaptureConfirmOpen] = useState(false);
   const [previewSize, setPreviewSize] = useState<{ width: number; height: number } | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const backgroundRef = useRef<ImageBitmap | null>(null);
+  const backgroundSaveGenerationRef = useRef(0);
   const previewViewportRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ id: string; dx: number; dy: number } | null>(null);
+  const preparedTxRef = useRef<PreparedSstvTx | null>(null);
+  const operatorIdRef = useRef(operatorId);
+  operatorIdRef.current = operatorId;
   const mode = modes.find((item) => item.mode === selectedMode) ?? modes.find((item) => item.mode === 'robot36') ?? modes[0];
   const durationSeconds = mode ? Math.ceil(mode.lineSeconds * mode.height) : 0;
   const txProgress = txStatus?.estimatedTotalSamples
@@ -47,7 +58,31 @@ export function SstvComposer() {
   const selectedTemplate = templates.find((template) => template.id === selectedTemplateId);
   const deleteTemplate = templates.find((template) => template.id === deleteTemplateId);
 
+  const replaceBackground = useCallback((next: ImageBitmap | null) => {
+    backgroundRef.current?.close();
+    backgroundRef.current = next;
+    setBackground(next);
+  }, []);
+
   useEffect(() => { void refreshTemplates(operatorId); }, [operatorId, refreshTemplates]);
+  useEffect(() => {
+    let active = true;
+    backgroundSaveGenerationRef.current += 1;
+    setBackgroundSaving(false);
+    replaceBackground(null);
+    if (!operatorId) return () => { active = false; };
+    void api.getImageComposerBackground(operatorId).then(async (result) => {
+      if (!result.background) return;
+      const bitmap = await createImageBitmap(await api.getImageComposerBackgroundBlob(operatorId));
+      if (!active) bitmap.close();
+      else replaceBackground(bitmap);
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [operatorId, replaceBackground]);
+  useEffect(() => () => {
+    backgroundRef.current?.close();
+    backgroundRef.current = null;
+  }, []);
   useEffect(() => { if (modes.length && !modes.some((item) => item.mode === selectedMode)) setSelectedMode(modes[0].mode); }, [modes, selectedMode]);
   useEffect(() => {
     const viewport = previewViewportRef.current;
@@ -167,10 +202,36 @@ export function SstvComposer() {
   };
 
   const handleBackground = async (file?: File) => {
-    if (!file) return;
+    if (!file || !operatorId) return;
     if (file.size > 5 * 1024 * 1024 || !/^image\/(png|jpeg|webp)$/.test(file.type)) return;
-    background?.close();
-    setBackground(await createImageBitmap(file));
+    const targetOperatorId = operatorId;
+    const saveGeneration = ++backgroundSaveGenerationRef.current;
+    setBackgroundSaving(true);
+    let source: ImageBitmap | null = null;
+    let normalized: ImageBitmap | null = null;
+    try {
+      source = await createImageBitmap(file);
+      const size = fitComposerBackgroundSize(source.width, source.height);
+      const canvas = document.createElement('canvas');
+      canvas.width = size.width;
+      canvas.height = size.height;
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('IMAGE_CANVAS_UNAVAILABLE');
+      context.drawImage(source, 0, 0, size.width, size.height);
+      const png = await new Promise<Blob>((resolve, reject) => canvas.toBlob((value) => value ? resolve(value) : reject(new Error('PNG render failed')), 'image/png'));
+      normalized = await createImageBitmap(png);
+      await api.saveImageComposerBackground(targetOperatorId, png);
+      if (operatorIdRef.current === targetOperatorId) {
+        replaceBackground(normalized);
+        normalized = null;
+      }
+    } catch {
+      addToast({ title: t('backgroundSaveFailed'), color: 'danger' });
+    } finally {
+      source?.close();
+      normalized?.close();
+      if (backgroundSaveGenerationRef.current === saveGeneration) setBackgroundSaving(false);
+    }
   };
 
   const pointerPosition = (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -190,23 +251,84 @@ export function SstvComposer() {
     setLayers((current) => current.map((layer) => layer.id === drag.id ? { ...layer, x: Math.max(0, Math.min(1 - layer.width, point.x - drag.dx)), y: Math.max(0, Math.min(1 - layer.height, point.y - drag.dy)) } : layer));
   };
 
-  const send = async () => {
+  const dispatchPreparedTx = (prepared: PreparedSstvTx, interruptActiveCapture: boolean) => {
+    const service = connection.state.radioService;
+    if (!service || !connection.state.isReady) throw new Error('IMAGE_CONNECTION_UNAVAILABLE');
+    const requestId = crypto.randomUUID();
+    preparedTxRef.current = prepared;
+    setPendingRequestId(requestId);
+    setSending(true);
+    service.startSstvTx({ requestId, ...prepared, interruptActiveCapture });
+  };
+
+  const send = async (interruptActiveCapture = false) => {
     if (!mode || !operatorId || !radio.currentRadioFrequency || !canvasRef.current) return;
+    if (status?.rxCaptureActive && !interruptActiveCapture) {
+      setCaptureConfirmOpen(true);
+      return;
+    }
     setSending(true);
     try {
+      if (!connection.state.radioService || !connection.state.isReady) throw new Error('IMAGE_CONNECTION_UNAVAILABLE');
       setSelectedLayerId(null); draw(false);
       const blob = await new Promise<Blob>((resolve, reject) => canvasRef.current?.toBlob((value) => value ? resolve(value) : reject(new Error('PNG render failed')), 'image/png'));
       const upload = await api.uploadSstvArtifact({ file: blob, operatorId, mode: mode.mode, frequency: radio.currentRadioFrequency, radioMode: radio.currentRadioMode ?? undefined });
-      const requestId = crypto.randomUUID();
-      connection.state.radioService?.startSstvTx({ requestId, operatorId, artifactId: upload.artifact.id, mode: mode.mode, expectedFrequency: radio.currentRadioFrequency });
+      dispatchPreparedTx({ operatorId, artifactId: upload.artifact.id, mode: mode.mode, expectedFrequency: radio.currentRadioFrequency }, interruptActiveCapture);
     } catch (error) {
       addToast({ title: error instanceof Error ? error.message : t('sendFailed'), color: 'danger' });
       setSending(false);
     }
   };
 
+  const confirmCaptureInterrupt = () => {
+    setCaptureConfirmOpen(false);
+    const prepared = preparedTxRef.current;
+    if (prepared) {
+      try {
+        dispatchPreparedTx(prepared, true);
+      } catch (error) {
+        addToast({ title: error instanceof Error ? error.message : t('sendFailed'), color: 'danger' });
+        setSending(false);
+      }
+      return;
+    }
+    void send(true);
+  };
+
   useEffect(() => {
-    if (txStatus?.phase === 'completed' || txStatus?.phase === 'error' || txStatus?.phase === 'cancelled' || txStatus?.phase === 'ptt_unknown') setSending(false);
+    if (!pendingRequestId || txCommandResult?.requestId !== pendingRequestId) return;
+    setPendingRequestId(null);
+    if (txCommandResult.accepted) return;
+    setSending(false);
+    if (txCommandResult.errorCode === 'IMAGE_RX_CAPTURE_CONFIRM_REQUIRED') {
+      setCaptureConfirmOpen(true);
+      return;
+    }
+    preparedTxRef.current = null;
+    addToast({ title: t(sstvTxErrorTranslationKey(txCommandResult.errorCode)), color: 'danger' });
+  }, [pendingRequestId, t, txCommandResult]);
+
+  useEffect(() => {
+    if (!pendingRequestId) return;
+    if (txStatus?.requestId === pendingRequestId && txStatus.phase !== 'idle') {
+      setPendingRequestId(null);
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      setPendingRequestId(null);
+      preparedTxRef.current = null;
+      setSending(false);
+      addToast({ title: t('txAckTimeout'), color: 'danger' });
+    }, 5_000);
+    return () => window.clearTimeout(timeout);
+  }, [pendingRequestId, t, txStatus?.phase, txStatus?.requestId]);
+
+  useEffect(() => {
+    if (txStatus?.phase === 'completed' || txStatus?.phase === 'error' || txStatus?.phase === 'cancelled' || txStatus?.phase === 'ptt_unknown') {
+      setSending(false);
+      setPendingRequestId(null);
+      preparedTxRef.current = null;
+    }
   }, [txStatus?.phase]);
 
   const selectedLayer = layers.find((layer) => layer.id === selectedLayerId);
@@ -236,8 +358,8 @@ export function SstvComposer() {
       </div>
 
       <div className="flex flex-shrink-0 flex-wrap items-center justify-end gap-1.5">
-        <Button as="label" size="sm" variant="flat" startContent={<FontAwesomeIcon icon={faImage} />}>
-          <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(event) => void handleBackground(event.target.files?.[0])} />
+        <Button as="label" size="sm" variant="flat" isLoading={backgroundSaving} startContent={<FontAwesomeIcon icon={faImage} />}>
+          <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(event) => { void handleBackground(event.target.files?.[0]); event.target.value = ''; }} />
           {t('background')}
         </Button>
         <ButtonGroup size="sm" variant="flat">
@@ -311,6 +433,18 @@ export function SstvComposer() {
         <ModalFooter>
           <Button variant="flat" isDisabled={deletingTemplate} onPress={() => setDeleteTemplateId(null)}>{t('common:button.cancel')}</Button>
           <Button color="danger" isLoading={deletingTemplate} onPress={() => void confirmDeleteTemplate()}>{t('common:button.delete')}</Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
+    <Modal isOpen={captureConfirmOpen} onClose={() => { if (!sending) setCaptureConfirmOpen(false); }} size="sm" placement="center">
+      <ModalContent>
+        <ModalHeader>{t('interruptReceiveTitle')}</ModalHeader>
+        <ModalBody>
+          <p className="text-sm text-default-600">{t('interruptReceiveConfirm')}</p>
+        </ModalBody>
+        <ModalFooter>
+          <Button variant="flat" onPress={() => { setCaptureConfirmOpen(false); preparedTxRef.current = null; }}>{t('common:button.cancel')}</Button>
+          <Button color="danger" onPress={confirmCaptureInterrupt}>{t('interruptAndSend')}</Button>
         </ModalFooter>
       </ModalContent>
     </Modal>

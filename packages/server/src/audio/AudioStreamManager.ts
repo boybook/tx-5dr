@@ -268,6 +268,8 @@ export interface PlayAudioOptions {
   diagnosticContext?: Record<string, unknown>;
   /** Called once the first output frame has been consumed by the active sink. */
   onPlaybackStarted?: () => void;
+  /** Best-effort tap of PCM submitted by this playback session. Observer failures never fail physical output. */
+  onPlaybackChunk?: (samples: Float32Array, sampleRate: number) => void;
 }
 
 export type PlaybackKind = 'digital' | 'voice-keyer' | 'sstv' | 'tune-tone';
@@ -2424,6 +2426,13 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       if (queuedSamples > lowWaterSamples) return;
       for (const resolve of backpressureWaiters.splice(0)) resolve();
     };
+    const observePlaybackChunk = (samples: Float32Array) => {
+      try {
+        options.onPlaybackChunk?.(samples, sampleRate);
+      } catch (error) {
+        logger.warn('Deterministic playback chunk observer failed', error);
+      }
+    };
 
     const pump = async () => {
       this.playing = true;
@@ -2465,20 +2474,29 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           const leadMs = producedMs - (performance.now() - hrStart);
           if (leadMs > 100) await new Promise<void>((resolve) => setTimeout(resolve, Math.min(leadMs - 100, 25)));
 
+          let observedChunk = chunk;
           if (radioAdapter) {
             const output = new Float32Array(chunk.length);
             for (let index = 0; index < chunk.length; index += 1) {
               output[index] = Math.max(-1, Math.min(1, chunk[index] * this.volumeGain));
             }
             await radioAdapter.adapter.sendAudio(output);
+            observedChunk = output;
             signalStarted();
             if (options.injectIntoMonitor) this.emit('txMonitorAudioData', { samples: output, sampleRate });
           } else if (this.usingAndroidOutput && this.androidAudioOutput) {
             if (!await this.androidAudioOutput.write(chunk, this.volumeGain)) throw new Error('Android audio output write failed');
+            if (options.onPlaybackChunk) {
+              const output = new Float32Array(chunk.length);
+              for (let index = 0; index < chunk.length; index += 1) {
+                output[index] = Math.max(-1, Math.min(1, chunk[index] * this.volumeGain));
+              }
+              observedChunk = output;
+            }
             signalStarted();
             if (options.injectIntoMonitor) this.emit('txMonitorAudioData', { samples: chunk, sampleRate });
           } else if (this.rtAudioOutput && rtWaiter) {
-            const encoded = this.encodeRtAudioOutputChunk(chunk, frameSamples, this.volumeGain, Boolean(options.injectIntoMonitor));
+            const encoded = this.encodeRtAudioOutputChunk(chunk, frameSamples, this.volumeGain, Boolean(options.injectIntoMonitor || options.onPlaybackChunk));
             this.noteRtAudioChunkPending(rtWaiter);
             try {
               this.rtAudioOutput.write(encoded.buffer);
@@ -2487,9 +2505,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               throw error;
             }
             if (encoded.monitorChunk) this.emit('txMonitorAudioData', { samples: encoded.monitorChunk, sampleRate });
+            observedChunk = encoded.monitorChunk ?? chunk;
           } else {
             throw new Error('audio output became unavailable');
           }
+          observePlaybackChunk(observedChunk);
           submittedSamples += chunk.length;
         }
 

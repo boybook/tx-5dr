@@ -38,6 +38,7 @@ export class ImageArtifactStore {
   private readonly indexPath: string;
   private readonly imageDir: string;
   private initialized = false;
+  private removalListener?: (artifactId: string) => Promise<void>;
 
   constructor(private readonly baseDir: string, private readonly quotaBytes = DEFAULT_QUOTA_BYTES) {
     this.indexPath = path.join(baseDir, 'index.json');
@@ -69,6 +70,14 @@ export class ImageArtifactStore {
       .filter((item) => !options.operatorId || item.operatorId === options.operatorId)
       .sort((a, b) => b.createdAt - a.createdAt)
       .slice(offset, offset + limit);
+  }
+
+  listAll(): ImageArtifact[] {
+    return [...this.artifacts.values()];
+  }
+
+  setRemovalListener(listener: (artifactId: string) => Promise<void>): void {
+    this.removalListener = listener;
   }
 
   get(id: string): ImageArtifact | null {
@@ -200,6 +209,7 @@ export class ImageArtifactStore {
     await fs.unlink(this.imagePath(id));
     this.artifacts.delete(id);
     await this.persistIndex();
+    await this.removalListener?.(id);
     return artifact;
   }
 
@@ -224,6 +234,9 @@ export class ImageArtifactStore {
       await fs.unlink(this.imagePath(artifact.id)).catch(() => undefined);
       total -= sizes.get(artifact.id) ?? 0;
       this.artifacts.delete(artifact.id);
+      await this.removalListener?.(artifact.id).catch((error) => {
+        logger.error('Failed to remove image history for evicted artifact', { artifactId: artifact.id, error: error instanceof Error ? error.message : String(error) });
+      });
       changed = true;
       logger.info('Removed old image artifact to enforce quota', { artifactId: artifact.id });
     }

@@ -28,6 +28,19 @@ describe('image paper virtual layout', () => {
     expect(paperBottomTarget(layout.height, 200)).toBe(74);
   });
 
+  it('preserves each SSTV segment aspect ratio when mode widths differ', () => {
+    const robot36 = { ...boundary, boundaryId: 'robot36', codecMode: 'robot36', width: 320, pixelFormat: 'rgb8' as const };
+    const pd120 = { ...boundary, boundaryId: 'pd120', lineIndex: 240, codecMode: 'pd120', width: 640, pixelFormat: 'rgb8' as const };
+    const layout = buildPaperLayout([
+      { boundary: robot36, displayWidth: robot36.width, chunks: [{ startLine: 0, endLine: 240 }], data: null },
+      { boundary: pd120, displayWidth: pd120.width, chunks: [{ startLine: 240, endLine: 736 }], data: null },
+    ], 640, () => 0);
+
+    expect(layout.items[0]).toMatchObject({ height: 480 });
+    expect(layout.items[1]).toMatchObject({ top: 480, height: 496 });
+    expect(layout.height).toBe(976);
+  });
+
   it('bottom-aligns short paper without negative scrolling', () => {
     expect(paperBottomTarget(120, 600)).toBe(0);
   });
