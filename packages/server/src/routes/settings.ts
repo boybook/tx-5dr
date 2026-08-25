@@ -205,7 +205,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // 获取频率预设列表（包含所有模式：FT8/FT4/VOICE）
+  // 获取频率预设列表（包含所有支持预设的模式）
   fastify.get('/frequency-presets', async (_request, reply) => {
     try {
       const data = hostSettings.getFrequencyPresets();

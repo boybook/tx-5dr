@@ -26,6 +26,7 @@ import { FrequencyDigit } from '../radio/frequency/FrequencyDigit';
 import { SPLIT_FREQUENCY_ROW_CLASS, SplitFrequencyLayout } from '../radio/frequency/SplitFrequencyLayout';
 import { SplitSettingsPopover } from '../radio/frequency/SplitSettingsPopover';
 import { deriveVoiceRadioModeOptions } from '../../utils/voiceRadioModeOptions';
+import { formatFrequencyMHz } from '../../utils/frequencyMHz';
 
 const logger = createLogger('VoiceFrequencyControl');
 const CURRENT_CUSTOM_FREQUENCY_KEY = '__current_custom_analog_frequency__';
@@ -187,7 +188,7 @@ export const VoiceFrequencyControl: React.FC<VoiceFrequencyControlProps> = ({ pr
         frequency: freq,
         mode: presetMode,
         band: overrides?.band ?? 'Custom',
-        description: overrides?.description ?? `${(freq / 1000000).toFixed(3)} MHz`,
+        description: overrides?.description ?? `${formatFrequencyMHz(freq)} MHz`,
       };
       if (typeof overrides?.radioMode === 'string' && overrides.radioMode.trim().length > 0) {
         request.radioMode = overrides.radioMode;
@@ -237,7 +238,7 @@ export const VoiceFrequencyControl: React.FC<VoiceFrequencyControlProps> = ({ pr
     () => deriveVoiceRadioModeOptions(radioModeDescriptor, radioModeCapabilityState),
     [radioModeDescriptor, radioModeCapabilityState],
   );
-  const formatFrequencyLabel = useCallback((frequency: number) => `${(frequency / 1000000).toFixed(3)} MHz`, []);
+  const formatFrequencyLabel = useCallback((frequency: number) => `${formatFrequencyMHz(frequency)} MHz`, []);
   const formatBandLabel = useCallback((band?: string | null) => {
     if (!band || band.toLowerCase() === CUSTOM_BAND) {
       return t('frequency.customBand');
@@ -276,7 +277,7 @@ export const VoiceFrequencyControl: React.FC<VoiceFrequencyControlProps> = ({ pr
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           .map((p: any) => ({
             key: String(p.frequency),
-            label: p.description || `${formatBandLabel(p.band)} ${(p.frequency / 1000000).toFixed(3)} MHz`,
+            label: p.description || `${formatBandLabel(p.band)} ${formatFrequencyMHz(p.frequency)} MHz`,
             frequency: p.frequency,
             band: p.band,
             mode: p.mode,
@@ -606,7 +607,7 @@ export const VoiceFrequencyControl: React.FC<VoiceFrequencyControlProps> = ({ pr
         resetOperatorsAfterOperatingStateChange();
         addToast({
           title: t('frequency.switchSuccess'),
-          description: t('frequency.switched', { freq: (preset.frequency / 1000000).toFixed(3) }),
+          description: t('frequency.switched', { freq: formatFrequencyMHz(preset.frequency) }),
           color: 'success',
           timeout: 3000,
         });

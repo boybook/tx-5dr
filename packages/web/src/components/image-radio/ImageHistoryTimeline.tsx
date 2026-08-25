@@ -19,6 +19,7 @@ import { useTranslation } from 'react-i18next';
 import { useImageHistory, type ImageHistoryDirection } from '../../hooks/useImageHistory';
 import { useRadioModeState } from '../../store/radioStore';
 import { useHasMinRole } from '../../store/authStore';
+import { formatFrequencyMHz } from '../../utils/frequencyMHz';
 import { groupImageHistoryByDay } from './imageHistoryGrouping';
 
 function historyFileName(entry: ImageHistoryEntry): string {
@@ -119,7 +120,7 @@ function HistoryEntry({
           </div>
           <div className="flex min-w-0 items-end justify-between gap-2">
             <span className="truncate font-mono text-[11px] text-default-500">
-              {(entry.artifact.frequency / 1e6).toFixed(3)} MHz{entry.artifact.radioMode ? ` · ${entry.artifact.radioMode}` : ''}
+              {formatFrequencyMHz(entry.artifact.frequency)} MHz{entry.artifact.radioMode ? ` · ${entry.artifact.radioMode}` : ''}
             </span>
             <div className="flex shrink-0 gap-0.5">
               <Button isIconOnly size="sm" variant="light" className="h-7 min-w-7 text-default-600" isLoading={downloading} onPress={onDownload} aria-label={t('downloadRecord')} title={t('downloadRecord')}>

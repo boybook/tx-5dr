@@ -12,6 +12,7 @@ import { setRadioFrequencyWithIntent } from '../../utils/radioFrequencyIntent';
 import { FrequencyDigit } from '../radio/frequency/FrequencyDigit';
 import { SPLIT_FREQUENCY_ROW_CLASS, SplitFrequencyLayout } from '../radio/frequency/SplitFrequencyLayout';
 import { SplitSettingsPopover } from '../radio/frequency/SplitSettingsPopover';
+import { formatFrequencyMHz } from '../../utils/frequencyMHz';
 
 const logger = createLogger('CWFrequencyControl');
 const DEFAULT_CW_FREQUENCY = 14_000_000;
@@ -134,7 +135,7 @@ export const CWFrequencyControl: React.FC = () => {
 
     const freq = pending.intendedFrequency;
     const band = getBandFromFrequency(freq);
-    const description = `${(freq / 1_000_000).toFixed(3)} MHz`;
+    const description = `${formatFrequencyMHz(freq)} MHz`;
     pendingFreqRef.current = { intendedFrequency: freq, sentAt: Date.now() };
 
     try {

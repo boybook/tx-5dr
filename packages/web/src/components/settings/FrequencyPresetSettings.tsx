@@ -26,6 +26,7 @@ import { showErrorToast } from '../../utils/errorToast';
 import { createLogger } from '../../utils/logger';
 import { FrequencyPresetAddModal } from './FrequencyPresetAddModal';
 import { formatToneSquelch } from '../../utils/toneSquelch';
+import { formatFrequencyMHz } from '../../utils/frequencyMHz';
 
 const logger = createLogger('FrequencyPresetSettings');
 
@@ -266,7 +267,7 @@ export const FrequencyPresetSettings = forwardRef<
   };
 
   const formatFrequency = (hz: number): string => {
-    return (hz / 1000000).toFixed(3);
+    return formatFrequencyMHz(hz);
   };
   const formatBandLabel = (band?: string | null): string => (
     !band || band.toLowerCase() === CUSTOM_BAND ? t('freqPresets.customBand') : band
