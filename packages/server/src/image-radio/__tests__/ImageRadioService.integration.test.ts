@@ -131,6 +131,23 @@ describe('ImageRadioService native streaming integration', () => {
     expect(service.getStatus().receiveProfile).toEqual({ family: 'fax', strategy: 'auto' });
     expect(events[0]).toMatchObject({ type: 'paperStarted' });
     expect(events.some((event) => event.type === 'rows')).toBe(true);
+    const manifest = service.getPaperManifest()!;
+    const faxCalibration = manifest.segments[0].calibration!;
+    const adjusted = service.setFaxCalibration({
+      requestId: 'fax-adjust', operatorId: 'op', sessionId: manifest.session.sessionId,
+      boundaryId: faxCalibration.boundaryId, expectedRevision: faxCalibration.revision,
+      autoEnabled: true, phasePixels: 10, clockPpm: 250,
+    });
+    expect(adjusted).toMatchObject({ accepted: true, calibration: { manualPhasePixels: 10, manualClockPpm: 250 } });
+    expect(service.setFaxCalibration({
+      requestId: 'fax-adjust', operatorId: 'op', sessionId: manifest.session.sessionId,
+      boundaryId: faxCalibration.boundaryId, expectedRevision: faxCalibration.revision,
+      autoEnabled: true, phasePixels: 10, clockPpm: 250,
+    })).toEqual(adjusted);
+    expect(service.resetFaxCalibration({
+      requestId: 'fax-reset', operatorId: 'op', sessionId: manifest.session.sessionId,
+      boundaryId: faxCalibration.boundaryId, expectedRevision: adjusted.calibration!.revision,
+    })).toMatchObject({ accepted: true, calibration: { manualPhasePixels: 0, manualClockPpm: 0 } });
     const revision = service.getStatus().currentSession!.revision;
     const saved = await service.saveCurrentPaper({ requestId: 'save-fax-1', operatorId: 'op', expectedRevision: revision });
     const repeated = await service.saveCurrentPaper({ requestId: 'save-fax-1', operatorId: 'op', expectedRevision: revision });

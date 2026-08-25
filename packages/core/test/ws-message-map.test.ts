@@ -24,12 +24,14 @@ test('routes all image radio messages to frontend event handlers', () => {
       WSMessageType.IMAGE_RX_EVENT,
       WSMessageType.SSTV_TX_STATUS,
       WSMessageType.SSTV_TX_COMMAND_RESULT,
+      WSMessageType.FAX_CALIBRATION_COMMAND_RESULT,
     ].map((type) => WS_MESSAGE_EVENT_MAP[type]),
     [
       'imageRadioStatus',
       'imageRxEvent',
       'sstvTxStatus',
       'sstvTxCommandResult',
+      'faxCalibrationCommandResult',
     ],
   );
 });

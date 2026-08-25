@@ -1,9 +1,9 @@
 import React, { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Button, Select, SelectItem } from '@heroui/react';
+import { Button, Popover, PopoverContent, PopoverTrigger, Select, SelectItem, Slider, Switch } from '@heroui/react';
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faFloppyDisk, faSatelliteDish } from '@fortawesome/free-solid-svg-icons';
-import { UserRole, type ImagePaperBoundary, type ImageReceiveProfile } from '@tx5dr/contracts';
+import { faCheck, faFloppyDisk, faRotateLeft, faSatelliteDish, faSliders } from '@fortawesome/free-solid-svg-icons';
+import { UserRole, type ImageFaxCalibration, type ImagePaperBoundary, type ImageReceiveProfile } from '@tx5dr/contracts';
 import { useTranslation } from 'react-i18next';
 
 import { useImageRadioControls, useImageRadioReceive } from '../../hooks/useImageRadio';
@@ -47,11 +47,13 @@ function PaperDivider({ boundary }: { boundary: ImagePaperBoundary }) {
 const PaperChunk = memo(function PaperChunk({
   startLine, endLine, displayWidth, sourceWidth, pixelFormat, rowStore,
   snapshot, snapshotStartLine, markers, contentRevision, isTail, source,
+  calibration,
 }: {
   startLine: number; endLine: number; displayWidth: number; sourceWidth: number; pixelFormat: 'rgb8' | 'gray8';
   rowStore: ImagePaperRowStore;
   snapshot?: HTMLImageElement; snapshotStartLine: number;
   markers: ImagePaperBoundary[]; contentRevision: number; isTail: boolean; source: 'rx' | 'localTx';
+  calibration?: ImageFaxCalibration;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const sourceCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -73,7 +75,7 @@ const PaperChunk = memo(function PaperChunk({
     if (!imageDataRef.current || imageDataRef.current.width !== sourceWidth || imageDataRef.current.height !== height) {
       imageDataRef.current = new ImageData(sourceWidth, height);
     }
-    writePaperRowsToRgba(imageDataRef.current.data, sourceWidth, startLine, endLine, pixelFormat, rowStore);
+    writePaperRowsToRgba(imageDataRef.current.data, sourceWidth, startLine, endLine, pixelFormat, rowStore, snapshot ? undefined : calibration, snapshotStartLine);
     if (sourceWidth === displayWidth && !snapshot) {
       context.putImageData(imageDataRef.current, 0, 0);
     } else {
@@ -97,7 +99,7 @@ const PaperChunk = memo(function PaperChunk({
       }
       sourceCanvasRef.current = null;
     }
-  }, [contentRevision, displayWidth, endLine, isTail, pixelFormat, rowStore, snapshot, snapshotStartLine, sourceWidth, startLine]);
+  }, [calibration, contentRevision, displayWidth, endLine, isTail, pixelFormat, rowStore, snapshot, snapshotStartLine, sourceWidth, startLine]);
   return (
     <div className="relative h-full w-full">
       <canvas ref={canvasRef} className="block h-auto w-full [image-rendering:auto]" style={{ contentVisibility: 'auto', containIntrinsicSize: `auto ${Math.max(1, endLine - startLine)}px` }} />
@@ -121,16 +123,56 @@ const PaperChunk = memo(function PaperChunk({
   && previous.contentRevision === next.contentRevision
   && previous.isTail === next.isTail
   && previous.source === next.source
+  && previous.calibration?.revision === next.calibration?.revision
   && previous.markers.length === next.markers.length
   && previous.markers.every((marker, index) => marker.boundaryId === next.markers[index]?.boundaryId && marker.lineIndex === next.markers[index]?.lineIndex)
 ));
+
+function FaxCalibrationPopover({
+  calibration, width, disabled, onApply, onReset,
+}: {
+  calibration: ImageFaxCalibration; width: number; disabled: boolean;
+  onApply: (autoEnabled: boolean, phasePixels: number, clockPpm: number) => void;
+  onReset: () => void;
+}) {
+  const { t } = useTranslation('image');
+  const [autoEnabled, setAutoEnabled] = useState(calibration.autoEnabled);
+  const [phasePixels, setPhasePixels] = useState(calibration.manualPhasePixels);
+  const [clockPpm, setClockPpm] = useState(calibration.manualClockPpm);
+  useEffect(() => {
+    setAutoEnabled(calibration.autoEnabled);
+    setPhasePixels(calibration.manualPhasePixels);
+    setClockPpm(calibration.manualClockPpm);
+  }, [calibration]);
+  const latest = calibration.autoPoints.at(-1);
+  const indicator = latest?.status === 'locked' || latest?.status === 'tracking' ? 'bg-success' : latest ? 'bg-warning' : 'bg-default-500';
+  return (
+    <Popover placement="bottom-start">
+      <PopoverTrigger>
+        <Button isIconOnly size="sm" variant="light" className="relative h-7 min-h-7 w-7 min-w-7 text-white data-[hover=true]:bg-white/15" aria-label={t('faxCalibration', { defaultValue: 'FAX' })} title={latest ? `${latest.status} · ${latest.clockPpm.toFixed(1)} ppm` : t('faxCalibration', { defaultValue: 'FAX' })}>
+          <FontAwesomeIcon icon={faSliders} />
+          <span className={`absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full ${indicator}`} />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[min(20rem,calc(100vw-1rem))] gap-3 p-3">
+        <Switch size="sm" isSelected={autoEnabled} isDisabled={disabled} onValueChange={setAutoEnabled}>{t('auto')}</Switch>
+        <Slider size="sm" label="Phase" value={phasePixels} minValue={-width / 2} maxValue={width / 2} step={1} isDisabled={disabled} onChange={(value) => setPhasePixels(Number(value))} />
+        <Slider size="sm" label="ppm" value={clockPpm} minValue={-5000} maxValue={5000} step={1} isDisabled={disabled} onChange={(value) => setClockPpm(Number(value))} />
+        <div className="flex justify-end gap-2">
+          <Button isIconOnly size="sm" variant="flat" isDisabled={disabled} onPress={onReset} aria-label="Reset" title="Reset"><FontAwesomeIcon icon={faRotateLeft} /></Button>
+          <Button isIconOnly size="sm" variant="flat" isDisabled={disabled} onPress={() => onApply(autoEnabled, phasePixels, clockPpm)} aria-label="Apply" title="Apply"><FontAwesomeIcon icon={faCheck} /></Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 export function ImageReceiveCanvas() {
   const { t } = useTranslation('image');
   const canConfigure = useHasMinRole(UserRole.OPERATOR);
   const { currentOperatorId } = useCurrentOperatorId();
-  const { session, rowStore, boundaries, segmentSnapshots } = useImageRadioReceive();
-  const { status, txStatus, modes, configureReceive, saveCurrentPaper } = useImageRadioControls();
+  const { session, rowStore, boundaries, segmentSnapshots, faxCalibrations } = useImageRadioReceive();
+  const { status, txStatus, modes, configureReceive, saveCurrentPaper, setFaxCalibration, resetFaxCalibration } = useImageRadioControls();
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const followTailRef = useRef(true);
   const snapshotImagesRef = useRef(new Map<string, HTMLImageElement>());
@@ -148,6 +190,10 @@ export function ImageReceiveCanvas() {
     if (profile.family === 'sstv') return profile.mode;
     return `${profile.ioc}-${profile.lpm}-${profile.modulation}`;
   }, [status?.receiveProfile]);
+  const activeFaxCalibration = useMemo(() => {
+    if (session?.family !== 'fax') return undefined;
+    return [...boundaries].reverse().map((boundary) => faxCalibrations.get(boundary.boundaryId)).find(Boolean);
+  }, [boundaries, faxCalibrations, session?.family]);
 
   const changeProfile = async (key: string) => {
     const family = status?.receiveProfile?.family;
@@ -202,11 +248,12 @@ export function ImageReceiveCanvas() {
       }
       return [{
         boundary, displayWidth: boundary.width, chunks,
+        calibration: faxCalibrations.get(boundary.boundaryId),
         snapshot: snapshotImagesRef.current.get(boundary.boundaryId),
         markers: markers.filter((marker) => marker.lineIndex >= startLine && marker.lineIndex < endLine),
       }];
     });
-  }, [boundaries, imageRevision, session]);
+  }, [boundaries, faxCalibrations, imageRevision, session]);
 
   const paperLayout = useMemo(() => {
     return buildPaperLayout(
@@ -294,6 +341,7 @@ export function ImageReceiveCanvas() {
                   contentRevision={rowStore.rangeRevision(item.startLine, item.endLine) + imageRevision}
                   isTail={item.endLine === session.receivedLines}
                   source={item.data.boundary.source ?? 'rx'}
+                  calibration={item.data.calibration}
                 />
               )}
             </div>
@@ -303,6 +351,7 @@ export function ImageReceiveCanvas() {
       <div className="pointer-events-none absolute inset-x-2 top-2 z-[2] flex items-start justify-between gap-2">
         <div className="pointer-events-auto flex h-8 min-w-0 items-center gap-1 rounded-medium bg-black/70 px-1 text-xs text-white">
           {session ? <span className="max-w-36 truncate px-1 font-mono">{txActive ? `TX · ${txStatus?.mode ?? session.codecMode ?? t('auto')}` : `${session.codecMode ?? t('auto')} · ${session.receivedLines}`}</span> : null}
+          {activeFaxCalibration ? <FaxCalibrationPopover calibration={activeFaxCalibration} width={session?.width ?? 1810} disabled={!canConfigure} onApply={(autoEnabled, phasePixels, clockPpm) => setFaxCalibration(activeFaxCalibration, autoEnabled, phasePixels, clockPpm)} onReset={() => resetFaxCalibration(activeFaxCalibration)} /> : null}
           <Button isIconOnly size="sm" variant="light" className="h-7 min-h-7 w-7 min-w-7 text-white data-[hover=true]:bg-white/15" isDisabled={!session || !currentOperatorId || isSaving} isLoading={isSaving} onPress={() => void handleSave()} aria-label={t('savePaper')} title={t('savePaper')}>
             <FontAwesomeIcon icon={faFloppyDisk} />
           </Button>

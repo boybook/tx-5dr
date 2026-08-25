@@ -1,4 +1,4 @@
-import { WSMessageType, ModeDescriptor, type SpectrumKind, type WSSelectedFrame, type WSAccessDeniedData, type SstvTxCancelCommand, type SstvTxStartCommand } from '@tx5dr/contracts';
+import { WSMessageType, ModeDescriptor, type SpectrumKind, type WSSelectedFrame, type WSAccessDeniedData, type SstvTxCancelCommand, type SstvTxStartCommand, type FaxCalibrationSetCommand, type FaxCalibrationResetCommand } from '@tx5dr/contracts';
 import { WSMessageHandler } from './WSMessageHandler.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -328,6 +328,14 @@ export class WSClient extends WSMessageHandler {
 
   cancelSstvTx(command: SstvTxCancelCommand): void {
     this.send(WSMessageType.SSTV_TX_CANCEL, command);
+  }
+
+  setFaxCalibration(command: FaxCalibrationSetCommand): void {
+    this.send(WSMessageType.FAX_CALIBRATION_SET, command);
+  }
+
+  resetFaxCalibration(command: FaxCalibrationResetCommand): void {
+    this.send(WSMessageType.FAX_CALIBRATION_RESET, command);
   }
 
   invokeSpectrumControl(id: string, action: 'in' | 'out' | 'toggle'): void {

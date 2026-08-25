@@ -6583,7 +6583,7 @@ __metadata:
     node-wav: "npm:^0.0.2"
     onnxruntime-node: "npm:^1.26.0"
     pngjs: "npm:^7.0.0"
-    rasterwave-node: "npm:0.2.0"
+    rasterwave-node: "npm:0.3.0"
     rubato-fft-node: "npm:^0.1.0"
     serialport: "npm:^13.0.0"
     tci-client-node: "npm:^0.1.2"
@@ -16551,50 +16551,50 @@ __metadata:
   languageName: node
   linkType: hard
 
-"rasterwave-node-darwin-arm64@npm:0.2.0":
-  version: 0.2.0
-  resolution: "rasterwave-node-darwin-arm64@npm:0.2.0"
+"rasterwave-node-darwin-arm64@npm:0.3.0":
+  version: 0.3.0
+  resolution: "rasterwave-node-darwin-arm64@npm:0.3.0"
   conditions: os=darwin & cpu=arm64
   languageName: node
   linkType: hard
 
-"rasterwave-node-darwin-x64@npm:0.2.0":
-  version: 0.2.0
-  resolution: "rasterwave-node-darwin-x64@npm:0.2.0"
+"rasterwave-node-darwin-x64@npm:0.3.0":
+  version: 0.3.0
+  resolution: "rasterwave-node-darwin-x64@npm:0.3.0"
   conditions: os=darwin & cpu=x64
   languageName: node
   linkType: hard
 
-"rasterwave-node-linux-arm64-gnu@npm:0.2.0":
-  version: 0.2.0
-  resolution: "rasterwave-node-linux-arm64-gnu@npm:0.2.0"
+"rasterwave-node-linux-arm64-gnu@npm:0.3.0":
+  version: 0.3.0
+  resolution: "rasterwave-node-linux-arm64-gnu@npm:0.3.0"
   conditions: os=linux & cpu=arm64 & libc=glibc
   languageName: node
   linkType: hard
 
-"rasterwave-node-linux-x64-gnu@npm:0.2.0":
-  version: 0.2.0
-  resolution: "rasterwave-node-linux-x64-gnu@npm:0.2.0"
+"rasterwave-node-linux-x64-gnu@npm:0.3.0":
+  version: 0.3.0
+  resolution: "rasterwave-node-linux-x64-gnu@npm:0.3.0"
   conditions: os=linux & cpu=x64 & libc=glibc
   languageName: node
   linkType: hard
 
-"rasterwave-node-win32-x64-msvc@npm:0.2.0":
-  version: 0.2.0
-  resolution: "rasterwave-node-win32-x64-msvc@npm:0.2.0"
+"rasterwave-node-win32-x64-msvc@npm:0.3.0":
+  version: 0.3.0
+  resolution: "rasterwave-node-win32-x64-msvc@npm:0.3.0"
   conditions: os=win32 & cpu=x64
   languageName: node
   linkType: hard
 
-"rasterwave-node@npm:0.2.0":
-  version: 0.2.0
-  resolution: "rasterwave-node@npm:0.2.0"
+"rasterwave-node@npm:0.3.0":
+  version: 0.3.0
+  resolution: "rasterwave-node@npm:0.3.0"
   dependencies:
-    rasterwave-node-darwin-arm64: "npm:0.2.0"
-    rasterwave-node-darwin-x64: "npm:0.2.0"
-    rasterwave-node-linux-arm64-gnu: "npm:0.2.0"
-    rasterwave-node-linux-x64-gnu: "npm:0.2.0"
-    rasterwave-node-win32-x64-msvc: "npm:0.2.0"
+    rasterwave-node-darwin-arm64: "npm:0.3.0"
+    rasterwave-node-darwin-x64: "npm:0.3.0"
+    rasterwave-node-linux-arm64-gnu: "npm:0.3.0"
+    rasterwave-node-linux-x64-gnu: "npm:0.3.0"
+    rasterwave-node-win32-x64-msvc: "npm:0.3.0"
   dependenciesMeta:
     rasterwave-node-darwin-arm64:
       optional: true
@@ -16606,7 +16606,7 @@ __metadata:
       optional: true
     rasterwave-node-win32-x64-msvc:
       optional: true
-  checksum: 10c0/e378ba4892249c6746cfacbfa10fddd97ddae87135635cc61a2d8f82156fc37319c3edbb6050352f01306bb2d0b8f52e1709df769f8c24ea1bb6bc0ac212255f
+  checksum: 10c0/17a4a92cbcf60c18529c40ac55bb7abc889b17bb098348a2026a4031db7a2e07cb7d7616099990350d80110f30b449c9acf2211a3a7fcc4ad655259523520bee
   languageName: node
   linkType: hard
 

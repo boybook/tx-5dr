@@ -6,6 +6,10 @@ import { EventEmitter } from 'eventemitter3';
 import type {
   ImageFamily,
   ImageFaxReceiveProfile,
+  ImageFaxCalibrationPoint,
+  FaxCalibrationCommandResult,
+  FaxCalibrationResetCommand,
+  FaxCalibrationSetCommand,
   ImagePaperBoundary,
   ImagePaperSaveCommand,
   ImagePixelFormat,
@@ -26,6 +30,7 @@ import { rasterwaveRuntime, type RasterwaveRuntime } from './RasterwaveRuntime.j
 import type { PhysicalTxCoordinator } from '../transmission/PhysicalTxCoordinator.js';
 import type { DeterministicPlaybackSession } from '../audio/AudioStreamManager.js';
 import { ImagePaperSpool, type PaperManifest } from './ImagePaperSpool.js';
+import type { PaperRangeSnapshot } from './ImagePaperSpool.js';
 
 const logger = createLogger('ImageRadioService');
 const INPUT_CHUNK_MS = 100;
@@ -109,6 +114,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
   };
   private readonly txResults = new Map<string, SstvTxCommandResult>();
   private readonly saveResults = new Map<string, { artifactId: string }>();
+  private readonly calibrationResults = new Map<string, FaxCalibrationCommandResult>();
   private activeTx: ActiveSstvTx | null = null;
   private readonly paper: ImagePaperSpool;
   private nativeLineOffset = 0;
@@ -154,7 +160,9 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
 
   getPaperManifest(): PaperManifest | null { return this.paper.getManifest(); }
 
-  renderPaperSegment(boundaryId: string): Promise<Buffer> { return this.paper.renderSegment(boundaryId); }
+  renderPaperSegment(boundaryId: string): Promise<Buffer> {
+    return this.paper.renderSegment(boundaryId, (snapshot) => this.correctFaxSnapshot(snapshot));
+  }
 
   async start(family: ImageFamily): Promise<void> {
     if (this.family === family && this.serviceState === 'ready') {
@@ -229,6 +237,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     const profile = this.faxReceiveProfile.strategy === 'manual' ? this.faxReceiveProfile : DEFAULT_FAX_FALLBACK;
     this.decoder = new native.FaxDecoder(this.inputSampleRate, {
       outputMode: 'continuousPaper', continuousAuto: this.faxReceiveProfile.strategy === 'auto',
+      clockRecovery: 'auto',
       ioc: profile.ioc, lpm: profile.lpm,
       modulation: { kind: profile.modulation, centerHz: profile.centerHz, deviationHz: profile.deviationHz },
       queueCapacitySamples: this.inputSampleRate * NATIVE_QUEUE_SECONDS,
@@ -505,6 +514,12 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
       });
     } else if (event.type === 'rasterLineReady') {
       this.acceptPaperRow(event.lineIndex, event.width, 0, event.pixels, 'final');
+    } else if (event.type === 'clockCalibration') {
+      this.acceptFaxCalibration(event.boundaryId, {
+        revision: event.revision, referenceLine: this.nativeLineOffset + event.referenceLine,
+        phasePixels: event.phasePixels, clockPpm: event.clockPpm,
+        confidence: event.confidence, source: event.source, status: event.status,
+      });
     } else if (event.type === 'transmissionCompleted') {
       this.trackArtifactWrite(this.savePaperRange(
         this.nativeLineOffset + event.startLine,
@@ -516,6 +531,86 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     } else if (event.type === 'error') {
       this.failDecoder(new Error(event.reason));
     }
+  }
+
+  private acceptFaxCalibration(nativeBoundaryId: number, point: ImageFaxCalibrationPoint): void {
+    const boundaryId = `${this.generation}:${nativeBoundaryId}`;
+    const calibration = this.paper.addFaxCalibrationPoint(boundaryId, point);
+    const session = this.paper.getSession();
+    if (!calibration || !session) return;
+    this.emit('rxEvent', {
+      type: 'faxCalibration', sessionId: session.sessionId, generation: this.generation,
+      revision: session.revision, calibration,
+    });
+    this.emitStatus();
+  }
+
+  setFaxCalibration(command: FaxCalibrationSetCommand): FaxCalibrationCommandResult {
+    const previous = this.calibrationResults.get(command.requestId);
+    if (previous) return previous;
+    const reject = (errorCode: string): FaxCalibrationCommandResult => {
+      const result = { requestId: command.requestId, accepted: false, errorCode };
+      this.calibrationResults.set(command.requestId, result);
+      return result;
+    };
+    const session = this.paper.getSession();
+    if (this.family !== 'fax' || !session || session.sessionId !== command.sessionId) return reject('FAX_CALIBRATION_SESSION_CHANGED');
+    const current = this.paper.getFaxCalibration(command.boundaryId);
+    if (!current) return reject('FAX_CALIBRATION_SEGMENT_NOT_FOUND');
+    if (command.expectedRevision !== current.revision) return reject('FAX_CALIBRATION_REVISION_CONFLICT');
+    const boundary = this.paper.getManifest()?.boundaries.find((candidate) => candidate.boundaryId === command.boundaryId);
+    if (!boundary || Math.abs(command.phasePixels) > boundary.width / 2) return reject('FAX_CALIBRATION_PHASE_OUT_OF_RANGE');
+    const calibration = this.paper.setFaxCalibration({
+      boundaryId: command.boundaryId, autoEnabled: command.autoEnabled,
+      phasePixels: command.phasePixels, clockPpm: command.clockPpm,
+    });
+    if (!calibration) return reject('FAX_CALIBRATION_SEGMENT_NOT_FOUND');
+    const result = { requestId: command.requestId, accepted: true, calibration };
+    this.calibrationResults.set(command.requestId, result);
+    this.emitFaxCalibration(calibration);
+    return result;
+  }
+
+  resetFaxCalibration(command: FaxCalibrationResetCommand): FaxCalibrationCommandResult {
+    const previous = this.calibrationResults.get(command.requestId);
+    if (previous) return previous;
+    const session = this.paper.getSession();
+    if (this.family !== 'fax' || !session || session.sessionId !== command.sessionId) {
+      const result = { requestId: command.requestId, accepted: false, errorCode: 'FAX_CALIBRATION_SESSION_CHANGED' };
+      this.calibrationResults.set(command.requestId, result);
+      return result;
+    }
+    const current = this.paper.getFaxCalibration(command.boundaryId);
+    if (!current || command.expectedRevision !== current.revision) {
+      const result = { requestId: command.requestId, accepted: false, errorCode: current ? 'FAX_CALIBRATION_REVISION_CONFLICT' : 'FAX_CALIBRATION_SEGMENT_NOT_FOUND' };
+      this.calibrationResults.set(command.requestId, result);
+      return result;
+    }
+    const calibration = this.paper.resetFaxCalibration(command.boundaryId)!;
+    const result = { requestId: command.requestId, accepted: true, calibration };
+    this.calibrationResults.set(command.requestId, result);
+    this.emitFaxCalibration(calibration);
+    return result;
+  }
+
+  private emitFaxCalibration(calibration: NonNullable<FaxCalibrationCommandResult['calibration']>): void {
+    const session = this.paper.getSession();
+    if (!session) return;
+    this.emit('rxEvent', {
+      type: 'faxCalibration', sessionId: session.sessionId, generation: this.generation,
+      revision: session.revision, calibration,
+    });
+    this.emitStatus();
+  }
+
+  private async correctFaxSnapshot(snapshot: PaperRangeSnapshot): Promise<Uint8Array> {
+    if (snapshot.family !== 'fax' || snapshot.pixelFormat !== 'gray8' || !snapshot.calibration) return snapshot.pixels;
+    const calibration = snapshot.calibration;
+    return this.runtime.load().correctFaxPaper(
+      snapshot.pixels, snapshot.width, snapshot.height, snapshot.startLine,
+      calibration.autoEnabled ? calibration.autoPoints : [],
+      { phasePixels: calibration.manualPhasePixels, clockPpm: calibration.manualClockPpm },
+    );
   }
 
   private currentReceiveProfile(): ImageReceiveProfile | null {
@@ -560,6 +655,11 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     }
     const session = this.paper.getSession()!;
     this.emit('rxEvent', { type: 'boundary', sessionId: session.sessionId, generation: this.generation, revision: session.revision, boundary });
+    const calibration = this.family === 'fax' ? this.paper.getFaxCalibration(boundary.boundaryId) : null;
+    if (calibration) this.emit('rxEvent', {
+      type: 'faxCalibration', sessionId: session.sessionId, generation: this.generation,
+      revision: session.revision, calibration,
+    });
     this.rxState = 'receiving';
     this.emitStatus();
   }
@@ -635,14 +735,16 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     try {
       const snapshot = await this.paper.snapshotRange(startLine, endLine);
       if (snapshot.source !== 'rx') throw new Error('IMAGE_PAPER_RANGE_NOT_RECEIVED');
+      const correctedPixels = await this.correctFaxSnapshot(snapshot);
       const artifact = await this.artifacts.save({
         family: snapshot.family, direction: 'rx', operatorId,
         codecMode: snapshot.codecMode, pixelFormat: snapshot.pixelFormat,
-        width: snapshot.width, height: snapshot.height, pixels: snapshot.pixels,
+        width: snapshot.width, height: snapshot.height, pixels: correctedPixels,
         frequency: this.getFrequency(), radioMode: this.getRadioMode(),
         complete: complete && !snapshot.truncated, saveReason,
         captureStartedAt: snapshot.startedAt, captureEndedAt: snapshot.endedAt,
         truncated: snapshot.truncated,
+        faxCalibration: snapshot.calibration,
       });
       try {
         await this.history.recordReceived(artifact);

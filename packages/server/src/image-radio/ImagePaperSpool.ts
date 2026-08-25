@@ -4,6 +4,8 @@ import path from 'node:path';
 
 import type {
   ImageFamily,
+  ImageFaxCalibration,
+  ImageFaxCalibrationPoint,
   ImagePaperBoundary,
   ImagePaperSource,
   ImagePixelFormat,
@@ -26,6 +28,7 @@ interface PaperSegment {
   chunks: ChunkDescriptor[];
   activeChunkStart: number;
   activeRows: Map<number, { revision: number; pixels: Uint8Array }>;
+  calibration?: ImageFaxCalibration;
 }
 
 export interface PaperRangeSnapshot {
@@ -41,12 +44,13 @@ export interface PaperRangeSnapshot {
   endedAt: number;
   truncated: boolean;
   source: ImagePaperSource;
+  calibration?: ImageFaxCalibration;
 }
 
 export interface PaperManifest {
   session: ImageSessionSummary;
   boundaries: ImagePaperBoundary[];
-  segments: Array<{ boundaryId: string; startLine: number; endLine: number; width: number; pixelFormat: ImagePixelFormat; snapshotUrl: string }>;
+  segments: Array<{ boundaryId: string; startLine: number; endLine: number; width: number; pixelFormat: ImagePixelFormat; snapshotUrl: string; calibration?: ImageFaxCalibration }>;
 }
 
 export class ImagePaperSpool {
@@ -102,6 +106,9 @@ export class ImagePaperSpool {
       chunks: [],
       activeChunkStart: boundary.lineIndex,
       activeRows: new Map(),
+      calibration: this.session.family === 'fax' && (boundary.source ?? 'rx') === 'rx'
+        ? defaultFaxCalibration(boundary.boundaryId)
+        : undefined,
     });
     this.session.codecMode = boundary.codecMode;
     this.session.width = boundary.width;
@@ -157,7 +164,8 @@ export class ImagePaperSpool {
         endLine: this.segments[index + 1]?.boundary.lineIndex ?? session.receivedLines,
         width: segment.boundary.width,
         pixelFormat: segment.boundary.pixelFormat,
-        snapshotUrl: `/api/image-radio/paper/segments/${encodeURIComponent(segment.boundary.boundaryId)}/snapshot`,
+        snapshotUrl: `/api/image-radio/paper/segments/${encodeURIComponent(segment.boundary.boundaryId)}/snapshot?calibrationRevision=${segment.calibration?.revision ?? 0}`,
+        calibration: segment.calibration ? cloneCalibration(segment.calibration) : undefined,
       })),
     };
   }
@@ -219,31 +227,80 @@ export class ImagePaperSpool {
       endedAt: Date.now(),
       truncated: startLine < segment.boundary.lineIndex || startLine <= session.firstAvailableLine && session.firstAvailableLine > 0,
       source: segment.boundary.source ?? 'rx',
+      calibration: segment.calibration ? cloneCalibration(segment.calibration) : undefined,
     };
   }
 
-  async renderSegment(boundaryId: string): Promise<Buffer> {
+  async renderSegment(
+    boundaryId: string,
+    transform?: (snapshot: PaperRangeSnapshot) => Promise<Uint8Array>,
+  ): Promise<Buffer> {
     const session = this.session;
     const index = this.segments.findIndex((segment) => segment.boundary.boundaryId === boundaryId);
     if (!session || index < 0) throw new Error('IMAGE_PAPER_SEGMENT_NOT_FOUND');
     const segment = this.segments[index];
     const endLine = this.segments[index + 1]?.boundary.lineIndex ?? session.receivedLines;
     const snapshot = await this.snapshotRange(segment.boundary.lineIndex, Math.max(segment.boundary.lineIndex + 1, endLine));
+    const sourcePixels = transform ? await transform(snapshot) : snapshot.pixels;
     const png = new PNG({ width: snapshot.width, height: snapshot.height });
     const channels = snapshot.pixelFormat === 'rgb8' ? 3 : 1;
     for (let pixel = 0, source = 0; pixel < snapshot.width * snapshot.height; pixel += 1) {
       const target = pixel * 4;
       if (channels === 3) {
-        png.data[target] = snapshot.pixels[source++];
-        png.data[target + 1] = snapshot.pixels[source++];
-        png.data[target + 2] = snapshot.pixels[source++];
+        png.data[target] = sourcePixels[source++];
+        png.data[target + 1] = sourcePixels[source++];
+        png.data[target + 2] = sourcePixels[source++];
       } else {
-        const gray = snapshot.pixels[source++];
+        const gray = sourcePixels[source++];
         png.data[target] = gray; png.data[target + 1] = gray; png.data[target + 2] = gray;
       }
       png.data[target + 3] = 255;
     }
-    return PNG.sync.write(png, { colorType: 6 });
+    return encodePng(png);
+  }
+
+  addFaxCalibrationPoint(boundaryId: string, point: ImageFaxCalibrationPoint): ImageFaxCalibration | null {
+    const segment = this.segments.find((candidate) => candidate.boundary.boundaryId === boundaryId);
+    if (!segment?.calibration || !this.session) return null;
+    const points = segment.calibration.autoPoints.filter((candidate) => candidate.revision !== point.revision);
+    points.push({ ...point });
+    points.sort((left, right) => left.referenceLine - right.referenceLine || left.revision - right.revision);
+    segment.calibration.autoPoints = points.slice(-256);
+    segment.calibration.revision += 1;
+    segment.calibration.updatedAt = Date.now();
+    this.session.revision += 1;
+    return cloneCalibration(segment.calibration);
+  }
+
+  setFaxCalibration(input: {
+    boundaryId: string; autoEnabled: boolean; phasePixels: number; clockPpm: number;
+  }): ImageFaxCalibration | null {
+    const segment = this.segments.find((candidate) => candidate.boundary.boundaryId === input.boundaryId);
+    if (!segment?.calibration || !this.session) return null;
+    segment.calibration.autoEnabled = input.autoEnabled;
+    segment.calibration.manualPhasePixels = input.phasePixels;
+    segment.calibration.manualClockPpm = input.clockPpm;
+    segment.calibration.revision += 1;
+    segment.calibration.updatedAt = Date.now();
+    this.session.revision += 1;
+    return cloneCalibration(segment.calibration);
+  }
+
+  resetFaxCalibration(boundaryId: string): ImageFaxCalibration | null {
+    const segment = this.segments.find((candidate) => candidate.boundary.boundaryId === boundaryId);
+    if (!segment?.calibration || !this.session) return null;
+    segment.calibration.autoEnabled = true;
+    segment.calibration.manualPhasePixels = 0;
+    segment.calibration.manualClockPpm = 0;
+    segment.calibration.revision += 1;
+    segment.calibration.updatedAt = Date.now();
+    this.session.revision += 1;
+    return cloneCalibration(segment.calibration);
+  }
+
+  getFaxCalibration(boundaryId: string): ImageFaxCalibration | null {
+    const calibration = this.segments.find((candidate) => candidate.boundary.boundaryId === boundaryId)?.calibration;
+    return calibration ? cloneCalibration(calibration) : null;
   }
 
   private segmentForLine(line: number): PaperSegment | null {
@@ -295,4 +352,25 @@ export class ImagePaperSpool {
       this.onTruncated?.(session.firstAvailableLine);
     }
   }
+}
+
+function defaultFaxCalibration(boundaryId: string): ImageFaxCalibration {
+  return {
+    boundaryId, revision: 0, autoEnabled: true, autoPoints: [],
+    manualPhasePixels: 0, manualClockPpm: 0, updatedAt: Date.now(),
+  };
+}
+
+function cloneCalibration(calibration: ImageFaxCalibration): ImageFaxCalibration {
+  return { ...calibration, autoPoints: calibration.autoPoints.map((point) => ({ ...point })) };
+}
+
+function encodePng(png: PNG): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    png.pack()
+      .on('data', (chunk: Buffer) => chunks.push(chunk))
+      .once('error', reject)
+      .once('end', () => resolve(Buffer.concat(chunks)));
+  });
 }

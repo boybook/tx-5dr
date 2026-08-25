@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // WebSocket服务器 - 事件处理和消息传递需要使用any类型以保持灵活性
 
-import { ServerMessageKey, WSMessageType, RadioConnectionStatus, UserRole, WriteCapabilityPayloadSchema, SetSplitFrequencyPayloadSchema, TuneToneStartPayloadSchema, SstvTxStartCommandSchema, SstvTxCancelCommandSchema, SLOT_PACK_HISTORY_LIMIT, type AppAction, type AppSubject } from '@tx5dr/contracts';
+import { ServerMessageKey, WSMessageType, RadioConnectionStatus, UserRole, WriteCapabilityPayloadSchema, SetSplitFrequencyPayloadSchema, TuneToneStartPayloadSchema, SstvTxStartCommandSchema, SstvTxCancelCommandSchema, FaxCalibrationSetCommandSchema, FaxCalibrationResetCommandSchema, SLOT_PACK_HISTORY_LIMIT, type AppAction, type AppSubject } from '@tx5dr/contracts';
 import type {
   ClockStatusSummary,
   DecodeErrorInfo,
@@ -425,6 +425,8 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.SUBSCRIBE_IMAGE_RX]: (data, id) => this.handleSubscribeImageRx(id, data),
       [WSMessageType.SSTV_TX_START]: (data, id) => this.handleSstvTxStart(id, data),
       [WSMessageType.SSTV_TX_CANCEL]: (data, id) => this.handleSstvTxCancel(id, data),
+      [WSMessageType.FAX_CALIBRATION_SET]: (data, id) => this.handleFaxCalibrationSet(id, data),
+      [WSMessageType.FAX_CALIBRATION_RESET]: (data, id) => this.handleFaxCalibrationReset(id, data),
       [WSMessageType.INVOKE_SPECTRUM_CONTROL]: (data: unknown, id: string) => this.handleInvokeSpectrumControl(id, data),
       [WSMessageType.GET_OPERATORS]: (_data, id) => this.handleGetOperators(id),
       [WSMessageType.SET_OPERATOR_CONTEXT]: (data, id) => this.handleSetOperatorContext(data, id),
@@ -871,6 +873,8 @@ export class WSServer extends WSMessageHandler {
     [WSMessageType.VOICE_PTT_REQUEST]: { ability: { action: 'manage', subject: 'Transmission' } },
     [WSMessageType.SSTV_TX_START]: { ability: { action: 'manage', subject: 'Transmission' } },
     [WSMessageType.SSTV_TX_CANCEL]: { ability: { action: 'manage', subject: 'Transmission' } },
+    [WSMessageType.FAX_CALIBRATION_SET]: { ability: { action: 'manage', subject: 'Operator' } },
+    [WSMessageType.FAX_CALIBRATION_RESET]: { ability: { action: 'manage', subject: 'Operator' } },
     [WSMessageType.VOICE_PTT_RELEASE]: { minRole: UserRole.OPERATOR },
     [WSMessageType.VOICE_KEYER_PLAY]: { ability: { action: 'manage', subject: 'Transmission' } },
     [WSMessageType.VOICE_KEYER_STOP]: { minRole: UserRole.OPERATOR },
@@ -912,6 +916,8 @@ export class WSServer extends WSMessageHandler {
     WSMessageType.VOICE_PTT_REQUEST,
     WSMessageType.SSTV_TX_START,
     WSMessageType.SSTV_TX_CANCEL,
+    WSMessageType.FAX_CALIBRATION_SET,
+    WSMessageType.FAX_CALIBRATION_RESET,
     WSMessageType.VOICE_KEYER_PLAY,
     WSMessageType.CW_KEY_ACTION,
     WSMessageType.CW_TEXT_INPUT,
@@ -1293,6 +1299,34 @@ export class WSServer extends WSMessageHandler {
       accepted: cancelled,
       sessionId: parsed.data.sessionId,
       errorCode: cancelled ? undefined : 'IMAGE_TX_STALE_COMMAND',
+    });
+  }
+
+  private handleFaxCalibrationSet(connectionId: string, data: unknown): void {
+    const connection = this.getConnection(connectionId);
+    if (!connection) return;
+    const parsed = FaxCalibrationSetCommandSchema.safeParse(data);
+    const result = parsed.success
+      ? this.digitalRadioEngine.getImageRadioService()?.setFaxCalibration(parsed.data)
+      : null;
+    connection.send(WSMessageType.FAX_CALIBRATION_COMMAND_RESULT, result ?? {
+      requestId: (data as { requestId?: string } | null)?.requestId ?? '',
+      accepted: false,
+      errorCode: parsed.success ? 'IMAGE_RADIO_NOT_INITIALIZED' : 'FAX_CALIBRATION_INVALID_COMMAND',
+    });
+  }
+
+  private handleFaxCalibrationReset(connectionId: string, data: unknown): void {
+    const connection = this.getConnection(connectionId);
+    if (!connection) return;
+    const parsed = FaxCalibrationResetCommandSchema.safeParse(data);
+    const result = parsed.success
+      ? this.digitalRadioEngine.getImageRadioService()?.resetFaxCalibration(parsed.data)
+      : null;
+    connection.send(WSMessageType.FAX_CALIBRATION_COMMAND_RESULT, result ?? {
+      requestId: (data as { requestId?: string } | null)?.requestId ?? '',
+      accepted: false,
+      errorCode: parsed.success ? 'IMAGE_RADIO_NOT_INITIALIZED' : 'FAX_CALIBRATION_INVALID_COMMAND',
     });
   }
 
