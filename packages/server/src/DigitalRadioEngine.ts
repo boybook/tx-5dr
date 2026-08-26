@@ -117,6 +117,11 @@ import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { ImageArtifactStore, ImageComposerBackgroundStore, ImageHistoryStore, ImagePaperSpool, ImageRadioService, ImageTemplateStore, SstvTxPreferenceStore } from './image-radio/index.js';
+import { RadioConnectionFactory } from './radio/connections/RadioConnectionFactory.js';
+import { VirtualRadioConnection } from './virtual-radio/VirtualRadioConnection.js';
+import { VirtualRadioSession } from './virtual-radio/VirtualRadioSession.js';
+import { validateVirtualRadioSafety } from './virtual-radio/virtualRadioSafety.js';
+import { VIRTUAL_AUDIO_INGRESS_TOKEN } from './virtual-radio/virtualAudioIngress.js';
 
 export interface DeepCWModelPathConfig {
   language?: string;
@@ -272,6 +277,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private _pluginManager!: PluginManager;        // 在构造函数末尾初始化
   private _callsignTracker: CallsignContextTracker;
   private ntpCalibrationService: NtpCalibrationService;
+  private virtualRadioSession: VirtualRadioSession | null = null;
+  private dataDir = '';
   private voiceManualPttActive = false;
   private voiceKeyerPttActive = false;
   private physicalPttActive = false;
@@ -319,17 +326,57 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       this.slotPackManager.setFrequencyContext(data);
     });
     this.audioMixer = new AudioMixer(100);
-    this.radioManager = new PhysicalRadioManager();
+    this.radioManager = new PhysicalRadioManager({
+      connectionFactory: (config) => {
+        const virtual = ConfigManager.getInstance().getActiveVirtualRadioProfile();
+        return virtual
+          ? new VirtualRadioConnection(virtual.radio.virtual.dialFrequencyHz)
+          : RadioConnectionFactory.create(config);
+      },
+    });
     this.digitalFrameCoordinator = new DigitalFrameCoordinator({ now: () => this.clockSource.now() });
     this.operatorIntentCoordinator = new OperatorIntentCoordinator();
     this.physicalTxCoordinator = new PhysicalTxCoordinator({
       isRadioConnected: () => this.radioManager.isConnected(),
       setPTT: (active) => this.radioManager.setPTT(active),
-      playAudio: (audioData, sampleRate, options) => this.audioStreamManager.playAudio(audioData, sampleRate, options),
-      stopCurrentPlayback: (options) => this.audioStreamManager.stopCurrentPlayback(options),
-      prepareAudioPlayback: (kind) => this.audioStreamManager.prepareAudioPlayback(kind),
-      getAudioPlaybackReadiness: (kind) => this.audioStreamManager.getAudioPlaybackReadiness(kind),
-      isAudioPlaying: (kind) => this.audioStreamManager.isPlaying(kind),
+      playAudio: async (audioData, sampleRate, options) => {
+        if (ConfigManager.getInstance().getActiveVirtualRadioProfile()) {
+          if (!this.virtualRadioSession) {
+            throw new Error('virtual radio playback is unavailable while its session is stopped');
+          }
+          return this.virtualRadioSession.playAudio(audioData, sampleRate, options);
+        }
+        return this.audioStreamManager.playAudio(audioData, sampleRate, options);
+      },
+      stopCurrentPlayback: (options) => {
+        if (ConfigManager.getInstance().getActiveVirtualRadioProfile()) {
+          return this.virtualRadioSession?.stopCurrentPlayback(options) ?? Promise.resolve(0);
+        }
+        return this.audioStreamManager.stopCurrentPlayback(options);
+      },
+      prepareAudioPlayback: (kind) => {
+        if (ConfigManager.getInstance().getActiveVirtualRadioProfile()) {
+          return this.virtualRadioSession?.prepareAudioPlayback(kind) ?? Promise.resolve({
+            ready: false,
+            waitedForDrain: false,
+            reason: 'virtual radio session is not running',
+          });
+        }
+        return this.audioStreamManager.prepareAudioPlayback(kind);
+      },
+      getAudioPlaybackReadiness: (kind) => {
+        if (ConfigManager.getInstance().getActiveVirtualRadioProfile()) {
+          return this.virtualRadioSession?.getAudioPlaybackReadiness(kind) ?? {
+            ready: false,
+            waitedForDrain: false,
+            reason: 'virtual radio session is not running',
+          };
+        }
+        return this.audioStreamManager.getAudioPlaybackReadiness(kind);
+      },
+      isAudioPlaying: (kind) => ConfigManager.getInstance().getActiveVirtualRadioProfile()
+        ? (this.virtualRadioSession?.isPlaying(kind) ?? false)
+        : this.audioStreamManager.isPlaying(kind),
       setTxDialOffset: (shiftHz) => this.radioManager.setTxDialOffset(shiftHz),
       clearTxDialOffset: () => this.radioManager.clearTxDialOffset(),
       now: () => this.clockSource.now(),
@@ -890,6 +937,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   }
 
   public async retryAudioSidecar(): Promise<void> {
+    if (ConfigManager.getInstance().getActiveVirtualRadioProfile()) {
+      throw new Error('physical audio is disabled while a virtual radio Profile is active');
+    }
     await this.audioSidecar.retryNow();
   }
 
@@ -1177,6 +1227,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     // 更新插件管理器的数据目录（在 initialize 阶段异步获取）
     const dataDir = await tx5drPaths.getDataDir();
+    this.dataDir = dataDir;
     const cacheDir = await tx5drPaths.getCacheDir();
     this._pluginManager.setDataDir(dataDir);
     this.imageArtifactStore = new ImageArtifactStore(path.join(dataDir, 'image-radio'));
@@ -1318,6 +1369,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       getCWDecoderManager: () => this.getCWDecoderManager(),
       getAudioVolumeController: () => this.audioVolumeController,
       getAudioSidecar: () => this.audioSidecar,
+      isVirtualRadioActive: () => this.virtualRadioSession !== null,
       getImageRadioService: () => this.imageRadioService,
       getStatus: () => this.getStatus(),
     });
@@ -1440,7 +1492,13 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   async start(): Promise<void> {
     this.configureAudioProcessingForCurrentMode('engine-start');
-    return this.engineLifecycle.start();
+    await this.prepareVirtualRadioSession();
+    try {
+      return await this.engineLifecycle.start();
+    } catch (error) {
+      await this.stopVirtualRadioSession('engine start failed');
+      throw error;
+    }
   }
 
   async stop(): Promise<void> {
@@ -1448,7 +1506,55 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     // already-serialized mode transaction settle before disconnecting CAT.
     await this.modeSwitchTail.catch(() => undefined);
     await this.stopTuneTone('engine stopped');
-    return this.engineLifecycle.stop();
+    try {
+      return await this.engineLifecycle.stop();
+    } finally {
+      await this.stopVirtualRadioSession('engine stopped');
+    }
+  }
+
+  private async prepareVirtualRadioSession(): Promise<void> {
+    const profile = ConfigManager.getInstance().getActiveVirtualRadioProfile();
+    if (!profile) {
+      await this.stopVirtualRadioSession('physical profile active');
+      return;
+    }
+    if (this.engineMode !== 'digital' || (this.currentMode.name !== 'FT8' && this.currentMode.name !== 'FT4')) {
+      throw new Error('virtual radio supports only FT8 and FT4 digital engine modes');
+    }
+    if (this.virtualRadioSession) return;
+    const scenarios = validateVirtualRadioSafety(
+      profile,
+      ConfigManager.getInstance(),
+      this._pluginManager,
+      this.currentMode.name,
+    );
+    const session = new VirtualRadioSession({
+      profile,
+      scenarios,
+      mode: this.currentMode,
+      dataDir: this.dataDir,
+      now: () => this.clockSource.now(),
+      getOutputGain: () => this.audioStreamManager.getVolumeGain(),
+      ingestInput: (samples, sampleRate) => this.audioStreamManager.ingestVirtualInput(
+        VIRTUAL_AUDIO_INGRESS_TOKEN,
+        samples,
+        sampleRate,
+      ),
+    });
+    try {
+      await session.start();
+      this.virtualRadioSession = session;
+    } catch (error) {
+      await session.stop('virtual session start failed');
+      throw error;
+    }
+  }
+
+  private async stopVirtualRadioSession(reason: string): Promise<void> {
+    const session = this.virtualRadioSession;
+    this.virtualRadioSession = null;
+    await session?.stop(reason);
   }
 
   async destroy(): Promise<void> {
@@ -1602,6 +1708,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   async setMode(mode: ModeDescriptor | string): Promise<void> {
     const runSwitch = async () => {
+      const virtualProfile = ConfigManager.getInstance().getActiveVirtualRadioProfile();
+      const requestedModeName = typeof mode === 'string' ? mode : mode.name;
+      if (virtualProfile && requestedModeName !== 'FT8' && requestedModeName !== 'FT4') {
+        throw new Error('virtual radio supports only FT8 and FT4 digital engine modes');
+      }
       // Handle CW mode
       if (typeof mode === 'object' && mode.name === 'CW') {
         if (this.engineMode === 'cw') {
@@ -1670,9 +1781,16 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         logger.info(`Switching mode: ${this.currentMode.name} -> ${digitalMode.name}`);
         await this.applyNearestPresetForDigitalMode(digitalMode);
 
+        const rebuildVirtualSession = this.virtualRadioSession !== null;
+        if (rebuildVirtualSession) {
+          await this.stopVirtualRadioSession('digital mode changed');
+        }
         this.currentMode = digitalMode;
         this.applyDecodeWindowOverrides();
         this.syncCurrentModeToRuntimeComponents('digital-mode-switch');
+        if (rebuildVirtualSession) {
+          await this.prepareVirtualRadioSession();
+        }
 
         await ConfigManager.getInstance().setLastDigitalModeName(digitalMode.name);
         this.emitModeAndStatusSnapshot();

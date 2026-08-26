@@ -9,6 +9,8 @@ const { state, mockConfigManager, mockEngine, mockReloadAudioConfig } = vi.hoist
 
   const configManager = {
     getActiveProfileId: vi.fn(() => testState.activeProfileId),
+    getPublicActiveProfileId: vi.fn(() => testState.activeProfileId),
+    hasConfiguredProfiles: vi.fn(() => testState.profiles.length > 0),
     getProfile: vi.fn((id: string) => testState.profiles.find((profile) => profile.id === id) ?? null),
     updateProfile: vi.fn(async (id: string, updates: Partial<RadioProfile>) => {
       const index = testState.profiles.findIndex((profile) => profile.id === id);
@@ -294,6 +296,7 @@ describe('ProfileManager audio runtime config application', () => {
     expect(mockEngine.emit).toHaveBeenCalledWith('profileListUpdated', {
       profiles: state.profiles,
       activeProfileId: 'profile-1',
+      hasConfiguredProfiles: true,
     });
     expect(mockReloadAudioConfig).not.toHaveBeenCalled();
   });

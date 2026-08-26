@@ -1674,6 +1674,18 @@ export class PluginManager {
     return this.loadedPlugins.get(pluginName);
   }
 
+  getSimulationScenarios(pluginName: string): import('@tx5dr/plugin-api').SimulationScenarioDescriptor[] {
+    const scenarios = this.loadedPlugins.get(pluginName)?.definition.simulationScenarios ?? [];
+    return structuredClone(scenarios);
+  }
+
+  getEnabledUtilityPluginNames(): string[] {
+    return [...this.loadedPlugins]
+      .filter(([, plugin]) => plugin.definition.type === 'utility' && this.resolveUtilityEnabled(plugin.definition.name, plugin))
+      .map(([name]) => name)
+      .sort();
+  }
+
   getPluginStorageDir(pluginName: string): string {
     return path.join(this.getPluginPaths().pluginDataDir, pluginName);
   }

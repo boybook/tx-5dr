@@ -1,6 +1,8 @@
 import {
   PLUGIN_COMMAND_CAPABILITY_PERMISSIONS,
   type AnyPluginDefinition,
+  type SimulationScenarioChoice,
+  type SimulationScenarioDescriptor,
 } from '@tx5dr/plugin-api';
 import type { PluginPanelDescriptor, PluginRuntimeLogEntry, PluginUIPageDescriptor } from '@tx5dr/contracts';
 import { PluginManifestSchema } from '@tx5dr/contracts';
@@ -83,6 +85,8 @@ export function validatePluginDefinition(def: AnyPluginDefinition): void {
       throw new Error('Plugins with permission "operator:transmit-control" must implement isTransmitControlEnabled(ctx) or isAutoCallEnabled(ctx)');
     }
   }
+
+  validateSimulationScenarios(def);
 
   for (const quickSetting of manifest.quickSettings ?? []) {
     const setting = manifest.settings?.[quickSetting.settingKey];
@@ -192,8 +196,76 @@ export function canonicalizePluginDefinition(def: AnyPluginDefinition): AnyPlugi
     hooks: def.hooks ? { ...def.hooks } : undefined,
     isTransmitControlEnabled: def.isTransmitControlEnabled,
     isAutoCallEnabled: def.isAutoCallEnabled,
+    simulationScenarios: def.simulationScenarios
+      ? structuredClone(def.simulationScenarios)
+      : undefined,
   };
   return deepFreezeDefinition(canonical);
+}
+
+function validateSimulationScenarios(def: AnyPluginDefinition): void {
+  const scenarios = def.simulationScenarios ?? [];
+  const scenarioIds = new Set<string>();
+  for (const scenario of scenarios) {
+    if (!scenario.id?.trim() || scenarioIds.has(scenario.id)) {
+      throw new Error(`Simulation scenario id must be non-empty and unique: ${scenario.id ?? ''}`);
+    }
+    scenarioIds.add(scenario.id);
+    if (scenario.modes.length === 0 || scenario.modes.some((mode) => mode !== 'FT8' && mode !== 'FT4')) {
+      throw new Error(`Simulation scenario "${scenario.id}" must declare FT8 and/or FT4`);
+    }
+    if (!scenario.states[scenario.initialState]) {
+      throw new Error(`Simulation scenario "${scenario.id}" references missing initial state "${scenario.initialState}"`);
+    }
+    for (const [stateId, state] of Object.entries(scenario.states)) {
+      for (const rule of state.rules ?? []) {
+        if (!rule.pattern || rule.pattern.length > 512) {
+          throw new Error(`Simulation scenario "${scenario.id}" state "${stateId}" has an invalid pattern`);
+        }
+        try {
+          void new RegExp(`^(?:${rule.pattern})$`, 'i');
+        } catch (error) {
+          throw new Error(`Simulation scenario "${scenario.id}" state "${stateId}" has an invalid pattern: ${(error as Error).message}`);
+        }
+        validateSimulationChoices(scenario.id, stateId, rule.choices, scenario.states);
+      }
+      for (const timeout of state.timeouts ?? []) {
+        if (!Number.isInteger(timeout.afterReceiveCycles) || timeout.afterReceiveCycles < 1) {
+          throw new Error(`Simulation scenario "${scenario.id}" state "${stateId}" has an invalid timeout`);
+        }
+        validateSimulationChoices(scenario.id, stateId, timeout.choices, scenario.states);
+      }
+    }
+  }
+}
+
+function validateSimulationChoices(
+  scenarioId: string,
+  stateId: string,
+  choices: SimulationScenarioChoice[],
+  states: SimulationScenarioDescriptor['states'],
+): void {
+  if (choices.length === 0) {
+    throw new Error(`Simulation scenario "${scenarioId}" state "${stateId}" has no choices`);
+  }
+  for (const choice of choices) {
+    const actionCount = Number(Boolean(choice.reply))
+      + Number(Boolean(choice.repeatLast))
+      + Number(Boolean(choice.silence))
+      + Number(Boolean(choice.complete));
+    if (actionCount !== 1) {
+      throw new Error(`Simulation scenario "${scenarioId}" state "${stateId}" choice must declare exactly one action`);
+    }
+    if (choice.weight !== undefined && (!Number.isFinite(choice.weight) || choice.weight <= 0)) {
+      throw new Error(`Simulation scenario "${scenarioId}" state "${stateId}" has an invalid weight`);
+    }
+    if (choice.delayCycles !== undefined && (!Number.isInteger(choice.delayCycles) || choice.delayCycles < 1)) {
+      throw new Error(`Simulation scenario "${scenarioId}" state "${stateId}" has an invalid delayCycles`);
+    }
+    if (choice.nextState && !states[choice.nextState]) {
+      throw new Error(`Simulation scenario "${scenarioId}" references missing state "${choice.nextState}"`);
+    }
+  }
 }
 
 function validatePluginUiPaths(manifest: ReturnType<typeof PluginManifestSchema.parse>): void {

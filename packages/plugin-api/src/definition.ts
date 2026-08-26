@@ -16,6 +16,7 @@ import type {
 } from './context.js';
 import type { PluginHooks } from './hooks.js';
 import type { StrategyRuntime } from './runtime.js';
+import type { SimulationScenarioDescriptor } from './simulation.js';
 
 /**
  * Describes a TX-5DR plugin module.
@@ -142,6 +143,9 @@ export interface PluginDefinition<
     /** Strategy-specific cap applied in addition to the operator cap. */
     maxConcurrentStreams?: number;
   };
+
+  /** Development-only virtual-radio peer scenarios. The Host owns execution and RF safety. */
+  simulationScenarios?: SimulationScenarioDescriptor[];
 
   /**
    * Controls whether the host creates one instance per operator or a single

@@ -48,6 +48,8 @@ vi.mock('../../config/config-manager.js', () => ({
   ConfigManager: {
     getInstance: () => ({
       getActiveProfileId: () => profile.id,
+      getPublicActiveProfileId: () => profile.id,
+      hasConfiguredProfiles: () => true,
     }),
   },
 }));

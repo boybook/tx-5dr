@@ -52,6 +52,7 @@ export type UpdateProfileRequest = z.infer<typeof UpdateProfileRequestSchema>;
 export const ProfileListResponseSchema = z.object({
   profiles: z.array(RadioProfileSchema),
   activeProfileId: z.string().nullable(),
+  hasConfiguredProfiles: z.boolean().optional().default(false),
 });
 
 export type ProfileListResponse = z.infer<typeof ProfileListResponseSchema>;
