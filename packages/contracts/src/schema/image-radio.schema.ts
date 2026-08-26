@@ -53,6 +53,26 @@ export const SstvTxPhaseSchema = z.enum([
   'idle', 'preparing', 'waiting_for_lease', 'keying', 'on_air', 'draining',
   'completed', 'cancelled', 'error', 'ptt_unknown',
 ]);
+export const SstvStationIdModeSchema = z.enum(['fsk', 'cw', 'none']);
+export type SstvStationIdMode = z.infer<typeof SstvStationIdModeSchema>;
+export const SstvTxEnvelopeSelectionSchema = z.object({
+  enhancedPreamble: z.boolean().default(true),
+  stationIdMode: SstvStationIdModeSchema.default('fsk'),
+});
+export type SstvTxEnvelopeSelection = z.infer<typeof SstvTxEnvelopeSelectionSchema>;
+export const SstvTxEnvelopeSnapshotSchema = SstvTxEnvelopeSelectionSchema.extend({
+  callsign: z.string().optional(),
+  postImageGapMs: z.literal(500),
+  endGuardMs: z.literal(300),
+  cwWpm: z.literal(20),
+  cwToneHz: z.literal(800),
+});
+export type SstvTxEnvelopeSnapshot = z.infer<typeof SstvTxEnvelopeSnapshotSchema>;
+export const SstvTxPreferencesSchema = SstvTxEnvelopeSelectionSchema.extend({
+  operatorId: z.string().min(1),
+  updatedAt: z.number(),
+});
+export type SstvTxPreferences = z.infer<typeof SstvTxPreferencesSchema>;
 
 export const ImageSessionSummarySchema = z.object({
   sessionId: z.string(),
@@ -76,6 +96,8 @@ export const SstvTxStatusSchema = z.object({
   artifactId: z.string().optional(),
   historyId: z.string().optional(),
   mode: z.string().optional(),
+  encoderStage: z.enum(['preamble', 'vis', 'raster', 'stationId', 'guard', 'finished']).optional(),
+  envelope: SstvTxEnvelopeSnapshotSchema.optional(),
   revision: z.number().int().nonnegative().default(0),
   samplesEmitted: z.number().int().nonnegative().default(0),
   estimatedTotalSamples: z.number().int().nonnegative().default(0),
@@ -215,6 +237,9 @@ export const ImageHistoryRecordSchema = z.discriminatedUnion('direction', [
     endedAt: z.number().optional(),
     outcome: z.enum(['transmitting', 'completed', 'interrupted']),
     errorCode: z.string().optional(),
+    envelope: SstvTxEnvelopeSnapshotSchema.optional(),
+    sampleRate: z.number().int().positive().optional(),
+    estimatedTotalSamples: z.number().int().nonnegative().optional(),
   }),
 ]);
 export type ImageHistoryRecord = z.infer<typeof ImageHistoryRecordSchema>;
@@ -268,6 +293,7 @@ export const SstvTxStartCommandSchema = z.object({
   mode: z.string().min(1),
   expectedFrequency: z.number().positive(),
   interruptActiveCapture: z.boolean().optional(),
+  envelope: SstvTxEnvelopeSelectionSchema.default({ enhancedPreamble: true, stationIdMode: 'fsk' }),
 });
 export type SstvTxStartCommand = z.infer<typeof SstvTxStartCommandSchema>;
 export const SstvTxCancelCommandSchema = z.object({

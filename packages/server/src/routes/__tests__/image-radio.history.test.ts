@@ -33,6 +33,8 @@ const mocks = vi.hoisted(() => ({
   linkArtifactQso: vi.fn(),
   getBackground: vi.fn(),
   saveBackground: vi.fn(),
+  getTxPreferences: vi.fn(),
+  saveTxPreferences: vi.fn(),
 }));
 
 vi.mock('../../DigitalRadioEngine.js', () => ({
@@ -51,6 +53,7 @@ vi.mock('../../DigitalRadioEngine.js', () => ({
         referencesArtifact: () => true,
       }),
       getImageTemplateStore: () => ({ referencesArtifact: () => false }),
+      getSstvTxPreferenceStore: () => ({ get: mocks.getTxPreferences, save: mocks.saveTxPreferences }),
       getImageRadioService: () => null,
     }),
   },
@@ -69,6 +72,8 @@ describe('image radio history authorization', () => {
     mocks.linkArtifactQso.mockReset().mockResolvedValue({ ...artifacts.get('tx-image'), qsoId: 'qso' });
     mocks.getBackground.mockReset().mockReturnValue({ operatorId: 'op-a', width: 320, height: 240, updatedAt: 1, imageUrl: '/background' });
     mocks.saveBackground.mockReset().mockResolvedValue({ operatorId: 'op-a', width: 2, height: 2, updatedAt: 2, imageUrl: '/background' });
+    mocks.getTxPreferences.mockReset().mockReturnValue({ operatorId: 'op-a', enhancedPreamble: true, stationIdMode: 'fsk', updatedAt: 0 });
+    mocks.saveTxPreferences.mockReset().mockResolvedValue({ operatorId: 'op-a', enhancedPreamble: true, stationIdMode: 'cw', updatedAt: 2 });
     const { imageRadioRoutes } = await import('../image-radio.js');
     app = Fastify();
     app.decorateRequest('authUser', null);
@@ -165,5 +170,27 @@ describe('image radio history authorization', () => {
 
     expect(response.statusCode).toBe(200);
     expect(mocks.saveBackground).toHaveBeenCalledWith('op-a', expect.any(Buffer));
+  });
+
+  it('keeps SSTV transmit preferences scoped to the authorized operator', async () => {
+    const loaded = await app.inject({
+      method: 'GET', url: '/api/image-radio/sstv-tx-preferences/op-a',
+      headers: { 'x-role': UserRole.OPERATOR },
+    });
+    const saved = await app.inject({
+      method: 'PUT', url: '/api/image-radio/sstv-tx-preferences/op-a',
+      headers: { 'x-role': UserRole.OPERATOR },
+      payload: { enhancedPreamble: true, stationIdMode: 'cw' },
+    });
+    const denied = await app.inject({
+      method: 'GET', url: '/api/image-radio/sstv-tx-preferences/op-b',
+      headers: { 'x-role': UserRole.OPERATOR },
+    });
+
+    expect(loaded.statusCode).toBe(200);
+    expect(loaded.json().preferences).toMatchObject({ stationIdMode: 'fsk' });
+    expect(saved.statusCode).toBe(200);
+    expect(mocks.saveTxPreferences).toHaveBeenCalledWith('op-a', { enhancedPreamble: true, stationIdMode: 'cw' });
+    expect(denied.statusCode).toBe(403);
   });
 });

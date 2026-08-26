@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
-import { ImagePaperSaveCommandSchema, ImageReceiveProfileSchema, ImageTemplateSchema, UserRole } from '@tx5dr/contracts';
+import { ImagePaperSaveCommandSchema, ImageReceiveProfileSchema, ImageTemplateSchema, SstvTxEnvelopeSelectionSchema, UserRole } from '@tx5dr/contracts';
 
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { AuthManager } from '../auth/AuthManager.js';
@@ -19,6 +19,12 @@ function requireStores(engine: DigitalRadioEngine) {
   const templates = engine.getImageTemplateStore();
   if (!artifacts || !composerBackgrounds || !history || !templates) throw new Error('IMAGE_RADIO_NOT_INITIALIZED');
   return { artifacts, composerBackgrounds, history, templates };
+}
+
+function requireSstvTxPreferences(engine: DigitalRadioEngine) {
+  const store = engine.getSstvTxPreferenceStore();
+  if (!store) throw new Error('IMAGE_RADIO_NOT_INITIALIZED');
+  return store;
 }
 
 export async function imageRadioRoutes(fastify: FastifyInstance): Promise<void> {
@@ -220,6 +226,27 @@ export async function imageRadioRoutes(fastify: FastifyInstance): Promise<void> 
       const code = error instanceof Error ? error.message : 'IMAGE_COMPOSER_BACKGROUND_INVALID';
       return reply.code(400).send({ success: false, error: { code } });
     }
+  });
+
+  fastify.get('/sstv-tx-preferences/:operatorId', { preHandler: [requireRole(UserRole.OPERATOR)] }, async (request, reply) => {
+    const { operatorId } = request.params as { operatorId: string };
+    if (!canAccessOperator(request, operatorId)) return reply.code(403).send({ success: false, error: { code: 'FORBIDDEN' } });
+    const sstvTxPreferences = requireSstvTxPreferences(engine);
+    return reply.header('Cache-Control', 'private, no-store').send({
+      success: true,
+      preferences: sstvTxPreferences.get(operatorId),
+    });
+  });
+
+  fastify.put('/sstv-tx-preferences/:operatorId', { preHandler: [requireRole(UserRole.OPERATOR)] }, async (request, reply) => {
+    const { operatorId } = request.params as { operatorId: string };
+    if (!canAccessOperator(request, operatorId)) return reply.code(403).send({ success: false, error: { code: 'FORBIDDEN' } });
+    const selection = SstvTxEnvelopeSelectionSchema.parse(request.body);
+    const sstvTxPreferences = requireSstvTxPreferences(engine);
+    return reply.send({
+      success: true,
+      preferences: await sstvTxPreferences.save(operatorId, selection),
+    });
   });
 
   fastify.post('/artifacts/sstv', { preHandler: [requireRole(UserRole.OPERATOR)] }, async (request, reply) => {

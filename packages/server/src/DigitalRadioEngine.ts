@@ -115,7 +115,7 @@ import type { PluginRadioCommand, PluginRadioTunerCommand } from '@tx5dr/plugin-
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { ImageArtifactStore, ImageComposerBackgroundStore, ImageHistoryStore, ImagePaperSpool, ImageRadioService, ImageTemplateStore } from './image-radio/index.js';
+import { ImageArtifactStore, ImageComposerBackgroundStore, ImageHistoryStore, ImagePaperSpool, ImageRadioService, ImageTemplateStore, SstvTxPreferenceStore } from './image-radio/index.js';
 
 export interface DeepCWModelPathConfig {
   language?: string;
@@ -243,6 +243,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private imageComposerBackgroundStore: ImageComposerBackgroundStore | null = null;
   private imageHistoryStore: ImageHistoryStore | null = null;
   private imageTemplateStore: ImageTemplateStore | null = null;
+  private sstvTxPreferenceStore: SstvTxPreferenceStore | null = null;
 
   // 语音模式
   private engineMode: EngineMode = 'digital';
@@ -818,6 +819,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     return this.imageTemplateStore;
   }
 
+  public getSstvTxPreferenceStore(): SstvTxPreferenceStore | null {
+    return this.sstvTxPreferenceStore;
+  }
+
   public getDecodeWorkerTelemetrySnapshot(): DecodeWorkerTelemetrySnapshot | undefined {
     return this.realDecodeQueue.getDecodeWorkerTelemetrySnapshot();
   }
@@ -1173,6 +1178,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.imageArtifactStore.setRemovalListener((artifactId) => this.imageHistoryStore!.removeByArtifact(artifactId));
     this.imageTemplateStore = new ImageTemplateStore(path.join(dataDir, 'image-radio'));
     await this.imageTemplateStore.initialize();
+    this.sstvTxPreferenceStore = new SstvTxPreferenceStore(path.join(dataDir, 'image-radio'));
+    await this.sstvTxPreferenceStore.initialize();
     this.imageRadioService = new ImageRadioService(
       this.audioStreamManager,
       this.imageArtifactStore,
@@ -1180,6 +1187,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       this.physicalTxCoordinator,
       () => this.radioManager.getKnownFrequency() ?? ConfigManager.getInstance().getLastImageFrequency()?.frequency ?? 0,
       () => this.getCurrentRadioMode() ?? undefined,
+      (operatorId) => this._operatorManager.getOperatorById(operatorId)?.config.myCallsign,
       undefined,
       new ImagePaperSpool(path.join(cacheDir, 'image-radio-paper')),
     );

@@ -1,19 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, ButtonGroup, Input, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, Progress, Select, SelectItem, Slider } from '@heroui/react';
+import { Button, ButtonGroup, Input, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, Popover, PopoverContent, PopoverTrigger, Progress, Select, SelectItem, Slider, Switch } from '@heroui/react';
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faImage, faPaperPlane, faPlus, faSave, faStop, faTrash } from '@fortawesome/free-solid-svg-icons';
+import { faGear, faImage, faPaperPlane, faPlus, faSave, faStop, faTrash, faTriangleExclamation } from '@fortawesome/free-solid-svg-icons';
 import { api } from '@tx5dr/core';
-import type { ImageTemplateTextLayer } from '@tx5dr/contracts';
+import type { ImageTemplateTextLayer, SstvTxEnvelopeSelection } from '@tx5dr/contracts';
 import { useTranslation } from 'react-i18next';
 
 import { useImageRadioControls } from '../../hooks/useImageRadio';
 import { useConnection, useCurrentOperatorId, useOperators, useRadioModeState } from '../../store/radioStore';
 import { fitComposerBackgroundSize } from './composerBackground';
 import { sstvTxErrorTranslationKey } from './sstvTxCommand';
+import { estimateSstvTxDurationSeconds, isSstvStationIdCallsignSupported } from './sstvTxEnvelope';
 
 type TextLayer = ImageTemplateTextLayer;
-type PreparedSstvTx = { artifactId: string; operatorId: string; mode: string; expectedFrequency: number };
+type PreparedSstvTx = { artifactId: string; operatorId: string; mode: string; expectedFrequency: number; envelope: SstvTxEnvelopeSelection };
 
 export function SstvComposer() {
   const { t } = useTranslation('image');
@@ -41,17 +42,22 @@ export function SstvComposer() {
   const [sending, setSending] = useState(false);
   const [pendingRequestId, setPendingRequestId] = useState<string | null>(null);
   const [captureConfirmOpen, setCaptureConfirmOpen] = useState(false);
+  const [txEnvelope, setTxEnvelope] = useState<SstvTxEnvelopeSelection>({ enhancedPreamble: true, stationIdMode: 'fsk' });
   const [previewSize, setPreviewSize] = useState<{ width: number; height: number } | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const backgroundRef = useRef<ImageBitmap | null>(null);
   const backgroundSaveGenerationRef = useRef(0);
+  const preferenceSaveGenerationRef = useRef(0);
   const previewViewportRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ id: string; dx: number; dy: number } | null>(null);
   const preparedTxRef = useRef<PreparedSstvTx | null>(null);
   const operatorIdRef = useRef(operatorId);
   operatorIdRef.current = operatorId;
   const mode = modes.find((item) => item.mode === selectedMode) ?? modes.find((item) => item.mode === 'robot36') ?? modes[0];
-  const durationSeconds = mode ? Math.ceil(mode.lineSeconds * mode.height) : 0;
+  const stationCallsign = (operator?.context.myCall ?? '').trim().toUpperCase();
+  const stationIdAvailable = isSstvStationIdCallsignSupported(stationCallsign);
+  const stationIdBlocked = txEnvelope.stationIdMode !== 'none' && !stationIdAvailable;
+  const durationSeconds = estimateSstvTxDurationSeconds(mode, stationCallsign, txEnvelope);
   const txProgress = txStatus?.estimatedTotalSamples
     ? Math.min(100, Math.round((txStatus.samplesEmitted / txStatus.estimatedTotalSamples) * 100))
     : 0;
@@ -65,6 +71,19 @@ export function SstvComposer() {
   }, []);
 
   useEffect(() => { void refreshTemplates(operatorId); }, [operatorId, refreshTemplates]);
+  useEffect(() => {
+    let active = true;
+    preferenceSaveGenerationRef.current += 1;
+    setTxEnvelope({ enhancedPreamble: true, stationIdMode: 'fsk' });
+    if (!operatorId) return () => { active = false; };
+    void api.getSstvTxPreferences(operatorId).then((result) => {
+      if (active) setTxEnvelope({
+        enhancedPreamble: result.preferences.enhancedPreamble,
+        stationIdMode: result.preferences.stationIdMode,
+      });
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [operatorId]);
   useEffect(() => {
     let active = true;
     backgroundSaveGenerationRef.current += 1;
@@ -263,6 +282,10 @@ export function SstvComposer() {
 
   const send = async (interruptActiveCapture = false) => {
     if (!mode || !operatorId || !radio.currentRadioFrequency || !canvasRef.current) return;
+    if (stationIdBlocked) {
+      addToast({ title: t('txCallsignRequired'), color: 'warning' });
+      return;
+    }
     if (status?.rxCaptureActive && !interruptActiveCapture) {
       setCaptureConfirmOpen(true);
       return;
@@ -273,7 +296,13 @@ export function SstvComposer() {
       setSelectedLayerId(null); draw(false);
       const blob = await new Promise<Blob>((resolve, reject) => canvasRef.current?.toBlob((value) => value ? resolve(value) : reject(new Error('PNG render failed')), 'image/png'));
       const upload = await api.uploadSstvArtifact({ file: blob, operatorId, mode: mode.mode, frequency: radio.currentRadioFrequency, radioMode: radio.currentRadioMode ?? undefined });
-      dispatchPreparedTx({ operatorId, artifactId: upload.artifact.id, mode: mode.mode, expectedFrequency: radio.currentRadioFrequency }, interruptActiveCapture);
+      dispatchPreparedTx({
+        operatorId,
+        artifactId: upload.artifact.id,
+        mode: mode.mode,
+        expectedFrequency: radio.currentRadioFrequency,
+        envelope: { ...txEnvelope },
+      }, interruptActiveCapture);
     } catch (error) {
       addToast({ title: error instanceof Error ? error.message : t('sendFailed'), color: 'danger' });
       setSending(false);
@@ -293,6 +322,18 @@ export function SstvComposer() {
       return;
     }
     void send(true);
+  };
+
+  const updateTxEnvelope = (next: SstvTxEnvelopeSelection) => {
+    const previous = txEnvelope;
+    const targetOperatorId = operatorId;
+    const generation = ++preferenceSaveGenerationRef.current;
+    setTxEnvelope(next);
+    if (!targetOperatorId) return;
+    void api.saveSstvTxPreferences(targetOperatorId, next).catch(() => {
+      if (preferenceSaveGenerationRef.current === generation) setTxEnvelope(previous);
+      addToast({ title: t('txPreferenceSaveFailed'), color: 'danger' });
+    });
   };
 
   useEffect(() => {
@@ -415,11 +456,47 @@ export function SstvComposer() {
         <div className="shrink-0 text-xs text-default-500">
           {mode ? `${mode.width}×${mode.height} · ${durationSeconds}s` : '—'}
         </div>
+        <Popover placement="top-end">
+          <PopoverTrigger>
+            <Button isIconOnly size="sm" variant="flat" aria-label={t('stationId')}>
+              <FontAwesomeIcon icon={faGear} />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-[min(18rem,calc(100vw-1rem))] gap-3 p-3">
+            <Switch
+              size="sm"
+              isSelected={txEnvelope.enhancedPreamble}
+              onValueChange={(enhancedPreamble) => updateTxEnvelope({ ...txEnvelope, enhancedPreamble })}
+              className="self-start"
+            >
+              {t('enhancedPreamble')}
+            </Switch>
+            <Select
+              size="sm"
+              label={t('stationId')}
+              selectedKeys={[txEnvelope.stationIdMode]}
+              disallowEmptySelection
+              onSelectionChange={(keys) => updateTxEnvelope({
+                ...txEnvelope,
+                stationIdMode: String(Array.from(keys)[0]) as SstvTxEnvelopeSelection['stationIdMode'],
+              })}
+              className="w-full"
+            >
+              <SelectItem key="fsk">FSK-ID</SelectItem>
+              <SelectItem key="cw">CW</SelectItem>
+              <SelectItem key="none">{t('stationIdNone')}</SelectItem>
+            </Select>
+            <div className={`flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-xs ${stationIdBlocked ? 'bg-warning-100 text-warning-700' : 'bg-default-100 text-default-600'}`}>
+              {stationIdBlocked ? <FontAwesomeIcon icon={faTriangleExclamation} className="shrink-0" /> : null}
+              <span className="truncate">{stationIdAvailable ? stationCallsign : t('noCallsign')}</span>
+            </div>
+          </PopoverContent>
+        </Popover>
       </div>
 
       {sending ? <Progress size="sm" value={txProgress} aria-label={t('transmitting')} className="flex-shrink-0" /> : null}
       <div className="flex flex-shrink-0 items-center gap-2 pb-2">
-        <Button color="danger" className="min-h-11 flex-1" isLoading={sending && txStatus?.phase !== 'on_air'} isDisabled={!mode || !operatorId || sending} onPress={() => void send()} startContent={<FontAwesomeIcon icon={faPaperPlane} />}>{t('sendImage')} · {durationSeconds}s</Button>
+        <Button color="danger" className="min-h-11 flex-1" isLoading={sending && txStatus?.phase !== 'on_air'} isDisabled={!mode || !operatorId || sending || stationIdBlocked} onPress={() => void send()} startContent={<FontAwesomeIcon icon={faPaperPlane} />}>{t('sendImage')} · {durationSeconds}s</Button>
         {txStatus?.phase === 'on_air' || txStatus?.phase === 'draining' ? <Button isIconOnly className="min-h-11 min-w-11" color="danger" variant="flat" onPress={() => operatorId && txStatus.sessionId && connection.state.radioService?.cancelSstvTx({ requestId: crypto.randomUUID(), operatorId, sessionId: txStatus.sessionId, expectedRevision: txStatus.revision })} aria-label={t('stop')}><FontAwesomeIcon icon={faStop} /></Button> : null}
       </div>
     </div>
