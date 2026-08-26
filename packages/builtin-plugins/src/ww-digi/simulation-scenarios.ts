@@ -33,6 +33,60 @@ export const wwDigiSimulationScenarios: SimulationScenarioDescriptor[] = [
   finalScenario('final-rr73', 'RR73'),
   finalScenario('final-73', '73'),
   {
+    id: 'ambient-band', modes: ['FT8', 'FT4'], initialState: 'idle', states: {
+      idle: {
+        rules: [{
+          pattern: 'CQ WW (?<contactCallsign>[A-Z0-9/]+) (?<contactGrid>[A-R]{2}[0-9]{2})',
+          choices: [
+            {
+              weight: 3,
+              reply: '{{contactCallsign}} {{peerCallsign}} {{peerGrid}}',
+              replyFrequency: 'peer',
+              nextState: 'await-r-grid',
+            },
+            { weight: 7, silence: true },
+          ],
+        }],
+        timeouts: [{ afterReceiveCycles: 2, choices: [
+          { weight: 1, reply: 'CQ WW {{peerCallsign}} {{peerGrid}}', replyFrequency: 'peer', nextState: 'calling' },
+          { weight: 7, silence: true },
+        ] }],
+      },
+      calling: {
+        rules: [{
+          pattern: '{{peerCallsign}} (?<contactCallsign>[A-Z0-9/]+) (?<contactGrid>[A-R]{2}[0-9]{2})',
+          choices: [{
+            reply: '{{contactCallsign}} {{peerCallsign}} R {{peerGrid}}',
+            replyFrequency: 'peer',
+            nextState: 'await-final',
+          }],
+        }],
+        timeouts: [{ afterReceiveCycles: 2, choices: [
+          { weight: 1, repeatLast: true },
+          { weight: 2, silence: true },
+        ] }],
+      },
+      'await-r-grid': {
+        rules: [{
+          pattern: '{{peerCallsign}} (?<contactCallsign>[A-Z0-9/]+) R [A-R]{2}[0-9]{2}',
+          choices: [{
+            reply: '{{contactCallsign}} {{peerCallsign}} RR73',
+            replyFrequency: 'peer',
+            nextState: 'idle',
+          }],
+        }],
+        timeouts: [{ afterReceiveCycles: 3, choices: [{ silence: true, nextState: 'idle' }] }],
+      },
+      'await-final': {
+        rules: [{
+          pattern: '{{peerCallsign}} [A-Z0-9/]+ (?:RRR|RR73|73)',
+          choices: [{ silence: true, nextState: 'idle' }],
+        }],
+        timeouts: [{ afterReceiveCycles: 3, choices: [{ silence: true, nextState: 'idle' }] }],
+      },
+    },
+  },
+  {
     id: 'repeat-exchange', modes: ['FT8', 'FT4'], initialState: 'await-grid', states: {
       'await-grid': { rules: [{ pattern: GRID_MESSAGE, choices: [{ reply: R_GRID_REPLY, nextState: 'await-final' }] }] },
       'await-final': { rules: [{ pattern: FINAL_MESSAGE, choices: [{ reply: R_GRID_REPLY, nextState: 'await-repeated-final' }] }] },

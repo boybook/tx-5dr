@@ -1092,6 +1092,12 @@ export class RadioOperatorManager {
     const operators = [];
     for (const [id, operator] of this.operators.entries()) {
       const runtimeState = this._pluginManager?.getOperatorRuntimeStatus(id);
+      const runtimeSnapshot = runtimeState
+        ? (({ strategyName: _strategyName, currentSlot: _currentSlot, ...snapshot }) => ({
+            ...snapshot,
+            currentState: runtimeState.currentSlot,
+          }))(runtimeState)
+        : undefined;
       const queueExecutionSuspended = this._pluginManager?.isQueueExecutionSuspended?.(id) === true;
       const currentTransmissions = operator.isTransmitting && !queueExecutionSuspended
         ? this._pluginManager?.getCurrentTransmissions?.(id) ?? []
@@ -1142,15 +1148,7 @@ export class RadioOperatorManager {
           state: currentSlot,
           availableSlots: runtimeState?.availableSlots ?? ['TX1', 'TX2', 'TX3', 'TX4', 'TX5', 'TX6']
         },
-        runtime: runtimeState ? {
-          currentState: currentSlot,
-          slots,
-          context: runtimeState.context as any,
-          availableSlots: runtimeState.availableSlots,
-          qsoLifecycleEpoch: runtimeState.qsoLifecycleEpoch,
-          streams: runtimeState.streams,
-          queue: runtimeState.queue,
-        } : undefined,
+        runtime: runtimeSnapshot,
         slots,
         transmitCycles: operator.getTransmitCycles(),
       });

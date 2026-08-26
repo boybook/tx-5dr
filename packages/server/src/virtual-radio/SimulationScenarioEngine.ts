@@ -15,6 +15,12 @@ export interface SimulationPeerDefinition {
 export interface SimulationDecodedMessage {
   text: string;
   audioFrequencyHz: number;
+  sourcePeerId?: string;
+}
+
+export interface SimulationObservationOptions {
+  /** Advance peer timeouts once for this receive cycle. */
+  advanceReceiveCycle?: boolean;
 }
 
 export interface SimulationReplyDecision {
@@ -101,7 +107,11 @@ export class SimulationScenarioEngine {
     }));
   }
 
-  observe(messages: SimulationDecodedMessage[]): SimulationReplyDecision[] {
+  observe(
+    messages: SimulationDecodedMessage[],
+    options: SimulationObservationOptions = {},
+  ): SimulationReplyDecision[] {
+    const advanceReceiveCycle = options.advanceReceiveCycle ?? true;
     const ordered = [...messages].sort((left, right) => (
       left.audioFrequencyHz - right.audioFrequencyHz || left.text.localeCompare(right.text)
     ));
@@ -112,7 +122,9 @@ export class SimulationScenarioEngine {
       let matched = false;
       for (const rule of state.rules ?? []) {
         const matcher = compileRule(rule, peer.definition);
-        const selected = ordered.find((message) => matcher.test(normalizeMessage(message.text)));
+        const selected = ordered.find((message) => (
+          message.sourcePeerId !== peer.definition.id && matcher.test(normalizeMessage(message.text))
+        ));
         if (!selected) continue;
         const match = matcher.exec(normalizeMessage(selected.text));
         matched = true;
@@ -126,6 +138,7 @@ export class SimulationScenarioEngine {
       }
       if (matched) continue;
 
+      if (!advanceReceiveCycle) continue;
       peer.quietReceiveCycles += 1;
       const timeout = [...(state.timeouts ?? [])]
         .sort((left, right) => left.afterReceiveCycles - right.afterReceiveCycles)
@@ -179,7 +192,9 @@ export class SimulationScenarioEngine {
       replies.push({
         peerId: peer.definition.id,
         text: peer.lastSent,
-        audioFrequencyHz: receivedFrequencyHz > 0 ? receivedFrequencyHz : peer.definition.audioFrequencyHz,
+        audioFrequencyHz: choice.replyFrequency === 'peer'
+          ? peer.definition.audioFrequencyHz
+          : receivedFrequencyHz > 0 ? receivedFrequencyHz : peer.definition.audioFrequencyHz,
         delayCycles: choice.delayCycles ?? 1,
       });
     }

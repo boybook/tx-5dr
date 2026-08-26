@@ -3,6 +3,8 @@ export type SimulationMode = 'FT8' | 'FT4';
 export interface SimulationScenarioChoice {
   weight?: number;
   reply?: string;
+  /** Send on the received frequency by default, or on the peer's configured frequency. */
+  replyFrequency?: 'received' | 'peer';
   repeatLast?: boolean;
   silence?: boolean;
   complete?: boolean;

@@ -84,4 +84,43 @@ describe('SimulationScenarioEngine', () => {
       delayCycles: 1,
     });
   });
+
+  it('advances timeouts only on an authoritative receive-cycle tick', () => {
+    const autonomous: SimulationScenarioDescriptor = {
+      id: 'autonomous', modes: ['FT8'], initialState: 'idle', states: {
+        idle: { timeouts: [{ afterReceiveCycles: 1, choices: [{ reply: 'CQ TEST' }] }] },
+      },
+    };
+    const engine = new SimulationScenarioEngine('seed', [{
+      id: 'peer-1', callsign: 'JA1AAA', grid: 'PM95', audioFrequencyHz: 1_500, scenario: autonomous,
+    }]);
+
+    expect(engine.observe([], { advanceReceiveCycle: false })).toEqual([]);
+    expect(engine.observe([], { advanceReceiveCycle: true })).toEqual([{
+      peerId: 'peer-1', text: 'CQ TEST', audioFrequencyHz: 1_500, delayCycles: 1,
+    }]);
+  });
+
+  it('does not let a peer hear itself and can reply on its configured frequency', () => {
+    const listener: SimulationScenarioDescriptor = {
+      id: 'listener', modes: ['FT8'], initialState: 'idle', states: {
+        idle: { rules: [{
+          pattern: 'CQ TEST',
+          choices: [{ reply: 'ANSWER', replyFrequency: 'peer' }],
+        }] },
+      },
+    };
+    const engine = new SimulationScenarioEngine('seed', [{
+      id: 'peer-1', callsign: 'JA1AAA', grid: 'PM95', audioFrequencyHz: 1_700, scenario: listener,
+    }]);
+
+    expect(engine.observe([{
+      text: 'CQ TEST', audioFrequencyHz: 1_200, sourcePeerId: 'peer-1',
+    }])).toEqual([]);
+    expect(engine.observe([{
+      text: 'CQ TEST', audioFrequencyHz: 1_200, sourcePeerId: 'peer-2',
+    }])).toEqual([{
+      peerId: 'peer-1', text: 'ANSWER', audioFrequencyHz: 1_700, delayCycles: 1,
+    }]);
+  });
 });

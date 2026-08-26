@@ -2529,6 +2529,28 @@ describe('RadioOperatorManager operator status payloads', () => {
     expect(getCurrentTransmissions).not.toHaveBeenCalled();
   });
 
+  it('forwards generic runtime actions and attentions to operator status', async () => {
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+    });
+    await addBasicOperator(manager, 'op1');
+    manager.setPluginManager({
+      getOperatorRuntimeStatus: vi.fn(() => ({
+        strategyName: 'test-strategy',
+        currentSlot: 'idle',
+        currentState: 'idle',
+        actions: [{ id: 'arm-once', label: 'Arm once' }],
+        attentions: [{ id: 'check-target', tone: 'warning', title: 'Check target' }],
+      })),
+    } as any);
+
+    expect(manager.getOperatorsStatus()[0]?.runtime).toEqual({
+      currentState: 'idle',
+      actions: [{ id: 'arm-once', label: 'Arm once' }],
+      attentions: [{ id: 'check-target', tone: 'warning', title: 'Check target' }],
+    });
+  });
+
   it('does not rebroadcast operator status only because the clock moved to another slot', async () => {
     const { manager, eventEmitter, clockSource } = createManager({
       logBook: { id: 'log-1', name: 'Test Log', provider: {} },

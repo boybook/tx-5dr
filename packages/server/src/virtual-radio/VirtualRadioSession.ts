@@ -11,6 +11,7 @@ import type { SimulationScenarioDescriptor } from '@tx5dr/plugin-api';
 import { createLogger } from '../utils/logger.js';
 import {
   SimulationScenarioEngine,
+  type SimulationDecodedMessage,
   type SimulationReplyDecision,
 } from './SimulationScenarioEngine.js';
 
@@ -59,6 +60,8 @@ export class VirtualRadioSession {
   private readonly scenarioEngine: SimulationScenarioEngine;
   private readonly channelRandom = new Map<string, () => number>();
   private readonly scheduledAudio: ScheduledAudio[] = [];
+  private readonly scheduledPeerMessages = new Map<number, SimulationDecodedMessage[]>();
+  private lastAdvancedSimulationSlot?: number;
   private pumpTimer: NodeJS.Timeout | null = null;
   private running = false;
   private stopped = false;
@@ -122,6 +125,7 @@ export class VirtualRadioSession {
     this.pumpTimer = null;
     await this.stopCurrentPlayback();
     this.scheduledAudio.length = 0;
+    this.scheduledPeerMessages.clear();
     await Promise.allSettled([this.decodePool.destroy(), this.encodeQueue.destroy()]);
     await this.trace('session-stop', { reason });
     await this.traceTail;
@@ -223,7 +227,7 @@ export class VirtualRadioSession {
     if (!this.running) return;
     const messages = decoded.frames.map((frame) => ({ text: frame.message, audioFrequencyHz: frame.freq }));
     await this.trace('host-decode', { slotStartMs, messages });
-    const decisions = this.scenarioEngine.observe(messages);
+    const decisions = this.scenarioEngine.observe(messages, { advanceReceiveCycle: false });
     await this.scheduleReplies(slotStartMs, decisions);
   }
 
@@ -244,6 +248,13 @@ export class VirtualRadioSession {
       const entries = grouped.get(targetSlotStart) ?? [];
       entries.push({ peerId: peer.id, audio: encoded.audioData, frequency, timingOffsetMs: peer.timingOffsetMs });
       grouped.set(targetSlotStart, entries);
+      const scheduledMessages = this.scheduledPeerMessages.get(targetSlotStart) ?? [];
+      scheduledMessages.push({
+        text: decision.text,
+        audioFrequencyHz: frequency,
+        sourcePeerId: peer.id,
+      });
+      this.scheduledPeerMessages.set(targetSlotStart, scheduledMessages);
       await this.trace('reply-encoded', { peerId: peer.id, text: decision.text, frequency, targetSlotStart });
     }
     for (const [targetSlotStart, tracks] of grouped) {
@@ -314,6 +325,7 @@ export class VirtualRadioSession {
   private async pumpInput(): Promise<void> {
     if (!this.running) return;
     const endMs = this.options.now();
+    await this.advanceSimulationClock(endMs);
     const chunkSamples = Math.round(SAMPLE_RATE * PUMP_MS / 1_000);
     const startMs = endMs - PUMP_MS;
     const chunk = new Float32Array(chunkSamples);
@@ -334,6 +346,33 @@ export class VirtualRadioSession {
       }
     }
     await this.options.ingestInput(chunk, SAMPLE_RATE);
+  }
+
+  private async advanceSimulationClock(now: number): Promise<void> {
+    const slotMs = this.options.mode.slotMs;
+    const currentSlotStart = Math.floor(now / slotMs) * slotMs;
+    let lastSlot = this.lastAdvancedSimulationSlot;
+    if (lastSlot === undefined || currentSlotStart - lastSlot > slotMs * 4) {
+      lastSlot = currentSlotStart - slotMs;
+    }
+    while (lastSlot < currentSlotStart) {
+      const slotStart: number = lastSlot + slotMs;
+      lastSlot = slotStart;
+      this.lastAdvancedSimulationSlot = lastSlot;
+      const messages = this.scheduledPeerMessages.get(slotStart) ?? [];
+      this.scheduledPeerMessages.delete(slotStart);
+      const decisions = this.scenarioEngine.observe(messages, { advanceReceiveCycle: true });
+      await this.trace('simulation-cycle', {
+        slotStartMs: slotStart,
+        messages: messages.map((message) => ({
+          text: message.text,
+          audioFrequencyHz: message.audioFrequencyHz,
+          sourcePeerId: message.sourcePeerId,
+        })),
+        replies: decisions.length,
+      });
+      await this.scheduleReplies(slotStart, decisions);
+    }
   }
 
   private trace(kind: string, data: unknown = {}): Promise<void> {
