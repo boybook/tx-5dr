@@ -815,6 +815,16 @@ export class ADIFLogProvider implements ILogProvider {
     const opened = retry ? await this.store.recoverOnOpen() : await this.store.open();
     this.stickyIssues = [];
     this.installOpenResult(opened);
+    logger.info('Logbook opened', {
+      logBookId,
+      status: opened.status,
+      qsoCount: this.document?.getQsoRecords().length ?? 0,
+      segmentCount: this.document?.getSegments().length ?? 0,
+      opaqueSegmentCount: this.document?.getOpaqueSegments().length ?? 0,
+      generation: this.generation?.token.slice(0, 12) ?? null,
+      generationSize: this.generation?.size ?? 0,
+      retry,
+    });
     if (!this.backup) {
       const backupOptions: AdifBackupServiceOptions = {
         onChanged: () => undefined,
@@ -934,41 +944,78 @@ export class ADIFLogProvider implements ILogProvider {
   }
 
   private async commitMutation(mutation: PreparedLogbookMutation): Promise<void> {
-    if (mutation.kind === 'append') {
-      const expected = mutation.nextDocument;
-      const committed = await this.store!.commitAppend(
-        [mutation.appendBytes],
-        this.generation,
-        {
-          recordCount: expected.getSegments().length,
-          validate: (scan, _generation, projections) => this.assertScanMatches(expected, scan, projections),
-        },
-      );
-      this.assertScanMatches(mutation.nextDocument, committed.scan, committed.recordProjections);
-      this.installScan(committed.scan, committed.generation, committed.recordProjections);
-    } else {
-      try {
-        await this.requireBackup().ensureBeforeRewrite();
-      } catch (error) {
-        throw new LogbookOperationError(
-          'LOGBOOK_BACKUP_FAILED',
-          'A valid backup is required before rewriting the main logbook',
-          { cause: error, systemCode: systemErrorCode(error) },
-        );
-      }
-      const expected = mutation.nextDocument;
-      const committed = await this.store!.commitRewrite(
-        mutation.rewriteParts,
-        this.generation,
-        {
-          recordCount: expected.getSegments().length,
-          validate: (scan, _generation, projections) => this.assertScanMatches(expected, scan, projections),
-        },
-      );
-      this.installScan(committed.scan, committed.generation, committed.recordProjections);
+    const logBookId = this.options.logBookId?.trim()
+      || path.basename(this.logFilePath).replace(/\.adi$/i, '');
+    const beforeRecordCount = this.document?.getQsoRecords().length ?? 0;
+    const expectedRecordCount = mutation.nextDocument.getQsoRecords().length;
+    const changedIds = mutation.kind === 'append' ? mutation.addedIds : mutation.changedIds;
+    const audit = {
+      logBookId,
+      mutationKind: mutation.kind,
+      beforeRecordCount,
+      expectedRecordCount,
+      changedIdCount: changedIds.length,
+      changedIds: changedIds.slice(0, 20),
+      changedIdsTruncated: changedIds.length > 20,
+      generationBefore: this.generation?.token.slice(0, 12) ?? null,
+    };
+
+    if (mutation.kind === 'rewrite') {
+      logger.info('Logbook rewrite committing', audit);
     }
-    this.backup?.markMutationCommitted();
-    this.refreshHealth();
+
+    try {
+      if (mutation.kind === 'append') {
+        const expected = mutation.nextDocument;
+        const committed = await this.store!.commitAppend(
+          [mutation.appendBytes],
+          this.generation,
+          {
+            recordCount: expected.getSegments().length,
+            validate: (scan, _generation, projections) => this.assertScanMatches(expected, scan, projections),
+          },
+        );
+        this.assertScanMatches(mutation.nextDocument, committed.scan, committed.recordProjections);
+        this.installScan(committed.scan, committed.generation, committed.recordProjections);
+      } else {
+        try {
+          await this.requireBackup().ensureBeforeRewrite();
+        } catch (error) {
+          throw new LogbookOperationError(
+            'LOGBOOK_BACKUP_FAILED',
+            'A valid backup is required before rewriting the main logbook',
+            { cause: error, systemCode: systemErrorCode(error) },
+          );
+        }
+        const expected = mutation.nextDocument;
+        const committed = await this.store!.commitRewrite(
+          mutation.rewriteParts,
+          this.generation,
+          {
+            recordCount: expected.getSegments().length,
+            validate: (scan, _generation, projections) => this.assertScanMatches(expected, scan, projections),
+          },
+        );
+        this.installScan(committed.scan, committed.generation, committed.recordProjections);
+      }
+      this.backup?.markMutationCommitted();
+      this.refreshHealth();
+    } catch (error) {
+      logger.warn('Logbook mutation failed', {
+        ...audit,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+
+    if (mutation.kind === 'rewrite') {
+      logger.info('Logbook rewrite committed', {
+        ...audit,
+        actualRecordCount: this.document?.getQsoRecords().length ?? 0,
+        generationAfter: this.generation?.token.slice(0, 12) ?? null,
+        generationSize: this.generation?.size ?? 0,
+      });
+    }
   }
 
   private assertScanMatches(

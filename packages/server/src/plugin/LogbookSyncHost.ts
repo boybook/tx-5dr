@@ -368,10 +368,32 @@ export class LogbookSyncHost {
       }
 
       this.pendingAutoRecords.delete(key);
-      return this.invoke(entry, 'auto-upload', () => entry.provider.upload(callsign, {
+      const records = Array.from(queuedRecords.values());
+      const result = await this.invoke(entry, 'auto-upload', () => entry.provider.upload(callsign, {
         trigger: 'auto',
-        records: Array.from(queuedRecords.values()),
+        records,
       }));
+      const failures = result.failures ?? [];
+      const audit = {
+        providerId: entry.info.id,
+        pluginName: entry.pluginName,
+        callsign,
+        recordCount: records.length,
+        recordIds: records.slice(0, 20).map(record => record.id),
+        recordIdsTruncated: records.length > 20,
+        uploaded: result.uploaded,
+        skipped: result.skipped,
+        failed: result.failed,
+        failureCount: failures.length,
+        failureCodes: [...new Set(failures.map(failure => failure.code))],
+        retryableFailureCount: failures.filter(failure => failure.retryable === true).length,
+      };
+      if (result.failed > 0 || failures.length > 0) {
+        logger.warn('Auto-upload completed with failures', audit);
+      } else {
+        logger.info('Auto-upload completed', audit);
+      }
+      return result;
     }).catch((err) => {
       logger.warn('Auto-upload failed', {
         providerId: entry.info.id,

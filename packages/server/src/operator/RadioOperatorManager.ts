@@ -405,6 +405,19 @@ export class RadioOperatorManager {
           throw new Error('Logbook provider completed without returning the durably committed QSO');
         }
 
+        logger.info('QSO durably committed', {
+          operation: eventName === 'qsoRecordAdded' ? 'add' : 'update',
+          operatorId: data.operatorId,
+          logBookId: logBook.id,
+          qsoId: persistedQSO.id,
+          callsign: persistedQSO.callsign,
+          grid: persistedQSO.grid || null,
+          startTime: persistedQSO.startTime,
+          endTime: persistedQSO.endTime ?? null,
+          frequency: persistedQSO.frequency,
+          mode: persistedQSO.mode,
+        });
+
         this.clearUnsavedQsoForLifecycle(data.operatorId, data.qsoLifecycleId);
         this.preparedQsoCandidates.delete(persistenceKey);
         if (this.isCurrentQsoLifecycle(

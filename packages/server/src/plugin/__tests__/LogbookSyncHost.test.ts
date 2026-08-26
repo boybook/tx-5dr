@@ -110,6 +110,46 @@ describe('LogbookSyncHost', () => {
     });
   });
 
+  it('audits structured auto-upload failures returned without rejection', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const host = new LogbookSyncHost();
+      const provider = createProvider(async () => ({
+        uploaded: 0,
+        skipped: 0,
+        failed: 1,
+        failures: [{
+          code: 'wavelog_upload_failed',
+          message: 'Network request failed',
+          source: 'network',
+          operation: 'upload',
+          providerId: 'wavelog',
+          retryable: true,
+        }],
+      }));
+      host.register('wavelog-sync', provider, createOwner());
+
+      host.onQSOComplete('BG5DRB', createQso('qso-failed'));
+      await flushAsyncWork();
+
+      expect(warn.mock.calls).toContainEqual([
+        '[LogbookSyncHost] Auto-upload completed with failures',
+        expect.objectContaining({
+          providerId: 'wavelog',
+          recordCount: 1,
+          recordIds: ['qso-failed'],
+          uploaded: 0,
+          failed: 1,
+          failureCount: 1,
+          failureCodes: ['wavelog_upload_failed'],
+          retryableFailureCount: 1,
+        }),
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('buffers later auto-upload QSOs until the current upload finishes', async () => {
     const host = new LogbookSyncHost();
     const firstUpload = deferred<SyncUploadResult>();
