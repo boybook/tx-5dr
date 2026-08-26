@@ -18,6 +18,9 @@ import {
 const logger = createLogger('VirtualRadioSession');
 const SAMPLE_RATE = 12_000;
 const PUMP_MS = 100;
+const PUMP_SAMPLES = SAMPLE_RATE * PUMP_MS / 1_000;
+const PUMP_CHECK_MS = 5;
+const MAX_AUDIO_CATCH_UP_MS = 2_000;
 
 interface ScheduledAudio {
   startMs: number;
@@ -63,6 +66,9 @@ export class VirtualRadioSession {
   private readonly scheduledPeerMessages = new Map<number, SimulationDecodedMessage[]>();
   private lastAdvancedSimulationSlot?: number;
   private pumpTimer: NodeJS.Timeout | null = null;
+  private inputCursorSample?: number;
+  private pumpInFlight = false;
+  private simulationAdvanceInFlight = false;
   private running = false;
   private stopped = false;
   private playing = false;
@@ -113,8 +119,9 @@ export class VirtualRadioSession {
       seed: this.options.profile.radio.virtual.seed,
       peers: this.options.profile.radio.virtual.peers,
     });
-    this.pumpTimer = setInterval(() => { void this.pumpInput(); }, PUMP_MS);
-    await this.pumpInput();
+    this.inputCursorSample = this.toSampleIndex(this.options.now());
+    this.schedulePumpCheck();
+    this.requestSimulationAdvance(this.options.now());
     logger.info('virtual radio session started', { sessionId: this.sessionId, tracePath: this.tracePath });
   }
 
@@ -122,7 +129,7 @@ export class VirtualRadioSession {
     if (this.stopped) return;
     this.stopped = true;
     this.running = false;
-    if (this.pumpTimer) clearInterval(this.pumpTimer);
+    if (this.pumpTimer) clearTimeout(this.pumpTimer);
     this.pumpTimer = null;
     await this.stopCurrentPlayback();
     this.scheduledAudio.length = 0;
@@ -151,7 +158,7 @@ export class VirtualRadioSession {
     const elapsed = Math.max(0, this.options.now() - this.playbackStartedAt);
     if (this.playbackTimer) clearTimeout(this.playbackTimer);
     this.playbackTimer = null;
-    this.removeActiveHostMonitorAudio();
+    this.stopActiveHostMonitorAudio(this.options.now());
     this.rejectPlayback?.(new Error('playback interrupted'));
     this.rejectPlayback = null;
     this.playing = false;
@@ -335,11 +342,34 @@ export class VirtualRadioSession {
 
   private async pumpInput(): Promise<void> {
     if (!this.running) return;
-    const endMs = this.options.now();
-    await this.advanceSimulationClock(endMs);
-    const chunkSamples = Math.round(SAMPLE_RATE * PUMP_MS / 1_000);
-    const startMs = endMs - PUMP_MS;
-    const chunk = new Float32Array(chunkSamples);
+    const now = this.options.now();
+    this.requestSimulationAdvance(now);
+    const nowSample = this.toSampleIndex(now);
+    let cursor = this.inputCursorSample ?? nowSample;
+    if (nowSample < cursor) {
+      cursor = nowSample;
+      await this.trace('input-clock-resync', { reason: 'clock-moved-backward' });
+    }
+    const maximumCatchUpSamples = SAMPLE_RATE * MAX_AUDIO_CATCH_UP_MS / 1_000;
+    if (nowSample - cursor > maximumCatchUpSamples) {
+      cursor = nowSample - PUMP_SAMPLES;
+      await this.trace('input-clock-resync', {
+        reason: 'catch-up-limit-exceeded',
+        skippedSamples: nowSample - (this.inputCursorSample ?? nowSample),
+      });
+    }
+    this.inputCursorSample = cursor;
+    while (this.running && nowSample - cursor >= PUMP_SAMPLES) {
+      await this.ingestInputRange(cursor, PUMP_SAMPLES);
+      cursor += PUMP_SAMPLES;
+      this.inputCursorSample = cursor;
+    }
+  }
+
+  private async ingestInputRange(startSample: number, sampleCount: number): Promise<void> {
+    const startMs = startSample / SAMPLE_RATE * 1_000;
+    const endMs = (startSample + sampleCount) / SAMPLE_RATE * 1_000;
+    const chunk = new Float32Array(sampleCount);
     for (const scheduled of this.scheduledAudio) {
       const scheduledEnd = scheduled.startMs + scheduled.samples.length / SAMPLE_RATE * 1_000;
       if (scheduledEnd <= startMs || scheduled.startMs >= endMs) continue;
@@ -358,6 +388,38 @@ export class VirtualRadioSession {
       }
     }
     await this.options.ingestInput(chunk, SAMPLE_RATE);
+  }
+
+  private schedulePumpCheck(): void {
+    if (!this.running || this.pumpTimer) return;
+    this.pumpTimer = setTimeout(() => {
+      this.pumpTimer = null;
+      if (!this.running || this.pumpInFlight) {
+        this.schedulePumpCheck();
+        return;
+      }
+      this.pumpInFlight = true;
+      void this.pumpInput().catch((error) => {
+        logger.warn('virtual input pump failed', { error: (error as Error).message });
+      }).finally(() => {
+        this.pumpInFlight = false;
+        this.schedulePumpCheck();
+      });
+    }, PUMP_CHECK_MS);
+  }
+
+  private requestSimulationAdvance(now: number): void {
+    if (!this.running || this.simulationAdvanceInFlight) return;
+    this.simulationAdvanceInFlight = true;
+    void this.advanceSimulationClock(now).catch((error) => {
+      logger.warn('virtual scenario clock failed', { error: (error as Error).message });
+    }).finally(() => {
+      this.simulationAdvanceInFlight = false;
+    });
+  }
+
+  private toSampleIndex(timestampMs: number): number {
+    return Math.floor(timestampMs * SAMPLE_RATE / 1_000);
   }
 
   private async advanceSimulationClock(now: number): Promise<void> {
@@ -387,11 +449,19 @@ export class VirtualRadioSession {
     }
   }
 
-  private removeActiveHostMonitorAudio(): void {
+  private stopActiveHostMonitorAudio(stoppedAtMs: number): void {
     const scheduled = this.activeHostMonitorAudio;
     if (!scheduled) return;
-    const index = this.scheduledAudio.indexOf(scheduled);
-    if (index >= 0) this.scheduledAudio.splice(index, 1);
+    const playedSamples = Math.max(0, Math.min(
+      scheduled.samples.length,
+      Math.floor((stoppedAtMs - scheduled.startMs) * SAMPLE_RATE / 1_000),
+    ));
+    if (playedSamples === 0) {
+      const index = this.scheduledAudio.indexOf(scheduled);
+      if (index >= 0) this.scheduledAudio.splice(index, 1);
+    } else if (playedSamples < scheduled.samples.length) {
+      scheduled.samples = scheduled.samples.slice(0, playedSamples);
+    }
     this.activeHostMonitorAudio = undefined;
   }
 

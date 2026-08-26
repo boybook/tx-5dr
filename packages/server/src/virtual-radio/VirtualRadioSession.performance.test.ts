@@ -229,7 +229,7 @@ describe('VirtualRadioSession real codec loop', () => {
     }
   });
 
-  it('feeds the active host waveform into virtual input and removes it on cancellation', async () => {
+  it('catches up delayed host-monitor input without gaps and truncates it on cancellation', async () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), 'tx5dr-virtual-tx-monitor-'));
     tempDirs.push(dataDir);
     const profile = VirtualRadioProfileSchema.parse({
@@ -251,20 +251,35 @@ describe('VirtualRadioSession real codec loop', () => {
     });
     await session.start();
     try {
-      const waveform = new Float32Array(12_000).fill(0.25);
+      const internals = session as unknown as {
+        pumpTimer: NodeJS.Timeout | null;
+        pumpInput(): Promise<void>;
+      };
+      if (internals.pumpTimer) clearTimeout(internals.pumpTimer);
+      internals.pumpTimer = null;
+      const waveform = Float32Array.from(
+        { length: 12_000 },
+        (_value, index) => ((index % 100) - 50) / 100,
+      );
       const playback = session.playAudio(waveform, 12_000, { playbackKind: 'tune-tone' });
       const interrupted = expect(playback).rejects.toThrow('playback interrupted');
       await new Promise<void>((resolve) => setImmediate(resolve));
 
-      now += 100;
-      await (session as unknown as { pumpInput(): Promise<void> }).pumpInput();
-      expect(ingested.at(-1)?.some((sample) => sample !== 0)).toBe(true);
+      now += 350;
+      await internals.pumpInput();
+      expect(ingested).toHaveLength(3);
+      const caughtUp = new Float32Array(3_600);
+      ingested.forEach((chunk, index) => caughtUp.set(chunk, index * chunk.length));
+      expect(caughtUp).toEqual(waveform.slice(0, 3_600));
 
-      expect(await session.stopCurrentPlayback({ kind: 'tune-tone' })).toBe(100);
+      expect(await session.stopCurrentPlayback({ kind: 'tune-tone' })).toBe(350);
       await interrupted;
-      now += 100;
-      await (session as unknown as { pumpInput(): Promise<void> }).pumpInput();
-      expect(ingested.at(-1)?.every((sample) => sample === 0)).toBe(true);
+      now += 150;
+      await internals.pumpInput();
+      expect(ingested).toHaveLength(5);
+      expect(ingested[3]?.slice(0, 600)).toEqual(waveform.slice(3_600, 4_200));
+      expect(ingested[3]?.slice(600).every((sample) => sample === 0)).toBe(true);
+      expect(ingested[4]?.every((sample) => sample === 0)).toBe(true);
     } finally {
       await session.stop('test complete');
     }
