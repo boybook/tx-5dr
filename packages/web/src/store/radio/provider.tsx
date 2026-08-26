@@ -344,8 +344,9 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
       profiles: radioState.profiles,
       activeProfileId: radioState.activeProfileId,
       profilesLoaded: radioState.profilesLoaded,
+      hasConfiguredProfiles: radioState.hasConfiguredProfiles,
     }),
-    [radioState.profiles, radioState.activeProfileId, radioState.profilesLoaded],
+    [radioState.profiles, radioState.activeProfileId, radioState.profilesLoaded, radioState.hasConfiguredProfiles],
   );
 
   const radioConnectionContextValue = useMemo(

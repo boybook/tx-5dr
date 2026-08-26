@@ -250,7 +250,8 @@ export class ProfileManager {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       engine.emit('profileListUpdated' as any, {
         profiles: this.getAllProfiles(),
-        activeProfileId: ConfigManager.getInstance().getActiveProfileId(),
+        activeProfileId: ConfigManager.getInstance().getPublicActiveProfileId(),
+        hasConfiguredProfiles: ConfigManager.getInstance().hasConfiguredProfiles(),
       });
     } catch {
       // 引擎可能还未初始化，忽略

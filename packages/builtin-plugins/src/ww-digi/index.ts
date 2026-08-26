@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import { wwDigiSimulationScenarios } from './simulation-scenarios.js';
 import { definePlugin, type PluginContextFor, type QSORecord } from '@tx5dr/plugin-api';
 import type { PluginQuickSetting } from '@tx5dr/plugin-api';
 import { getCallsignInfo } from '@tx5dr/core';
@@ -297,6 +298,7 @@ export const wwDigiStrategyPlugin = definePlugin({
     manualInitiation: 1,
     maxConcurrentStreams: 3,
   },
+  simulationScenarios: wwDigiSimulationScenarios,
   permissions: ['logbook:read', 'operator:transmit-control', 'plugin:event-bus'],
   storage: { scopes: ['global', 'operator'] },
   settings: {

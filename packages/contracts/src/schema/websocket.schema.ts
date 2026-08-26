@@ -2083,7 +2083,7 @@ export interface DigitalRadioEngineEvents {
 
   // Profile 管理事件
   profileChanged: (data: z.infer<typeof ProfileChangedEventSchema>) => void;
-  profileListUpdated: (data: { profiles: z.infer<typeof RadioProfileSchema>[]; activeProfileId: string | null }) => void;
+  profileListUpdated: (data: { profiles: z.infer<typeof RadioProfileSchema>[]; activeProfileId: string | null; hasConfiguredProfiles?: boolean }) => void;
   realtimeSettingsChanged: (data: RealtimeSettingsResponseData) => void;
 
   // 认证事件

@@ -33,6 +33,14 @@ export type {
 } from './capabilities.js';
 export type { PluginDefinition, AnyPluginDefinition } from './definition.js';
 export type {
+  SimulationMode,
+  SimulationScenarioChoice,
+  SimulationScenarioRule,
+  SimulationScenarioTimeoutRule,
+  SimulationScenarioState,
+  SimulationScenarioDescriptor,
+} from './simulation.js';
+export type {
   PluginContext,
   PluginContextBase,
   PluginCleanupContext,

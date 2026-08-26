@@ -88,6 +88,7 @@ export interface RadioState {
   profiles: RadioProfile[];
   activeProfileId: string | null;
   profilesLoaded: boolean;
+  hasConfiguredProfiles: boolean;
   engineMode: EngineMode;
   voicePttLock: VoicePTTLock | null;
   currentRadioMode: string | null;
@@ -171,9 +172,9 @@ export type RadioAction =
   | { type: 'tuneToneStatusChanged'; payload: TuneToneStatus }
   | { type: 'meterData'; payload: MeterData }
   | { type: 'squelchStatusChanged'; payload: SquelchStatus }
-  | { type: 'setProfiles'; payload: { profiles: RadioProfile[]; activeProfileId: string | null } }
+  | { type: 'setProfiles'; payload: { profiles: RadioProfile[]; activeProfileId: string | null; hasConfiguredProfiles?: boolean } }
   | { type: 'profileChanged'; payload: ProfileChangedEvent }
-  | { type: 'profileListUpdated'; payload: { profiles: RadioProfile[]; activeProfileId: string | null } }
+  | { type: 'profileListUpdated'; payload: { profiles: RadioProfile[]; activeProfileId: string | null; hasConfiguredProfiles?: boolean } }
   | { type: 'radioError'; payload: RadioErrorRecord }
   | { type: 'clearRadioErrors' }
   | { type: 'setEngineMode'; payload: EngineMode }
