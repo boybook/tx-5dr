@@ -253,6 +253,8 @@ export enum WSMessageType {
   GET_PLUGIN_RUNTIME_LOG_HISTORY = 'getPluginRuntimeLogHistory',
   PLUGIN_RUNTIME_LOG_HISTORY = 'pluginRuntimeLogHistory',
   PLUGIN_USER_ACTION = 'pluginUserAction',
+  /** 插件用户动作执行结果回传（server → client） */
+  PLUGIN_USER_ACTION_RESULT = 'pluginUserActionResult',
   PLUGIN_PAGE_PUSH = 'pluginPagePush',
   PLUGIN_PANEL_META = 'pluginPanelMeta',
   PLUGIN_PANEL_CONTRIBUTIONS_CHANGED = 'pluginPanelContributionsChanged',
@@ -1625,6 +1627,28 @@ export const WSPluginUserActionMessageSchema = WSBaseMessageSchema.extend({
 });
 export type WSPluginUserActionMessage = z.infer<typeof WSPluginUserActionMessageSchema>;
 
+/**
+ * 插件用户动作执行结果（server → client，WSMessageType.PLUGIN_USER_ACTION_RESULT）
+ *
+ * `result` 为插件 `onUserAction` hook 的返回值（执行失败、实例不可用或超时为
+ * null）。插件可返回结构化结果（如 `{ ok, messageKey, params }`）供前端展示。
+ * `requestId` 由发起动作的客户端生成并回显，用于并发调用间的匹配。
+ */
+export const PluginUserActionResultPayloadSchema = z.object({
+  pluginName: z.string(),
+  actionId: z.string(),
+  operatorId: z.string().optional(),
+  requestId: z.string().optional(),
+  result: z.unknown(),
+});
+export type PluginUserActionResultPayload = z.infer<typeof PluginUserActionResultPayloadSchema>;
+
+export const WSPluginUserActionResultMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.PLUGIN_USER_ACTION_RESULT),
+  data: PluginUserActionResultPayloadSchema,
+});
+export type WSPluginUserActionResultMessage = z.infer<typeof WSPluginUserActionResultMessageSchema>;
+
 // 联合所有WebSocket消息类型
 export const WSMessageSchema = z.discriminatedUnion('type', [
   WSPingMessageSchema,
@@ -1753,6 +1777,7 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSGetPluginRuntimeLogHistoryMessageSchema,
   WSPluginRuntimeLogHistoryMessageSchema,
   WSPluginUserActionMessageSchema,
+  WSPluginUserActionResultMessageSchema,
 ]);
 
 // ===== 导出消息类型 =====
@@ -1967,6 +1992,7 @@ export interface DigitalRadioEngineEvents {
     data?: unknown;
   }) => void;
   pluginPanelMeta: (data: import('./plugin.schema.js').PluginPanelMetaPayload) => void;
+  pluginUserActionResult: (data: PluginUserActionResultPayload) => void;
   pluginPanelContributionsChanged: (data: import('./plugin.schema.js').PluginUIPanelContributionGroup) => void;
   pluginRemoteReplyToDecode: (data: { operatorId: string; callsign: string; modifiers?: number }) => void;
   pluginRemoteClearDecodes: (data: { operatorId: string; window?: number }) => void;

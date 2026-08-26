@@ -29,6 +29,11 @@ function normalizeStringArrayValue(value: unknown): string[] {
   return [];
 }
 
+/** 归一化 multiselect 值：选择集顺序无意义，排序去重后便于持久化与脏检查比较 */
+function normalizeMultiselectValue(value: unknown): string[] {
+  return [...new Set(normalizeStringArrayValue(value))].sort();
+}
+
 function normalizeWatchedCallsignWatchListValue(value: unknown): string[] {
   if (typeof value === 'string') {
     return value
@@ -66,6 +71,12 @@ function normalizeKeyedStringArraysValue(
 }
 
 function normalizeObjectFieldValue(field: PluginObjectArrayField, value: unknown): unknown {
+  if (field.type === 'action') {
+    return undefined;
+  }
+  if (field.type === 'string[]' || field.type === 'multiselect') {
+    return field.type === 'multiselect' ? normalizeMultiselectValue(value) : normalizeStringArrayValue(value);
+  }
   if (field.type === 'boolean') {
     return value === true;
   }
@@ -78,7 +89,18 @@ function normalizeObjectFieldValue(field: PluginObjectArrayField, value: unknown
 }
 
 function isDefaultObjectFieldValue(field: PluginObjectArrayField, value: unknown): boolean {
-  const defaultValue = field.default ?? (field.type === 'boolean' ? false : field.type === 'number' ? undefined : '');
+  const defaultValue = field.default ?? (field.type === 'boolean'
+    ? false
+    : field.type === 'number'
+      ? undefined
+      : field.type === 'string[]' || field.type === 'multiselect'
+        ? []
+        : '');
+  // Arrays are normalized to fresh instances, so compare by content instead of
+  // reference — an empty array is the default for array-typed fields.
+  if (Array.isArray(value) || Array.isArray(defaultValue)) {
+    return JSON.stringify(value) === JSON.stringify(defaultValue);
+  }
   return Object.is(value, defaultValue);
 }
 

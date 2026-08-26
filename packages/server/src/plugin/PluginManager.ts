@@ -953,12 +953,12 @@ export class PluginManager {
     return this.orchestrator.readCurrentTransmission(operatorId);
   }
 
-  handlePluginUserAction(
+  async handlePluginUserAction(
     pluginName: string,
     actionId: string,
     operatorId?: string,
     payload?: unknown,
-  ): void {
+  ): Promise<unknown> {
     const instance = this.resolvePluginActionTarget(pluginName, operatorId);
     if (!instance?.enabled) {
       throw new Error(`Plugin action target not available: plugin=${pluginName}${operatorId ? `, operator=${operatorId}` : ''}`);
@@ -968,7 +968,8 @@ export class PluginManager {
       throw new Error(`Plugin action is paused for operator: plugin=${pluginName}${pausedOperatorId ? `, operator=${pausedOperatorId}` : ''}`);
     }
 
-    void this.dispatcher.dispatchInstance(
+    // 返回 onUserAction hook 的执行结果，WSServer 会将其回传给发起动作的客户端
+    return this.dispatcher.dispatchInstance(
       instance,
       'onUserAction',
       (hook, guardedCtx) => hook(

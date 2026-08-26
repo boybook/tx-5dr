@@ -290,8 +290,12 @@ export interface PluginHooks<Permissions extends readonly PluginPermission[] = r
 
   /**
    * Broadcast when the user clicks one of the plugin's declared quick actions.
+   *
+   * The return value is echoed back to the requesting client as the
+   * `pluginUserActionResult` WS message, so plugins can surface structured
+   * outcomes (e.g. `{ ok, messageKey, params }`) to the settings UI.
    */
-  onUserAction?(actionId: string, payload: unknown, ctx: PluginContextFor<Permissions>): void | Promise<void>;
+  onUserAction?(actionId: string, payload: unknown, ctx: PluginContextFor<Permissions>): unknown | Promise<unknown>;
 
   /**
    * Broadcast after one or more persisted plugin settings have changed.

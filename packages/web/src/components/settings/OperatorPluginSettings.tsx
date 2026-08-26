@@ -6,6 +6,7 @@ import { api } from '@tx5dr/core';
 import { createLogger } from '../../utils/logger';
 import { pluginApi } from '../../utils/pluginApi';
 import { usePluginSnapshot } from '../../hooks/usePluginSnapshot';
+import { useConnection } from '../../store/radioStore';
 import { PluginStrategySelector } from '../plugins/PluginStrategySelector';
 import { isTransmitControlPlugin, isTransmitControlPluginPaused } from '../radio/operators/radioOperatorAutomation';
 import {
@@ -29,6 +30,7 @@ interface OperatorPluginSettingsProps {
  */
 export const OperatorPluginSettings: React.FC<OperatorPluginSettingsProps> = ({ operatorId }) => {
   const { t } = useTranslation('settings');
+  const connection = useConnection();
   const pluginSnapshot = usePluginSnapshot();
   const plugins = pluginSnapshot.plugins;
   const [settingsMap, setSettingsMap] = useState<Record<string, Record<string, unknown>>>({});
@@ -198,6 +200,8 @@ export const OperatorPluginSettings: React.FC<OperatorPluginSettingsProps> = ({ 
             isAutomationPauseUpdating={pausingMap[plugin.name]}
             onToggleAutomationPause={() => { void handleTogglePause(plugin.name); }}
             automationPauseError={pauseErrorMap[plugin.name]}
+            onUserAction={(actionId) =>
+              connection.state.radioService?.sendPluginUserAction(plugin.name, actionId, operatorId)}
             description={plugin.type === 'strategy'
               ? t('plugins.operatorStrategySettingsHint', 'Settings for the current strategy plugin.')
               : t('plugins.operatorPluginSettingsHint', 'Operator-specific plugin settings.')}

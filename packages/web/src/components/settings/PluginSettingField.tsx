@@ -17,10 +17,47 @@ interface PluginSettingFieldProps {
   /** 用于从插件独立命名空间查找 label 翻译 */
   pluginName: string;
   settings?: Record<string, unknown>;
+  /** 触发 `action` 类型设置项时回调（actionId 由调用方分发到插件 onUserAction hook） */
+  onUserAction?: (actionId: string) => void;
 }
 
 const RESPONSIVE_SETTING_GRID_CLASS = 'grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(100%,12rem),1fr))]';
 const RESPONSIVE_FIELD_GRID_CLASS = 'grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(100%,10rem),1fr))]';
+const OBJECT_ROW_GRID_CLASS = 'grid gap-2 [grid-template-columns:minmax(0,3fr)_minmax(9rem,1fr)]';
+
+const ACTION_PARAM_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]{0,31}$/;
+/** i18next 保留选项，插件 params 不可覆盖（防御恶意/损坏插件打崩设置页） */
+const ACTION_PARAM_RESERVED = new Set([
+  'ns',
+  'lng',
+  'defaultValue',
+  'escapeValue',
+  'returnObjects',
+  'returnDetails',
+  'count',
+  'context',
+  'interpolation',
+  'keySeparator',
+  'nsSeparator',
+  'pluralSeparator',
+]);
+
+/** 把插件返回的 params 过滤为安全的 i18n 插值变量：仅普通字符串/数字键值。 */
+function sanitizeActionParams(raw: unknown): Record<string, string | number> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return {};
+  }
+  const safe: Record<string, string | number> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (ACTION_PARAM_RESERVED.has(key) || !ACTION_PARAM_PATTERN.test(key)) {
+      continue;
+    }
+    if (typeof value === 'string' || typeof value === 'number') {
+      safe[key] = value;
+    }
+  }
+  return safe;
+}
 
 /**
  * 通用的单个插件设置项渲染组件
@@ -36,9 +73,80 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
   onChange,
   pluginName,
   settings,
+  onUserAction,
 }) => {
   const [optionSearch, setOptionSearch] = React.useState('');
   const [keyedOptionSearch, setKeyedOptionSearch] = React.useState<Record<string, string>>({});
+  const [runningActionIds, setRunningActionIds] = React.useState<Set<string>>(new Set());
+  const [actionOutcome, setActionOutcome] = React.useState<{ actionId: string; ok: boolean; text: string } | null>(null);
+  /**
+   * 把 onUserAction 的返回值翻译成按钮下方的反馈文案。
+   * 插件可返回 { ok, messageKey, params, message }，messageKey 走插件自己的
+   * i18n 命名空间；无回传（旧主机）或超时返回 null。
+   */
+  const resolveActionOutcome = (actionId: string, result: unknown): { ok: boolean; text: string } | null => {
+    if (result === undefined || result === null) {
+      return {
+        ok: false,
+        text: i18n.t('settings:plugins.actionNoReply', { defaultValue: 'No response from host' }),
+      };
+    }
+    const record = result as { ok?: unknown; messageKey?: unknown; params?: Record<string, unknown>; message?: unknown };
+    const ok = record.ok !== false;
+    if (typeof record.messageKey === 'string') {
+      const rendered = i18n.t(record.messageKey, {
+        ns: `plugin:${pluginName}`,
+        ...sanitizeActionParams(record.params),
+        defaultValue: typeof record.message === 'string' ? record.message : record.messageKey,
+      });
+      // returnObjects 或损坏的翻译值可能返回非字符串；一律降级为固定文案
+      const text = typeof rendered === 'string'
+        ? rendered
+        : i18n.t('settings:plugins.actionFailed', { defaultValue: 'Action failed' });
+      return { ok, text };
+    }
+    if (typeof record.message === 'string') {
+      return { ok, text: record.message };
+    }
+    return ok ? null : {
+      ok: false,
+      text: i18n.t('settings:plugins.actionFailed', { defaultValue: 'Action failed' }),
+    };
+  };
+  const runAction = React.useCallback((actionId: string) => {
+    if (!onUserAction || runningActionIds.has(actionId)) {
+      return;
+    }
+    setRunningActionIds((prev) => new Set(prev).add(actionId));
+    setActionOutcome((prev) => prev?.actionId === actionId ? null : prev);
+    Promise.resolve()
+      .then(() => onUserAction(actionId))
+      .then((result) => {
+        const outcome = resolveActionOutcome(actionId, result);
+        if (outcome) {
+          setActionOutcome({ actionId, ...outcome });
+          // 反馈文案几秒后自动消失，避免遮挡后续操作
+          setTimeout(() => {
+            setActionOutcome((prev) => prev?.actionId === actionId ? null : prev);
+          }, 6000);
+        }
+      })
+      .catch(() => {
+        setActionOutcome({
+          actionId,
+          ok: false,
+          text: i18n.t('settings:plugins.actionFailed', { defaultValue: 'Action failed' }),
+        });
+      })
+      .finally(() => {
+        setRunningActionIds((prev) => {
+          if (!prev.has(actionId)) return prev;
+          const next = new Set(prev);
+          next.delete(actionId);
+          return next;
+        });
+      });
+  }, [runningActionIds, onUserAction]);
   const label = resolvePluginLabel(descriptor.label, pluginName);
   const descriptionKey = getPluginSettingDescriptionKey(pluginName, fieldKey, descriptor, settings);
   const description = descriptionKey
@@ -261,13 +369,110 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
     row: Record<string, unknown>,
     field: (typeof objectFields)[number],
     updateField: (key: string, nextValue: unknown) => void,
+    rowIdentity: string,
   ) => {
     const fieldLabel = resolvePluginLabel(field.label, pluginName);
     const fieldDescription = field.description ? resolvePluginLabel(field.description, pluginName) : undefined;
     const currentValue = row[field.key] ?? getObjectFieldDefault(field);
+    const spanClass = field.fullWidth ? ' col-span-2' : '';
+    if (field.type === 'action') {
+      const actionId = `${field.actionId ?? field.key}:${rowIdentity}`;
+      const outcome = actionOutcome?.actionId === actionId ? actionOutcome : undefined;
+      return (
+        <div key={field.key} className={`rounded-md border border-default-200/60 bg-content1 px-3 py-2${spanClass}`}>
+          <div className="flex items-center justify-between gap-3">
+            {renderLabelWithHelp(fieldLabel, fieldDescription, 'text-sm text-default-700')}
+            <Button
+              size="sm"
+              variant="flat"
+              color="primary"
+              className="h-8 shrink-0"
+              isLoading={runningActionIds.has(actionId)}
+              isDisabled={!onUserAction}
+              onPress={() => runAction(actionId)}
+            >
+              {fieldLabel}
+            </Button>
+          </div>
+          {outcome && (
+            <div className={`mt-1 text-xs ${outcome.ok ? 'text-success-600 dark:text-success-400' : 'text-danger'}`}>
+              {outcome.text}
+            </div>
+          )}
+        </div>
+      );
+    }
+    if (field.type === 'radio') {
+      return (
+        <Select
+          key={field.key}
+          size="sm"
+          className={spanClass}
+          label={renderLabelWithHelp(fieldLabel, fieldDescription)}
+          selectedKeys={currentValue ? [String(currentValue)] : []}
+          variant="bordered"
+          onSelectionChange={(keys) => {
+            const selected = Array.from(keys ?? [])[0];
+            updateField(field.key, selected !== undefined ? String(selected) : '');
+          }}
+        >
+          {(field.options ?? []).map((option) => (
+            <SelectItem key={option.value}>
+              {resolvePluginLabel(option.label, pluginName)}
+            </SelectItem>
+          ))}
+        </Select>
+      );
+    }
+    if (field.type === 'multiselect') {
+      const selectedValues = Array.isArray(currentValue)
+        ? currentValue.filter((item): item is string => typeof item === 'string')
+        : [];
+      return (
+        <Select
+          key={field.key}
+          size="sm"
+          selectionMode="multiple"
+          className={spanClass}
+          label={renderLabelWithHelp(fieldLabel, fieldDescription)}
+          selectedKeys={selectedValues}
+          placeholder={field.placeholder}
+          variant="bordered"
+          onSelectionChange={(keys) => {
+            updateField(field.key, Array.from(keys ?? []).map(String));
+          }}
+        >
+          {(field.options ?? []).map((option) => (
+            <SelectItem key={option.value}>
+              {resolvePluginLabel(option.label, pluginName)}
+            </SelectItem>
+          ))}
+        </Select>
+      );
+    }
+    if (field.type === 'string[]') {
+      const lines = Array.isArray(currentValue)
+        ? currentValue.filter((item): item is string => typeof item === 'string')
+        : typeof currentValue === 'string'
+          ? [currentValue]
+          : [];
+      return (
+        <Textarea
+          key={field.key}
+          size="sm"
+          className={spanClass}
+          label={renderLabelWithHelp(fieldLabel, fieldDescription)}
+          placeholder={field.placeholder}
+          value={lines.join('\n')}
+          onValueChange={(nextValue: string) => updateField(field.key, nextValue)}
+          minRows={3}
+          variant="bordered"
+        />
+      );
+    }
     if (field.type === 'boolean') {
       return (
-        <div key={field.key} className="flex items-center justify-between gap-3 rounded-md border border-default-200/60 bg-content1 px-3 py-2">
+        <div key={field.key} className={`flex items-center justify-between gap-3 rounded-md border border-default-200/60 bg-content1 px-3 py-2${spanClass}`}>
           {renderLabelWithHelp(fieldLabel, fieldDescription, 'text-sm text-default-700')}
           <Switch
             size="sm"
@@ -281,6 +486,7 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
       <Input
         key={field.key}
         size="sm"
+        className={spanClass}
         label={renderLabelWithHelp(fieldLabel, fieldDescription)}
         placeholder={field.placeholder}
         type={field.type === 'number' ? 'number' : 'text'}
@@ -515,7 +721,7 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
                         </div>
                         <div className={RESPONSIVE_FIELD_GRID_CLASS}>
                           {objectFields.map((field) => renderObjectField(row, field, (fieldKey, nextValue) =>
-                            updateRow(index, fieldKey, nextValue)
+                            updateRow(index, fieldKey, nextValue), String(index)
                           ))}
                         </div>
                       </div>
@@ -568,7 +774,7 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
                 </div>
                 <div className="grid gap-2">
                   {objectFields.map((field) => renderObjectField(row, field, (fieldKey, nextValue) =>
-                    updateObjectForKey(keyDescriptor.key, { ...row, [fieldKey]: nextValue })
+                    updateObjectForKey(keyDescriptor.key, { ...row, [fieldKey]: nextValue }), keyDescriptor.key
                   ))}
                 </div>
               </div>
@@ -594,6 +800,7 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
     const addRow = () => {
       onChange([...rows, createEmptyObjectRow()]);
     };
+    const useFixedRowLayout = objectFields.some((field) => field.fullWidth);
 
     return (
       <div className="rounded-lg border border-default-200/70 bg-content1 px-3 py-2.5">
@@ -621,9 +828,9 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
                     {i18n.t('common:button.delete', { defaultValue: 'Delete' })}
                   </Button>
                 </div>
-                <div className={RESPONSIVE_FIELD_GRID_CLASS}>
+                <div className={useFixedRowLayout ? OBJECT_ROW_GRID_CLASS : RESPONSIVE_FIELD_GRID_CLASS}>
                   {objectFields.map((field) => renderObjectField(row, field, (fieldKey, nextValue) =>
-                    updateRow(index, fieldKey, nextValue)
+                    updateRow(index, fieldKey, nextValue), String(index)
                   ))}
                 </div>
               </div>
