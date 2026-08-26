@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, ButtonGroup, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, Spinner } from '@heroui/react';
+import { Button, ButtonGroup, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, Spinner, Tooltip } from '@heroui/react';
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
@@ -8,6 +8,7 @@ import {
   faCheck,
   faDownload,
   faImages,
+  faRepeat,
   faRotate,
   faTrash,
   faTriangleExclamation,
@@ -17,10 +18,13 @@ import { UserRole, type ImageHistoryEntry } from '@tx5dr/contracts';
 import { useTranslation } from 'react-i18next';
 
 import { useImageHistory, type ImageHistoryDirection } from '../../hooks/useImageHistory';
-import { useRadioModeState } from '../../store/radioStore';
+import { useSstvTxStart } from '../../hooks/useSstvTxStart';
+import { useCurrentOperatorId, useOperators, useRadioModeState } from '../../store/radioStore';
 import { useHasMinRole } from '../../store/authStore';
 import { formatFrequencyMHz } from '../../utils/frequencyMHz';
+import { canResendImageHistoryEntry, historyEnvelopeSelection } from './imageHistoryResend';
 import { groupImageHistoryByDay } from './imageHistoryGrouping';
+import { SstvCaptureConfirmModal } from './SstvCaptureConfirmModal';
 
 function historyFileName(entry: ImageHistoryEntry): string {
   const timestamp = new Date(entry.record.occurredAt).toISOString().replace(/[:.]/g, '-');
@@ -52,17 +56,25 @@ async function downloadBlob(blob: Blob, fileName: string, title: string): Promis
 function HistoryEntry({
   entry,
   canDelete,
+  canResend,
+  resendDisabled,
   downloading,
   deleting,
+  resending,
   onDownload,
   onDelete,
+  onResend,
 }: {
   entry: ImageHistoryEntry;
   canDelete: boolean;
+  canResend: boolean;
+  resendDisabled: boolean;
   downloading: boolean;
   deleting: boolean;
+  resending: boolean;
   onDownload: () => void;
   onDelete: () => void;
+  onResend: () => void;
 }) {
   const { t } = useTranslation('image');
   const [url, setUrl] = useState<string | null>(null);
@@ -123,13 +135,30 @@ function HistoryEntry({
               {formatFrequencyMHz(entry.artifact.frequency)} MHz{entry.artifact.radioMode ? ` · ${entry.artifact.radioMode}` : ''}
             </span>
             <div className="flex shrink-0 gap-0.5">
-              <Button isIconOnly size="sm" variant="light" className="h-7 min-w-7 text-default-600" isLoading={downloading} onPress={onDownload} aria-label={t('downloadRecord')} title={t('downloadRecord')}>
-                <FontAwesomeIcon icon={faDownload} className="text-[11px]" />
-              </Button>
+              {canResend ? (
+                <Tooltip content={t('sendImage')} placement="top" delay={250} closeDelay={0}>
+                  <span className="inline-flex">
+                    <Button isIconOnly size="sm" variant="light" className="h-7 min-w-7 text-default-600" isLoading={resending} isDisabled={resendDisabled} onPress={onResend} aria-label={t('sendImage')}>
+                      <FontAwesomeIcon icon={faRepeat} className="text-[11px]" />
+                    </Button>
+                  </span>
+                </Tooltip>
+              ) : null}
+              <Tooltip content={t('downloadRecord')} placement="top" delay={250} closeDelay={0}>
+                <span className="inline-flex">
+                  <Button isIconOnly size="sm" variant="light" className="h-7 min-w-7 text-default-600" isLoading={downloading} onPress={onDownload} aria-label={t('downloadRecord')}>
+                    <FontAwesomeIcon icon={faDownload} className="text-[11px]" />
+                  </Button>
+                </span>
+              </Tooltip>
               {canDelete ? (
-                <Button isIconOnly size="sm" variant="light" color="danger" className="h-7 min-w-7" isLoading={deleting} onPress={onDelete} aria-label={t('deleteRecord')} title={t('deleteRecord')}>
-                  <FontAwesomeIcon icon={faTrash} className="text-[11px]" />
-                </Button>
+                <Tooltip content={t('deleteRecord')} placement="top" delay={250} closeDelay={0}>
+                  <span className="inline-flex">
+                    <Button isIconOnly size="sm" variant="light" color="danger" className="h-7 min-w-7" isLoading={deleting} onPress={onDelete} aria-label={t('deleteRecord')}>
+                      <FontAwesomeIcon icon={faTrash} className="text-[11px]" />
+                    </Button>
+                  </span>
+                </Tooltip>
               ) : null}
             </div>
           </div>
@@ -142,6 +171,10 @@ function HistoryEntry({
 export function ImageHistoryTimeline() {
   const { t, i18n } = useTranslation('image');
   const radioMode = useRadioModeState();
+  const { currentOperatorId } = useCurrentOperatorId();
+  const { operators } = useOperators();
+  const operatorId = currentOperatorId ?? operators[0]?.id;
+  const txStart = useSstvTxStart();
   const isFax = radioMode.currentMode?.name === 'FAX';
   const canDelete = useHasMinRole(UserRole.OPERATOR);
   const [direction, setDirection] = useState<ImageHistoryDirection>('all');
@@ -175,6 +208,36 @@ export function ImageHistoryTimeline() {
     } finally {
       setDeleting(false);
     }
+  };
+
+  const resend = (entry: ImageHistoryEntry) => {
+    if (!canResendImageHistoryEntry(entry, operatorId) || entry.record.direction !== 'tx' || !operatorId) return;
+    const expectedFrequency = radioMode.currentRadioFrequency;
+    if (!expectedFrequency) {
+      addToast({ title: t('txNotReady'), color: 'warning' });
+      return;
+    }
+    const expectedRadioMode = radioMode.currentRadioMode ?? undefined;
+    txStart.start(entry.record.id, async () => {
+      const fallbackEnvelope = entry.record.direction === 'tx' && entry.record.envelope
+        ? { enhancedPreamble: true, stationIdMode: 'fsk' as const }
+        : (await api.getSstvTxPreferences(operatorId)).preferences;
+      const blob = await api.getImageArtifactBlob(entry.artifact.id);
+      const upload = await api.uploadSstvArtifact({
+        file: blob,
+        operatorId,
+        mode: entry.artifact.codecMode,
+        frequency: expectedFrequency,
+        radioMode: expectedRadioMode,
+      });
+      return {
+        artifactId: upload.artifact.id,
+        operatorId,
+        mode: entry.artifact.codecMode,
+        expectedFrequency,
+        envelope: historyEnvelopeSelection(entry, fallbackEnvelope),
+      };
+    });
   };
 
   return (
@@ -226,10 +289,14 @@ export function ImageHistoryTimeline() {
                         key={entry.record.id}
                         entry={entry}
                         canDelete={canDelete}
+                        canResend={canResendImageHistoryEntry(entry, operatorId)}
+                        resendDisabled={txStart.isBusy}
                         downloading={downloadingId === entry.record.id}
                         deleting={deleting && deleteEntry?.record.id === entry.record.id}
+                        resending={txStart.starting && txStart.activeKey === entry.record.id}
                         onDownload={() => void download(entry)}
                         onDelete={() => setDeleteEntry(entry)}
+                        onResend={() => resend(entry)}
                       />
                     ))}
                   </div>
@@ -255,6 +322,11 @@ export function ImageHistoryTimeline() {
           </ModalFooter>
         </ModalContent>
       </Modal>
+      <SstvCaptureConfirmModal
+        isOpen={txStart.captureConfirmOpen}
+        onCancel={txStart.cancelCaptureConfirmation}
+        onConfirm={txStart.confirmCaptureInterrupt}
+      />
     </>
   );
 }

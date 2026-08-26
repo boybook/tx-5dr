@@ -8,17 +8,18 @@ import type { ImageTemplateTextLayer, SstvTxEnvelopeSelection } from '@tx5dr/con
 import { useTranslation } from 'react-i18next';
 
 import { useImageRadioControls } from '../../hooks/useImageRadio';
+import { useSstvTxStart } from '../../hooks/useSstvTxStart';
 import { useConnection, useCurrentOperatorId, useOperators, useRadioModeState } from '../../store/radioStore';
-import { fitComposerBackgroundSize } from './composerBackground';
-import { sstvTxErrorTranslationKey } from './sstvTxCommand';
+import { fitComposerBackgroundSize, validateComposerBackgroundFile } from './composerBackground';
+import { SstvCaptureConfirmModal } from './SstvCaptureConfirmModal';
 import { estimateSstvTxDurationSeconds, isSstvStationIdCallsignSupported } from './sstvTxEnvelope';
 
 type TextLayer = ImageTemplateTextLayer;
-type PreparedSstvTx = { artifactId: string; operatorId: string; mode: string; expectedFrequency: number; envelope: SstvTxEnvelopeSelection };
 
 export function SstvComposer() {
   const { t } = useTranslation('image');
-  const { status, modes, templates, refreshTemplates, txStatus, txCommandResult } = useImageRadioControls();
+  const { modes, templates, refreshTemplates, txStatus } = useImageRadioControls();
+  const txStart = useSstvTxStart();
   const connection = useConnection();
   const radio = useRadioModeState();
   const { currentOperatorId } = useCurrentOperatorId();
@@ -39,9 +40,6 @@ export function SstvComposer() {
   const [deleteTemplateId, setDeleteTemplateId] = useState<string | null>(null);
   const [deletingTemplate, setDeletingTemplate] = useState(false);
   const [templateName, setTemplateName] = useState('');
-  const [sending, setSending] = useState(false);
-  const [pendingRequestId, setPendingRequestId] = useState<string | null>(null);
-  const [captureConfirmOpen, setCaptureConfirmOpen] = useState(false);
   const [txEnvelope, setTxEnvelope] = useState<SstvTxEnvelopeSelection>({ enhancedPreamble: true, stationIdMode: 'fsk' });
   const [previewSize, setPreviewSize] = useState<{ width: number; height: number } | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -50,7 +48,6 @@ export function SstvComposer() {
   const preferenceSaveGenerationRef = useRef(0);
   const previewViewportRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ id: string; dx: number; dy: number } | null>(null);
-  const preparedTxRef = useRef<PreparedSstvTx | null>(null);
   const operatorIdRef = useRef(operatorId);
   operatorIdRef.current = operatorId;
   const mode = modes.find((item) => item.mode === selectedMode) ?? modes.find((item) => item.mode === 'robot36') ?? modes[0];
@@ -222,7 +219,10 @@ export function SstvComposer() {
 
   const handleBackground = async (file?: File) => {
     if (!file || !operatorId) return;
-    if (file.size > 5 * 1024 * 1024 || !/^image\/(png|jpeg|webp)$/.test(file.type)) return;
+    if (validateComposerBackgroundFile(file)) {
+      addToast({ title: t('backgroundSaveFailed'), color: 'warning' });
+      return;
+    }
     const targetOperatorId = operatorId;
     const saveGeneration = ++backgroundSaveGenerationRef.current;
     setBackgroundSaving(true);
@@ -270,58 +270,27 @@ export function SstvComposer() {
     setLayers((current) => current.map((layer) => layer.id === drag.id ? { ...layer, x: Math.max(0, Math.min(1 - layer.width, point.x - drag.dx)), y: Math.max(0, Math.min(1 - layer.height, point.y - drag.dy)) } : layer));
   };
 
-  const dispatchPreparedTx = (prepared: PreparedSstvTx, interruptActiveCapture: boolean) => {
-    const service = connection.state.radioService;
-    if (!service || !connection.state.isReady) throw new Error('IMAGE_CONNECTION_UNAVAILABLE');
-    const requestId = crypto.randomUUID();
-    preparedTxRef.current = prepared;
-    setPendingRequestId(requestId);
-    setSending(true);
-    service.startSstvTx({ requestId, ...prepared, interruptActiveCapture });
-  };
-
-  const send = async (interruptActiveCapture = false) => {
+  const send = () => {
     if (!mode || !operatorId || !radio.currentRadioFrequency || !canvasRef.current) return;
     if (stationIdBlocked) {
       addToast({ title: t('txCallsignRequired'), color: 'warning' });
       return;
     }
-    if (status?.rxCaptureActive && !interruptActiveCapture) {
-      setCaptureConfirmOpen(true);
-      return;
-    }
-    setSending(true);
-    try {
+    const expectedFrequency = radio.currentRadioFrequency;
+    const expectedRadioMode = radio.currentRadioMode ?? undefined;
+    txStart.start('composer', async () => {
       if (!connection.state.radioService || !connection.state.isReady) throw new Error('IMAGE_CONNECTION_UNAVAILABLE');
       setSelectedLayerId(null); draw(false);
       const blob = await new Promise<Blob>((resolve, reject) => canvasRef.current?.toBlob((value) => value ? resolve(value) : reject(new Error('PNG render failed')), 'image/png'));
-      const upload = await api.uploadSstvArtifact({ file: blob, operatorId, mode: mode.mode, frequency: radio.currentRadioFrequency, radioMode: radio.currentRadioMode ?? undefined });
-      dispatchPreparedTx({
+      const upload = await api.uploadSstvArtifact({ file: blob, operatorId, mode: mode.mode, frequency: expectedFrequency, radioMode: expectedRadioMode });
+      return {
         operatorId,
         artifactId: upload.artifact.id,
         mode: mode.mode,
-        expectedFrequency: radio.currentRadioFrequency,
+        expectedFrequency,
         envelope: { ...txEnvelope },
-      }, interruptActiveCapture);
-    } catch (error) {
-      addToast({ title: error instanceof Error ? error.message : t('sendFailed'), color: 'danger' });
-      setSending(false);
-    }
-  };
-
-  const confirmCaptureInterrupt = () => {
-    setCaptureConfirmOpen(false);
-    const prepared = preparedTxRef.current;
-    if (prepared) {
-      try {
-        dispatchPreparedTx(prepared, true);
-      } catch (error) {
-        addToast({ title: error instanceof Error ? error.message : t('sendFailed'), color: 'danger' });
-        setSending(false);
-      }
-      return;
-    }
-    void send(true);
+      };
+    });
   };
 
   const updateTxEnvelope = (next: SstvTxEnvelopeSelection) => {
@@ -335,42 +304,6 @@ export function SstvComposer() {
       addToast({ title: t('txPreferenceSaveFailed'), color: 'danger' });
     });
   };
-
-  useEffect(() => {
-    if (!pendingRequestId || txCommandResult?.requestId !== pendingRequestId) return;
-    setPendingRequestId(null);
-    if (txCommandResult.accepted) return;
-    setSending(false);
-    if (txCommandResult.errorCode === 'IMAGE_RX_CAPTURE_CONFIRM_REQUIRED') {
-      setCaptureConfirmOpen(true);
-      return;
-    }
-    preparedTxRef.current = null;
-    addToast({ title: t(sstvTxErrorTranslationKey(txCommandResult.errorCode)), color: 'danger' });
-  }, [pendingRequestId, t, txCommandResult]);
-
-  useEffect(() => {
-    if (!pendingRequestId) return;
-    if (txStatus?.requestId === pendingRequestId && txStatus.phase !== 'idle') {
-      setPendingRequestId(null);
-      return;
-    }
-    const timeout = window.setTimeout(() => {
-      setPendingRequestId(null);
-      preparedTxRef.current = null;
-      setSending(false);
-      addToast({ title: t('txAckTimeout'), color: 'danger' });
-    }, 5_000);
-    return () => window.clearTimeout(timeout);
-  }, [pendingRequestId, t, txStatus?.phase, txStatus?.requestId]);
-
-  useEffect(() => {
-    if (txStatus?.phase === 'completed' || txStatus?.phase === 'error' || txStatus?.phase === 'cancelled' || txStatus?.phase === 'ptt_unknown') {
-      setSending(false);
-      setPendingRequestId(null);
-      preparedTxRef.current = null;
-    }
-  }, [txStatus?.phase]);
 
   const selectedLayer = layers.find((layer) => layer.id === selectedLayerId);
   return (
@@ -494,9 +427,9 @@ export function SstvComposer() {
         </Popover>
       </div>
 
-      {sending ? <Progress size="sm" value={txProgress} aria-label={t('transmitting')} className="flex-shrink-0" /> : null}
+      {txStart.starting ? <Progress size="sm" value={txProgress} aria-label={t('transmitting')} className="flex-shrink-0" /> : null}
       <div className="flex flex-shrink-0 items-center gap-2 pb-2">
-        <Button color="danger" className="min-h-11 flex-1" isLoading={sending && txStatus?.phase !== 'on_air'} isDisabled={!mode || !operatorId || sending || stationIdBlocked} onPress={() => void send()} startContent={<FontAwesomeIcon icon={faPaperPlane} />}>{t('sendImage')} · {durationSeconds}s</Button>
+        <Button color="danger" className="min-h-11 flex-1" isLoading={txStart.starting && txStatus?.phase !== 'on_air'} isDisabled={!mode || !operatorId || txStart.isBusy || stationIdBlocked} onPress={send} startContent={<FontAwesomeIcon icon={faPaperPlane} />}>{t('sendImage')} · {durationSeconds}s</Button>
         {txStatus?.phase === 'on_air' || txStatus?.phase === 'draining' ? <Button isIconOnly className="min-h-11 min-w-11" color="danger" variant="flat" onPress={() => operatorId && txStatus.sessionId && connection.state.radioService?.cancelSstvTx({ requestId: crypto.randomUUID(), operatorId, sessionId: txStatus.sessionId, expectedRevision: txStatus.revision })} aria-label={t('stop')}><FontAwesomeIcon icon={faStop} /></Button> : null}
       </div>
     </div>
@@ -513,18 +446,11 @@ export function SstvComposer() {
         </ModalFooter>
       </ModalContent>
     </Modal>
-    <Modal isOpen={captureConfirmOpen} onClose={() => { if (!sending) setCaptureConfirmOpen(false); }} size="sm" placement="center">
-      <ModalContent>
-        <ModalHeader>{t('interruptReceiveTitle')}</ModalHeader>
-        <ModalBody>
-          <p className="text-sm text-default-600">{t('interruptReceiveConfirm')}</p>
-        </ModalBody>
-        <ModalFooter>
-          <Button variant="flat" onPress={() => { setCaptureConfirmOpen(false); preparedTxRef.current = null; }}>{t('common:button.cancel')}</Button>
-          <Button color="danger" onPress={confirmCaptureInterrupt}>{t('interruptAndSend')}</Button>
-        </ModalFooter>
-      </ModalContent>
-    </Modal>
+    <SstvCaptureConfirmModal
+      isOpen={txStart.captureConfirmOpen}
+      onCancel={txStart.cancelCaptureConfirmation}
+      onConfirm={txStart.confirmCaptureInterrupt}
+    />
     </>
   );
 }
