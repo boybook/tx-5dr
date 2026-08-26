@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildWWDigiCQ,
+  buildWWDigi73,
   buildWWDigiGrid,
   buildWWDigiRogerGrid,
   buildWWDigiRR73,
@@ -26,5 +27,6 @@ describe('WW Digi messages', () => {
     expect(buildWWDigiGrid('s52xyz', 'k1abc', 'fn42aa')).toBe('S52XYZ K1ABC FN42');
     expect(buildWWDigiRogerGrid('s52xyz', 'k1abc', 'fn42aa')).toBe('S52XYZ K1ABC R FN42');
     expect(buildWWDigiRR73('s52xyz', 'k1abc')).toBe('S52XYZ K1ABC RR73');
+    expect(buildWWDigi73('s52xyz', 'k1abc')).toBe('S52XYZ K1ABC 73');
   });
 });

@@ -47,6 +47,8 @@ import {
   OperatorPluginPageActions,
   type OperatorPluginPageActionEntry,
 } from './OperatorPluginPageActions';
+import { OperatorStrategyActions } from './OperatorStrategyActions';
+import { requestStrategyFrequencyPick } from '../../../utils/strategyFrequencyPick';
 
 const logger = createLogger('RadioOperator');
 
@@ -762,6 +764,22 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
       content: option.transmitText,
     }))
   ), [operatorStatus.strategy.name]);
+  const strategyLabel = React.useCallback(
+    (value: string) => resolvePluginLabel(value, operatorStatus.strategy.name),
+    [operatorStatus.strategy.name],
+  );
+  const invokeStrategyAction = React.useCallback((
+    target: import('@tx5dr/contracts').StrategyActionTarget,
+    action: import('@tx5dr/contracts').StrategyActionDescriptor,
+    payload?: unknown,
+  ) => {
+    connection.state.radioService?.invokeOperatorStrategyAction(
+      operatorStatus.id,
+      target,
+      action.id,
+      payload,
+    );
+  }, [connection.state.radioService, operatorStatus.id]);
   const configuredStreamCount = operatorStatus.runtime?.queue?.maxActiveStreams;
   const singleStateStream = resolveSingleControllableStream(streamPresentations, configuredStreamCount);
   const legacyStateChoices: OperatorStateChoice[] = operatorStatus.strategy.availableSlots.map((slot) => ({
@@ -1564,6 +1582,16 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
           </Button>
         </div>
 
+        {(operatorStatus.runtime?.actions?.length ?? 0) > 0 && (
+          <div className="mb-2 rounded-md bg-default-100 px-2 py-1.5">
+            <OperatorStrategyActions
+              actions={operatorStatus.runtime!.actions!}
+              resolveLabel={strategyLabel}
+              onInvoke={(action, payload) => invokeStrategyAction({ kind: 'runtime' }, action, payload)}
+            />
+          </div>
+        )}
+
         {shouldRenderOperatorQueue(operatorStatus, pluginStatuses) && (
           <OperatorQueueTable operatorId={operatorStatus.id} queue={operatorStatus.runtime.queue} />
         )}
@@ -1593,17 +1621,47 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
                 </div>
               ) : singleStateStream && singleStateStream.currentState
                   && singleStateStream.qsoLifecycleEpoch !== undefined ? (
-                <OperatorStateList
-                  choices={streamStateChoices(singleStateStream)}
-                  currentState={singleStateStream.currentState}
-                  onSelect={(stateId) => setOperatorStreamState(
-                    singleStateStream.streamId,
-                    stateId,
-                    singleStateStream.qsoLifecycleEpoch!,
+                <div>
+                  <OperatorStateList
+                    choices={streamStateChoices(singleStateStream)}
+                    currentState={singleStateStream.currentState}
+                    onSelect={(stateId) => setOperatorStreamState(
+                      singleStateStream.streamId,
+                      stateId,
+                      singleStateStream.qsoLifecycleEpoch!,
+                    )}
+                    disabled={!connection.state.isConnected}
+                    selectLabel={(choice) => t('operator.switchToState', { state: choice.label })}
+                  />
+                  {(singleStateStream.attentions ?? []).map((attention) => (
+                    <div key={attention.id} role="alert" className="mx-2 mb-1 rounded bg-warning-50 px-2 py-1 text-[11px] text-warning-700">
+                      <span className="font-medium">{strategyLabel(attention.title)}</span>
+                      {attention.description && <span className="ml-1">{strategyLabel(attention.description)}</span>}
+                    </div>
+                  ))}
+                  {(singleStateStream.actions?.length ?? 0) > 0 && (
+                    <div className="border-t border-divider px-2 py-1.5">
+                      <OperatorStrategyActions
+                        actions={singleStateStream.actions!}
+                        resolveLabel={strategyLabel}
+                        onInvoke={(action, payload) => invokeStrategyAction({
+                          kind: 'stream',
+                          streamId: singleStateStream.streamId,
+                          lifecycleEpoch: singleStateStream.qsoLifecycleEpoch!,
+                        }, action, payload)}
+                        onRequestSpectrumPick={(action) => requestStrategyFrequencyPick({
+                          operatorId: operatorStatus.id,
+                          target: {
+                            kind: 'stream',
+                            streamId: singleStateStream.streamId,
+                            lifecycleEpoch: singleStateStream.qsoLifecycleEpoch!,
+                          },
+                          actionId: action.id,
+                        })}
+                      />
+                    </div>
                   )}
-                  disabled={!connection.state.isConnected}
-                  selectLabel={(choice) => t('operator.switchToState', { state: choice.label })}
-                />
+                </div>
               ) : streamPresentations.map((stream, streamIndex) => {
                 const metadata = [
                   stream.targetCallsign,
@@ -1670,6 +1728,48 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
                       >
                         {stream.text || t('operator.noCurrentTransmission')}
                       </div>
+                      {stream.completion && (
+                        <div className="mt-1 text-[10px] text-default-500">
+                          {stream.completion.label ? strategyLabel(stream.completion.label) : stream.completion.state}
+                        </div>
+                      )}
+                      {(stream.attentions ?? []).map((attention) => (
+                        <div
+                          key={attention.id}
+                          role="alert"
+                          className={`mt-1 rounded px-2 py-1 text-[11px] ${
+                            attention.tone === 'danger' ? 'bg-danger-50 text-danger-700'
+                              : attention.tone === 'warning' ? 'bg-warning-50 text-warning-700'
+                                : 'bg-primary-50 text-primary-700'
+                          }`}
+                        >
+                          <span className="font-medium">{strategyLabel(attention.title)}</span>
+                          {attention.description && <span className="ml-1">{strategyLabel(attention.description)}</span>}
+                        </div>
+                      ))}
+                      {(stream.actions?.length ?? 0) > 0 && stream.qsoLifecycleEpoch !== undefined && (
+                        <div className="mt-1.5">
+                          <OperatorStrategyActions
+                            compact
+                            actions={stream.actions!}
+                            resolveLabel={strategyLabel}
+                            onInvoke={(action, payload) => invokeStrategyAction({
+                              kind: 'stream',
+                              streamId: stream.streamId,
+                              lifecycleEpoch: stream.qsoLifecycleEpoch!,
+                            }, action, payload)}
+                            onRequestSpectrumPick={(action) => requestStrategyFrequencyPick({
+                              operatorId: operatorStatus.id,
+                              target: {
+                                kind: 'stream',
+                                streamId: stream.streamId,
+                                lifecycleEpoch: stream.qsoLifecycleEpoch!,
+                              },
+                              actionId: action.id,
+                            })}
+                          />
+                        </div>
+                      )}
                     </div>
                     {isStreamExpanded && stream.currentState && stream.qsoLifecycleEpoch !== undefined && (
                       <div className="border-t border-divider bg-default-100/70">

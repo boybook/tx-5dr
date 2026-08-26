@@ -51,6 +51,10 @@ export function buildWWDigiRR73(targetCallsign: string, myCallsign: string): str
   return `${targetCallsign.trim().toUpperCase()} ${myCallsign.trim().toUpperCase()} RR73`;
 }
 
+export function buildWWDigi73(targetCallsign: string, myCallsign: string): string {
+  return `${targetCallsign.trim().toUpperCase()} ${myCallsign.trim().toUpperCase()} 73`;
+}
+
 export function isFourCharacterGrid(value: string | undefined): value is string {
   return Boolean(value && GRID.test(value.trim().toUpperCase()));
 }

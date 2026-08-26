@@ -15,7 +15,7 @@ export type WWDigiBand = typeof WW_DIGI_BANDS[number];
 export const WW_DIGI_POWER_CATEGORIES = ['HIGH', 'LOW', 'QRP'] as const;
 export type WWDigiPowerCategory = typeof WW_DIGI_POWER_CATEGORIES[number];
 
-export type ContestQsoStatus = 'included' | 'x-qso';
+export type ContestQsoStatus = 'included' | 'x-qso' | 'review';
 
 export interface ContestQso {
   /** Stable general-log QSO ID and idempotency key. */
@@ -34,6 +34,9 @@ export interface ContestQso {
   status: ContestQsoStatus;
   streamId?: string;
   authorizationId?: string;
+  operatorId?: string;
+  transmitterId?: 0 | 1;
+  source?: 'ww-digi' | 'standard' | 'manual' | 'reconciled';
 }
 
 export interface ContestConfig {
@@ -41,6 +44,9 @@ export interface ContestConfig {
   location: string;
   categoryBand: 'ALL' | WWDigiBand;
   categoryPower: WWDigiPowerCategory;
+  categoryOperator?: 'SINGLE-OP' | 'MULTI-OP' | 'CHECKLOG';
+  categoryTransmitter?: 'ONE' | 'TWO' | 'UNLIMITED';
+  operators?: string[];
   createdBy?: string;
 }
 
@@ -149,7 +155,9 @@ function normalizeCreatedBy(value: unknown): string {
   return normalized;
 }
 
-function normalizeConfig(config: ContestConfig): Required<ContestConfig> {
+type NormalizedContestConfig = Required<ContestConfig>;
+
+function normalizeConfig(config: ContestConfig): NormalizedContestConfig {
   if (!config || typeof config !== 'object') fail('config', 'must be an object');
 
   const callsign = normalizeCallsign(config.callsign, 'config.callsign');
@@ -162,12 +170,33 @@ function normalizeConfig(config: ContestConfig): Required<ContestConfig> {
   if (!WW_DIGI_POWER_CATEGORIES.includes(categoryPower as WWDigiPowerCategory)) {
     fail('config.categoryPower', 'must be HIGH, LOW, or QRP');
   }
+  const categoryOperator = normalizeRequiredToken(config.categoryOperator ?? 'SINGLE-OP', 'config.categoryOperator', 10);
+  if (!['SINGLE-OP', 'MULTI-OP', 'CHECKLOG'].includes(categoryOperator)) {
+    fail('config.categoryOperator', 'must be SINGLE-OP, MULTI-OP, or CHECKLOG');
+  }
+  const categoryTransmitter = normalizeRequiredToken(config.categoryTransmitter ?? 'ONE', 'config.categoryTransmitter', 9);
+  if (!['ONE', 'TWO', 'UNLIMITED'].includes(categoryTransmitter)) {
+    fail('config.categoryTransmitter', 'must be ONE, TWO, or UNLIMITED');
+  }
+  const operators = (config.operators ?? []).map((operator, index) => normalizeCallsign(operator, `config.operators.${index}`));
+  if (categoryOperator === 'MULTI-OP' && operators.length === 0) {
+    fail('config.operators', 'is required for MULTI-OP');
+  }
+  if (categoryOperator === 'SINGLE-OP' && categoryTransmitter === 'TWO') {
+    fail('config.categoryTransmitter', 'TWO is not available for SINGLE-OP');
+  }
+  if ((categoryOperator === 'MULTI-OP' || categoryTransmitter === 'UNLIMITED') && categoryBand !== 'ALL') {
+    fail('config.categoryBand', 'must be ALL for this operator/transmitter category');
+  }
 
   return {
     callsign,
     location,
     categoryBand: categoryBand as ContestConfig['categoryBand'],
     categoryPower: categoryPower as WWDigiPowerCategory,
+    categoryOperator: categoryOperator as NormalizedContestConfig['categoryOperator'],
+    categoryTransmitter: categoryTransmitter as NormalizedContestConfig['categoryTransmitter'],
+    operators,
     createdBy: normalizeCreatedBy(config.createdBy),
   };
 }
@@ -202,8 +231,8 @@ function normalizeContestQso(qso: ContestQso): ContestQso {
     fail('qso.startTime', 'must be a valid UTC instant');
   }
 
-  if (qso.status !== 'included' && qso.status !== 'x-qso') {
-    fail('qso.status', 'must be included or x-qso');
+  if (qso.status !== 'included' && qso.status !== 'x-qso' && qso.status !== 'review') {
+    fail('qso.status', 'must be included, x-qso, or review');
   }
 
   return {
@@ -221,11 +250,14 @@ function normalizeContestQso(qso: ContestQso): ContestQso {
     authorizationId: typeof qso.authorizationId === 'string' && qso.authorizationId.trim()
       ? qso.authorizationId.trim()
       : undefined,
+    operatorId: typeof qso.operatorId === 'string' && qso.operatorId.trim() ? qso.operatorId.trim() : undefined,
+    transmitterId: qso.transmitterId === 0 || qso.transmitterId === 1 ? qso.transmitterId : undefined,
+    source: qso.source,
   };
 }
 
 /** Validate and normalize one config snapshot. */
-export function validateContestConfig(config: ContestConfig): Required<ContestConfig> {
+export function validateContestConfig(config: ContestConfig): NormalizedContestConfig {
   return normalizeConfig(config);
 }
 
@@ -256,8 +288,8 @@ export function setContestQsoStatus(
   qsoId: string,
   status: ContestQsoStatus,
 ): ContestQso[] {
-  if (status !== 'included' && status !== 'x-qso') {
-    fail('status', 'must be included or x-qso');
+  if (status !== 'included' && status !== 'x-qso' && status !== 'review') {
+    fail('status', 'must be included, x-qso, or review');
   }
   if (typeof qsoId !== 'string' || !qsoId.trim()) fail('qsoId', 'must not be empty');
   const normalizedId = qsoId.trim();
@@ -309,7 +341,7 @@ function renderQsoLine(qso: ContestQsoRuntimeView): string {
   const { date, time } = formatUtc(qso.startTime);
   const prefix = qso.status === 'x-qso' ? 'X-QSO:' : 'QSO:';
   const frequencyKhz = Math.round(qso.frequencyHz / 1_000).toString().padStart(5, ' ');
-  return `${prefix} ${frequencyKhz} DG ${date} ${time} ${qso.myCallsign.padEnd(13)} ${qso.sentGrid.padEnd(8)} ${qso.callsign.padEnd(13)} ${qso.receivedGrid.padEnd(8)} 0`;
+  return `${prefix} ${frequencyKhz} DG ${date} ${time} ${qso.myCallsign.padEnd(13)} ${qso.sentGrid.padEnd(8)} ${qso.callsign.padEnd(13)} ${qso.receivedGrid.padEnd(8)} ${qso.transmitterId ?? 0}`;
 }
 
 /** Generate one deterministic Cabrillo 3.0 WW Digi submission with CRLF line endings. */
@@ -319,27 +351,32 @@ export function generateWWDigiCabrillo(
 ): string {
   const normalizedConfig = normalizeConfig(config);
   const projected = projectContestQsos(records);
+  if (projected.some((qso) => qso.status === 'review')) fail('qso.status', 'all review records must be resolved before export');
+  if (normalizedConfig.categoryTransmitter === 'TWO'
+      && projected.some((qso) => qso.status !== 'x-qso' && qso.transmitterId !== 0 && qso.transmitterId !== 1)) {
+    fail('qso.transmitterId', 'is required for every TWO-transmitter QSO');
+  }
   for (const qso of projected) {
     if (qso.myCallsign !== normalizedConfig.callsign) {
       fail('qso.myCallsign', `must match config.callsign for QSO ${qso.qsoId}`);
     }
   }
 
-  const lines = [
-    'START-OF-LOG: 3.0',
-    `CONTEST: ${WW_DIGI_CONTEST_ID}`,
-    `CALLSIGN: ${normalizedConfig.callsign}`,
-    `LOCATION: ${normalizedConfig.location}`,
-    'CATEGORY-OPERATOR: SINGLE-OP',
-    'CATEGORY-TRANSMITTER: ONE',
-    `CATEGORY-BAND: ${normalizedConfig.categoryBand}`,
-    `CATEGORY-POWER: ${normalizedConfig.categoryPower}`,
-    'CATEGORY-MODE: DIGI',
-    'CATEGORY-STATION: FIXED',
-    `CREATED-BY: ${normalizedConfig.createdBy}`,
-    ...projected.map(renderQsoLine),
-    'END-OF-LOG:',
-  ];
-
-  return `${lines.join('\r\n')}\r\n`;
+  return buildCabrilloDocument({
+    headers: [
+      ['CONTEST', WW_DIGI_CONTEST_ID],
+      ['CALLSIGN', normalizedConfig.callsign],
+      ['LOCATION', normalizedConfig.location],
+      ['CATEGORY-OPERATOR', normalizedConfig.categoryOperator],
+      ['CATEGORY-TRANSMITTER', normalizedConfig.categoryTransmitter],
+      ['CATEGORY-BAND', normalizedConfig.categoryBand],
+      ['CATEGORY-POWER', normalizedConfig.categoryPower],
+      ['CATEGORY-MODE', 'DIGI'],
+      ['CATEGORY-STATION', 'FIXED'],
+      ...(normalizedConfig.operators.length > 0 ? [['OPERATORS', normalizedConfig.operators.join(', ')]] as const : []),
+      ['CREATED-BY', normalizedConfig.createdBy],
+    ],
+    qsoLines: projected.map(renderQsoLine),
+  });
 }
+import { buildCabrilloDocument } from '@tx5dr/plugin-api/toolkit';

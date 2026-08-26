@@ -44,7 +44,7 @@ function createContestContext(options: {
 } = {}) {
   const queryQSOs = vi.fn(async () => options.records ?? []);
   const ctx = createMockContext({
-    permissions: ['logbook:read', 'operator:transmit-control'] as const,
+    permissions: ['logbook:read', 'operator:transmit-control', 'plugin:event-bus'] as const,
     callsign: 'BG5DRB',
     grid: 'OL32',
     config: {
@@ -72,7 +72,7 @@ function createContestContext(options: {
 }
 
 describe('WW Digi contest edition persistence', () => {
-  it('reconciles only the selected edition into year-scoped ledger and health keys', async () => {
+  it('reconciles all eligible FT4/FT8 records into a shared callsign/year session', async () => {
     const in2026 = qsoRecord('qso-2026', Date.UTC(2026, 7, 29, 12, 0));
     const in2025 = qsoRecord('qso-2025', Date.UTC(2025, 7, 30, 12, 0));
     const nonContest = qsoRecord('not-ww-digi', Date.UTC(2026, 7, 29, 12, 1), 'OTHER');
@@ -82,7 +82,7 @@ describe('WW Digi contest edition persistence', () => {
       [contestQso('retained-2025', Date.UTC(2025, 7, 30, 12))],
     );
 
-    await expect(wwDigiTestables.reconcileLedger(ctx, 2026)).resolves.toEqual({ imported: 1, total: 1 });
+    await expect(wwDigiTestables.reconcileLedger(ctx, 2026)).resolves.toEqual({ imported: 1, total: 2 });
 
     expect(queryQSOs).toHaveBeenCalledWith(expect.objectContaining({
       orderDirection: 'asc',
@@ -93,11 +93,14 @@ describe('WW Digi contest edition persistence', () => {
         end: Date.UTC(2026, 7, 30, 12) - 1,
       },
     }));
-    expect(ctx.store.operator.get<ContestQso[]>(wwDigiTestables.ledgerKey(2026)))
-      .toEqual([expect.objectContaining({ qsoId: 'qso-2026' })]);
+    expect(await wwDigiTestables.readContestRecords(ctx, 2026))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ qsoId: 'qso-2026', source: 'ww-digi' }),
+        expect.objectContaining({ qsoId: 'not-ww-digi', source: 'reconciled' }),
+      ]));
     expect(ctx.store.operator.get<ContestQso[]>(wwDigiTestables.ledgerKey(2025)))
       .toEqual([expect.objectContaining({ qsoId: 'retained-2025' })]);
-    expect(ctx.store.operator.get(wwDigiTestables.healthKey(2026)))
+    expect(ctx.store.global.get<{ health?: { state?: string } }>(wwDigiTestables.sessionKey('BG5DRB', 2026))?.health)
       .toEqual(expect.objectContaining({ state: 'healthy' }));
   });
 
@@ -106,24 +109,24 @@ describe('WW Digi contest edition persistence', () => {
 
     await expect(wwDigiTestables.reconcileLedgerWithHealth(ctx, 2026))
       .rejects.toThrow(/logbook is unavailable/);
-    expect(ctx.store.operator.get(wwDigiTestables.healthKey(2026)))
+    expect(ctx.store.global.get<{ health?: { state?: string } }>(wwDigiTestables.sessionKey('BG5DRB', 2026))?.health)
       .toEqual(expect.objectContaining({ state: 'degraded' }));
-    expect(() => wwDigiTestables.renderCabrillo(ctx, 2026))
-      .toThrow(/reconcile it before download/);
+    await expect(wwDigiTestables.renderCabrillo(ctx, 2026))
+      .rejects.toThrow(/reconcile it before download/);
   });
 
-  it('projects live completions only into the configured contest year', async () => {
+  it('records per-operator metadata in the shared session for the QSO year', async () => {
     const { ctx } = createContestContext();
     const hook = wwDigiStrategyPlugin.hooks?.onQSOComplete;
     expect(hook).toBeTypeOf('function');
 
     await hook!(qsoRecord('qso-2025', Date.UTC(2025, 7, 30, 12)), ctx);
-    expect(ctx.store.operator.get(wwDigiTestables.ledgerKey(2026), [])).toEqual([]);
+    expect(ctx.store.global.get<{ overrides?: Record<string, unknown> }>(wwDigiTestables.sessionKey('BG5DRB', 2025))?.overrides)
+      .toEqual(expect.objectContaining({ 'qso-2025': expect.objectContaining({ operatorId: 'operator-0' }) }));
 
     await hook!(qsoRecord('qso-2026', Date.UTC(2026, 7, 29, 12)), ctx);
-    expect(ctx.store.operator.get<ContestQso[]>(wwDigiTestables.ledgerKey(2026)))
-      .toEqual([expect.objectContaining({ qsoId: 'qso-2026' })]);
-    expect(ctx.store.operator.get(wwDigiTestables.ledgerKey(2025))).toBeUndefined();
+    expect(ctx.store.global.get<{ overrides?: Record<string, unknown> }>(wwDigiTestables.sessionKey('BG5DRB', 2026))?.overrides)
+      .toEqual(expect.objectContaining({ 'qso-2026': expect.objectContaining({ operatorId: 'operator-0', transmitterId: 0 }) }));
   });
 
   it('defaults the setting to the current UTC year with bounded input', () => {

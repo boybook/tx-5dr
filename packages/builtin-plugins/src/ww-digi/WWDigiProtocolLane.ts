@@ -6,6 +6,8 @@ import type {
   StrategyDecisionMetaV2,
   StrategyQSOCompletionEffect,
   StrategyQSOCompletionSettlement,
+  StrategyActionDescriptor,
+  StrategyActionResult,
   StreamPhysicalReceipt,
 } from '@tx5dr/plugin-api';
 import { FT8MessageType } from '@tx5dr/plugin-api';
@@ -16,9 +18,11 @@ import type {
   ProtocolLaneActivation,
   ProtocolLaneDecision,
   ProtocolLaneSnapshot,
-} from '../_shared/parallel-qso/ProtocolLane.js';
+} from '@tx5dr/plugin-api/toolkit';
+import { LaneFrequencyController } from '@tx5dr/plugin-api/toolkit';
 import {
   buildWWDigiGrid,
+  buildWWDigi73,
   buildWWDigiRogerGrid,
   buildWWDigiRR73,
   parseWWDigiMessage,
@@ -30,7 +34,11 @@ export interface WWDigiEntryData {
   lastMessageRaw?: string;
   targetGrid?: string;
   lastSnr?: number;
-  status?: 'queued' | 'no-response' | 'review';
+  status?: 'queued' | 'paused' | 'stale' | 'no-response' | 'review';
+  authorizedReceiveEpoch?: number;
+  noResponseCycles?: number;
+  alternateText?: string;
+  encodingError?: string;
 }
 
 export interface WWDigiLaneConfig {
@@ -59,9 +67,11 @@ interface CompletionState {
 
 interface FinalRetryLease {
   callsign: string;
-  text: string;
+  rr73Text: string;
+  seventyThreeText: string;
   expiresAt: number;
-  scheduled: boolean;
+  scheduledText?: string;
+  awaiting73Decision: boolean;
 }
 
 interface WWDigiLaneCheckpoint {
@@ -75,6 +85,11 @@ interface WWDigiLaneCheckpoint {
   history: string[];
   completion?: CompletionState;
   finalRetry?: FinalRetryLease;
+  paused: boolean;
+  hasDirectedReply: boolean;
+  lastReceivedText?: string;
+  releaseRequested?: boolean;
+  frequency: { manualFrequencyHz?: number };
   lastPhysicalFrame?: { frameId: string; revision: number };
 }
 
@@ -93,17 +108,24 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
   private history: string[] = [];
   private completion?: CompletionState;
   private finalRetry?: FinalRetryLease;
+  private paused = false;
+  private hasDirectedReply = false;
+  private lastReceivedText?: string;
+  private releaseRequested = false;
   private lastPhysicalFrame?: { frameId: string; revision: number };
+  private readonly frequencyController: LaneFrequencyController;
 
   constructor(
     readonly streamId: string,
     private readonly resolveAudioFrequencyHz: () => number,
     private readonly getConfig: () => WWDigiLaneConfig,
     private readonly logger: PluginLogger,
-  ) {}
+  ) {
+    this.frequencyController = new LaneFrequencyController(resolveAudioFrequencyHz);
+  }
 
   get audioFrequencyHz(): number {
-    return this.resolveAudioFrequencyHz();
+    return this.frequencyController.frequencyHz;
   }
 
   activate(entry: Readonly<ParallelQSOQueueEntry<WWDigiEntryData>>): ProtocolLaneActivation {
@@ -117,7 +139,16 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
     this.targetGrid = entry.data.targetGrid;
     this.completion = undefined;
     this.lastPhysicalFrame = undefined;
+    this.paused = false;
+    this.hasDirectedReply = false;
+    this.lastReceivedText = undefined;
+    this.releaseRequested = false;
 
+    if (entry.data.alternateText) {
+      this.phase = 'wait-r-grid';
+      this.outgoing = entry.data.alternateText;
+      return { accepted: true };
+    }
     const selected = entry.data.lastMessageRaw
       ? parseWWDigiMessage(entry.data.lastMessageRaw)
       : { type: 'unknown' as const };
@@ -128,6 +159,8 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
         && callsignMatches(selectedStandard.targetCallsign, config.myCallsign)
         && callsignMatches(selectedStandard.senderCallsign, entry.callsign)) {
       this.phase = 'wait-standard-final';
+      this.hasDirectedReply = true;
+      this.lastReceivedText = entry.data.lastMessageRaw;
       this.outgoing = FT8MessageParser.generateMessage({
         type: FT8MessageType.ROGER_REPORT,
         senderCallsign: config.myCallsign,
@@ -138,6 +171,8 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
         && callsignMatches(selected.targetCallsign, config.myCallsign)
         && callsignMatches(selected.senderCallsign, entry.callsign)) {
       this.targetGrid = selected.grid;
+      this.hasDirectedReply = true;
+      this.lastReceivedText = entry.data.lastMessageRaw;
       this.phase = 'wait-rr73';
       this.outgoing = buildWWDigiRogerGrid(entry.callsign, config.myCallsign, config.myGrid);
     } else {
@@ -160,6 +195,10 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
     this.history = [];
     this.completion = undefined;
     this.lastPhysicalFrame = undefined;
+    this.paused = false;
+    this.hasDirectedReply = false;
+    this.lastReceivedText = undefined;
+    this.releaseRequested = false;
   }
 
   hasPendingWork(): boolean {
@@ -178,7 +217,18 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
       if (parsed.type === 'roger-grid'
           && callsignMatches(parsed.senderCallsign, lease.callsign)
           && callsignMatches(parsed.targetCallsign, config.myCallsign)) {
-        lease.scheduled = true;
+        lease.scheduledText = lease.rr73Text;
+        return true;
+      }
+      const standard = message.message;
+      const standardSender = 'senderCallsign' in standard ? standard.senderCallsign : undefined;
+      const standardTarget = 'targetCallsign' in standard ? standard.targetCallsign : undefined;
+      const repeatedFinal = parsed.type === 'rr73'
+        || standard.type === FT8MessageType.RRR;
+      if (repeatedFinal
+          && callsignMatches('senderCallsign' in parsed ? parsed.senderCallsign : standardSender, lease.callsign)
+          && callsignMatches('targetCallsign' in parsed ? parsed.targetCallsign : standardTarget, config.myCallsign)) {
+        lease.awaiting73Decision = true;
         return true;
       }
     }
@@ -191,6 +241,12 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
   ): ProtocolLaneDecision<WWDigiEntryData> {
     this.expireFinalRetry(Date.now());
     if (!this.active) return {};
+    if (this.releaseRequested) {
+      return {
+        release: { disposition: 'remove-entry', reason: 'WW Digi QSO ended by operator' },
+        queueChanged: true,
+      };
+    }
     const config = this.getConfig();
     let queueChanged = false;
 
@@ -213,14 +269,14 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
           });
           this.attempts = 0;
           queueChanged = true;
-        } else if (this.phase === 'wait-standard-final'
+        } else if ((this.phase === 'wait-standard-final' || this.phase === 'wait-rr73')
             && this.attempts > 0
             && (standard.type === FT8MessageType.RRR
               || standard.type === FT8MessageType.SEVENTY_THREE)
             && callsignMatches(standard.senderCallsign, this.active.callsign)
             && callsignMatches(standard.targetCallsign, config.myCallsign)) {
           this.acceptInbound(message.rawMessage);
-          this.prepareCompletion(false);
+          this.prepareCompletion();
           queueChanged = true;
         }
         continue;
@@ -237,12 +293,12 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
       } else if (this.phase === 'wait-rr73' && parsed.type === 'rr73'
           && callsignMatches(parsed.targetCallsign, config.myCallsign)) {
         this.acceptInbound(message.rawMessage);
-        this.prepareCompletion(false);
+        this.prepareCompletion();
         queueChanged = true;
       } else if (this.phase === 'wait-standard-final' && this.attempts > 0 && parsed.type === 'rr73'
           && callsignMatches(parsed.targetCallsign, config.myCallsign)) {
         this.acceptInbound(message.rawMessage);
-        this.prepareCompletion(false);
+        this.prepareCompletion();
         queueChanged = true;
       }
     }
@@ -282,26 +338,99 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
   }
 
   getTransmitText(): string | null {
-    if (this.finalRetry?.scheduled) return this.finalRetry.text;
+    if (this.paused) return null;
+    if (this.finalRetry?.scheduledText) return this.finalRetry.scheduledText;
     if (this.phase === 'review' || this.phase === 'closing') return null;
     return this.outgoing;
   }
 
   getSnapshot(): ProtocolLaneSnapshot | null {
     if (!this.active && !this.finalRetry) return null;
+    const completionState = this.completion?.settled === 'failed' ? 'failed'
+      : this.completion?.settled === 'committed' ? 'committed'
+        : this.completion ? 'committing'
+          : this.hasDirectedReply ? 'ready' : 'not-ready';
     return {
       currentState: this.active ? this.phase : 'final-retry',
       targetCallsign: this.active?.callsign ?? this.finalRetry?.callsign,
       targetGrid: this.targetGrid,
       qsoLifecycleEpoch: this.qsoLifecycleEpoch,
-      stateOptions: this.active && !this.completion && this.phase !== 'review' && this.phase !== 'closing'
+      stateOptions: this.active && !this.paused && !this.completion && this.phase !== 'review' && this.phase !== 'closing'
         ? USER_SELECTABLE_PHASES.map(({ id, label }) => ({
           id,
           label,
           transmitText: id === this.phase ? this.outgoing ?? undefined : this.transmitTextForPhase(id) ?? undefined,
         }))
         : [],
+      actions: this.getActions(),
+      attentions: this.finalRetry?.awaiting73Decision ? [{
+        id: 'repeated-final',
+        tone: 'warning',
+        title: 'attentionRepeatedRr73',
+        description: 'attentionRepeatedRr73Desc',
+        actionIds: ['send-73-once', 'resend-rr73', 'finish-recovery'],
+      }] : [],
+      completion: { state: completionState, recordId: this.completion?.effect.record.id },
+      lastReceivedText: this.lastReceivedText,
+      nextTransmitText: this.getTransmitText() ?? undefined,
     };
+  }
+
+  async invokeAction(actionId: string, payload?: unknown): Promise<StrategyActionResult | void> {
+    if (actionId === 'pause') {
+      this.paused = true;
+      return { requestDecision: true };
+    }
+    if (actionId === 'resume') {
+      this.paused = false;
+      return { requestDecision: true };
+    }
+    if (actionId === 'set-frequency') {
+      const value = Number((payload as { value?: unknown } | undefined)?.value);
+      this.frequencyController.setManual(value);
+      return { requestDecision: true };
+    }
+    if (actionId === 'reset-frequency') {
+      this.frequencyController.useAutomatic();
+      return { requestDecision: true };
+    }
+    if (actionId === 'send-alternate') {
+      const value = (payload as { value?: unknown } | undefined)?.value;
+      if (typeof value !== 'string' || !value.trim() || !this.active) throw new Error('alternate_message_invalid');
+      this.outgoing = value.trim().toUpperCase().replace(/\s+/g, ' ');
+      this.paused = false;
+      this.attempts = 0;
+      return { requestDecision: true };
+    }
+    if (actionId === 'log-current') {
+      if (!this.active || !this.hasDirectedReply || this.completion) throw new Error('manual_log_not_available');
+      this.prepareCompletion();
+      const completion = this.completion as CompletionState | undefined;
+      if (!completion) return;
+      completion.emitted = true;
+      return { qsoCompletions: [structuredClone(completion.effect)] };
+    }
+    if (actionId === 'end-qso') {
+      this.releaseRequested = true;
+      return { requestDecision: true };
+    }
+    const retry = this.finalRetry;
+    if (!retry) throw new Error('strategy_action_not_available');
+    if (actionId === 'send-73-once') {
+      retry.scheduledText = retry.seventyThreeText;
+      retry.awaiting73Decision = false;
+      return { requestDecision: true };
+    }
+    if (actionId === 'resend-rr73') {
+      retry.scheduledText = retry.rr73Text;
+      retry.awaiting73Decision = false;
+      return { requestDecision: true };
+    }
+    if (actionId === 'finish-recovery') {
+      this.finalRetry = undefined;
+      return { requestDecision: true };
+    }
+    throw new Error('strategy_action_not_available');
   }
 
   setUserState(stateId: string): boolean {
@@ -336,6 +465,11 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
       history: this.history,
       completion: this.completion,
       finalRetry: this.finalRetry,
+      paused: this.paused,
+      hasDirectedReply: this.hasDirectedReply,
+      lastReceivedText: this.lastReceivedText,
+      releaseRequested: this.releaseRequested,
+      frequency: this.frequencyController.checkpoint(),
       lastPhysicalFrame: this.lastPhysicalFrame,
     } satisfies WWDigiLaneCheckpoint);
   }
@@ -353,6 +487,11 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
     this.history = [...state.history];
     this.completion = state.completion ? structuredClone(state.completion) : undefined;
     this.finalRetry = state.finalRetry ? { ...state.finalRetry } : undefined;
+    this.paused = state.paused === true;
+    this.hasDirectedReply = state.hasDirectedReply === true;
+    this.lastReceivedText = state.lastReceivedText;
+    this.releaseRequested = state.releaseRequested === true;
+    this.frequencyController.restore(state.frequency ?? {});
     this.lastPhysicalFrame = state.lastPhysicalFrame ? { ...state.lastPhysicalFrame } : undefined;
   }
 
@@ -362,15 +501,15 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
     if (previous && (receipt.frameId === previous.frameId && receipt.revision <= previous.revision)) return;
     this.lastPhysicalFrame = { frameId: receipt.frameId, revision: receipt.revision };
 
-    if (this.finalRetry?.scheduled && receipt.text === this.finalRetry.text) {
-      this.finalRetry.scheduled = false;
-      this.finalRetry.expiresAt = Date.now() + this.getConfig().slotMs * 2;
+    if (this.finalRetry?.scheduledText && receipt.text === this.finalRetry.scheduledText) {
+      this.finalRetry.scheduledText = undefined;
+      this.finalRetry.expiresAt = Date.now() + this.getConfig().slotMs * 4;
       return;
     }
     if (!this.active || receipt.text !== this.outgoing) return;
     this.history.push(receipt.text);
     this.attempts += 1;
-    if (this.phase === 'send-rr73') this.prepareCompletion(true);
+    if (this.phase === 'send-rr73' && this.hasDirectedReply) this.prepareCompletion();
   }
 
   settleQSOCompletion(settlement: StrategyQSOCompletionSettlement): boolean {
@@ -396,11 +535,70 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
     this.history = [];
     this.completion = undefined;
     this.finalRetry = undefined;
+    this.paused = false;
+    this.hasDirectedReply = false;
+    this.lastReceivedText = undefined;
+    this.releaseRequested = false;
+    this.frequencyController.useAutomatic();
     this.lastPhysicalFrame = undefined;
   }
 
   private acceptInbound(rawMessage: string): void {
     if (this.history[this.history.length - 1] !== rawMessage) this.history.push(rawMessage);
+    this.hasDirectedReply = true;
+    this.lastReceivedText = rawMessage;
+  }
+
+  private getActions(): StrategyActionDescriptor[] {
+    if (!this.active && this.finalRetry) {
+      return [
+        ...(this.finalRetry.awaiting73Decision ? [{
+          id: 'send-73-once', label: 'actionSend73', icon: 'paper-plane', tone: 'primary', presentation: 'primary',
+          previewText: this.finalRetry.seventyThreeText,
+        } satisfies StrategyActionDescriptor] : []),
+        {
+          id: 'resend-rr73', label: 'actionResendRr73', icon: 'rotate-right', presentation: 'secondary',
+          previewText: this.finalRetry.rr73Text,
+        },
+        { id: 'finish-recovery', label: 'actionFinishRecovery', icon: 'check', presentation: 'menu' },
+      ];
+    }
+    if (!this.active) return [];
+    const actions: StrategyActionDescriptor[] = [
+      this.paused
+        ? { id: 'resume', label: 'actionResume', icon: 'play', tone: 'primary', presentation: 'primary' }
+        : { id: 'pause', label: 'actionPause', icon: 'pause', presentation: 'secondary' },
+      {
+        id: 'set-frequency', label: 'actionSetFrequency', icon: 'wave-square', presentation: 'menu',
+        input: {
+          kind: 'audio-frequency', label: 'actionSetFrequency', value: this.audioFrequencyHz,
+          min: 100, max: 5000, step: 10, unit: 'Hz', spectrumPick: true,
+        },
+      },
+      {
+        id: 'send-alternate', label: 'actionAlternateMessage', icon: 'pen', presentation: 'menu',
+        previewText: this.outgoing ?? undefined,
+        input: { kind: 'text', label: 'actionAlternateMessage', value: this.outgoing ?? '', maxLength: 32 },
+      },
+    ];
+    if (this.frequencyController.mode === 'manual') {
+      actions.push({ id: 'reset-frequency', label: 'actionResetFrequency', icon: 'rotate-left', presentation: 'menu' });
+    }
+    if (this.hasDirectedReply && !this.completion) {
+      actions.push({
+        id: 'log-current', label: 'actionLogCurrent', icon: 'book', tone: 'warning', presentation: 'menu',
+        confirmation: {
+          title: 'confirmLogCurrent',
+          description: this.targetGrid ? 'confirmLogCurrentDesc' : 'confirmLogCurrentMissingGrid',
+          confirmLabel: 'actionLogCurrent',
+        },
+      });
+    }
+    actions.push({
+      id: 'end-qso', label: 'actionEndQso', icon: 'xmark', tone: 'danger', presentation: 'menu',
+      confirmation: { title: 'confirmEndQso', description: 'confirmEndQsoDesc', confirmLabel: 'actionEndQso' },
+    });
+    return actions;
   }
 
   private transmitTextForPhase(phase: UserSelectableLanePhase): string | null {
@@ -423,7 +621,7 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
     return buildWWDigiRR73(this.active.callsign, config.myCallsign);
   }
 
-  private prepareCompletion(withFinalRetry: boolean): void {
+  private prepareCompletion(): void {
     if (!this.active || this.completion) return;
     const config = this.getConfig();
     const now = Date.now();
@@ -453,14 +651,13 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
     this.completion = { effect, emitted: false };
     this.phase = 'closing';
     this.outgoing = null;
-    if (withFinalRetry) {
-      this.finalRetry = {
-        callsign: this.active.callsign,
-        text: buildWWDigiRR73(this.active.callsign, config.myCallsign),
-        expiresAt: now + config.slotMs * 2,
-        scheduled: false,
-      };
-    }
+    this.finalRetry = {
+      callsign: this.active.callsign,
+      rr73Text: buildWWDigiRR73(this.active.callsign, config.myCallsign),
+      seventyThreeText: buildWWDigi73(this.active.callsign, config.myCallsign),
+      expiresAt: now + config.slotMs * 4,
+      awaiting73Decision: false,
+    };
     this.logger.info('WW Digi lane completed over the air', {
       streamId: this.streamId,
       callsign: this.active.callsign,
@@ -469,7 +666,7 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
   }
 
   private expireFinalRetry(now: number): void {
-    if (this.finalRetry && !this.finalRetry.scheduled && now > this.finalRetry.expiresAt) {
+    if (this.finalRetry && !this.finalRetry.scheduledText && now > this.finalRetry.expiresAt) {
       this.finalRetry = undefined;
     }
   }

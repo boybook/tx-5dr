@@ -38,6 +38,40 @@ p {
   font-size: var(--tx5dr-font-size-sm);
 }
 
+.session-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(110px, 1fr)) minmax(90px, .7fr) minmax(180px, 1.4fr) auto;
+  gap: var(--tx5dr-spacing-sm);
+  padding: var(--tx5dr-spacing-sm) var(--tx5dr-spacing-lg);
+  border-block: 1px solid var(--tx5dr-border);
+  background: var(--tx5dr-bg-content);
+}
+
+.session-form select,
+.session-form input {
+  min-width: 0;
+  min-height: var(--tx5dr-control-height-sm);
+  border: 1px solid var(--tx5dr-control-border);
+  border-radius: var(--tx5dr-radius-sm);
+  background: var(--tx5dr-control-bg);
+  color: var(--tx5dr-text);
+  padding-inline: var(--tx5dr-control-padding-x-sm);
+  font: inherit;
+}
+
+.tx-select {
+  min-height: var(--tx5dr-control-height-xs);
+  margin-right: var(--tx5dr-spacing-xs);
+  border: 1px solid var(--tx5dr-control-border);
+  border-radius: var(--tx5dr-radius-sm);
+  background: var(--tx5dr-control-bg);
+  color: var(--tx5dr-text);
+}
+
+@media (max-width: 900px) {
+  .session-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 .actions {
   display: flex;
   align-items: center;

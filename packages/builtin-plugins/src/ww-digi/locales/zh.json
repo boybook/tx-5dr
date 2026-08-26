@@ -17,5 +17,22 @@
   "categoryBandDesc": "最终日志仍保留所有波段通联。",
   "categoryPower": "功率组别",
   "categoryPowerDesc": "WW Digi 参赛功率分类。",
-  "contestLogTitle": "WW Digi 日志"
+  "categoryOperator": "操作员类别", "categoryOperatorDesc": "单人、多人或检查日志。",
+  "categoryTransmitter": "发射机类别", "categoryTransmitterDesc": "Cabrillo 的 ONE、TWO 或 UNLIMITED 类别。",
+  "operators": "操作员呼号", "operatorsDesc": "MULTI-OP 必填，以逗号分隔操作员呼号。",
+  "transmitterId": "当前发射机", "transmitterIdDesc": "新 QSO 默认使用的 Cabrillo 发射机编号 0 或 1。",
+  "contestLogTitle": "WW Digi 日志",
+  "authorizationReceiveCycles": "授权有效期",
+  "authorizationReceiveCyclesDesc": "未启动的手动目标经过多少个接收周期后需要重新授权。",
+  "cqOff": "关闭 CQ", "cqOnce": "单次 CQ", "cqRepeat": "持续 CQ",
+  "actionPause": "暂停", "actionResume": "恢复", "actionSetFrequency": "发射频率",
+  "actionResetFrequency": "恢复自动频率", "actionAlternateMessage": "备用消息",
+  "actionAlternateMessageDesc": "验证备用 FT8/FT4 消息后重新授权此目标。",
+  "actionLogCurrent": "按当前信息记录", "actionEndQso": "结束通联", "actionRetry": "重试",
+  "actionLater": "稍后处理", "actionReauthorize": "重新授权", "actionSend73": "发送一次 73",
+  "actionResendRr73": "重发 RR73", "actionFinishRecovery": "结束恢复窗口",
+  "attentionRepeatedRr73": "对方重复 RR73", "attentionRepeatedRr73Desc": "对方可能正在等待你的 73。",
+  "confirmLogCurrent": "按当前信息记录？", "confirmLogCurrentDesc": "现在记录已收到的定向交换。",
+  "confirmLogCurrentMissingGrid": "缺失网格将在 Cabrillo 中填写 ZZ00。",
+  "confirmEndQso": "结束此通联？", "confirmEndQsoDesc": "当前槽将被释放。"
 }

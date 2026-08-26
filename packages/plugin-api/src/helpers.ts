@@ -46,6 +46,9 @@ export interface KVStore {
    */
   set(key: string, value: unknown): void;
 
+  /** Atomically updates one value shared by every instance of this plugin. */
+  update<T = unknown>(key: string, reducer: (current: T | undefined) => T | undefined): T | undefined;
+
   /**
    * Removes a stored key and its value.
    */
@@ -64,6 +67,24 @@ export interface KVStore {
    * crash or restart (e.g. during a migration sequence).
    */
   flush(): Promise<void>;
+}
+
+export interface DigitalMessagePreflightRequest {
+  mode: 'FT8' | 'FT4';
+  text: string;
+}
+
+export interface DigitalMessagePreflightResult {
+  encodable: boolean;
+  requestedText: string;
+  transmittedText?: string;
+  reason?: 'empty' | 'encoder_changed_text' | 'encode_failed';
+  error?: string;
+}
+
+/** Read-only digital-mode validation; no audio or encoder handle is exposed. */
+export interface DigitalMessagePreflight {
+  check(request: DigitalMessagePreflightRequest): Promise<DigitalMessagePreflightResult>;
 }
 
 /**

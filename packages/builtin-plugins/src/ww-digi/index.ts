@@ -2,14 +2,13 @@ import { fileURLToPath } from 'node:url';
 import { definePlugin, type PluginContextFor, type QSORecord } from '@tx5dr/plugin-api';
 import type { PluginQuickSetting } from '@tx5dr/plugin-api';
 import { getCallsignInfo } from '@tx5dr/core';
+import { ContestSessionNotifier, ContestSessionRepository } from '@tx5dr/plugin-api/toolkit';
 import { WWDigiStrategyRuntime, type WWDigiRuntimeConfig } from './WWDigiStrategyRuntime.js';
 import {
   generateWWDigiCabrillo,
   isWithinWWDigiContestPeriod,
   resolveWWDigiBand,
   resolveWWDigiContestPeriod,
-  setContestQsoStatus,
-  upsertContestQso,
   WW_DIGI_MAX_CONTEST_YEAR,
   WW_DIGI_MIN_CONTEST_YEAR,
   type ContestConfig,
@@ -21,7 +20,26 @@ import jaLocale from './locales/ja.json' with { type: 'json' };
 
 export const BUILTIN_WW_DIGI_PLUGIN_NAME = 'ww-digi';
 const DEFAULT_CONTEST_YEAR = new Date().getUTCFullYear();
-type WWDigiContext = PluginContextFor<readonly ['logbook:read', 'operator:transmit-control']>;
+type WWDigiContext = PluginContextFor<readonly ['logbook:read', 'operator:transmit-control', 'plugin:event-bus']>;
+
+interface ContestQsoOverride {
+  status?: ContestQso['status'];
+  operatorId?: string;
+  transmitterId?: 0 | 1;
+  source?: ContestQso['source'];
+}
+
+interface WWDigiContestSession {
+  schemaVersion: 1;
+  revision: number;
+  config: ContestConfig;
+  overrides: Record<string, ContestQsoOverride>;
+  operatorTransmitters: Record<string, 0 | 1>;
+  migratedOperators: Record<string, true>;
+  health: ContestLedgerHealth;
+}
+
+const SESSION_CHANGED_TOPIC = 'ww-digi.session.changed';
 
 interface ContestLedgerHealth {
   state: 'healthy' | 'degraded' | 'unknown';
@@ -41,6 +59,30 @@ function ledgerKey(contestYear: number): string {
 
 function healthKey(contestYear: number): string {
   return `ledgerHealth:${contestYear}`;
+}
+
+function sessionKey(callsign: string, contestYear: number): string {
+  return `contestSession:${callsign.trim().toUpperCase()}:${contestYear}`;
+}
+
+function createSession(ctx: WWDigiContext, _contestYear: number): WWDigiContestSession {
+  return {
+    schemaVersion: 1,
+    revision: 0,
+    config: seedContestConfig(ctx),
+    overrides: {},
+    operatorTransmitters: {},
+    migratedOperators: {},
+    health: { state: 'unknown' },
+  };
+}
+
+function sessionRepository(ctx: WWDigiContext, contestYear: number) {
+  return new ContestSessionRepository<WWDigiContestSession>(
+    ctx.store.global,
+    sessionKey(ctx.operator.callsign, contestYear),
+    () => createSession(ctx, contestYear),
+  );
 }
 
 function resolveContestLocation(callsign: string, configured: unknown): string {
@@ -83,7 +125,6 @@ function toContestQso(
   contestYear: number,
   existing?: ContestQso,
 ): ContestQso | null {
-  if (record.contestId?.toUpperCase() !== 'WW-DIGI') return null;
   if (!isWithinWWDigiContestPeriod(record.startTime, contestYear)) return null;
   const band = resolveWWDigiBand(record.frequency);
   const mode = modeOf(record);
@@ -103,16 +144,10 @@ function toContestQso(
     status: existing?.status ?? 'included',
     streamId: existing?.streamId,
     authorizationId: existing?.authorizationId,
+    operatorId: existing?.operatorId,
+    transmitterId: existing?.transmitterId,
+    source: existing?.source ?? (record.contestId?.toUpperCase() === 'WW-DIGI' ? 'ww-digi' : 'reconciled'),
   };
-}
-
-async function persistLedger(
-  ctx: WWDigiContext,
-  contestYear: number,
-  records: ContestQso[],
-): Promise<void> {
-  ctx.store.operator.set(ledgerKey(contestYear), records);
-  await ctx.store.operator.flush();
 }
 
 async function markLedgerDegraded(
@@ -120,52 +155,64 @@ async function markLedgerDegraded(
   contestYear: number,
   error: unknown,
 ): Promise<void> {
-  ctx.store.operator.set(healthKey(contestYear), {
-    state: 'degraded',
-    updatedAt: Date.now(),
-    error: error instanceof Error ? error.message : String(error),
-  } satisfies ContestLedgerHealth);
-  await ctx.store.operator.flush().catch((flushError) => {
+  const repository = sessionRepository(ctx, contestYear);
+  repository.update((session) => ({
+    ...session,
+    health: {
+      state: 'degraded',
+      updatedAt: Date.now(),
+      error: error instanceof Error ? error.message : String(error),
+    },
+  }));
+  await repository.flush().catch((flushError) => {
     ctx.log.error('WW Digi degraded health could not be flushed', flushError);
   });
+}
+
+async function readContestRecords(ctx: WWDigiContext, contestYear: number): Promise<ContestQso[]> {
+  const period = resolveWWDigiContestPeriod(contestYear);
+  const logbook = ctx.logbook.forCallsign(ctx.operator.callsign);
+  if (!await logbook.getLogBookId()) throw new Error(`WW Digi logbook is unavailable for ${ctx.operator.callsign}`);
+  const session = sessionRepository(ctx, contestYear).read();
+  const projected: ContestQso[] = [];
+  const pageSize = 5_000;
+  for (let offset = 0; ; offset += pageSize) {
+    const records = await logbook.queryQSOs({
+      orderDirection: 'asc', limit: pageSize, offset,
+      timeRange: { start: period.startTime, end: period.endTime - 1 },
+    });
+    for (const record of records) {
+      const qso = toContestQso(record, contestYear);
+      if (!qso || qso.myCallsign !== ctx.operator.callsign.trim().toUpperCase()) continue;
+      const override = session.overrides[qso.qsoId];
+      const merged = { ...qso, ...override };
+      projected.push({
+        ...merged,
+        status: session.config.categoryTransmitter === 'TWO' && merged.transmitterId === undefined && merged.status !== 'x-qso'
+          ? 'review'
+          : merged.status,
+      });
+    }
+    if (records.length < pageSize) break;
+  }
+  return projected;
 }
 
 async function reconcileLedger(
   ctx: WWDigiContext,
   contestYear: number,
 ): Promise<{ imported: number; total: number }> {
-  const period = resolveWWDigiContestPeriod(contestYear);
-  const logbook = ctx.logbook.forCallsign(ctx.operator.callsign);
-  if (!await logbook.getLogBookId()) {
-    throw new Error(`WW Digi logbook is unavailable for ${ctx.operator.callsign}`);
-  }
-  const existing = readLedger(ctx, contestYear);
-  let next = [...existing];
-  let imported = 0;
-  const pageSize = 5_000;
-  for (let offset = 0; ; offset += pageSize) {
-    const records = await logbook.queryQSOs({
-      orderDirection: 'asc',
-      limit: pageSize,
-      offset,
-      timeRange: { start: period.startTime, end: period.endTime - 1 },
-    });
-    for (const record of records) {
-      const prior = next.find((candidate) => candidate.qsoId === record.id);
-      const contestQso = toContestQso(record, contestYear, prior);
-      if (!contestQso) continue;
-      if (!prior) imported += 1;
-      next = upsertContestQso(next, contestQso);
-    }
-    if (records.length < pageSize) break;
-  }
-  ctx.store.operator.set(ledgerKey(contestYear), next);
-  ctx.store.operator.set(healthKey(contestYear), {
-    state: 'healthy',
-    updatedAt: Date.now(),
-  } satisfies ContestLedgerHealth);
-  await ctx.store.operator.flush();
-  return { imported, total: next.length };
+  const records = await readContestRecords(ctx, contestYear);
+  const repository = sessionRepository(ctx, contestYear);
+  repository.update((session) => ({
+    ...session,
+    health: { state: 'healthy', updatedAt: Date.now() },
+  }));
+  await repository.flush();
+  return {
+    imported: records.filter((record) => record.source !== 'ww-digi').length,
+    total: records.length,
+  };
 }
 
 async function reconcileLedgerWithHealth(
@@ -180,21 +227,30 @@ async function reconcileLedgerWithHealth(
   }
 }
 
-function renderCabrillo(ctx: WWDigiContext, contestYear: number): string {
-  const health = readLedgerHealth(ctx, contestYear);
+async function renderCabrillo(ctx: WWDigiContext, contestYear: number): Promise<string> {
+  const session = sessionRepository(ctx, contestYear).read();
+  const health = session.health;
   if (health.state !== 'healthy') {
     throw new Error(`WW Digi ${contestYear} log is not reconciled; reconcile it before download`);
   }
-  return generateWWDigiCabrillo(contestConfig(ctx), readLedger(ctx, contestYear));
+  return generateWWDigiCabrillo(session.config, await readContestRecords(ctx, contestYear));
 }
 
-function notifyContestLogChanged(ctx: WWDigiContext): void {
+function notifyLocalContestLogChanged(ctx: WWDigiContext): void {
   for (const session of ctx.ui.listActivePageSessions('contest-log')) {
     ctx.ui.pushToSession(session.sessionId, 'stateChanged');
   }
 }
 
-function contestConfig(ctx: WWDigiContext): ContestConfig {
+function notifyContestLogChanged(ctx: WWDigiContext, contestYear: number): void {
+  notifyLocalContestLogChanged(ctx);
+  new ContestSessionNotifier(ctx.eventBus, SESSION_CHANGED_TOPIC).publish({
+    callsign: ctx.operator.callsign.trim().toUpperCase(),
+    contestYear,
+  });
+}
+
+function seedContestConfig(ctx: WWDigiContext): ContestConfig {
   return {
     callsign: ctx.operator.callsign,
     location: resolveContestLocation(ctx.operator.callsign, ctx.config.location),
@@ -204,6 +260,15 @@ function contestConfig(ctx: WWDigiContext): ContestConfig {
     categoryPower: typeof ctx.config.categoryPower === 'string'
       ? ctx.config.categoryPower as ContestConfig['categoryPower']
       : 'LOW',
+    categoryOperator: typeof ctx.config.categoryOperator === 'string'
+      ? ctx.config.categoryOperator as ContestConfig['categoryOperator']
+      : 'SINGLE-OP',
+    categoryTransmitter: typeof ctx.config.categoryTransmitter === 'string'
+      ? ctx.config.categoryTransmitter as ContestConfig['categoryTransmitter']
+      : 'ONE',
+    operators: typeof ctx.config.operators === 'string'
+      ? ctx.config.operators.split(/[\s,]+/).map((value) => value.trim().toUpperCase()).filter(Boolean)
+      : [],
     createdBy: 'TX-5DR WW Digi',
   };
 }
@@ -216,6 +281,7 @@ function parallelStreams(value: unknown, fallback = 1): number {
 export const wwDigiQuickSettings: PluginQuickSetting[] = [
   { settingKey: 'parallelStreams' },
   { settingKey: 'maxAttempts' },
+  { settingKey: 'authorizationReceiveCycles' },
 ];
 
 export const wwDigiStrategyPlugin = definePlugin({
@@ -231,8 +297,8 @@ export const wwDigiStrategyPlugin = definePlugin({
     manualInitiation: 1,
     maxConcurrentStreams: 3,
   },
-  permissions: ['logbook:read', 'operator:transmit-control'],
-  storage: { scopes: ['operator'] },
+  permissions: ['logbook:read', 'operator:transmit-control', 'plugin:event-bus'],
+  storage: { scopes: ['global', 'operator'] },
   settings: {
     strategyOverview: { type: 'info', default: '', label: 'strategyOverview', description: 'strategyOverviewDesc', scope: 'operator' },
     contestYear: {
@@ -241,6 +307,9 @@ export const wwDigiStrategyPlugin = definePlugin({
     },
     parallelStreams: { type: 'number', default: 1, label: 'parallelStreams', description: 'parallelStreamsDesc', scope: 'operator', min: 1, max: 3 },
     maxAttempts: { type: 'number', default: 5, label: 'maxAttempts', description: 'maxAttemptsDesc', scope: 'operator', min: 1, max: 20 },
+    authorizationReceiveCycles: {
+      type: 'number', default: 4, label: 'authorizationReceiveCycles', description: 'authorizationReceiveCyclesDesc', scope: 'operator', min: 1, max: 20,
+    },
     location: { type: 'string', default: '', label: 'location', description: 'locationDesc', scope: 'operator' },
     categoryBand: {
       type: 'string', default: 'ALL', label: 'categoryBand', description: 'categoryBandDesc', scope: 'operator',
@@ -249,6 +318,18 @@ export const wwDigiStrategyPlugin = definePlugin({
     categoryPower: {
       type: 'string', default: 'LOW', label: 'categoryPower', description: 'categoryPowerDesc', scope: 'operator',
       options: ['HIGH', 'LOW', 'QRP'].map((value) => ({ label: value, value })),
+    },
+    categoryOperator: {
+      type: 'string', default: 'SINGLE-OP', label: 'categoryOperator', description: 'categoryOperatorDesc', scope: 'operator',
+      options: ['SINGLE-OP', 'MULTI-OP', 'CHECKLOG'].map((value) => ({ label: value, value })),
+    },
+    categoryTransmitter: {
+      type: 'string', default: 'ONE', label: 'categoryTransmitter', description: 'categoryTransmitterDesc', scope: 'operator',
+      options: ['ONE', 'TWO', 'UNLIMITED'].map((value) => ({ label: value, value })),
+    },
+    operators: { type: 'string', default: '', label: 'operators', description: 'operatorsDesc', scope: 'operator' },
+    transmitterId: {
+      type: 'number', default: 0, label: 'transmitterId', description: 'transmitterIdDesc', scope: 'operator', min: 0, max: 1,
     },
   },
   quickSettings: wwDigiQuickSettings,
@@ -281,6 +362,7 @@ export const wwDigiStrategyPlugin = definePlugin({
           parallelStreams: parallelStreams(ctx.config.parallelStreams),
           maxConcurrentStreams: ctx.operator.maxConcurrentStreams,
           maxAttempts: Math.max(1, Math.min(20, Math.trunc(Number(ctx.config.maxAttempts) || 5))),
+          authorizationReceiveCycles: Math.max(1, Math.min(20, Math.trunc(Number(ctx.config.authorizationReceiveCycles) || 4))),
         };
       },
       get isTransmitting() { return ctx.operator.isTransmitting; },
@@ -291,12 +373,39 @@ export const wwDigiStrategyPlugin = definePlugin({
     return new WWDigiStrategyRuntime(operator, ctx.log, () => {
       const base = resolveBaseFrequency();
       return [base - 100, base, base + 100];
-    });
+    }, async (text, mode) => ctx.digitalMessagePreflight.check({ text, mode }));
   },
   isTransmitControlEnabled: () => true,
   async onLoad(ctx) {
     const typed = ctx as WWDigiContext;
     const contestYear = configuredContestYear(typed.config.contestYear);
+    const repository = sessionRepository(typed, contestYear);
+    const legacy = readLedger(typed, contestYear);
+    repository.update((session) => {
+      if (session.migratedOperators[typed.operator.id]) return session;
+      const overrides = { ...session.overrides };
+      for (const record of legacy) {
+        overrides[record.qsoId] = {
+          ...overrides[record.qsoId],
+          status: record.status === 'x-qso' ? 'x-qso' : overrides[record.qsoId]?.status,
+          operatorId: record.operatorId ?? typed.operator.id,
+          transmitterId: record.transmitterId,
+          source: record.source ?? 'ww-digi',
+        };
+      }
+      return {
+        ...session,
+        overrides,
+        migratedOperators: { ...session.migratedOperators, [typed.operator.id]: true },
+      };
+    });
+    await repository.flush();
+    const notifier = new ContestSessionNotifier<{ callsign: string; contestYear: number }>(typed.eventBus, SESSION_CHANGED_TOPIC);
+    notifier.subscribe((event) => {
+      if (event.callsign === typed.operator.callsign.trim().toUpperCase() && event.contestYear === contestYear) {
+        notifyLocalContestLogChanged(typed);
+      }
+    });
     await reconcileLedgerWithHealth(typed, contestYear).catch((error) => {
       typed.log.warn('WW Digi ledger reconciliation failed', { error: error instanceof Error ? error.message : String(error) });
     });
@@ -307,29 +416,75 @@ export const wwDigiStrategyPlugin = definePlugin({
         const selectedYear = configuredContestYear(typed.config.contestYear);
         if (action === 'getState') {
           const period = resolveWWDigiContestPeriod(selectedYear);
+          const session = sessionRepository(typed, selectedYear).read();
           return {
-            config: contestConfig(typed),
+            config: session.config,
             contestYear: selectedYear,
             period,
-            records: readLedger(typed, selectedYear),
-            health: readLedgerHealth(typed, selectedYear),
+            deadline: period.endTime + 48 * 60 * 60 * 1000,
+            records: await readContestRecords(typed, selectedYear),
+            health: session.health,
           };
         }
         if (action === 'renderCabrillo') {
-          return { text: renderCabrillo(typed, selectedYear) };
+          return { text: await renderCabrillo(typed, selectedYear) };
         }
         if (action === 'reconcile') {
           const result = await reconcileLedgerWithHealth(typed, selectedYear);
-          notifyContestLogChanged(typed);
+          notifyContestLogChanged(typed, selectedYear);
           return result;
         }
         if (action === 'setStatus') {
           const qsoId = typeof payload.qsoId === 'string' ? payload.qsoId : '';
-          const status = payload.status === 'x-qso' ? 'x-qso' : 'included';
-          const next = setContestQsoStatus(readLedger(typed, selectedYear), qsoId, status);
-          await persistLedger(typed, selectedYear, next);
-          notifyContestLogChanged(typed);
-          return { records: next };
+          const status = payload.status === 'x-qso' ? 'x-qso'
+            : payload.status === 'review' ? 'review' : 'included';
+          const records = await readContestRecords(typed, selectedYear);
+          if (!records.some((record) => record.qsoId === qsoId)) throw new Error('Unknown contest QSO');
+          const repository = sessionRepository(typed, selectedYear);
+          repository.update((session) => ({
+            ...session,
+            overrides: {
+              ...session.overrides,
+              [qsoId]: { ...session.overrides[qsoId], status },
+            },
+          }));
+          await repository.flush();
+          notifyContestLogChanged(typed, selectedYear);
+          return { records: await readContestRecords(typed, selectedYear) };
+        }
+        if (action === 'setTransmitter') {
+          const qsoId = typeof payload.qsoId === 'string' ? payload.qsoId : '';
+          const transmitterId = payload.transmitterId === 1 ? 1 : payload.transmitterId === 0 ? 0 : undefined;
+          if (transmitterId === undefined) throw new Error('Invalid transmitter ID');
+          const repository = sessionRepository(typed, selectedYear);
+          repository.update((session) => ({
+            ...session,
+            overrides: {
+              ...session.overrides,
+              [qsoId]: { ...session.overrides[qsoId], transmitterId, status: 'included' },
+            },
+          }));
+          await repository.flush();
+          notifyContestLogChanged(typed, selectedYear);
+          return { records: await readContestRecords(typed, selectedYear) };
+        }
+        if (action === 'updateSession') {
+          const repository = sessionRepository(typed, selectedYear);
+          repository.update((session) => ({
+            ...session,
+            config: {
+              ...session.config,
+              ...(typeof payload.location === 'string' ? { location: payload.location } : {}),
+              ...(typeof payload.categoryBand === 'string' ? { categoryBand: payload.categoryBand as ContestConfig['categoryBand'] } : {}),
+              ...(typeof payload.categoryPower === 'string' ? { categoryPower: payload.categoryPower as ContestConfig['categoryPower'] } : {}),
+              ...(typeof payload.categoryOperator === 'string' ? { categoryOperator: payload.categoryOperator as ContestConfig['categoryOperator'] } : {}),
+              ...(typeof payload.categoryTransmitter === 'string' ? { categoryTransmitter: payload.categoryTransmitter as ContestConfig['categoryTransmitter'] } : {}),
+              ...(Array.isArray(payload.operators) ? { operators: payload.operators.filter((value): value is string => typeof value === 'string') } : {}),
+            },
+          }));
+          await repository.flush();
+          notifyContestLogChanged(typed, selectedYear);
+          return { config: repository.read().config };
         }
         throw new Error(`Unknown action: ${action}`);
       },
@@ -337,22 +492,35 @@ export const wwDigiStrategyPlugin = definePlugin({
   },
   hooks: {
     async onQSOComplete(record, ctx) {
-      if (record.contestId?.toUpperCase() !== 'WW-DIGI') return;
       const typed = ctx as WWDigiContext;
-      const contestYear = configuredContestYear(typed.config.contestYear);
-      const existing = readLedger(typed, contestYear);
-      const contestQso = toContestQso(
-        record,
-        contestYear,
-        existing.find((candidate) => candidate.qsoId === record.id),
-      );
+      const contestYear = new Date(record.startTime).getUTCFullYear();
+      const contestQso = toContestQso(record, contestYear);
       if (!contestQso) return;
       try {
-        await persistLedger(typed, contestYear, upsertContestQso(existing, contestQso));
-        notifyContestLogChanged(typed);
+        const transmitterId = Number(typed.config.transmitterId) === 1 ? 1 : 0;
+        const repository = sessionRepository(typed, contestYear);
+        repository.update((session) => ({
+          ...session,
+          overrides: {
+            ...session.overrides,
+            [record.id]: {
+              ...session.overrides[record.id],
+              status: session.overrides[record.id]?.status ?? 'included',
+              operatorId: typed.operator.id,
+              transmitterId,
+              source: record.contestId?.toUpperCase() === 'WW-DIGI'
+                ? 'ww-digi'
+                : record.messageHistory.length > 0 ? 'standard' : 'manual',
+            },
+          },
+          operatorTransmitters: { ...session.operatorTransmitters, [typed.operator.id]: transmitterId },
+          health: { state: 'healthy', updatedAt: Date.now() },
+        }));
+        await repository.flush();
+        notifyContestLogChanged(typed, contestYear);
       } catch (error) {
         await markLedgerDegraded(typed, contestYear, error);
-        notifyContestLogChanged(typed);
+        notifyContestLogChanged(typed, contestYear);
         await typed.operatorCommands.submit({ type: 'stop-automation' });
         throw error;
       }
@@ -364,12 +532,14 @@ export const wwDigiTestables = {
   configuredContestYear,
   ledgerKey,
   healthKey,
+  sessionKey,
   resolveContestLocation,
   readLedger,
   readLedgerHealth,
   reconcileLedger,
   reconcileLedgerWithHealth,
   renderCabrillo,
+  readContestRecords,
 };
 
 export const wwDigiLocales: Record<string, Record<string, string>> = {

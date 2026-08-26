@@ -76,6 +76,9 @@ export interface PluginContextBase {
     readonly operator: KVStore;
   };
 
+  /** Read-only validation for exact FT8/FT4 message encoding. */
+  readonly digitalMessagePreflight: import('./helpers.js').DigitalMessagePreflight;
+
   /**
    * Structured logger scoped to the plugin.
    *
@@ -244,6 +247,8 @@ export interface StrategyPluginContext {
   readonly log: PluginLogger;
   /** Read-only operator snapshot; mutation ports are deliberately absent. */
   readonly operator: OperatorSnapshot;
+  /** Read-only exact-message encoding validation. */
+  readonly digitalMessagePreflight: import('./helpers.js').DigitalMessagePreflight;
 }
 
 /** Minimal context used to evaluate a transmit-control eligibility predicate. */

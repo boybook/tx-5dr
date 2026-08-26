@@ -494,6 +494,8 @@
       "activeEntry": "当前通联目标不能移动",
       "versionConflict": "队列已在其他位置更新，请按最新顺序重试"
     },
+    "strategyActionUnavailable": "通联状态已变化，此操作不再可用。",
+    "strategyActions": { "more": "更多操作", "pickSpectrum": "从频谱选择", "cancel": "取消" },
     "streamStateErrors": {
       "qsoChanged": "该通联已发生变化，请重新确认当前行后再操作。",
       "stateUnavailable": "该通联当前已不能切换到这个状态。",

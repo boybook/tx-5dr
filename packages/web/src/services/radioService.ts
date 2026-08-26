@@ -385,6 +385,17 @@ export class RadioService {
     }
   }
 
+  invokeOperatorStrategyAction(
+    operatorId: string,
+    target: import('@tx5dr/contracts').StrategyActionTarget,
+    actionId: string,
+    payload?: unknown,
+  ): void {
+    if (!this.isConnected) return;
+    logger.info('UI command: invokeOperatorStrategyAction', { operatorId, target, actionId });
+    this.wsClient.send('invokeOperatorStrategyAction', { operatorId, target, actionId, payload });
+  }
+
   /**
    * 设置操作员策略运行时槽位内容
    */

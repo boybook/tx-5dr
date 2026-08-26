@@ -60,6 +60,7 @@ const PROTECTED_CONTEXT_KEYS = new Set<keyof RuntimePluginContext>([
   'operatorCommands',
   'radio',
   'band',
+  'digitalMessagePreflight',
   'radioCapabilities',
   'radioCommands',
   'radioTunerCommands',

@@ -17,5 +17,22 @@
   "categoryBandDesc": "All contacts remain in the submitted log.",
   "categoryPower": "Power category",
   "categoryPowerDesc": "WW Digi entry power category.",
-  "contestLogTitle": "WW Digi log"
+  "categoryOperator": "Operator category", "categoryOperatorDesc": "Single operator, multi-operator, or checklog.",
+  "categoryTransmitter": "Transmitter category", "categoryTransmitterDesc": "ONE, TWO, or UNLIMITED Cabrillo category.",
+  "operators": "Operators", "operatorsDesc": "Comma-separated operator callsigns required for MULTI-OP.",
+  "transmitterId": "Current transmitter", "transmitterIdDesc": "Default Cabrillo transmitter ID for new QSOs (0 or 1).",
+  "contestLogTitle": "WW Digi log",
+  "authorizationReceiveCycles": "Authorization lifetime",
+  "authorizationReceiveCyclesDesc": "Receive cycles before an unused manual target must be authorized again.",
+  "cqOff": "CQ off", "cqOnce": "CQ once", "cqRepeat": "Repeat CQ",
+  "actionPause": "Pause", "actionResume": "Resume", "actionSetFrequency": "TX frequency",
+  "actionResetFrequency": "Use automatic frequency", "actionAlternateMessage": "Alternate message",
+  "actionAlternateMessageDesc": "Validate an alternate FT8/FT4 message before authorizing this target.",
+  "actionLogCurrent": "Log current QSO", "actionEndQso": "End QSO", "actionRetry": "Retry",
+  "actionLater": "Later", "actionReauthorize": "Authorize again", "actionSend73": "Send 73 once",
+  "actionResendRr73": "Resend RR73", "actionFinishRecovery": "Finish recovery",
+  "attentionRepeatedRr73": "RR73 repeated", "attentionRepeatedRr73Desc": "The other station may be waiting for your 73.",
+  "confirmLogCurrent": "Log with current information?", "confirmLogCurrentDesc": "The directed exchange will be recorded now.",
+  "confirmLogCurrentMissingGrid": "The missing grid will be submitted as ZZ00.",
+  "confirmEndQso": "End this QSO?", "confirmEndQsoDesc": "The active lane will be released."
 }

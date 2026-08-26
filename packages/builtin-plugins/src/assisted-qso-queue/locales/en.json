@@ -4,5 +4,6 @@
   "strategyOverview": "Assisted Queue",
   "strategyOverviewDesc": "Double-click a target in the message list to add it manually. Reliable direct callers join automatically, and the queue works each target using the standard FT8/FT4 QSO flow.",
   "parallelStreams": "TX slots",
-  "parallelStreamsDesc": "Number of standard FT8/FT4 TX slots to use at once. Defaults to 1 TX slot and supports up to 3."
+  "parallelStreamsDesc": "Number of standard FT8/FT4 TX slots to use at once. Defaults to 1 TX slot and supports up to 3.",
+  "actionRetry": "Retry", "actionRemove": "Remove"
 }

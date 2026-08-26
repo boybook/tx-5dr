@@ -187,6 +187,8 @@ describe('PluginContextFactory operator access', () => {
     expect('playAudio' in ctx).toBe(false);
     expect('audioMixer' in ctx).toBe(false);
     expect('encoder' in ctx).toBe(false);
+    await expect(ctx.digitalMessagePreflight.check({ mode: 'FT8', text: 'CQ TEST' }))
+      .resolves.toMatchObject({ encodable: false, reason: 'encode_failed' });
     expect('forceStopTransmission' in ctx).toBe(false);
     expect('setPTT' in ctx.radio).toBe(false);
     expect('stopPlayback' in ctx.radio).toBe(false);

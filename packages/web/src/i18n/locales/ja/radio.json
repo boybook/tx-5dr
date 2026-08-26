@@ -482,6 +482,8 @@
       "activeEntry": "現在の交信相手は移動できません",
       "versionConflict": "別の場所でキューが更新されました。最新の順序で再試行してください"
     },
+    "strategyActionUnavailable": "QSO の状態が変更されたため、この操作は使用できません。",
+    "strategyActions": { "more": "その他の操作", "pickSpectrum": "スペクトラムから選択", "cancel": "キャンセル" },
     "streamStateErrors": {
       "qsoChanged": "交信状態が更新されました。現在の行を確認してから再試行してください。",
       "stateUnavailable": "この交信では、その状態を選択できなくなりました。",

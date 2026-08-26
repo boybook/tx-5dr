@@ -183,6 +183,25 @@ describe('WW Digi Cabrillo generation', () => {
 
     expect(output.indexOf('JA1AAA')).toBeLessThan(output.indexOf('JA1BBB'));
   });
+
+  it('renders multi-operator metadata and enforces transmitter ids', () => {
+    const multi: ContestConfig = {
+      ...CONFIG,
+      categoryOperator: 'MULTI-OP',
+      categoryTransmitter: 'TWO',
+      operators: ['BG5AAA', 'BG5BBB'],
+    };
+    expect(() => generateWWDigiCabrillo(multi, [qso()])).toThrow(/transmitterId/);
+    const output = generateWWDigiCabrillo(multi, [qso({ transmitterId: 1 })]);
+    expect(output).toContain('CATEGORY-OPERATOR: MULTI-OP');
+    expect(output).toContain('CATEGORY-TRANSMITTER: TWO');
+    expect(output).toContain('OPERATORS: BG5AAA, BG5BBB');
+    expect(output).toContain('PM95     1');
+  });
+
+  it('blocks unresolved review records', () => {
+    expect(() => generateWWDigiCabrillo(CONFIG, [qso({ status: 'review' })])).toThrow(/review records/);
+  });
 });
 
 describe('WW Digi contest log validation', () => {
