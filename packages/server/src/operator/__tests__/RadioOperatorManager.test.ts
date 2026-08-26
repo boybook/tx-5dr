@@ -3275,6 +3275,51 @@ describe('RadioOperatorManager transmission acceptance notification', () => {
     }));
   });
 
+  it('includes generic runtime action selection in operator-status deduplication', () => {
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+    });
+    const base = {
+      id: 'op1',
+      isActive: true,
+      isTransmitting: true,
+      hasTransmitIntent: false,
+      currentSlot: 'parallel',
+      context: {},
+      strategy: { name: 'test-strategy', state: 'parallel' },
+      currentTransmissions: [],
+      runtime: {
+        currentState: 'parallel',
+        streams: [{
+          streamId: 'stream-1',
+          currentState: 'closing',
+          audioFrequencyHz: 1_500,
+          qsoLifecycleEpoch: 1,
+        }],
+        actions: [
+          { id: 'mode-off', label: 'Off', selected: true },
+          { id: 'mode-on', label: 'On', selected: false },
+        ],
+      },
+      transmitCycles: [0],
+    };
+    const changedSelection = {
+      ...base,
+      runtime: {
+        ...base.runtime,
+        actions: [
+          { id: 'mode-off', label: 'Off', selected: false },
+          { id: 'mode-on', label: 'On', selected: true },
+        ],
+      },
+    };
+
+    expect((manager as any).hashOperatorStatus(base)).not.toBe(
+      (manager as any).hashOperatorStatus(changedSelection),
+    );
+  });
+
   it('includes the active strategy in operator-status deduplication', () => {
     const { manager } = createManager({
       logBook: { id: 'log-1', name: 'Test Log', provider: {} },
