@@ -25,6 +25,8 @@ import {
   getQueueBeforeEntryId,
   QUEUE_BODY_HEIGHT_PX,
 } from './operatorQueuePresentation';
+import { OperatorStrategyActions } from './OperatorStrategyActions';
+import { resolvePluginLabel } from '../../../utils/pluginLocales';
 
 interface OperatorQueueTableProps {
   operatorId: string;
@@ -57,6 +59,8 @@ function QueueRow({
   onRetry,
   isNew = false,
   onEntryAnimationEnd,
+  strategyName,
+  onAction,
 }: {
   row: AssistedQueueRow;
   onRemove: () => void;
@@ -65,6 +69,8 @@ function QueueRow({
   onRetry?: () => void;
   isNew?: boolean;
   onEntryAnimationEnd?: () => void;
+  strategyName: string;
+  onAction: (action: NonNullable<AssistedQueueRow['actions']>[number], payload?: unknown) => void;
 }) {
   const { t, i18n } = useTranslation('radio');
   const callsignInfo = React.useMemo(() => getCallsignInfo(row.callsign), [row.callsign]);
@@ -160,6 +166,14 @@ function QueueRow({
         className="ml-1 flex shrink-0 items-center gap-0.5"
         onPointerDown={(event) => event.stopPropagation()}
       >
+        {(row.actions?.length ?? 0) > 0 ? (
+          <OperatorStrategyActions
+            compact
+            actions={row.actions!}
+            resolveLabel={(value) => resolvePluginLabel(value, strategyName)}
+            onInvoke={onAction}
+          />
+        ) : <>
         {onRetry && (
           <Tooltip content={retryLabel} placement="top" offset={4}>
             <Button
@@ -188,6 +202,7 @@ function QueueRow({
             <FontAwesomeIcon icon={faTrash} className="text-[9px]" />
           </Button>
         </Tooltip>
+        </>}
       </span>
     </div>
   );
@@ -206,6 +221,7 @@ export function OperatorQueueTable({ operatorId, queue }: OperatorQueueTableProp
   const { operators } = useOperators();
   const myGrid = operators
     .find((operator) => operator.id === operatorId)?.context.myGrid;
+  const strategyName = operators.find((operator) => operator.id === operatorId)?.strategy?.name ?? '';
   const activeEntryIds = React.useMemo(() => new Set(
     queue.activeEntryIds ?? (queue.activeEntryId ? [queue.activeEntryId] : []),
   ), [queue.activeEntryId, queue.activeEntryIds]);
@@ -302,6 +318,13 @@ export function OperatorQueueTable({ operatorId, queue }: OperatorQueueTableProp
             myGrid={myGrid}
             isNew={newEntryIds.has(row.entryId)}
             onEntryAnimationEnd={() => finishEntryAnimation(row.entryId)}
+            strategyName={strategyName}
+            onAction={(action, payload) => connection.state.radioService?.invokeOperatorStrategyAction(
+              operatorId,
+              { kind: 'queue-entry', entryId: row.entryId, queueVersion: queue.version },
+              action.id,
+              payload,
+            )}
           />
         ))}
         <Reorder.Group
@@ -326,6 +349,13 @@ export function OperatorQueueTable({ operatorId, queue }: OperatorQueueTableProp
               onDragEnd={() => commitOrder(row.entryId)}
               isNew={newEntryIds.has(row.entryId)}
               onEntryAnimationEnd={() => finishEntryAnimation(row.entryId)}
+              strategyName={strategyName}
+              onAction={(action, payload) => connection.state.radioService?.invokeOperatorStrategyAction(
+                operatorId,
+                { kind: 'queue-entry', entryId: row.entryId, queueVersion: queue.version },
+                action.id,
+                payload,
+              )}
             />
           ))}
         </Reorder.Group>

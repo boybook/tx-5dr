@@ -72,4 +72,31 @@ describe('strategy transmission contracts', () => {
       },
     }).type).toBe('setOperatorStreamState');
   });
+
+  it('accepts plugin-declared actions and lifecycle-scoped action invocations', () => {
+    const stream = StrategyStreamSnapshotSchema.parse({
+      streamId: 'stream-1',
+      currentState: 'recovering',
+      audioFrequencyHz: 1500,
+      qsoLifecycleEpoch: 7,
+      completion: { state: 'committed', recordId: 'qso-1' },
+      attentions: [{ id: 'needs-action', tone: 'warning', title: 'attentionTitle', actionIds: ['reply'] }],
+      actions: [{
+        id: 'reply', label: 'replyLabel', icon: 'paper-plane', tone: 'primary', presentation: 'primary',
+        input: { kind: 'audio-frequency', value: 1500, min: 100, max: 5000, step: 10, spectrumPick: true },
+      }],
+    });
+    expect(stream.actions?.[0]?.id).toBe('reply');
+
+    expect(WSMessageSchema.parse({
+      type: 'invokeOperatorStrategyAction',
+      timestamp: new Date().toISOString(),
+      data: {
+        operatorId: 'operator-1',
+        target: { kind: 'stream', streamId: 'stream-1', lifecycleEpoch: 7 },
+        actionId: 'reply',
+        payload: { value: 1600 },
+      },
+    }).type).toBe('invokeOperatorStrategyAction');
+  });
 });

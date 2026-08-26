@@ -27,6 +27,8 @@ import type {
   StrategyRuntimeSlot,
   StrategyRuntimeSnapshot,
   StrategyStreamStateUpdate,
+  StrategyActionInvocation,
+  StrategyActionDescriptor,
   AssistedQueueSnapshot,
   QueuedStrategyMutationResult,
   QueuedStrategyTargetRequest,
@@ -587,6 +589,7 @@ export class PluginManager {
       },
       log: ctx.log,
       operator: ctx.operator,
+      digitalMessagePreflight: ctx.digitalMessagePreflight,
     });
   }
 
@@ -970,6 +973,80 @@ export class PluginManager {
       streamId: update.streamId,
       state: update.stateId,
     });
+  }
+
+  async invokeOperatorStrategyAction(
+    operatorId: string,
+    invocation: StrategyActionInvocation,
+  ): Promise<import('@tx5dr/plugin-api').StrategyActionResult | void> {
+    const snapshot = this.getOperatorAutomationSnapshot(operatorId);
+    const action = this.findStrategyAction(snapshot, invocation);
+    if (!action) throw new Error('strategy_action_not_available');
+    if (action.disabledReason) throw new Error('strategy_action_disabled');
+
+    const checkpoint = this.invokeStrategyRuntimeSync(
+      operatorId,
+      'checkpoint:before-strategy-action',
+      (runtime) => runtime.checkpoint(),
+    );
+    try {
+      const result = await this.invokeStrategyRuntime(
+        operatorId,
+        `strategy-action:${invocation.actionId}`,
+        async (runtime) => {
+          if (!runtime.invokeAction) throw new Error('strategy_action_not_supported');
+          return runtime.invokeAction(snapshotPluginData(invocation, 'structured'));
+        },
+      );
+      if (result?.qsoCompletions?.length) {
+        this.orchestrator.commitQSOCompletionEffectsFromAction(operatorId, result.qsoCompletions);
+      }
+      if (result?.requestDecision) {
+        this.orchestrator.invalidateDecisionMessageSet(operatorId);
+        this.deps.triggerReEncode?.(operatorId, {
+          source: 'operator-edit',
+          reason: `strategy action ${invocation.actionId}`,
+        });
+      }
+      this.deps.notifyOperatorStatusChanged?.(operatorId);
+      logger.info('PluginManager strategy action applied', {
+        operatorId,
+        actionId: invocation.actionId,
+        targetKind: invocation.target.kind,
+      });
+      return result;
+    } catch (error) {
+      if (checkpoint !== undefined) {
+        this.invokeStrategyRuntimeSync(operatorId, 'restore:failed-strategy-action', (runtime) => {
+          runtime.restore(checkpoint);
+        });
+      }
+      throw error;
+    }
+  }
+
+  private findStrategyAction(
+    snapshot: StrategyRuntimeSnapshot | null,
+    invocation: StrategyActionInvocation,
+  ): StrategyActionDescriptor | undefined {
+    if (!snapshot) return undefined;
+    const target = invocation.target;
+    if (target.kind === 'runtime') {
+      return snapshot.actions?.find((action) => action.id === invocation.actionId);
+    }
+    if (target.kind === 'stream') {
+      const stream = snapshot.streams?.find((candidate) => candidate.streamId === target.streamId);
+      if (!stream || stream.qsoLifecycleEpoch !== target.lifecycleEpoch) {
+        throw new Error('stream_lifecycle_conflict');
+      }
+      return stream.actions?.find((action) => action.id === invocation.actionId);
+    }
+    if (snapshot.queue?.version !== target.queueVersion) {
+      throw new Error('queue_version_conflict');
+    }
+    return snapshot.queue.rows
+      .find((row) => row.entryId === target.entryId)
+      ?.actions?.find((action) => action.id === invocation.actionId);
   }
 
   setOperatorRuntimeSlotContent(

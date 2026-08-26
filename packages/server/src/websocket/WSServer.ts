@@ -432,6 +432,7 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.SET_OPERATOR_CONTEXT]: (data, id) => this.handleSetOperatorContext(data, id),
       [WSMessageType.SET_OPERATOR_RUNTIME_STATE]: (data, id) => this.handleSetOperatorRuntimeState(data, id),
       [WSMessageType.SET_OPERATOR_STREAM_STATE]: (data, id) => this.handleSetOperatorStreamState(data, id),
+      [WSMessageType.INVOKE_OPERATOR_STRATEGY_ACTION]: (data, id) => this.handleInvokeOperatorStrategyAction(data, id),
       [WSMessageType.SET_OPERATOR_RUNTIME_SLOT_CONTENT]: (data, id) => this.handleSetOperatorRuntimeSlotContent(data, id),
       [WSMessageType.SET_OPERATOR_TRANSMIT_CYCLES]: (data, id) => this.handleSetOperatorTransmitCycles(data, id),
       [WSMessageType.START_OPERATOR]: (data, id) => this.handleStartOperator(data, id),
@@ -889,6 +890,7 @@ export class WSServer extends WSMessageHandler {
     [WSMessageType.SET_OPERATOR_CONTEXT]: { ability: { action: 'manage', subject: 'Operator' } },
     [WSMessageType.SET_OPERATOR_RUNTIME_STATE]: { ability: { action: 'manage', subject: 'Operator' } },
     [WSMessageType.SET_OPERATOR_STREAM_STATE]: { ability: { action: 'manage', subject: 'Operator' } },
+    [WSMessageType.INVOKE_OPERATOR_STRATEGY_ACTION]: { ability: { action: 'manage', subject: 'Operator' } },
     [WSMessageType.SET_OPERATOR_RUNTIME_SLOT_CONTENT]: { ability: { action: 'manage', subject: 'Operator' } },
     [WSMessageType.SET_OPERATOR_TRANSMIT_CYCLES]: { ability: { action: 'manage', subject: 'Operator' } },
     [WSMessageType.OPERATOR_REQUEST_CALL]: { ability: { action: 'manage', subject: 'Operator' } },
@@ -908,6 +910,7 @@ export class WSServer extends WSMessageHandler {
     WSMessageType.SET_OPERATOR_CONTEXT,
     WSMessageType.SET_OPERATOR_RUNTIME_STATE,
     WSMessageType.SET_OPERATOR_STREAM_STATE,
+    WSMessageType.INVOKE_OPERATOR_STRATEGY_ACTION,
     WSMessageType.SET_OPERATOR_RUNTIME_SLOT_CONTENT,
     WSMessageType.SET_OPERATOR_TRANSMIT_CYCLES,
     WSMessageType.OPERATOR_REQUEST_CALL,
@@ -1469,6 +1472,35 @@ export class WSServer extends WSMessageHandler {
         return;
       }
       this.handleCommandError(error, 'setOperatorStreamState');
+    }
+  }
+
+  private async handleInvokeOperatorStrategyAction(data: any, connectionId: string): Promise<void> {
+    try {
+      const { operatorId, target, actionId, payload } = data;
+      this.logOperatorCommand('invokeOperatorStrategyAction', connectionId, {
+        operatorId,
+        target,
+        actionId,
+      });
+      await this.digitalRadioEngine.operatorManager.invokeOperatorStrategyAction(operatorId, {
+        target,
+        actionId,
+        payload,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : '';
+      if (['strategy_action_not_available', 'strategy_action_disabled', 'strategy_action_not_supported',
+        'stream_lifecycle_conflict', 'queue_version_conflict'].includes(reason)) {
+        this.sendToConnection(connectionId, WSMessageType.ERROR, {
+          message: reason,
+          userMessageKey: 'radio:operator.strategyActionUnavailable',
+          code: RadioErrorCode.INVALID_OPERATION,
+          context: { command: 'invokeOperatorStrategyAction' },
+        });
+        return;
+      }
+      this.handleCommandError(error, 'invokeOperatorStrategyAction');
     }
   }
 

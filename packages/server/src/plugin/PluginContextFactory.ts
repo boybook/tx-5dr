@@ -38,7 +38,7 @@ import {
 import { ConfigManager } from '../config/config-manager.js';
 import { LogManager } from '../log/LogManager.js';
 import type { LogBookInstance } from '../log/LogManager.js';
-import { PluginStorageProvider } from './PluginStorageProvider.js';
+import { acquireSharedPluginStorage, PluginStorageProvider } from './PluginStorageProvider.js';
 import { PluginFileStoreProvider } from './PluginFileStoreProvider.js';
 import { PluginTimerManager } from './PluginTimerManager.js';
 import { PluginUIBridge } from './PluginUIBridge.js';
@@ -140,11 +140,10 @@ export class PluginContextFactory {
     updatePluginSettings?: (patch: Record<string, unknown>) => Promise<void>,
     invokeResourceCallback?: <T>(operation: string, callback: () => T | Promise<T>) => Promise<T>,
   ): Promise<RuntimePluginContext> {
-    const globalStorage = new PluginStorageProvider(`${pluginStorageDir}/global.json`);
+    const globalStorage = await acquireSharedPluginStorage(`${pluginStorageDir}/global.json`);
     const operatorStorageName = operatorId ? `operator-${operatorId}.json` : 'instance-global.json';
     const operatorStorage = new PluginStorageProvider(`${pluginStorageDir}/${operatorStorageName}`);
 
-    await globalStorage.init();
     await operatorStorage.init();
 
     const timerManager = new PluginTimerManager(plugin.definition.name, onTimer);
@@ -196,6 +195,19 @@ export class PluginContextFactory {
       store: {
         global: globalStorage,
         operator: operatorStorage,
+      },
+      digitalMessagePreflight: {
+        check: async (request) => {
+          if (!this.deps.preflightDigitalMessage) {
+            return {
+              encodable: false,
+              requestedText: request.text.trim().toUpperCase().replace(/\s+/g, ' '),
+              reason: 'encode_failed' as const,
+              error: 'preflight_unavailable',
+            };
+          }
+          return this.deps.preflightDigitalMessage(request);
+        },
       },
       log: pluginLogger,
       timers: timerManager,

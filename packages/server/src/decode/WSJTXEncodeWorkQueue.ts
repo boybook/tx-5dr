@@ -3,12 +3,9 @@ import { WSJTXLib, WSJTXMode } from 'wsjtx-lib';
 import { resampleAudioProfessional } from '../utils/audioUtils.js';
 import { createLogger } from '../utils/logger.js';
 import { WSJTXNativeGate } from './WSJTXNativeGate.js';
+import { digitalMessageTextsMatch, normalizeDigitalMessageText } from './digitalMessageValidation.js';
 
 const logger = createLogger('EncodeWorkQueue');
-
-function normalizeMessageForEncodeCheck(message: string): string {
-  return message.trim().toUpperCase().replace(/\s+/g, ' ');
-}
 
 export interface EncodeRequest {
   message: string;
@@ -115,9 +112,9 @@ export class WSJTXEncodeWorkQueue extends EventEmitter<EncodeWorkQueueEvents> {
         )
       );
 
-      const normalizedRequestedMessage = normalizeMessageForEncodeCheck(request.message);
-      const normalizedSentMessage = normalizeMessageForEncodeCheck(messageSent ?? '');
-      if (normalizedSentMessage !== normalizedRequestedMessage) {
+      const normalizedRequestedMessage = normalizeDigitalMessageText(request.message);
+      const normalizedSentMessage = normalizeDigitalMessageText(messageSent ?? '');
+      if (!digitalMessageTextsMatch(normalizedRequestedMessage, normalizedSentMessage)) {
         throw new Error(
           `encoder changed message text: requested="${normalizedRequestedMessage}", sent="${normalizedSentMessage}". `
           + 'Free text messages are limited to 13 characters by WSJT-X.',

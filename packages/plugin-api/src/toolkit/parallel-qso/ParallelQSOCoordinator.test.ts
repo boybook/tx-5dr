@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import type { ParsedFT8Message } from '@tx5dr/contracts';
+import type { QSOFailureInfo } from '../../hooks.js';
 import type {
-  ParsedFT8Message,
-  QSOFailureInfo,
   QueuedStrategyObservationMeta,
   StrategyDecisionMetaV2,
   StrategyQSOCompletionEffect,
   StrategyQSOCompletionSettlement,
   StreamPhysicalReceipt,
-} from '@tx5dr/plugin-api';
+} from '../../runtime.js';
 import { ParallelQSOCoordinator } from './ParallelQSOCoordinator.js';
 import type {
   ParallelQSOQueueEntry,

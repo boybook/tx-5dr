@@ -1,6 +1,6 @@
+import type { ParsedFT8Message } from '@tx5dr/contracts';
+import type { QSOFailureInfo } from '../../hooks.js';
 import type {
-  ParsedFT8Message,
-  QSOFailureInfo,
   StrategyDecisionMetaV2,
   StrategyQSOCompletionEffect,
   StrategyQSOCompletionSettlement,
@@ -8,7 +8,7 @@ import type {
   StrategyTransmission,
   StreamPhysicalReceipt,
   QueuedStrategyObservationMeta,
-} from '@tx5dr/plugin-api';
+} from '../../runtime.js';
 import type {
   ParallelQSOQueueEntry,
   ProtocolLane,
@@ -531,6 +531,24 @@ export class ParallelQSOCoordinator<TData> {
     const changed = lane.setUserState(stateId);
     if (changed) this.bumpVersion();
     return changed;
+  }
+
+  async invokeStreamAction(
+    streamId: string,
+    lifecycleEpoch: number,
+    actionId: string,
+    payload?: unknown,
+  ): Promise<import('../../runtime.js').StrategyActionResult | void> {
+    const lane = this.lanesByStreamId.get(streamId);
+    const snapshot = lane?.getSnapshot();
+    if (!lane || !snapshot) throw new Error('stream_not_found');
+    if (snapshot.qsoLifecycleEpoch !== lifecycleEpoch) throw new Error('stream_lifecycle_conflict');
+    if (!snapshot.actions?.some((action) => action.id === actionId) || !lane.invokeAction) {
+      throw new Error('strategy_action_not_available');
+    }
+    const result = await lane.invokeAction(actionId, clone(payload));
+    this.bumpVersion();
+    return result;
   }
 
   onPhysicalReceipts(receipts: StreamPhysicalReceipt[]): string[] {

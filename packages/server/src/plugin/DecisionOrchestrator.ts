@@ -510,6 +510,15 @@ export class DecisionOrchestrator {
     state.lastDecisionMessageSet = null;
   }
 
+  commitQSOCompletionEffectsFromAction(
+    operatorId: string,
+    effects: import('@tx5dr/plugin-api').StrategyQSOCompletionEffect[],
+  ): void {
+    const runtimeGeneration = this.deps.getStrategyRuntimeGeneration(operatorId);
+    if (runtimeGeneration === undefined || effects.length === 0) return;
+    this.commitQSOCompletionEffects(operatorId, runtimeGeneration, effects);
+  }
+
   hasActiveSilentDirectedCallGate(operatorId: string, slotPack?: SlotPack): boolean {
     return this.getActiveSilentDirectedCallGate(operatorId, slotPack?.startMs) !== undefined;
   }

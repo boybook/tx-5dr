@@ -23,6 +23,10 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
+vi.mock('../../../utils/pluginLocales', () => ({
+  resolvePluginLabel: (value: string) => value,
+}));
+
 vi.mock('../../../store/radioStore', () => ({
   useConnection: () => ({
     state: {

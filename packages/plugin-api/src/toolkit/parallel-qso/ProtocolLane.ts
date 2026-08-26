@@ -1,13 +1,13 @@
+import type { ParsedFT8Message } from '@tx5dr/contracts';
+import type { QSOFailureInfo } from '../../hooks.js';
 import type {
-  ParsedFT8Message,
-  QSOFailureInfo,
   StrategyDecisionMetaV2,
   StrategyQSOCompletionEffect,
   StrategyQSOCompletionSettlement,
   StrategyStreamSnapshot,
   StreamPhysicalReceipt,
   QueuedStrategyObservationMeta,
-} from '@tx5dr/plugin-api';
+} from '../../runtime.js';
 
 export interface ParallelQSOQueueEntry<TData> {
   entryId: string;
@@ -63,6 +63,10 @@ export interface ProtocolLane<TData> {
   getTransmitText(): string | null;
   getSnapshot(): ProtocolLaneSnapshot | null;
   setUserState?(stateId: string): boolean;
+  invokeAction?(
+    actionId: string,
+    payload?: unknown,
+  ): import('../../runtime.js').StrategyActionResult | void | Promise<import('../../runtime.js').StrategyActionResult | void>;
 
   checkpoint(): unknown;
   restore(checkpoint: unknown): void;

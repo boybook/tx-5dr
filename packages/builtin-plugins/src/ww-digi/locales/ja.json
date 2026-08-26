@@ -17,5 +17,22 @@
   "categoryBandDesc": "送信ログには全バンドの QSO が残ります。",
   "categoryPower": "パワー部門",
   "categoryPowerDesc": "WW Digi のパワーカテゴリ。",
-  "contestLogTitle": "WW Digi ログ"
+  "categoryOperator": "オペレータ部門", "categoryOperatorDesc": "シングル、マルチ、またはチェックログです。",
+  "categoryTransmitter": "送信機部門", "categoryTransmitterDesc": "Cabrillo の ONE、TWO、UNLIMITED です。",
+  "operators": "オペレータ", "operatorsDesc": "MULTI-OP で必要なコールサインをカンマ区切りで入力します。",
+  "transmitterId": "現在の送信機", "transmitterIdDesc": "新しい QSO の Cabrillo 送信機 ID（0 または1）です。",
+  "contestLogTitle": "WW Digi ログ",
+  "authorizationReceiveCycles": "承認の有効期間",
+  "authorizationReceiveCyclesDesc": "未開始の手動ターゲットを再承認するまでの受信サイクル数です。",
+  "cqOff": "CQ オフ", "cqOnce": "CQ 1回", "cqRepeat": "CQ 繰り返し",
+  "actionPause": "一時停止", "actionResume": "再開", "actionSetFrequency": "送信周波数",
+  "actionResetFrequency": "自動周波数に戻す", "actionAlternateMessage": "代替メッセージ",
+  "actionAlternateMessageDesc": "代替 FT8/FT4 メッセージを検証してから再承認します。",
+  "actionLogCurrent": "現在の情報で記録", "actionEndQso": "QSO を終了", "actionRetry": "再試行",
+  "actionLater": "後で", "actionReauthorize": "再承認", "actionSend73": "73 を1回送信",
+  "actionResendRr73": "RR73 を再送", "actionFinishRecovery": "回復を終了",
+  "attentionRepeatedRr73": "RR73 が再送されました", "attentionRepeatedRr73Desc": "相手局は 73 を待っている可能性があります。",
+  "confirmLogCurrent": "現在の情報で記録しますか？", "confirmLogCurrentDesc": "受信した宛先付き交換を記録します。",
+  "confirmLogCurrentMissingGrid": "不足するグリッドは Cabrillo で ZZ00 になります。",
+  "confirmEndQso": "この QSO を終了しますか？", "confirmEndQsoDesc": "現在のスロットを解放します。"
 }

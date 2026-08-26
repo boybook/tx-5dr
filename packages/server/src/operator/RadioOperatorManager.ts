@@ -1302,6 +1302,16 @@ export class RadioOperatorManager {
     this.emitOperatorStatusUpdate(operatorId);
   }
 
+  async invokeOperatorStrategyAction(
+    operatorId: string,
+    invocation: import('@tx5dr/plugin-api').StrategyActionInvocation,
+  ): Promise<void> {
+    if (!this.operators.has(operatorId)) throw new Error(`operator ${operatorId} not found`);
+    if (!this._pluginManager) throw new Error('plugin_manager_unavailable');
+    await this._pluginManager.invokeOperatorStrategyAction(operatorId, invocation);
+    this.emitOperatorStatusUpdate(operatorId);
+  }
+
   async setOperatorRuntimeSlotContent(
     operatorId: string,
     slot: import('@tx5dr/contracts').OperatorRuntimeSlot,

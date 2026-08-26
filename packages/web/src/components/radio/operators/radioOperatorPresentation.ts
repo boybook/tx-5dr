@@ -13,6 +13,11 @@ export interface RadioOperatorStreamPresentation {
   text?: string;
   qsoLifecycleEpoch?: number;
   stateOptions?: StrategyStateOption[];
+  actions?: import('@tx5dr/contracts').StrategyActionDescriptor[];
+  attentions?: import('@tx5dr/contracts').StrategyAttention[];
+  completion?: import('@tx5dr/contracts').StrategyCompletionProjection;
+  lastReceivedText?: string;
+  nextTransmitText?: string;
 }
 
 /**
@@ -71,6 +76,11 @@ export function resolveRadioOperatorStreamPresentations(
       audioFrequencyHz: stream.audioFrequencyHz,
       qsoLifecycleEpoch: stream.qsoLifecycleEpoch,
       ...(stream.stateOptions ? { stateOptions: stream.stateOptions } : {}),
+      ...(stream.actions ? { actions: stream.actions } : {}),
+      ...(stream.attentions ? { attentions: stream.attentions } : {}),
+      ...(stream.completion ? { completion: stream.completion } : {}),
+      lastReceivedText: stream.lastReceivedText,
+      nextTransmitText: stream.nextTransmitText,
     });
   }
 

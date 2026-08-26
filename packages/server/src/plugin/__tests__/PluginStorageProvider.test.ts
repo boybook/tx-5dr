@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { PluginStorageProvider } from '../PluginStorageProvider.js';
+import { acquireSharedPluginStorage, PluginStorageProvider } from '../PluginStorageProvider.js';
 
 const tempDirs: string[] = [];
 
@@ -74,5 +74,23 @@ describe('PluginStorageProvider', () => {
 
     const defaultValue = { nested: { count: 1 } };
     expect(storage.get('missing', defaultValue)).toBe(defaultValue);
+  });
+
+  it('shares one global provider and applies atomic updates across instance leases', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-storage-shared-'));
+    tempDirs.push(root);
+    const file = join(root, 'global.json');
+    const first = await acquireSharedPluginStorage(file);
+    const second = await acquireSharedPluginStorage(file);
+
+    first.update<number>('count', (value) => (value ?? 0) + 1);
+    second.update<number>('count', (value) => (value ?? 0) + 1);
+    expect(first.get('count')).toBe(2);
+    expect(second.get('count')).toBe(2);
+    await second.flush();
+
+    first.dispose?.();
+    second.dispose?.();
+    expect(JSON.parse(await readFile(file, 'utf-8'))).toEqual({ count: 2 });
   });
 });

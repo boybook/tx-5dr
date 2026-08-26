@@ -18,12 +18,15 @@ import type {
   StrategyRuntimeSlotContentUpdate,
   StrategyRuntimeSnapshot,
   StrategyStreamStateUpdate,
+  StrategyActionInvocation,
+  StrategyActionResult,
   StreamPhysicalReceipt,
 } from '@tx5dr/plugin-api';
 import { normalizeCallsign } from '@tx5dr/plugin-api';
 import { FT8MessageParser, isValidCallsign, isUndecodedCallsignPlaceholder } from '@tx5dr/core';
-import { ParallelQSOCoordinator } from '../_shared/parallel-qso/index.js';
-import type { ParallelQueueMutationResult } from '../_shared/parallel-qso/index.js';
+import { ParallelQSOCoordinator } from '@tx5dr/plugin-api/toolkit';
+import type { ParallelQueueMutationResult } from '@tx5dr/plugin-api/toolkit';
+import { AuthorizationLease, ExplicitCQController } from '@tx5dr/plugin-api/toolkit';
 import { buildWWDigiCQ, parseWWDigiMessage } from './protocol.js';
 import {
   WWDigiProtocolLane,
@@ -36,6 +39,7 @@ export interface WWDigiRuntimeConfig extends WWDigiLaneConfig {
   transmitCycles: number[];
   parallelStreams: number;
   maxConcurrentStreams: number;
+  authorizationReceiveCycles?: number;
 }
 
 export interface WWDigiRuntimeOperator {
@@ -46,6 +50,9 @@ export interface WWDigiRuntimeOperator {
 
 interface RuntimeCheckpoint {
   coordinator: ReturnType<ParallelQSOCoordinator<WWDigiEntryData>['checkpoint']>;
+  cq: ReturnType<ExplicitCQController['checkpoint']>;
+  receiveEpoch: number;
+  lastObservedSlotId?: string;
 }
 
 function targetKey(callsign: string): string {
@@ -73,11 +80,18 @@ function selectedSender(raw: string): { callsign?: string; grid?: string } {
 
 export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   private readonly coordinator: ParallelQSOCoordinator<WWDigiEntryData>;
+  private readonly cq = new ExplicitCQController();
+  private receiveEpoch = 0;
+  private lastObservedSlotId?: string;
 
   constructor(
     private readonly operator: WWDigiRuntimeOperator,
     logger: PluginLogger,
     audioFrequenciesHz: readonly number[] | (() => readonly number[]),
+    private readonly preflightMessage: (
+      text: string,
+      mode: 'FT8' | 'FT4',
+    ) => Promise<{ encodable: boolean; error?: string; reason?: string }> = async () => ({ encodable: true }),
   ) {
     const resolveFrequencies = typeof audioFrequenciesHz === 'function'
       ? audioFrequenciesHz
@@ -103,17 +117,30 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   }
 
   checkpoint(): StrategyRuntimeCheckpoint {
-    return { coordinator: this.coordinator.checkpoint() } satisfies RuntimeCheckpoint;
+    return {
+      coordinator: this.coordinator.checkpoint(),
+      cq: this.cq.checkpoint(),
+      receiveEpoch: this.receiveEpoch,
+      lastObservedSlotId: this.lastObservedSlotId,
+    } satisfies RuntimeCheckpoint;
   }
 
   restore(checkpoint: StrategyRuntimeCheckpoint): void {
     const state = checkpoint as RuntimeCheckpoint;
     if (!state?.coordinator) throw new Error('Invalid WW Digi runtime checkpoint');
     this.coordinator.restore(state.coordinator);
+    if (state.cq) this.cq.restore(state.cq);
+    this.receiveEpoch = state.receiveEpoch ?? 0;
+    this.lastObservedSlotId = state.lastObservedSlotId;
   }
 
   observeDecodedMessages(messages: ParsedFT8Message[], meta: QueuedStrategyObservationMeta): boolean {
     let changed = false;
+    if (meta.slotInfo.id !== this.lastObservedSlotId) {
+      this.lastObservedSlotId = meta.slotInfo.id;
+      this.receiveEpoch += 1;
+      changed = this.expireAuthorizations() || changed;
+    }
     for (const message of messages) {
       if (message.isPartialDecode) continue;
       const sender = selectedSender(message.rawMessage);
@@ -137,12 +164,16 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
         return updated;
       })) changed = true;
     }
-    return this.coordinator.observe(messages, meta) || changed;
+    const observed = this.coordinator.observe(messages, meta);
+    this.cq.setSuppressed(Boolean(this.coordinator.getStreams().some((stream) => (stream.attentions?.length ?? 0) > 0)));
+    return observed || changed;
   }
 
   enqueueTarget(request: QueuedStrategyTargetRequest): QueuedStrategyMutationResult {
     const callsign = request.callsign.trim().toUpperCase();
-    if (!isValidCallsign(callsign)
+    const permissiveCallsign = /^[A-Z0-9]+(?:\/[A-Z0-9]+)*$/.test(callsign)
+      && /[A-Z]/.test(callsign) && /[0-9]/.test(callsign) && callsign.length <= 13;
+    if (!permissiveCallsign
         || isUndecodedCallsignPlaceholder(callsign)
         || targetKey(callsign) === targetKey(this.operator.config.myCallsign)) {
       return this.mutationResult({
@@ -160,6 +191,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
         requestedTransmitCycle = ((request.lastMessage.slotInfo.cycleNumber + 1) % 2) as 0 | 1;
       }
     }
+    const requiresAlternate = !isValidCallsign(callsign) || callsign.includes('/');
     return this.mutationResult(this.coordinator.enqueue({
       targetKey: targetKey(callsign),
       callsign,
@@ -167,10 +199,12 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       data: {
         authorizationId: randomUUID(),
         authorizedAt: Date.now(),
+        authorizedReceiveEpoch: this.receiveEpoch,
         lastMessageRaw,
         lastSnr: request.lastMessage?.message.snr,
         targetGrid,
-        status: 'queued',
+        status: requiresAlternate ? 'review' : 'queued',
+        encodingError: requiresAlternate ? 'special_callsign_requires_preflight' : undefined,
       },
     }));
   }
@@ -193,6 +227,8 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       data.status = 'queued';
       data.authorizationId = randomUUID();
       data.authorizedAt = Date.now();
+      data.authorizedReceiveEpoch = this.receiveEpoch;
+      data.noResponseCycles = undefined;
       return true;
     });
     return { outcome: 'accepted', snapshot: this.getQueueSnapshot() };
@@ -220,6 +256,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
         const stream = row.streamId ? streamsById.get(row.streamId) : undefined;
         const status = row.entry.data.status;
         const displayState: AssistedQueueDisplayState = status === 'review' || stream?.currentState === 'review' ? 'review'
+          : status === 'stale' || status === 'paused' ? 'paused'
           : status === 'no-response' ? 'no-response'
             : stream?.currentState === 'closing' ? 'closing'
               : row.active ? 'engaged' : 'later';
@@ -230,15 +267,20 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
           draggable: !row.active,
           displayState,
           tone: status === 'review' || stream?.currentState === 'review' ? 'danger'
+            : status === 'stale' || status === 'paused' ? 'warning'
             : status === 'no-response' ? 'warning'
               : row.active ? 'active' : 'neutral',
           icon: status === 'review' || stream?.currentState === 'review' ? 'triangle-alert'
+            : status === 'stale' || status === 'paused' ? 'pause'
             : status === 'no-response' ? 'clock'
               : row.active ? 'radio' : 'circle',
           targetGrid: row.entry.data.targetGrid,
           streamId: row.streamId,
           audioFrequencyHz: row.audioFrequencyHz,
           authorizationId: row.entry.data.authorizationId,
+          pauseReason: status === 'stale' ? 'stale' as const : undefined,
+          noResponseCycles: row.entry.data.noResponseCycles,
+          actions: row.active ? [] : this.queueActions(row.entry),
         };
       }),
     };
@@ -253,6 +295,10 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       if (released.disposition !== 'retain-entry') continue;
       this.coordinator.updateEntry(released.entryId, (data) => {
         data.status = 'no-response';
+        data.noResponseCycles = decision.qsoFailures
+          .find((failure) => targetKey(failure.targetCallsign) === targetKey(
+            this.coordinator.getEntry(released.entryId)?.callsign ?? '',
+          ))?.unansweredTransmissions;
         return true;
       });
     }
@@ -279,6 +325,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     const transmissions = this.coordinator.getTransmissions();
     if (transmissions.length > 0) return transmissions;
     if (this.coordinator.getQueueSnapshot().entries.length > 0) return [];
+    if (!this.cq.shouldTransmit()) return [];
     return [{
       streamId: 'cq',
       text: buildWWDigiCQ(this.operator.config.myCallsign, this.operator.config.myGrid),
@@ -305,6 +352,16 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       qsoLifecycleEpoch: primary?.qsoLifecycleEpoch,
       streams,
       queue: this.getQueueSnapshot(),
+      actions: (['off', 'once', 'repeat'] as const).map((mode) => ({
+        id: `cq-${mode}`,
+        label: mode === 'off' ? 'cqOff' : mode === 'once' ? 'cqOnce' : 'cqRepeat',
+        icon: mode === 'off' ? 'ban' : mode === 'once' ? 'tower-broadcast' : 'repeat',
+        presentation: 'segmented' as const,
+        groupId: 'cq-mode',
+        selected: this.cq.currentMode === mode,
+        tone: this.cq.currentMode === mode ? 'primary' as const : 'default' as const,
+      })),
+      attentions: streams.flatMap((stream) => stream.attentions ?? []),
     };
   }
 
@@ -313,6 +370,54 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   setStreamState(update: StrategyStreamStateUpdate): void {
     this.coordinator.setStreamState(update.streamId, update.stateId, update.expectedLifecycleEpoch);
   }
+  async invokeAction(invocation: StrategyActionInvocation): Promise<StrategyActionResult | void> {
+    if (invocation.target.kind === 'runtime') {
+      const mode = invocation.actionId.replace(/^cq-/, '');
+      if (mode !== 'off' && mode !== 'once' && mode !== 'repeat') throw new Error('strategy_action_not_available');
+      this.cq.setMode(mode);
+      return { requestDecision: true, outcome: { code: `cq_${mode}` } };
+    }
+    if (invocation.target.kind === 'stream') {
+      if (invocation.actionId === 'send-alternate') {
+        const text = (invocation.payload as { value?: unknown } | undefined)?.value;
+        if (typeof text !== 'string') throw new Error('alternate_message_invalid');
+        const checked = await this.preflightMessage(text, this.operator.config.modeName);
+        if (!checked.encodable) throw new Error(checked.error || checked.reason || 'alternate_message_not_encodable');
+      }
+      const result = await this.coordinator.invokeStreamAction(
+        invocation.target.streamId,
+        invocation.target.lifecycleEpoch,
+        invocation.actionId,
+        invocation.payload,
+      );
+      this.validateLaneSpacing();
+      return result;
+    }
+    const entry = this.coordinator.getEntry(invocation.target.entryId);
+    if (!entry) throw new Error('entry_not_found');
+    if (invocation.actionId === 'end-queued-target') {
+      this.coordinator.remove(entry.entryId, invocation.target.queueVersion);
+      return { requestDecision: true };
+    }
+    if (invocation.actionId === 'set-alternate-and-authorize') {
+      const text = (invocation.payload as { value?: unknown } | undefined)?.value;
+      if (typeof text !== 'string') throw new Error('alternate_message_invalid');
+      const normalized = text.trim().toUpperCase().replace(/\s+/g, ' ');
+      const checked = await this.preflightMessage(normalized, this.operator.config.modeName);
+      if (!checked.encodable) throw new Error(checked.error || checked.reason || 'alternate_message_not_encodable');
+      this.authorizeEntry(entry.entryId, { alternateText: normalized });
+      return { requestDecision: true };
+    }
+    if (invocation.actionId === 'retry-target' || invocation.actionId === 'reauthorize-target') {
+      this.authorizeEntry(entry.entryId);
+      return { requestDecision: true };
+    }
+    if (invocation.actionId === 'pause-target') {
+      this.coordinator.updateEntry(entry.entryId, (data) => { data.status = 'paused'; return true; });
+      return { requestDecision: true };
+    }
+    throw new Error('strategy_action_not_available');
+  }
   setSlotContent(_update: StrategyRuntimeSlotContentUpdate): void {}
 
   settleQSOCompletion(settlement: StrategyQSOCompletionSettlement): void {
@@ -320,6 +425,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   }
 
   onTransmissionsCompleted(receipts: StreamPhysicalReceipt[]): void {
+    if (receipts.some((receipt) => receipt.streamId === 'cq')) this.cq.onPhysicalSuccess();
     this.coordinator.onPhysicalReceipts(receipts.filter((receipt) => receipt.streamId !== 'cq'));
   }
 
@@ -336,6 +442,10 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
 
   reset(reason?: string): void {
     this.coordinator.reset(reason);
+    this.cq.setMode('off');
+    this.cq.setSuppressed(false);
+    this.receiveEpoch = 0;
+    this.lastObservedSlotId = undefined;
   }
 
   private result(options: {
@@ -370,9 +480,88 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     return Math.max(1, Math.min(3, Math.trunc(this.operator.config.parallelStreams || 1)));
   }
 
+  private queueActions(entry: import('@tx5dr/plugin-api/toolkit').ParallelQSOQueueEntry<WWDigiEntryData>) {
+    if (entry.data.status === 'review') {
+      const template = `<${entry.callsign}> ${this.operator.config.myCallsign} ${this.operator.config.myGrid}`;
+      return [{
+        id: 'set-alternate-and-authorize',
+        label: 'actionAlternateMessage',
+        description: 'actionAlternateMessageDesc',
+        icon: 'pen',
+        tone: 'warning' as const,
+        presentation: 'primary' as const,
+        input: { kind: 'text' as const, label: 'actionAlternateMessage', value: template, maxLength: 32 },
+      }, {
+        id: 'end-queued-target', label: 'actionEndQso', icon: 'xmark', tone: 'danger' as const, presentation: 'menu' as const,
+      }];
+    }
+    if (entry.data.status === 'stale' || entry.data.status === 'paused') {
+      return [{
+        id: 'reauthorize-target', label: 'actionReauthorize', icon: 'rotate-right', tone: 'primary' as const, presentation: 'primary' as const,
+      }, {
+        id: 'end-queued-target', label: 'actionEndQso', icon: 'xmark', tone: 'danger' as const, presentation: 'menu' as const,
+      }];
+    }
+    if (entry.data.status === 'no-response') {
+      return [{
+        id: 'retry-target', label: 'actionRetry', icon: 'rotate-right', tone: 'primary' as const, presentation: 'primary' as const,
+      }, {
+        id: 'pause-target', label: 'actionLater', icon: 'pause', presentation: 'menu' as const,
+      }, {
+        id: 'end-queued-target', label: 'actionEndQso', icon: 'xmark', tone: 'danger' as const, presentation: 'menu' as const,
+      }];
+    }
+    return [{ id: 'pause-target', label: 'actionLater', icon: 'pause', presentation: 'menu' as const }, {
+      id: 'end-queued-target', label: 'actionEndQso', icon: 'xmark', tone: 'danger' as const, presentation: 'menu' as const,
+    }];
+  }
+
+  private expireAuthorizations(): boolean {
+    let changed = false;
+    const expiry = Math.max(1, Math.min(20, Math.trunc(this.operator.config.authorizationReceiveCycles ?? 4)));
+    for (const row of this.coordinator.getQueueSnapshot().entries) {
+      if (row.active || row.entry.data.status !== 'queued') continue;
+      const authorizedAt = row.entry.data.authorizedReceiveEpoch ?? this.receiveEpoch;
+      const lease = new AuthorizationLease({
+        authorizationId: row.entry.data.authorizationId,
+        authorizedAtCycle: authorizedAt,
+        expiresAfterReceiveCycles: expiry,
+      });
+      if (lease.isFresh(this.receiveEpoch)) continue;
+      if (this.coordinator.updateEntry(row.entry.entryId, (data) => {
+        data.status = 'stale';
+        return true;
+      })) changed = true;
+    }
+    return changed;
+  }
+
   private parallelStreams(): number {
     const hostLimit = Math.max(1, Math.min(3, Math.trunc(this.operator.config.maxConcurrentStreams || 1)));
     return Math.min(this.requestedParallelStreams(), hostLimit);
+  }
+
+  private authorizeEntry(entryId: string, options: { alternateText?: string } = {}): void {
+    if (!this.coordinator.updateEntry(entryId, (data) => {
+      data.status = 'queued';
+      data.authorizationId = randomUUID();
+      data.authorizedAt = Date.now();
+      data.authorizedReceiveEpoch = this.receiveEpoch;
+      data.noResponseCycles = undefined;
+      data.encodingError = undefined;
+      if (options.alternateText) data.alternateText = options.alternateText;
+      return true;
+    })) throw new Error('entry_not_found');
+  }
+
+  private validateLaneSpacing(): void {
+    const frequencies = this.coordinator.getStreams().map((stream) => stream.audioFrequencyHz).sort((a, b) => a - b);
+    const minimum = this.operator.config.modeName === 'FT4' ? 100 : 60;
+    for (let index = 1; index < frequencies.length; index += 1) {
+      if (frequencies[index]! - frequencies[index - 1]! < minimum) {
+        throw new Error('audio_frequency_conflict');
+      }
+    }
   }
 
   private mutationResult(result: ParallelQueueMutationResult<WWDigiEntryData>): QueuedStrategyMutationResult {

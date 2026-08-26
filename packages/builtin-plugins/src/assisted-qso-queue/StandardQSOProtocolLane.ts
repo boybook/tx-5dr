@@ -22,7 +22,7 @@ import type {
   ProtocolLane,
   ProtocolLaneDecision,
   ProtocolLaneSnapshot,
-} from '../_shared/parallel-qso/index.js';
+} from '@tx5dr/plugin-api/toolkit';
 import {
   StandardQSOPluginRuntime,
   type StandardQSOPluginOperator,

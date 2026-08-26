@@ -38,6 +38,7 @@ import {
 import { WSJTXDecodeWorkQueue } from './decode/WSJTXDecodeWorkQueue.js';
 import type { DecodeWorkerPoolHealthSnapshot } from './decode/WSJTXDecodeProcessPool.js';
 import { WSJTXEncodeWorkQueue } from './decode/WSJTXEncodeWorkQueue.js';
+import { DigitalMessagePreflightService } from './decode/DigitalMessagePreflightService.js';
 import { SlotPackManager } from './slot/SlotPackManager.js';
 import { ConfigManager } from './config/config-manager.js';
 import { SpectrumScheduler } from './audio/SpectrumScheduler.js';
@@ -395,12 +396,14 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     // 初始化插件管理器（在操作员管理器之后）
     // dataDir 异步获取，先用占位符，initialize() 中完成
+    const digitalMessagePreflight = new DigitalMessagePreflightService();
     this._pluginManager = new PluginManager({
       eventEmitter: this,
       getOperators: () => this._operatorManager.getAllOperators(),
       getOperatorById: (id) => this._operatorManager.getOperatorById(id),
       notifyOperatorStatusChanged: (id) => this._operatorManager.emitOperatorStatusUpdate(id),
       getCurrentMode: () => this.currentMode,
+      preflightDigitalMessage: (request) => digitalMessagePreflight.check(request),
       getOperatorAutomationSnapshot: (id) => this._pluginManager.getOperatorAutomationSnapshot(id),
       requestOperatorCall: (operatorId, callsign, lastMessage) => {
         this._pluginManager.requestCall(operatorId, callsign, lastMessage);

@@ -4,5 +4,6 @@
   "strategyOverview": "アシストキューの説明",
   "strategyOverviewDesc": "メッセージ一覧の相手局をダブルクリックすると手動で追加できます。信頼できる直接呼び出しは自動で追加され、標準 FT8/FT4 手順で順番に交信します。",
   "parallelStreams": "送信スロット数",
-  "parallelStreamsDesc": "同時に使用する標準 FT8/FT4 送信スロット数です。既定値は1スロット、最大3スロットです。"
+  "parallelStreamsDesc": "同時に使用する標準 FT8/FT4 送信スロット数です。既定値は1スロット、最大3スロットです。",
+  "actionRetry": "再試行", "actionRemove": "削除"
 }

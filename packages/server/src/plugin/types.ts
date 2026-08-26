@@ -191,6 +191,9 @@ export interface PluginManagerDeps {
   getOperatorById: (id: string) => import('@tx5dr/core').RadioOperator | undefined;
   /** 见 DecisionOrchestratorDeps.getCurrentMode 的注释 */
   getCurrentMode: () => import('@tx5dr/contracts').ModeDescriptor;
+  preflightDigitalMessage?: (
+    request: import('@tx5dr/plugin-api').DigitalMessagePreflightRequest,
+  ) => Promise<import('@tx5dr/plugin-api').DigitalMessagePreflightResult>;
   getOperatorAutomationSnapshot: (id: string) => import('@tx5dr/plugin-api').StrategyRuntimeSnapshot | null;
   requestOperatorCall: (
     operatorId: string,

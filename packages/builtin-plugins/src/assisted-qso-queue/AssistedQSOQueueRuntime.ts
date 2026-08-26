@@ -17,6 +17,8 @@ import type {
   StrategyRuntimeSlotContentUpdate,
   StrategyRuntimeSnapshot,
   StrategyStreamStateUpdate,
+  StrategyActionInvocation,
+  StrategyActionResult,
   StreamPhysicalReceipt,
   SlotInfo,
 } from '@tx5dr/plugin-api';
@@ -30,7 +32,7 @@ import {
   ParallelQSOCoordinator,
   type ParallelQSOCoordinatorCheckpoint,
   type ParallelQSOQueueEntry,
-} from '../_shared/parallel-qso/index.js';
+} from '@tx5dr/plugin-api/toolkit';
 import type { StandardQSOPluginOperator } from '../standard-qso/StandardQSOPluginRuntime.js';
 import {
   StandardQSOProtocolLane,
@@ -398,6 +400,12 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
             )),
           streamId: row.streamId,
           audioFrequencyHz: row.audioFrequencyHz,
+          actions: row.active ? [] : [
+            ...(data.state === 'no-response' ? [{
+              id: 'retry-target', label: 'actionRetry', icon: 'rotate-right', tone: 'primary' as const, presentation: 'primary' as const,
+            }] : []),
+            { id: 'remove-target', label: 'actionRemove', icon: 'trash', tone: 'danger' as const, presentation: 'menu' as const },
+          ],
         };
       }),
     };
@@ -432,6 +440,21 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
       qsoFailures: qsoFailures.length > 1 ? qsoFailures : undefined,
       requestedTransmitCycle: firstFill.requestedTransmitCycle ?? refill?.requestedTransmitCycle,
     };
+  }
+
+  invokeAction(invocation: StrategyActionInvocation): StrategyActionResult | void {
+    if (invocation.target.kind !== 'queue-entry') throw new Error('strategy_action_not_available');
+    if (invocation.actionId === 'retry-target') {
+      const result = this.retryTarget(invocation.target.entryId, invocation.target.queueVersion);
+      if (result.outcome !== 'accepted') throw new Error(result.reason ?? 'strategy_action_not_available');
+      return { requestDecision: true };
+    }
+    if (invocation.actionId === 'remove-target') {
+      const result = this.removeTarget(invocation.target.entryId, invocation.target.queueVersion);
+      if (result.outcome !== 'accepted') throw new Error(result.reason ?? 'strategy_action_not_available');
+      return { requestDecision: true };
+    }
+    throw new Error('strategy_action_not_available');
   }
 
   getTransmitText(): string | null {

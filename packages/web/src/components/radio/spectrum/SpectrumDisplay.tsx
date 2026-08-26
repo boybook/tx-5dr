@@ -43,6 +43,10 @@ import {
   SPECTRUM_THEME_IDS,
   type SpectrumThemeId,
 } from './spectrumThemes';
+import {
+  STRATEGY_FREQUENCY_PICK_EVENT,
+  type StrategyFrequencyPickRequest,
+} from '../../../utils/strategyFrequencyPick';
 
 const logger = createLogger('SpectrumDisplay');
 const SPECTRUM_NO_FRAME_STALE_MS = 10_000;
@@ -966,6 +970,14 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const canToggleInputSignal = useHasMinRole(UserRole.ADMIN);
   const ability = useAbility();
   const [inputSignalTogglePending, setInputSignalTogglePending] = useState(false);
+  const [strategyFrequencyPick, setStrategyFrequencyPick] = useState<StrategyFrequencyPickRequest | null>(null);
+  useEffect(() => {
+    const listener = (event: Event) => {
+      setStrategyFrequencyPick((event as CustomEvent<StrategyFrequencyPickRequest>).detail);
+    };
+    window.addEventListener(STRATEGY_FREQUENCY_PICK_EVENT, listener);
+    return () => window.removeEventListener(STRATEGY_FREQUENCY_PICK_EVENT, listener);
+  }, []);
   const inputSignalType: AudioInputSignalType =
     activeProfile?.audio?.inputSignalType === 'icom-12k-if' ? 'icom-12k-if' : 'af';
   const isIfInputSignal = inputSignalType === 'icom-12k-if';
@@ -1268,6 +1280,17 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         : {}),
     });
   }, [connection.state.radioService, operators]);
+
+  const handleStrategyFrequencyPick = useCallback((frequency: number) => {
+    if (!strategyFrequencyPick) return;
+    connection.state.radioService?.invokeOperatorStrategyAction(
+      strategyFrequencyPick.operatorId,
+      strategyFrequencyPick.target,
+      strategyFrequencyPick.actionId,
+      { value: Math.round(frequency) },
+    );
+    setStrategyFrequencyPick(null);
+  }, [connection.state.radioService, strategyFrequencyPick]);
 
   const displayTxFrequencyChange = showMarkers && canDragTxMarker && !isVoiceMode
     ? handleTxFrequencyChange
@@ -2256,7 +2279,9 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
             : undefined
         }
         onDoubleClickSetFrequency={
-          frequencyGestureTarget === 'radio-frequency' && canDoubleClickSetFrequency && canWriteFrequency
+          strategyFrequencyPick && isAudioSpectrumSelected
+            ? handleStrategyFrequencyPick
+            : frequencyGestureTarget === 'radio-frequency' && canDoubleClickSetFrequency && canWriteFrequency
             ? handleRadioFrequencyGesture
             : undefined
         }

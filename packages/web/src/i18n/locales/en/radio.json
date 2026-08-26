@@ -494,6 +494,8 @@
       "activeEntry": "The active QSO target cannot be moved",
       "versionConflict": "The queue was updated elsewhere; retry using the latest order"
     },
+    "strategyActionUnavailable": "This action is no longer available because the QSO changed.",
+    "strategyActions": { "more": "More actions", "pickSpectrum": "Pick from spectrum", "cancel": "Cancel" },
     "streamStateErrors": {
       "qsoChanged": "This QSO changed before the state could be applied. Review the current row and try again.",
       "stateUnavailable": "That state is no longer available for this QSO.",

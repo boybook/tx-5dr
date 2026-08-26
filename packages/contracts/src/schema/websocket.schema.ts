@@ -112,6 +112,7 @@ export enum WSMessageType {
   SET_OPERATOR_CONTEXT = 'setOperatorContext',
   SET_OPERATOR_RUNTIME_STATE = 'setOperatorRuntimeState',
   SET_OPERATOR_STREAM_STATE = 'setOperatorStreamState',
+  INVOKE_OPERATOR_STRATEGY_ACTION = 'invokeOperatorStrategyAction',
   SET_OPERATOR_RUNTIME_SLOT_CONTENT = 'setOperatorRuntimeSlotContent',
   SET_OPERATOR_TRANSMIT_CYCLES = 'setOperatorTransmitCycles',
   START_OPERATOR = 'startOperator',
@@ -448,6 +449,63 @@ export const StrategyStateOptionSchema = z.object({
 });
 export type StrategyStateOption = z.infer<typeof StrategyStateOptionSchema>;
 
+export const StrategyActionInputSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('text'),
+    label: z.string().optional(),
+    value: z.string().optional(),
+    placeholder: z.string().optional(),
+    maxLength: z.number().int().positive().optional(),
+  }),
+  z.object({
+    kind: z.enum(['number', 'audio-frequency']),
+    label: z.string().optional(),
+    value: z.number().optional(),
+    min: z.number().optional(),
+    max: z.number().optional(),
+    step: z.number().positive().optional(),
+    unit: z.string().optional(),
+    spectrumPick: z.boolean().optional(),
+  }),
+]);
+
+export const StrategyActionDescriptorSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  description: z.string().optional(),
+  icon: z.string().optional(),
+  tone: z.enum(['default', 'primary', 'success', 'warning', 'danger']).optional(),
+  presentation: z.enum(['primary', 'secondary', 'menu', 'segmented']).optional(),
+  groupId: z.string().optional(),
+  selected: z.boolean().optional(),
+  disabledReason: z.string().optional(),
+  previewText: z.string().optional(),
+  confirmation: z.object({
+    title: z.string().min(1),
+    description: z.string().optional(),
+    confirmLabel: z.string().optional(),
+  }).optional(),
+  input: StrategyActionInputSchema.optional(),
+});
+export type StrategyActionDescriptor = z.infer<typeof StrategyActionDescriptorSchema>;
+
+export const StrategyAttentionSchema = z.object({
+  id: z.string().min(1),
+  tone: z.enum(['info', 'warning', 'danger', 'success']),
+  title: z.string().min(1),
+  description: z.string().optional(),
+  expiresAt: z.number().optional(),
+  actionIds: z.array(z.string()).optional(),
+});
+export type StrategyAttention = z.infer<typeof StrategyAttentionSchema>;
+
+export const StrategyCompletionProjectionSchema = z.object({
+  state: z.enum(['not-ready', 'ready', 'committing', 'committed', 'failed']),
+  label: z.string().optional(),
+  recordId: z.string().optional(),
+});
+export type StrategyCompletionProjection = z.infer<typeof StrategyCompletionProjectionSchema>;
+
 export const StrategyStreamSnapshotSchema = z.object({
   streamId: z.string().min(1),
   currentState: z.string(),
@@ -456,6 +514,11 @@ export const StrategyStreamSnapshotSchema = z.object({
   audioFrequencyHz: z.number().min(0).max(5000),
   qsoLifecycleEpoch: z.number().int().nonnegative(),
   stateOptions: z.array(StrategyStateOptionSchema).optional(),
+  actions: z.array(StrategyActionDescriptorSchema).optional(),
+  attentions: z.array(StrategyAttentionSchema).optional(),
+  completion: StrategyCompletionProjectionSchema.optional(),
+  lastReceivedText: z.string().optional(),
+  nextTransmitText: z.string().optional(),
 });
 export type StrategyStreamSnapshot = z.infer<typeof StrategyStreamSnapshotSchema>;
 
@@ -490,6 +553,7 @@ export const AssistedQueueRowSchema = z.object({
   streamId: z.string().optional(),
   audioFrequencyHz: z.number().optional(),
   authorizationId: z.string().optional(),
+  actions: z.array(StrategyActionDescriptorSchema).optional(),
 });
 export const AssistedQueueSnapshotSchema = z.object({
   version: z.number().int().nonnegative(),
@@ -524,7 +588,24 @@ export const StrategyRuntimeSnapshotSchema = z.object({
   qsoLifecycleEpoch: z.number().int().nonnegative().optional(),
   streams: z.array(StrategyStreamSnapshotSchema).optional(),
   queue: AssistedQueueSnapshotSchema.optional(),
+  actions: z.array(StrategyActionDescriptorSchema).optional(),
+  attentions: z.array(StrategyAttentionSchema).optional(),
 });
+
+export const StrategyActionTargetSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('runtime') }),
+  z.object({
+    kind: z.literal('stream'),
+    streamId: z.string().min(1),
+    lifecycleEpoch: z.number().int().nonnegative(),
+  }),
+  z.object({
+    kind: z.literal('queue-entry'),
+    entryId: z.string().min(1),
+    queueVersion: z.number().int().nonnegative(),
+  }),
+]);
+export type StrategyActionTarget = z.infer<typeof StrategyActionTargetSchema>;
 export type StrategyRuntimeSnapshot = z.infer<typeof StrategyRuntimeSnapshotSchema>;
 
 export const LevelMeterDisplayStyleSchema = z.enum([
@@ -922,6 +1003,16 @@ export const WSSetOperatorStreamStateMessageSchema = WSBaseMessageSchema.extend(
   }),
 });
 
+export const WSInvokeOperatorStrategyActionMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.INVOKE_OPERATOR_STRATEGY_ACTION),
+  data: z.object({
+    operatorId: z.string().min(1),
+    target: StrategyActionTargetSchema,
+    actionId: z.string().min(1),
+    payload: z.unknown().optional(),
+  }),
+});
+
 /**
  * 设置操作员运行时槽位内容消息
  */
@@ -1095,6 +1186,7 @@ export type WSOperatorStatusUpdateMessage = z.infer<typeof WSOperatorStatusUpdat
 export type WSSetOperatorContextMessage = z.infer<typeof WSSetOperatorContextMessageSchema>;
 export type WSSetOperatorRuntimeStateMessage = z.infer<typeof WSSetOperatorRuntimeStateMessageSchema>;
 export type WSSetOperatorStreamStateMessage = z.infer<typeof WSSetOperatorStreamStateMessageSchema>;
+export type WSInvokeOperatorStrategyActionMessage = z.infer<typeof WSInvokeOperatorStrategyActionMessageSchema>;
 export type WSSetOperatorRuntimeSlotContentMessage = z.infer<typeof WSSetOperatorRuntimeSlotContentMessageSchema>;
 export type WSSetOperatorTransmitCyclesMessage = z.infer<typeof WSSetOperatorTransmitCyclesMessageSchema>;
 export type WSStartOperatorMessage = z.infer<typeof WSStartOperatorMessageSchema>;
@@ -1722,6 +1814,7 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSSetOperatorContextMessageSchema,
   WSSetOperatorRuntimeStateMessageSchema,
   WSSetOperatorStreamStateMessageSchema,
+  WSInvokeOperatorStrategyActionMessageSchema,
   WSSetOperatorRuntimeSlotContentMessageSchema,
   WSSetOperatorTransmitCyclesMessageSchema,
   WSStartOperatorMessageSchema,

@@ -188,6 +188,14 @@ export function createMockKVStore(initial?: Record<string, unknown>): MockKVStor
         data.set(key, clonedEntry[key]);
       }
     },
+    update<T = unknown>(key: string, reducer: (current: T | undefined) => T | undefined): T | undefined {
+      const current = data.has(key) ? cloneJsonValue(data.get(key)) as T : undefined;
+      const next = reducer(current);
+      const clonedEntry = cloneJsonValue({ [key]: next }) as Record<string, unknown>;
+      if (!Object.prototype.hasOwnProperty.call(clonedEntry, key)) data.delete(key);
+      else data.set(key, clonedEntry[key]);
+      return data.has(key) ? cloneJsonValue(data.get(key)) as T : undefined;
+    },
     delete(key: string): void {
       data.delete(key);
     },
@@ -835,6 +843,14 @@ export function createMockContext<
       Object.assign(configState, cloneJsonValue(patch));
     },
     store: { global: globalStore, operator: operatorStore },
+    digitalMessagePreflight: {
+      async check(request) {
+        const text = request.text.trim().toUpperCase().replace(/\s+/g, ' ');
+        return text
+          ? { encodable: true, requestedText: text, transmittedText: text }
+          : { encodable: false, requestedText: text, reason: 'empty' as const };
+      },
+    },
     log,
     timers,
     operator,

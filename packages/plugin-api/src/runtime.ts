@@ -50,6 +50,67 @@ export interface StrategyRuntimeSnapshot {
   streams?: StrategyStreamSnapshot[];
   /** Optional compact projection exposed by queue-capable strategies. */
   queue?: AssistedQueueSnapshot;
+  /** Plugin-declared operator controls rendered without business interpretation. */
+  actions?: StrategyActionDescriptor[];
+  /** Plugin-declared operator attention items. */
+  attentions?: StrategyAttention[];
+}
+
+export type StrategyActionTone = 'default' | 'primary' | 'success' | 'warning' | 'danger';
+export type StrategyActionPresentation = 'primary' | 'secondary' | 'menu' | 'segmented';
+
+export type StrategyActionInput =
+  | {
+      kind: 'text';
+      label?: string;
+      value?: string;
+      placeholder?: string;
+      maxLength?: number;
+    }
+  | {
+      kind: 'number' | 'audio-frequency';
+      label?: string;
+      value?: number;
+      min?: number;
+      max?: number;
+      step?: number;
+      unit?: string;
+      spectrumPick?: boolean;
+    };
+
+/** One context-sensitive command wholly owned by a strategy plugin. */
+export interface StrategyActionDescriptor {
+  id: string;
+  label: string;
+  description?: string;
+  icon?: string;
+  tone?: StrategyActionTone;
+  presentation?: StrategyActionPresentation;
+  groupId?: string;
+  selected?: boolean;
+  disabledReason?: string;
+  previewText?: string;
+  confirmation?: {
+    title: string;
+    description?: string;
+    confirmLabel?: string;
+  };
+  input?: StrategyActionInput;
+}
+
+export interface StrategyAttention {
+  id: string;
+  tone: 'info' | 'warning' | 'danger' | 'success';
+  title: string;
+  description?: string;
+  expiresAt?: number;
+  actionIds?: string[];
+}
+
+export interface StrategyCompletionProjection {
+  state: 'not-ready' | 'ready' | 'committing' | 'committed' | 'failed';
+  label?: string;
+  recordId?: string;
 }
 
 /** One user-selectable state exposed by a strategy-owned state machine. */
@@ -78,6 +139,28 @@ export interface StrategyStreamSnapshot {
   qsoLifecycleEpoch: number;
   /** Protocol-approved states that the operator may select for this lane. */
   stateOptions?: StrategyStateOption[];
+  actions?: StrategyActionDescriptor[];
+  attentions?: StrategyAttention[];
+  completion?: StrategyCompletionProjection;
+  lastReceivedText?: string;
+  nextTransmitText?: string;
+}
+
+export type StrategyActionTarget =
+  | { kind: 'runtime' }
+  | { kind: 'stream'; streamId: string; lifecycleEpoch: number }
+  | { kind: 'queue-entry'; entryId: string; queueVersion: number };
+
+export interface StrategyActionInvocation {
+  target: StrategyActionTarget;
+  actionId: string;
+  payload?: unknown;
+}
+
+export interface StrategyActionResult {
+  requestDecision?: boolean;
+  qsoCompletions?: StrategyQSOCompletionEffect[];
+  outcome?: { code: string; message?: string };
 }
 
 /** Optimistic request to move one strategy-owned lane to a user-selectable state. */
@@ -145,6 +228,8 @@ export interface AssistedQueueRow {
   lastSnr?: number;
   /** Receive cycles elapsed since this target was last decoded. */
   lastHeardCyclesAgo?: number;
+  /** Plugin-declared row actions. Omission preserves legacy queue controls. */
+  actions?: StrategyActionDescriptor[];
 }
 
 /** Versioned queue projection embedded in `StrategyRuntimeSnapshot.queue`. */
@@ -375,6 +460,11 @@ export interface StrategyRuntime {
 
   /** Switches one independently progressing lane to a strategy-approved state. */
   setStreamState?(update: StrategyStreamStateUpdate): void;
+
+  /** Executes one plugin-declared runtime, stream or queue-entry action. */
+  invokeAction?(
+    invocation: StrategyActionInvocation,
+  ): StrategyActionResult | void | Promise<StrategyActionResult | void>;
 
   /**
    * Updates the human-readable content associated with a logical slot.
