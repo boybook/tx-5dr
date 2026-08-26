@@ -228,4 +228,45 @@ describe('VirtualRadioSession real codec loop', () => {
       await session.stop('test complete');
     }
   });
+
+  it('feeds the active host waveform into virtual input and removes it on cancellation', async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), 'tx5dr-virtual-tx-monitor-'));
+    tempDirs.push(dataDir);
+    const profile = VirtualRadioProfileSchema.parse({
+      id: 'virtual-tx-monitor', name: 'hidden', createdAt: 1, updatedAt: 1,
+      radio: { type: 'virtual', virtual: {
+        dialFrequencyHz: 14_090_000, scenarioProvider: 'ww-digi', seed: 'tx-monitor',
+        peers: [{ id: 'peer-1', callsign: 'JA1AAA', grid: 'PM95', scenarioId: 'standard', audioFrequencyHz: 1_500 }],
+      } },
+    });
+    const scenarios = BUILTIN_PLUGINS.find((plugin) => (
+      plugin.definition.name === BUILTIN_WW_DIGI_PLUGIN_NAME
+    ))!.definition.simulationScenarios!;
+    let now = Date.now();
+    const ingested: Float32Array[] = [];
+    const session = new VirtualRadioSession({
+      profile, scenarios, mode: MODES.FT8, dataDir, now: () => now,
+      getOutputGain: () => 1,
+      ingestInput: async (samples) => { ingested.push(samples.slice()); },
+    });
+    await session.start();
+    try {
+      const waveform = new Float32Array(12_000).fill(0.25);
+      const playback = session.playAudio(waveform, 12_000, { playbackKind: 'tune-tone' });
+      const interrupted = expect(playback).rejects.toThrow('playback interrupted');
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      now += 100;
+      await (session as unknown as { pumpInput(): Promise<void> }).pumpInput();
+      expect(ingested.at(-1)?.some((sample) => sample !== 0)).toBe(true);
+
+      expect(await session.stopCurrentPlayback({ kind: 'tune-tone' })).toBe(100);
+      await interrupted;
+      now += 100;
+      await (session as unknown as { pumpInput(): Promise<void> }).pumpInput();
+      expect(ingested.at(-1)?.every((sample) => sample === 0)).toBe(true);
+    } finally {
+      await session.stop('test complete');
+    }
+  });
 });

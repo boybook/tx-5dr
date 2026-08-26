@@ -70,6 +70,7 @@ export class VirtualRadioSession {
   private playbackStartedAt = 0;
   private playbackTimer: NodeJS.Timeout | null = null;
   private rejectPlayback: ((error: Error) => void) | null = null;
+  private activeHostMonitorAudio?: ScheduledAudio;
   private traceTail: Promise<void> = Promise.resolve();
   private readonly sessionId = randomUUID();
   private readonly tracePath: string;
@@ -150,6 +151,7 @@ export class VirtualRadioSession {
     const elapsed = Math.max(0, this.options.now() - this.playbackStartedAt);
     if (this.playbackTimer) clearTimeout(this.playbackTimer);
     this.playbackTimer = null;
+    this.removeActiveHostMonitorAudio();
     this.rejectPlayback?.(new Error('playback interrupted'));
     this.rejectPlayback = null;
     this.playing = false;
@@ -171,6 +173,14 @@ export class VirtualRadioSession {
     for (let index = 0; index < audioData.length; index += 1) {
       gained[index] = Math.max(-1, Math.min(1, audioData[index]! * gain));
     }
+    if (sampleRate === SAMPLE_RATE) {
+      this.activeHostMonitorAudio = {
+        startMs: playbackStartedAt,
+        samples: gained,
+      };
+      this.scheduledAudio.push(this.activeHostMonitorAudio);
+      this.scheduledAudio.sort((left, right) => left.startMs - right.startMs);
+    }
     const durationMs = Math.max(0, Math.round(gained.length / sampleRate * 1_000));
     const playbackCompletion = new Promise<void>((resolve, reject) => {
       this.rejectPlayback = reject;
@@ -190,6 +200,7 @@ export class VirtualRadioSession {
       this.rejectPlayback = null;
       this.playing = false;
       this.playbackKind = null;
+      this.activeHostMonitorAudio = undefined;
     }
     if (completed && playbackKind === 'digital' && this.running) {
       void this.decodeHostTransmission(gained, sampleRate, playbackStartedAt).catch((error) => {
@@ -342,6 +353,7 @@ export class VirtualRadioSession {
     for (let index = this.scheduledAudio.length - 1; index >= 0; index -= 1) {
       const scheduled = this.scheduledAudio[index]!;
       if (scheduled.startMs + scheduled.samples.length / SAMPLE_RATE * 1_000 <= endMs) {
+        if (scheduled === this.activeHostMonitorAudio) this.activeHostMonitorAudio = undefined;
         this.scheduledAudio.splice(index, 1);
       }
     }
@@ -373,6 +385,14 @@ export class VirtualRadioSession {
       });
       await this.scheduleReplies(slotStart, decisions);
     }
+  }
+
+  private removeActiveHostMonitorAudio(): void {
+    const scheduled = this.activeHostMonitorAudio;
+    if (!scheduled) return;
+    const index = this.scheduledAudio.indexOf(scheduled);
+    if (index >= 0) this.scheduledAudio.splice(index, 1);
+    this.activeHostMonitorAudio = undefined;
   }
 
   private trace(kind: string, data: unknown = {}): Promise<void> {
