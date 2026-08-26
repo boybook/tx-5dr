@@ -33,5 +33,7 @@ export interface SimulationScenarioDescriptor {
   id: string;
   modes: SimulationMode[];
   initialState: string;
+  /** Rules evaluated before the current state's rules, for protocol messages that may interrupt any state. */
+  globalRules?: SimulationScenarioRule[];
   states: Record<string, SimulationScenarioState>;
 }

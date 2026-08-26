@@ -6,7 +6,9 @@ function definition(): AnyPluginDefinition {
   return {
     apiVersion: 2, name: 'sim-provider', version: '1.0.0', type: 'utility',
     simulationScenarios: [{
-      id: 'scenario', modes: ['FT8'], initialState: 'idle', states: {
+      id: 'scenario', modes: ['FT8'], initialState: 'idle',
+      globalRules: [{ pattern: 'RESET', choices: [{ silence: true, nextState: 'idle' }] }],
+      states: {
         idle: { rules: [{ pattern: 'PING', choices: [{ reply: 'PONG' }] }] },
       },
     }],
@@ -29,5 +31,8 @@ describe('PluginLoader simulation scenarios', () => {
     const ambiguous = definition();
     ambiguous.simulationScenarios![0]!.states.idle!.rules![0]!.choices[0] = { reply: 'PONG', silence: true };
     expect(() => validatePluginDefinition(ambiguous)).toThrow('exactly one action');
+    const invalidGlobal = definition();
+    invalidGlobal.simulationScenarios![0]!.globalRules![0]!.choices[0] = { silence: true, nextState: 'missing' };
+    expect(() => validatePluginDefinition(invalidGlobal)).toThrow('missing state');
   });
 });

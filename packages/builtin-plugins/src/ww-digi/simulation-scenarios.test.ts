@@ -42,5 +42,7 @@ describe('WW Digi simulation scenarios', () => {
     const ambient = wwDigiSimulationScenarios.find((scenario) => scenario.id === 'ambient-band')!;
     expect(standard.states['await-grid']?.rules?.some((rule) => rule.pattern.startsWith('CQ WW'))).toBe(false);
     expect(ambient.states.idle?.rules?.some((rule) => rule.pattern.startsWith('CQ WW'))).toBe(true);
+    expect(ambient.globalRules).toHaveLength(3);
+    expect(ambient.globalRules?.every((rule) => rule.pattern.startsWith('{{peerCallsign}}'))).toBe(true);
   });
 });
