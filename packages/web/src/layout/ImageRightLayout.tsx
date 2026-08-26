@@ -65,7 +65,14 @@ export function ImageRightLayout() {
         </div>
       </div>
       <div className="min-h-0 flex-1 px-2 md:px-5">
-        {selectedTab === 'transmit' && !isFax ? <SstvComposer /> : <ImageHistoryTimeline />}
+        <div className={selectedTab === 'history' || isFax ? 'h-full' : 'hidden'}>
+          <ImageHistoryTimeline />
+        </div>
+        {!isFax ? (
+          <div className={selectedTab === 'transmit' ? 'h-full' : 'hidden'}>
+            <SstvComposer />
+          </div>
+        ) : null}
       </div>
       {!isFax ? (
         <div className="flex-shrink-0 px-2 pb-2 md:px-5">

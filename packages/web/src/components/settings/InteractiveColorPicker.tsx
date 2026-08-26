@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { ColorPicker, useColor, type IColor } from 'react-color-palette';
+import React, { useEffect, useState } from 'react';
+import { ColorPicker, ColorService, useColor, type IColor } from 'react-color-palette';
 import {
   Popover,
   PopoverTrigger,
@@ -15,16 +15,26 @@ interface InteractiveColorPickerProps {
   value: string;
   onChange: (color: string) => void;
   disabled?: boolean;
+  label?: React.ReactNode;
+  buttonClassName?: string;
+  hideAlpha?: boolean;
 }
 
 export const InteractiveColorPicker: React.FC<InteractiveColorPickerProps> = ({
   value,
   onChange,
   disabled = false,
+  label,
+  buttonClassName = '',
+  hideAlpha = false,
 }) => {
   const { t } = useTranslation('common');
   const [color, setColor] = useColor(value);
   const [isOpen, setIsOpen] = useState(false);
+
+  useEffect(() => {
+    setColor(ColorService.convert('hex', value));
+  }, [setColor, value]);
 
   const handleColorChange = (newColor: IColor) => {
     setColor(newColor);
@@ -42,7 +52,7 @@ export const InteractiveColorPicker: React.FC<InteractiveColorPickerProps> = ({
         <Button
           variant="flat"
           isDisabled={disabled}
-          className="h-8 px-3 bg-default-100 hover:bg-default-200"
+          className={`h-8 bg-default-100 px-3 hover:bg-default-200 ${buttonClassName}`}
           startContent={
             <div
               className="w-4 h-4 rounded border border-default-300"
@@ -53,13 +63,13 @@ export const InteractiveColorPicker: React.FC<InteractiveColorPickerProps> = ({
             <FontAwesomeIcon icon={faPalette} className="text-default-500 text-xs" />
           }
         >
-          <span className="text-xs text-default-700">{t('colorPicker.selectColor')}</span>
+          <span className="truncate text-xs text-default-700">{label ?? t('colorPicker.selectColor')}</span>
         </Button>
       </PopoverTrigger>
       <PopoverContent className="p-4">
         <div className="flex flex-col gap-3">
           <div className="text-sm font-medium text-default-900">
-            {t('colorPicker.selectColor')}
+            {label ?? t('colorPicker.selectColor')}
           </div>
           <div
             className="react-color-palette-container"
@@ -74,6 +84,7 @@ export const InteractiveColorPicker: React.FC<InteractiveColorPickerProps> = ({
               color={color}
               onChange={handleColorChange}
               height={160}
+              hideAlpha={hideAlpha}
               hideInput={['rgb', 'hsv']} // 只显示HEX输入
             />
           </div>

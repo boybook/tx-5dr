@@ -10,7 +10,7 @@ interface TemplateIndex { templates: ImageTemplate[] }
 function builtInTemplates(now = Date.now()): ImageTemplate[] {
   const layer = (id: string, text: string, y: number, fontSize: number) => ({
     id, text, x: 0.06, y, width: 0.88, height: 0.18, fontSize,
-    color: '#ffffff', strokeColor: '#000000', align: 'center' as const,
+    color: '#ffffff', strokeColor: '#000000', strokeWidth: 0.12, align: 'center' as const, rotation: 0,
   });
   return [
     { id: 'builtin-cq', name: 'CQ', builtIn: true, layers: [layer('title', 'CQ SSTV', 0.08, 0.12), layer('call', '{MYCALL}', 0.68, 0.14)], createdAt: now, updatedAt: now },
