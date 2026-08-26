@@ -22,7 +22,6 @@ import {
   resolveRadioOperatorCyclePresentation,
   resolveSingleControllableStream,
   resolveRadioOperatorStreamPresentations,
-  summarizeRadioOperatorTransmissions,
 } from './radioOperatorPresentation';
 import {
   OPERATOR_FORCE_STOP_REQUESTED_EVENT,
@@ -49,6 +48,7 @@ import {
 } from './OperatorPluginPageActions';
 import { OperatorStrategyActions } from './OperatorStrategyActions';
 import { requestStrategyFrequencyPick } from '../../../utils/strategyFrequencyPick';
+import { OperatorTransmissionStack } from './OperatorTransmissionStack';
 
 const logger = createLogger('RadioOperator');
 
@@ -752,7 +752,8 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
   );
   const currentTransmissions = resolveRadioOperatorCurrentTransmissions(operatorStatus);
   const streamPresentations = resolveRadioOperatorStreamPresentations(operatorStatus);
-  const currentTransmissionSummary = summarizeRadioOperatorTransmissions(currentTransmissions);
+  const currentTransmissionLineCount = currentTransmissions.filter((transmission) => Boolean(transmission.text)).length;
+  const usesStackedTransmissionLayout = currentTransmissionLineCount > 1;
   const activeStrategyStatus = pluginStatuses.find((plugin) => plugin.name === operatorStatus.strategy.name);
   const usesStreamProjection = activeStrategyStatus?.strategyFeatures?.parallelTargetQueue === 1
     || currentTransmissions.some((transmission) => transmission.streamId !== 'default')
@@ -1011,7 +1012,12 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
       }}
     >
       {/* 上半部分 - 进度条背景 */}
-      <div className="relative h-12 p-4">
+      <div
+        className={`relative px-4 ${usesStackedTransmissionLayout ? 'py-2' : 'h-12 py-4'}`}
+        style={usesStackedTransmissionLayout
+          ? { minHeight: `${Math.max(48, currentTransmissionLineCount * 14 + 16)}px` }
+          : undefined}
+      >
         {/* 进度条颜色层 - 仅在解码时显示 */}
         {radio.state.isDecoding && (
           <div
@@ -1050,12 +1056,11 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
               }
 
               return cyclePresentation.isTransmit ? (
-                <div
-                  className="truncate font-mono text-lg font-bold text-danger"
-                  title={cyclePresentation.transmitContent || t('operator.preparingTx')}
-                >
-                  {cyclePresentation.transmitContent || t('operator.preparingTx')}
-                </div>
+                <OperatorTransmissionStack
+                  transmissions={currentTransmissions}
+                  fallbackText={cyclePresentation.transmitContent || t('operator.preparingTx')}
+                  variant="header"
+                />
               ) : (
                 <div className="text-foreground opacity-65 font-bold font-mono text-lg">
                   {t('operator.listening', { callsign: operatorCallsign })}
@@ -1359,14 +1364,11 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
                 <span className="shrink-0 text-default-500">
                   {t('operator.transmitStreamsCount', { count: streamPresentations.length })}
                 </span>
-                <span
-                  className={`min-w-0 flex-1 truncate font-mono ${
-                    currentTransmissionSummary ? 'text-foreground' : 'text-default-400'
-                  }`}
-                  title={currentTransmissionSummary || t('operator.noCurrentTransmission')}
-                >
-                  {currentTransmissionSummary || t('operator.noCurrentTransmission')}
-                </span>
+                <OperatorTransmissionStack
+                  transmissions={currentTransmissions}
+                  fallbackText={t('operator.noCurrentTransmission')}
+                  variant="detail"
+                />
               </div>
             )
           ) : (
