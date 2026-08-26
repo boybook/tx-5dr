@@ -593,15 +593,9 @@ export class PluginManager {
     });
   }
 
-  getOperatorRuntimeStatus(operatorId: string): {
+  getOperatorRuntimeStatus(operatorId: string): Partial<StrategyRuntimeSnapshot> & {
     strategyName: string;
     currentSlot: string;
-    slots?: Record<string, string>;
-    context?: Record<string, unknown>;
-    availableSlots?: string[];
-    qsoLifecycleEpoch?: number;
-    streams?: import('@tx5dr/plugin-api').StrategyStreamSnapshot[];
-    queue?: import('@tx5dr/plugin-api').AssistedQueueSnapshot;
   } {
     const strategyName = this.getResolvedStrategyName(operatorId);
     const snapshot = this.getOperatorAutomationSnapshot(operatorId);
@@ -611,18 +605,9 @@ export class PluginManager {
 
     try {
       return {
+        ...snapshot,
         strategyName,
         currentSlot: typeof snapshot.currentState === 'string' ? snapshot.currentState : 'TX6',
-        slots: snapshot.slots && typeof snapshot.slots === 'object'
-          ? snapshot.slots as Record<string, string>
-          : undefined,
-        context: snapshot.context && typeof snapshot.context === 'object'
-          ? snapshot.context as Record<string, unknown>
-          : undefined,
-        availableSlots: snapshot.availableSlots,
-        qsoLifecycleEpoch: snapshot.qsoLifecycleEpoch,
-        streams: snapshot.streams,
-        queue: snapshot.queue,
       };
     } catch (err) {
       logger.error(`Failed to read strategy status: operator=${operatorId}`, err);

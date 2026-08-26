@@ -88,6 +88,7 @@ function createRuntime(options: {
   parallelStreams?: number;
   maxAttempts?: number;
   streamLimit?: number;
+  authorizationReceiveCycles?: number;
   busyCallsigns?: string[];
 } = {}) {
   let transmitting = options.transmitting ?? false;
@@ -102,6 +103,7 @@ function createRuntime(options: {
     parallelStreams: options.parallelStreams ?? 1,
     maxConcurrentStreams: options.streamLimit ?? 3,
     maxAttempts: options.maxAttempts ?? 5,
+    authorizationReceiveCycles: options.authorizationReceiveCycles,
   };
   const operator: WWDigiRuntimeOperator = {
     get config() { return config; },
@@ -267,6 +269,22 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
     expect(runtime.getQueueSnapshot().rows).toEqual([]);
     expect(result.transmissions).toEqual([]);
     await runtime.invokeAction({ target: { kind: 'runtime' }, actionId: 'cq-repeat' });
+    expect(runtime.getTransmissions()).toEqual([{
+      streamId: 'cq',
+      text: 'CQ WW BG5DRB OL32',
+      audioFrequencyHz: 1_500,
+    }]);
+  });
+
+  it('allows an armed CQ after queued targets become stale', async () => {
+    const { runtime } = createRuntime({ transmitting: true, authorizationReceiveCycles: 1 });
+    runtime.enqueueTarget({ callsign: 'JA1AAA' });
+    await runtime.invokeAction({ target: { kind: 'runtime' }, actionId: 'cq-repeat' });
+
+    expect(runtime.getTransmissions()).toEqual([]);
+
+    runtime.observeDecodedMessages([], observation());
+    expect(runtime.getQueueSnapshot().rows[0]).toMatchObject({ displayState: 'paused', pauseReason: 'stale' });
     expect(runtime.getTransmissions()).toEqual([{
       streamId: 'cq',
       text: 'CQ WW BG5DRB OL32',

@@ -324,7 +324,10 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     if (!this.operator.isTransmitting) return [];
     const transmissions = this.coordinator.getTransmissions();
     if (transmissions.length > 0) return transmissions;
-    if (this.coordinator.getQueueSnapshot().entries.length > 0) return [];
+    const queue = this.coordinator.getQueueSnapshot();
+    const hasCqBlockingWork = this.coordinator.getStreams().length > 0
+      || queue.entries.some((row) => row.entry.data.status === 'queued' || row.entry.data.status === 'review');
+    if (hasCqBlockingWork) return [];
     if (!this.cq.shouldTransmit()) return [];
     return [{
       streamId: 'cq',

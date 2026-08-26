@@ -20,6 +20,7 @@ describe('WW Digi simulation scenarios', () => {
       'missing-grid',
       'invalid-grid',
       'alternate-text',
+      'ambient-band',
       'seeded-random',
     ]));
   });
@@ -34,5 +35,12 @@ describe('WW Digi simulation scenarios', () => {
     expect(wwDigiSimulationScenarios.every((scenario) => (
       scenario.modes.includes('FT8') && scenario.modes.includes('FT4')
     ))).toBe(true);
+  });
+
+  it('keeps ambient discovery separate from the standard directed QSO flow', () => {
+    const standard = wwDigiSimulationScenarios.find((scenario) => scenario.id === 'standard')!;
+    const ambient = wwDigiSimulationScenarios.find((scenario) => scenario.id === 'ambient-band')!;
+    expect(standard.states['await-grid']?.rules?.some((rule) => rule.pattern.startsWith('CQ WW'))).toBe(false);
+    expect(ambient.states.idle?.rules?.some((rule) => rule.pattern.startsWith('CQ WW'))).toBe(true);
   });
 });

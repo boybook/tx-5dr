@@ -23,6 +23,18 @@ function managerHarness(invokeAction: () => unknown | Promise<unknown>) {
 }
 
 describe('PluginManager strategy actions', () => {
+  it('projects the complete generic runtime snapshot to the operator host', () => {
+    const { manager } = managerHarness(() => undefined);
+    manager.getResolvedStrategyName = vi.fn(() => 'test-strategy');
+
+    expect(manager.getOperatorRuntimeStatus('op-1')).toMatchObject({
+      strategyName: 'test-strategy',
+      currentSlot: 'active',
+      currentState: 'active',
+      actions: [{ id: 'do-work', label: 'Do work' }],
+    });
+  });
+
   it('commits declarative effects and requests a new decision', async () => {
     const effect = { lifecycleEpoch: 1, record: { id: 'qso-1' } };
     const { manager } = managerHarness(() => ({ requestDecision: true, qsoCompletions: [effect] }));
