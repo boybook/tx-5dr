@@ -753,7 +753,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
   const currentTransmissions = resolveRadioOperatorCurrentTransmissions(operatorStatus);
   const streamPresentations = resolveRadioOperatorStreamPresentations(operatorStatus);
   const currentTransmissionLineCount = currentTransmissions.filter((transmission) => Boolean(transmission.text)).length;
-  const usesStackedTransmissionLayout = currentTransmissionLineCount > 1;
+  const usesStackedHeaderLayout = cyclePresentation.isTransmit && currentTransmissionLineCount > 1;
   const activeStrategyStatus = pluginStatuses.find((plugin) => plugin.name === operatorStatus.strategy.name);
   const usesStreamProjection = activeStrategyStatus?.strategyFeatures?.parallelTargetQueue === 1
     || currentTransmissions.some((transmission) => transmission.streamId !== 'default')
@@ -1013,8 +1013,8 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
     >
       {/* 上半部分 - 进度条背景 */}
       <div
-        className={`relative px-4 ${usesStackedTransmissionLayout ? 'py-2' : 'h-12 py-4'}`}
-        style={usesStackedTransmissionLayout
+        className={`relative px-4 ${usesStackedHeaderLayout ? 'py-2' : 'h-12 py-4'}`}
+        style={usesStackedHeaderLayout
           ? { minHeight: `${Math.max(48, currentTransmissionLineCount * 14 + 16)}px` }
           : undefined}
       >
