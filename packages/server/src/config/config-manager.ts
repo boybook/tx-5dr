@@ -25,6 +25,7 @@ import { normalizeHamlibConfig, normalizeSerialConnectionConfig } from '../radio
 import {
   isVirtualRadioProfile,
   parseInternalProfiles,
+  projectVirtualRadioProfile,
   type InternalRadioProfile,
   type VirtualRadioProfile,
 } from './virtualRadioProfile.js';
@@ -834,7 +835,9 @@ export class ConfigManager {
    * 获取所有 Profile
    */
   getProfiles(): RadioProfile[] {
-    return this.config.profiles.filter((profile): profile is RadioProfile => !isVirtualRadioProfile(profile));
+    return this.config.profiles.map((profile) => (
+      isVirtualRadioProfile(profile) ? projectVirtualRadioProfile(profile) : profile
+    ));
   }
 
   getInternalProfiles(): InternalRadioProfile[] {
@@ -864,7 +867,7 @@ export class ConfigManager {
   }
 
   getPublicActiveProfileId(): string | null {
-    return this.getActiveVirtualRadioProfile() ? null : this.config.activeProfileId;
+    return this.config.activeProfileId;
   }
 
   hasConfiguredProfiles(): boolean {
@@ -876,7 +879,8 @@ export class ConfigManager {
    */
   getProfile(id: string): RadioProfile | null {
     const profile = this.config.profiles.find(p => p.id === id);
-    return profile && !isVirtualRadioProfile(profile) ? profile : null;
+    if (!profile) return null;
+    return isVirtualRadioProfile(profile) ? projectVirtualRadioProfile(profile) : profile;
   }
 
   /**
@@ -978,19 +982,15 @@ export class ConfigManager {
    * 重排 Profile 顺序
    */
   async reorderProfiles(orderedIds: string[]): Promise<void> {
-    const publicProfiles = this.getProfiles();
-    const profileMap = new Map(publicProfiles.map(p => [p.id, p]));
+    const profileMap = new Map(this.config.profiles.map(p => [p.id, p]));
     const reordered = orderedIds
       .map(id => profileMap.get(id))
-      .filter((p): p is RadioProfile => p !== undefined);
+      .filter((p): p is InternalRadioProfile => p !== undefined);
 
-    if (reordered.length !== publicProfiles.length || orderedIds.length !== publicProfiles.length) {
+    if (reordered.length !== this.config.profiles.length || orderedIds.length !== this.config.profiles.length) {
       throw new Error('Sort list does not match existing Profiles');
     }
-    let publicIndex = 0;
-    this.config.profiles = this.config.profiles.map((profile) => (
-      isVirtualRadioProfile(profile) ? profile : reordered[publicIndex++]!
-    ));
+    this.config.profiles = reordered;
     await this.saveConfig();
   }
 

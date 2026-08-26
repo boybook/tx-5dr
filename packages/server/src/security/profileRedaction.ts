@@ -14,6 +14,8 @@ export function redactProfileForRead(profile: RadioProfile): RadioProfile {
     audioLockedToRadio: profile.audioLockedToRadio,
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,
+    isVirtual: profile.isVirtual,
+    readOnly: profile.readOnly,
     radio: redactHamlibConfigForRead(profile.radio),
     audio: {},
   };

@@ -1,18 +1,16 @@
 # Virtual FT8/FT4 radio (development only)
 
-The virtual radio is intentionally unavailable through the Profile UI and public Profile API. It starts only when all of these are true:
+The virtual radio is configured only through `config.json`; the Profile creation and edit forms cannot create or modify it. Once configured, it appears in the Profile list as a read-only virtual radio and can be activated like any other Profile.
 
-- the active Profile in `config.json` has `radio.type` set to `virtual`;
-- `TX5DR_ENABLE_VIRTUAL_RADIO=1` is set;
-- `TX5DR_CONFIG_DIR` and `TX5DR_DATA_DIR` are both explicit and point to different development directories;
-- PSK Reporter and rigctld are disabled;
-- every enabled utility plugin is disabled or listed in `externalUtilityAllowlist`.
+- The active Profile in `config.json` must have `radio.type` set to `virtual`.
+- PSK Reporter and rigctld must be disabled while the virtual Profile is active.
+- Use a dedicated virtual operator callsign so normal callsign-scoped ADIF and contest sessions remain separate.
 
-Do not point either directory at a normal TX-5DR installation. The isolated data directory owns the test ADIF files, plugin storage, WW Digi session data, and simulator traces.
+Separate config and data directories are optional. When the normal data directory is used, simulator traces and frame logs share that directory, while QSO records remain isolated by the virtual operator callsign. External sync and broadcast plugins are not automatically disabled; pause them if they must not receive simulated QSOs.
 
 ## Example
 
-Add a Profile like this to an isolated `config.json`, set its ID as `activeProfileId`, and configure the operator to use the WW Digi strategy:
+Add a Profile like this to `config.json`, then configure a dedicated operator to use the WW Digi strategy:
 
 ```json
 {
@@ -27,7 +25,6 @@ Add a Profile like this to an isolated `config.json`, set its ID as `activeProfi
           "dialFrequencyHz": 14090000,
           "scenarioProvider": "ww-digi",
           "seed": "ww-digi-regression-1",
-          "externalUtilityAllowlist": [],
           "peers": [
             { "id": "peer-1", "callsign": "JA1AAA", "grid": "PM95", "scenarioId": "standard", "audioFrequencyHz": 1200 },
             { "id": "peer-2", "callsign": "JA2BBB", "grid": "PM96", "scenarioId": "repeat-final-wait-73", "audioFrequencyHz": 1500 },
@@ -56,15 +53,12 @@ Add a Profile like this to an isolated `config.json`, set its ID as `activeProfi
 }
 ```
 
-Start the development runtime with isolated paths:
+Start the normal Electron development runtime:
 
 ```sh
-TX5DR_ENABLE_VIRTUAL_RADIO=1 \
-TX5DR_CONFIG_DIR=/absolute/path/to/virtual-config \
-TX5DR_DATA_DIR=/absolute/path/to/virtual-data \
-yarn dev
+yarn dev:electron
 ```
 
-The server log reports the JSONL trace path for each session. Test QSOs use the ordinary logbook UI because the entire data directory is isolated.
+The server log reports the JSONL trace path for each session. Test QSOs use the ordinary callsign-scoped logbook and WW Digi page.
 
 The first version uses the real system UTC clock. Before the contest window, WW Digi Cabrillo reconciliation intentionally excludes these test QSOs even though the baseband QSO and ADIF persistence complete normally.

@@ -20,7 +20,6 @@ export const VirtualRadioRuntimeConfigSchema = z.object({
   scenarioProvider: z.string().min(1),
   seed: z.union([z.string().min(1), z.number().finite()]),
   peers: z.array(VirtualRadioPeerSchema).min(1),
-  externalUtilityAllowlist: z.array(z.string().min(1)).optional().default([]),
 }).superRefine((value, ctx) => {
   const ids = new Set<string>();
   const callsigns = new Set<string>();
@@ -75,4 +74,27 @@ export function parseInternalProfiles(value: unknown): InternalRadioProfile[] {
     }
     return result.data;
   });
+}
+
+export function projectVirtualRadioProfile(profile: VirtualRadioProfile): RadioProfile {
+  return {
+    id: profile.id,
+    name: profile.name,
+    radio: {
+      type: 'none',
+      transmitCompensationMs: profile.radio.transmitCompensationMs,
+    },
+    audio: {
+      inputSampleRate: 12_000,
+      outputSampleRate: 12_000,
+      inputBufferSize: 1_200,
+      outputBufferSize: 1_200,
+    },
+    audioLockedToRadio: true,
+    createdAt: profile.createdAt,
+    updatedAt: profile.updatedAt,
+    description: profile.description,
+    isVirtual: true,
+    readOnly: true,
+  };
 }

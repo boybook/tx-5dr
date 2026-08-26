@@ -508,6 +508,8 @@
     "switchFailed": "切换到「{{name}}」失败"
   },
   "profileModal": {
+    "virtual": "虚拟",
+    "virtualRadio": "开发用 FT4/FT8 虚拟电台",
     "edit": "编辑",
     "cannotDeleteActive": "无法删除当前激活的 Profile",
     "createNew": "新建电台配置",
