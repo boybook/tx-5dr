@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { appendFile, mkdtemp, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -311,6 +311,43 @@ describe('ADIFLogProvider import', () => {
     expect(exported).toContain('<BAND:3>20m');
 
     await provider.close();
+  });
+
+  it('audits durable rewrites with record counts and changed QSO IDs', async () => {
+    const audit = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const { provider, tempDir } = await createProvider();
+      tempDirs.push(tempDir);
+      await provider.addQSO({
+        id: 'rewrite-audit-qso',
+        callsign: 'BG2AD',
+        frequency: 14_074_000,
+        mode: 'FT8',
+        startTime: Date.parse('2026-01-04T14:30:00Z'),
+        messageHistory: [],
+      }, 'op1');
+
+      await provider.updateQSO('rewrite-audit-qso', { grid: 'PM01' });
+
+      const committed = audit.mock.calls.find(([message]) => (
+        message === '[ADIFLogProvider] Logbook rewrite committed'
+      ));
+      expect(committed?.[1]).toEqual(expect.objectContaining({
+        mutationKind: 'rewrite',
+        beforeRecordCount: 1,
+        expectedRecordCount: 1,
+        actualRecordCount: 1,
+        changedIdCount: 1,
+        changedIds: ['rewrite-audit-qso'],
+        changedIdsTruncated: false,
+        generationBefore: expect.any(String),
+        generationAfter: expect.any(String),
+      }));
+
+      await provider.close();
+    } finally {
+      audit.mockRestore();
+    }
   });
 
   it('exports manually created records using the TX-5DR format', async () => {

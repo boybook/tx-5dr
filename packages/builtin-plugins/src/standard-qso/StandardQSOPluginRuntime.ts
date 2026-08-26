@@ -1229,7 +1229,12 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
 
     beginQsoWithTarget(callsign: string, reason: string): void {
         if (!callsignMatches(callsign, this.context.targetCallsign)) {
+            this.saveCurrentContext();
             this.beginQsoLifecycle(reason);
+            this.context.targetGrid = undefined;
+            this.context.reportSent = undefined;
+            this.context.reportReceived = undefined;
+            this.context.actualFrequency = undefined;
         }
         this.context.targetCallsign = callsign;
     }
@@ -1370,6 +1375,12 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
             slotId: lastMessage.slotInfo.id,
             timestamp: lastMessage.slotInfo.startMs
         }
+        if (
+            (msg.type === FT8MessageType.CQ || msg.type === FT8MessageType.CALL)
+            && callsignMatches(msg.senderCallsign, callsign)
+        ) {
+            this.context.targetGrid = msg.grid;
+        }
         if (msg.type === FT8MessageType.UNKNOWN || msg.type === FT8MessageType.CUSTOM) {
             this.updateSlots();
             this.changeStateSafely(this.getInitialOutboundCallState());  // 呼叫他
@@ -1381,8 +1392,6 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
                 // 消息是发给我的，直接转到对应的回复状态
                 if (msg.type === FT8MessageType.CALL) {
                     // 对方呼叫我，回复信号报告
-                    const callMsg = msg as FT8MessageCall;
-                    this.context.targetGrid = callMsg.grid;
                     // 记录实际通联频率
                     if (this.context.config.frequency && this.context.config.frequency > 1000000) {
                         this.context.actualFrequency = this.context.config.frequency + parsedMessage.df;

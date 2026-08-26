@@ -65,6 +65,69 @@ function decisionMeta(overrides: Partial<{
 }
 
 describe('StandardQSOPluginRuntime v2 decision lifecycle', () => {
+  it('replaces a previous target grid with the grid from a selected CQ frame', () => {
+    const runtime = new StandardQSOPluginRuntime(createOperator());
+    runtime.patchContext({
+      targetCallsign: 'EW4M',
+      targetGrid: 'KO23',
+      reportSent: -3,
+      reportReceived: -8,
+      actualFrequency: 7_075_000,
+    });
+
+    const message: FrameMessage = {
+      snr: -18,
+      freq: 751,
+      dt: 0,
+      message: 'CQ OH7UE KP52',
+      confidence: 1,
+    };
+    const slotInfo: SlotInfo = {
+      id: 'slot-cq-kp52',
+      startMs: Date.parse('2026-08-26T07:05:00.000Z'),
+      phaseMs: 0,
+      driftMs: 0,
+      cycleNumber: 0,
+      utcSeconds: 0,
+      mode: 'FT8',
+    };
+
+    expect(runtime.requestCall('OH7UE', { message, slotInfo })).toBe(true);
+    expect(runtime.getSnapshot().context).toMatchObject({
+      targetCallsign: 'OH7UE',
+      targetGrid: 'KP52',
+      reportSent: -18,
+    });
+    expect(runtime.context.reportReceived).toBeUndefined();
+    expect(runtime.context.actualFrequency).toBeUndefined();
+  });
+
+  it('clears a previous target grid when the selected CQ has no grid', () => {
+    const runtime = new StandardQSOPluginRuntime(createOperator());
+    runtime.patchContext({ targetCallsign: 'EW4M', targetGrid: 'KO23' });
+
+    const message: FrameMessage = {
+      snr: -12,
+      freq: 1200,
+      dt: 0,
+      message: 'CQ OH7UE',
+      confidence: 1,
+    };
+    const slotInfo: SlotInfo = {
+      id: 'slot-cq-without-grid',
+      startMs: Date.parse('2026-08-26T07:05:00.000Z'),
+      phaseMs: 0,
+      driftMs: 0,
+      cycleNumber: 0,
+      utcSeconds: 0,
+      mode: 'FT8',
+    };
+
+    expect(runtime.requestCall('OH7UE', { message, slotInfo })).toBe(true);
+    expect(runtime.getSnapshot().context).toMatchObject({ targetCallsign: 'OH7UE' });
+    expect(runtime.getSnapshot().context?.targetGrid).toBeUndefined();
+  });
+
   it('returns QSO completion as a declarative effect without blocking the final frame', async () => {
     const operator = createOperator();
     const runtime = new StandardQSOPluginRuntime(operator);
