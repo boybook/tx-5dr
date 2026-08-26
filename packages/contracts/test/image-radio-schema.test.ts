@@ -37,6 +37,13 @@ describe('image radio contracts', () => {
 
   it('bounds templates and validates idempotent TX requests', () => {
     const layer = { id: 'line', text: '{MYCALL}', x: 0, y: 0, width: 1, height: 0.2, fontSize: 0.1, color: '#ffffff', align: 'center' };
+    const parsedTemplate = ImageTemplateSchema.parse({ id: 'legacy', name: 'Legacy', layers: [layer], createdAt: 1, updatedAt: 1 });
+    expect(parsedTemplate.layers[0]).toMatchObject({ align: 'center', rotation: 0, strokeWidth: 0.12 });
+    expect(ImageTemplateSchema.parse({ ...parsedTemplate, layers: [{ ...parsedTemplate.layers[0], rotation: 45 }] }).layers[0].rotation).toBe(45);
+    expect(ImageTemplateSchema.parse({ ...parsedTemplate, layers: [{ ...parsedTemplate.layers[0], x: -0.5, width: 2 }] }).layers[0]).toMatchObject({ x: -0.5, width: 2 });
+    expect(() => ImageTemplateSchema.parse({ ...parsedTemplate, layers: [{ ...parsedTemplate.layers[0], rotation: 181 }] })).toThrow();
+    expect(() => ImageTemplateSchema.parse({ ...parsedTemplate, layers: [{ ...parsedTemplate.layers[0], strokeWidth: 0.51 }] })).toThrow();
+    expect(() => ImageTemplateSchema.parse({ ...parsedTemplate, layers: [{ ...parsedTemplate.layers[0], x: -2.1 }] })).toThrow();
     expect(() => ImageTemplateSchema.parse({ id: 't', name: 'T', layers: Array.from({ length: 17 }, (_, index) => ({ ...layer, id: String(index) })), createdAt: 1, updatedAt: 1 })).toThrow();
     expect(SstvTxStartCommandSchema.parse({ requestId: 'request-1', operatorId: 'op', artifactId: 'a', mode: 'robot36', expectedFrequency: 14_230_000 })).toMatchObject({
       requestId: 'request-1', envelope: { enhancedPreamble: true, stationIdMode: 'fsk' },

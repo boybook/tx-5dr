@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, ButtonGroup, Input, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, Popover, PopoverContent, PopoverTrigger, Progress, Select, SelectItem, Slider, Switch } from '@heroui/react';
+import { Button, ButtonGroup, Input, Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, Popover, PopoverContent, PopoverTrigger, Progress, Select, SelectItem, Switch } from '@heroui/react';
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faGear, faImage, faPaperPlane, faPlus, faSave, faStop, faTrash, faTriangleExclamation } from '@fortawesome/free-solid-svg-icons';
@@ -12,9 +12,24 @@ import { useSstvTxStart } from '../../hooks/useSstvTxStart';
 import { useConnection, useCurrentOperatorId, useOperators, useRadioModeState } from '../../store/radioStore';
 import { fitComposerBackgroundSize, validateComposerBackgroundFile } from './composerBackground';
 import { SstvCaptureConfirmModal } from './SstvCaptureConfirmModal';
+import { SstvTextLayerInspector } from './SstvTextLayerInspector';
 import { estimateSstvTxDurationSeconds, isSstvStationIdCallsignSupported } from './sstvTxEnvelope';
+import {
+  moveTextLayer,
+  pointDistance,
+  pointInsideTextLayer,
+  rotateTextLayer,
+  scaleTextLayer,
+  textLayerInspectorPlacement,
+  textLayerHandles,
+  type CanvasPoint,
+} from './sstvTextLayerGeometry';
 
 type TextLayer = ImageTemplateTextLayer;
+type LayerInteraction =
+  | { kind: 'move'; id: string; offset: CanvasPoint }
+  | { kind: 'scale'; id: string; startDistance: number; startLayer: TextLayer }
+  | { kind: 'rotate'; id: string; startAngle: number; startRotation: number; startLayer: TextLayer };
 
 export function SstvComposer() {
   const { t } = useTranslation('image');
@@ -29,6 +44,8 @@ export function SstvComposer() {
   const [selectedMode, setSelectedMode] = useState('robot36');
   const [layers, setLayers] = useState<TextLayer[]>([]);
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [inspectorPlacement, setInspectorPlacement] = useState<'side' | 'bottom'>('bottom');
   const [hisCall, setHisCall] = useState('');
   const [rsv, setRsv] = useState('595');
   const [note, setNote] = useState('');
@@ -47,7 +64,7 @@ export function SstvComposer() {
   const backgroundSaveGenerationRef = useRef(0);
   const preferenceSaveGenerationRef = useRef(0);
   const previewViewportRef = useRef<HTMLDivElement | null>(null);
-  const dragRef = useRef<{ id: string; dx: number; dy: number } | null>(null);
+  const interactionRef = useRef<LayerInteraction | null>(null);
   const operatorIdRef = useRef(operatorId);
   operatorIdRef.current = operatorId;
   const mode = modes.find((item) => item.mode === selectedMode) ?? modes.find((item) => item.mode === 'robot36') ?? modes[0];
@@ -111,6 +128,8 @@ export function SstvComposer() {
       const widthConstrained = availableWidth / availableHeight <= ratio;
       const width = widthConstrained ? availableWidth : availableHeight * ratio;
       const height = widthConstrained ? availableWidth / ratio : availableHeight;
+      const canvasLeftInWindow = viewport.getBoundingClientRect().left + (availableWidth - width) / 2;
+      setInspectorPlacement(textLayerInspectorPlacement(canvasLeftInWindow));
       setPreviewSize({ width: Math.floor(width), height: Math.floor(height) });
     };
     update();
@@ -147,16 +166,44 @@ export function SstvComposer() {
       const width = layer.width * canvas.width; const height = layer.height * canvas.height;
       let fontPx = Math.max(8, layer.fontSize * canvas.height);
       const text = resolveText(layer.text);
-      context.textAlign = layer.align; context.textBaseline = 'middle';
-      while (fontPx > 8 && context.measureText(text).width > width) { fontPx -= 1; context.font = `700 ${fontPx}px sans-serif`; }
       context.font = `700 ${fontPx}px sans-serif`;
-      const textX = layer.align === 'left' ? x : layer.align === 'right' ? x + width : x + width / 2;
-      const textY = y + height / 2;
-      if (layer.strokeColor) { context.strokeStyle = layer.strokeColor; context.lineWidth = Math.max(2, fontPx / 12); context.strokeText(text, textX, textY, width); }
+      while (fontPx > 8 && context.measureText(text).width > width) {
+        fontPx -= 1;
+        context.font = `700 ${fontPx}px sans-serif`;
+      }
+      context.save();
+      context.translate(x + width / 2, y + height / 2);
+      context.rotate((layer.rotation ?? 0) * Math.PI / 180);
+      context.textAlign = layer.align; context.textBaseline = 'middle';
+      const textX = layer.align === 'left' ? -width / 2 : layer.align === 'right' ? width / 2 : 0;
+      const textY = 0;
+      const strokeWidth = layer.strokeWidth ?? 0.12;
+      if (layer.strokeColor && strokeWidth > 0) {
+        context.strokeStyle = layer.strokeColor;
+        context.lineWidth = Math.max(0.5, fontPx * strokeWidth);
+        context.strokeText(text, textX, textY, width);
+      }
       context.fillStyle = layer.color; context.fillText(text, textX, textY, width);
       if (showSelection && layer.id === selectedLayerId) {
-        context.strokeStyle = '#38bdf8'; context.lineWidth = 2; context.setLineDash([5, 4]); context.strokeRect(x, y, width, height); context.setLineDash([]);
+        const displayedWidth = canvas.getBoundingClientRect().width;
+        const cssScale = displayedWidth > 0 ? canvas.width / displayedWidth : 1;
+        const handleSize = 5 * cssScale;
+        const rotateOffset = 24 * cssScale;
+        context.strokeStyle = '#38bdf8'; context.lineWidth = Math.max(1, cssScale); context.setLineDash([5 * cssScale, 4 * cssScale]); context.strokeRect(-width / 2, -height / 2, width, height); context.setLineDash([]);
+        context.beginPath();
+        context.moveTo(0, -height / 2);
+        context.lineTo(0, -height / 2 - rotateOffset);
+        context.stroke();
+        context.fillStyle = '#ffffff';
+        context.strokeStyle = '#0ea5e9';
+        context.lineWidth = Math.max(1, cssScale);
+        context.beginPath();
+        context.arc(0, -height / 2 - rotateOffset, handleSize, 0, Math.PI * 2);
+        context.fill(); context.stroke();
+        context.fillRect(width / 2 - handleSize, height / 2 - handleSize, handleSize * 2, handleSize * 2);
+        context.strokeRect(width / 2 - handleSize, height / 2 - handleSize, handleSize * 2, handleSize * 2);
       }
+      context.restore();
     }
   }, [background, fit, layers, mode, resolveText, selectedLayerId]);
 
@@ -168,12 +215,14 @@ export function SstvComposer() {
     setSelectedTemplateId(id);
     setLayers(template.layers.map((layer) => ({ ...layer })));
     setSelectedLayerId(null);
+    setInspectorOpen(false);
   };
 
   const addTextLayer = () => {
-    const layer = { id: crypto.randomUUID(), text: '{NOTE}', x: 0.1, y: 0.4, width: 0.8, height: 0.16, fontSize: 0.09, color: '#ffffff', strokeColor: '#000000', align: 'center' as const };
+    const layer = { id: crypto.randomUUID(), text: '{NOTE}', x: 0.1, y: 0.4, width: 0.8, height: 0.16, fontSize: 0.09, color: '#ffffff', strokeColor: '#000000', strokeWidth: 0.12, align: 'center' as const, rotation: 0 };
     setLayers((current) => [...current, layer]);
     setSelectedLayerId(layer.id);
+    setInspectorOpen(true);
   };
 
   const removeSelectedTextLayer = () => {
@@ -182,9 +231,10 @@ export function SstvComposer() {
     if (selectedIndex < 0) return;
     const remainingLayers = layers.filter((layer) => layer.id !== selectedLayerId);
     const adjacentLayer = remainingLayers[Math.min(selectedIndex, remainingLayers.length - 1)];
-    if (dragRef.current?.id === selectedLayerId) dragRef.current = null;
+    if (interactionRef.current?.id === selectedLayerId) interactionRef.current = null;
     setLayers(remainingLayers);
     setSelectedLayerId(adjacentLayer?.id ?? null);
+    setInspectorOpen(Boolean(adjacentLayer));
   };
 
   const saveTemplate = async () => {
@@ -253,21 +303,72 @@ export function SstvComposer() {
     }
   };
 
-  const pointerPosition = (event: React.PointerEvent<HTMLCanvasElement>) => {
+  const pointerPosition = (event: React.PointerEvent<HTMLCanvasElement>): CanvasPoint => {
     const rect = event.currentTarget.getBoundingClientRect();
-    return { x: (event.clientX - rect.left) / rect.width, y: (event.clientY - rect.top) / rect.height };
+    return {
+      x: (event.clientX - rect.left) * event.currentTarget.width / rect.width,
+      y: (event.clientY - rect.top) * event.currentTarget.height / rect.height,
+    };
   };
   const onPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const point = pointerPosition(event);
-    const layer = [...layers].reverse().find((item) => point.x >= item.x && point.x <= item.x + item.width && point.y >= item.y && point.y <= item.y + item.height);
-    if (!layer) return;
-    setSelectedLayerId(layer.id); dragRef.current = { id: layer.id, dx: point.x - layer.x, dy: point.y - layer.y };
+    const canvas = event.currentTarget;
+    const displayedWidth = canvas.getBoundingClientRect().width;
+    const cssScale = displayedWidth > 0 ? canvas.width / displayedWidth : 1;
+    const selected = layers.find((layer) => layer.id === selectedLayerId);
+    if (selected) {
+      const handles = textLayerHandles(selected, canvas.width, canvas.height, 24 * cssScale);
+      if (pointDistance(point, handles.rotate) <= 11 * cssScale) {
+        interactionRef.current = {
+          kind: 'rotate', id: selected.id, startLayer: { ...selected }, startRotation: selected.rotation ?? 0,
+          startAngle: Math.atan2(point.y - handles.center.y, point.x - handles.center.x),
+        };
+        canvas.setPointerCapture(event.pointerId);
+        return;
+      }
+      if (pointDistance(point, handles.scale) <= 11 * cssScale) {
+        interactionRef.current = {
+          kind: 'scale', id: selected.id, startLayer: { ...selected },
+          startDistance: Math.max(1, pointDistance(point, handles.center)),
+        };
+        canvas.setPointerCapture(event.pointerId);
+        return;
+      }
+    }
+    const layer = [...layers].reverse().find((item) => pointInsideTextLayer(point, item, canvas.width, canvas.height));
+    if (!layer) {
+      setSelectedLayerId(null);
+      setInspectorOpen(false);
+      return;
+    }
+    const { center } = textLayerHandles(layer, canvas.width, canvas.height);
+    setSelectedLayerId(layer.id);
+    setInspectorOpen(true);
+    interactionRef.current = { kind: 'move', id: layer.id, offset: { x: point.x - center.x, y: point.y - center.y } };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
   const onPointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    const drag = dragRef.current; if (!drag) return;
+    const interaction = interactionRef.current; if (!interaction) return;
     const point = pointerPosition(event);
-    setLayers((current) => current.map((layer) => layer.id === drag.id ? { ...layer, x: Math.max(0, Math.min(1 - layer.width, point.x - drag.dx)), y: Math.max(0, Math.min(1 - layer.height, point.y - drag.dy)) } : layer));
+    const canvas = event.currentTarget;
+    setLayers((current) => current.map((layer) => {
+      if (layer.id !== interaction.id) return layer;
+      if (interaction.kind === 'move') {
+        return moveTextLayer(layer, { x: point.x - interaction.offset.x, y: point.y - interaction.offset.y }, canvas.width, canvas.height);
+      }
+      const { center } = textLayerHandles(interaction.startLayer, canvas.width, canvas.height);
+      if (interaction.kind === 'scale') {
+        const scale = pointDistance(point, center) / interaction.startDistance;
+        return scaleTextLayer(interaction.startLayer, scale, canvas.width, canvas.height);
+      }
+      const angle = Math.atan2(point.y - center.y, point.x - center.x);
+      const rotation = interaction.startRotation + (angle - interaction.startAngle) * 180 / Math.PI;
+      return rotateTextLayer(interaction.startLayer, rotation, canvas.width, canvas.height);
+    }));
+  };
+  const onPointerEnd = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    interactionRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   };
 
   const send = () => {
@@ -346,14 +447,28 @@ export function SstvComposer() {
 
       <div ref={previewViewportRef} className="flex min-h-32 flex-1 items-center justify-center overflow-hidden">
         <div
-          className="relative overflow-hidden rounded-md border border-default-200 bg-black"
+          className="relative"
           style={{
             width: previewSize ? `${previewSize.width}px` : '100%',
             height: previewSize ? `${previewSize.height}px` : 'auto',
             aspectRatio: mode ? `${mode.width} / ${mode.height}` : '4 / 3',
           }}
         >
-          <canvas ref={canvasRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={() => { dragRef.current = null; }} className="h-full w-full touch-none object-contain" />
+          <div className="h-full w-full overflow-hidden rounded-md border border-default-200 bg-black">
+            <canvas ref={canvasRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerEnd} onPointerCancel={onPointerEnd} className="h-full w-full touch-none object-contain" />
+          </div>
+          {selectedLayer ? (
+            <SstvTextLayerInspector
+              layer={selectedLayer}
+              placement={inspectorPlacement}
+              isOpen={inspectorOpen}
+              onOpenChange={setInspectorOpen}
+              canvasWidth={canvasRef.current?.width ?? mode?.width ?? 320}
+              canvasHeight={canvasRef.current?.height ?? mode?.height ?? 240}
+              onChange={(next) => setLayers((current) => current.map((layer) => layer.id === next.id ? next : layer))}
+              onDelete={removeSelectedTextLayer}
+            />
+          ) : null}
         </div>
       </div>
 
@@ -362,18 +477,6 @@ export function SstvComposer() {
         <Input size="sm" label="RSV" value={rsv} onValueChange={setRsv} />
         <Input size="sm" label={t('note')} value={note} onValueChange={setNote} />
       </div>
-
-      {selectedLayer ? (
-        <div className="flex flex-shrink-0 items-center gap-2 border-l-2 border-primary-400 pl-2">
-          <div className="grid min-w-0 flex-1 gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 12rem), 1fr))' }}>
-            <Input size="sm" label={t('layerText')} value={selectedLayer.text} onValueChange={(value) => setLayers((current) => current.map((layer) => layer.id === selectedLayer.id ? { ...layer, text: value } : layer))} />
-            <Slider size="sm" minValue={0.03} maxValue={0.25} step={0.01} value={selectedLayer.fontSize} onChange={(value) => setLayers((current) => current.map((layer) => layer.id === selectedLayer.id ? { ...layer, fontSize: Number(value) } : layer))} label={t('textSize')} />
-          </div>
-          <Button isIconOnly size="sm" variant="light" color="danger" className="shrink-0" onPress={removeSelectedTextLayer} aria-label={t('deleteText')} title={t('deleteText')}>
-            <FontAwesomeIcon icon={faTrash} />
-          </Button>
-        </div>
-      ) : null}
 
       {templateSaveOpen ? (
         <div className="flex flex-shrink-0 items-center gap-1.5">

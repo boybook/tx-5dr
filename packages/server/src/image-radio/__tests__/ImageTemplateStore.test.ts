@@ -14,7 +14,7 @@ afterEach(async () => {
 
 const layer = {
   id: 'call', text: '{MYCALL}', x: 0.1, y: 0.1, width: 0.8, height: 0.2,
-  fontSize: 0.1, color: '#ffffff', align: 'center' as const,
+  fontSize: 0.1, color: '#ffffff', strokeWidth: 0.12, align: 'center' as const, rotation: 0,
 };
 
 describe('ImageTemplateStore', () => {

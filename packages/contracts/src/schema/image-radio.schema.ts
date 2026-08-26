@@ -253,14 +253,16 @@ export type ImageHistoryEntry = z.infer<typeof ImageHistoryEntrySchema>;
 export const ImageTemplateTextLayerSchema = z.object({
   id: z.string().min(1).max(64),
   text: z.string().max(256),
-  x: z.number().min(0).max(1),
-  y: z.number().min(0).max(1),
-  width: z.number().positive().max(1),
-  height: z.number().positive().max(1),
+  x: z.number().min(-2).max(2),
+  y: z.number().min(-2).max(2),
+  width: z.number().positive().max(4),
+  height: z.number().positive().max(4),
   fontSize: z.number().positive().max(1),
   color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
   strokeColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  strokeWidth: z.number().min(0).max(0.5).default(0.12),
   align: z.enum(['left', 'center', 'right']).default('center'),
+  rotation: z.number().min(-180).max(180).default(0),
 });
 export type ImageTemplateTextLayer = z.infer<typeof ImageTemplateTextLayerSchema>;
 
