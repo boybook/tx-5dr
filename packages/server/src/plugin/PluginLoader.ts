@@ -217,17 +217,12 @@ function validateSimulationScenarios(def: AnyPluginDefinition): void {
     if (!scenario.states[scenario.initialState]) {
       throw new Error(`Simulation scenario "${scenario.id}" references missing initial state "${scenario.initialState}"`);
     }
+    for (const rule of scenario.globalRules ?? []) {
+      validateSimulationRule(scenario.id, 'global', rule, scenario.states);
+    }
     for (const [stateId, state] of Object.entries(scenario.states)) {
       for (const rule of state.rules ?? []) {
-        if (!rule.pattern || rule.pattern.length > 512) {
-          throw new Error(`Simulation scenario "${scenario.id}" state "${stateId}" has an invalid pattern`);
-        }
-        try {
-          void new RegExp(`^(?:${rule.pattern})$`, 'i');
-        } catch (error) {
-          throw new Error(`Simulation scenario "${scenario.id}" state "${stateId}" has an invalid pattern: ${(error as Error).message}`);
-        }
-        validateSimulationChoices(scenario.id, stateId, rule.choices, scenario.states);
+        validateSimulationRule(scenario.id, stateId, rule, scenario.states);
       }
       for (const timeout of state.timeouts ?? []) {
         if (!Number.isInteger(timeout.afterReceiveCycles) || timeout.afterReceiveCycles < 1) {
@@ -237,6 +232,23 @@ function validateSimulationScenarios(def: AnyPluginDefinition): void {
       }
     }
   }
+}
+
+function validateSimulationRule(
+  scenarioId: string,
+  stateId: string,
+  rule: import('@tx5dr/plugin-api').SimulationScenarioRule,
+  states: SimulationScenarioDescriptor['states'],
+): void {
+  if (!rule.pattern || rule.pattern.length > 512) {
+    throw new Error(`Simulation scenario "${scenarioId}" state "${stateId}" has an invalid pattern`);
+  }
+  try {
+    void new RegExp(`^(?:${rule.pattern})$`, 'i');
+  } catch (error) {
+    throw new Error(`Simulation scenario "${scenarioId}" state "${stateId}" has an invalid pattern: ${(error as Error).message}`);
+  }
+  validateSimulationChoices(scenarioId, stateId, rule.choices, states);
 }
 
 function validateSimulationChoices(

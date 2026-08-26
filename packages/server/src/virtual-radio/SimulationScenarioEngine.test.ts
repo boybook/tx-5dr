@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SimulationScenarioDescriptor } from '@tx5dr/plugin-api';
+import { BUILTIN_PLUGINS, BUILTIN_WW_DIGI_PLUGIN_NAME } from '@tx5dr/builtin-plugins';
 import { SimulationScenarioEngine } from './SimulationScenarioEngine.js';
 
 const scenario: SimulationScenarioDescriptor = {
@@ -121,6 +122,29 @@ describe('SimulationScenarioEngine', () => {
       text: 'CQ TEST', audioFrequencyHz: 1_200, sourcePeerId: 'peer-2',
     }])).toEqual([{
       peerId: 'peer-1', text: 'ANSWER', audioFrequencyHz: 1_700, delayCycles: 1,
+    }]);
+  });
+
+  it('lets an ambient WW Digi peer infer directed exchanges from any state', () => {
+    const ambient = BUILTIN_PLUGINS
+      .find((plugin) => plugin.definition.name === BUILTIN_WW_DIGI_PLUGIN_NAME)!
+      .definition.simulationScenarios!
+      .find((candidate) => candidate.id === 'ambient-band')!;
+    const engine = new SimulationScenarioEngine('seed', [{
+      id: 'ambient-1', callsign: 'W1VRB', grid: 'FN42', audioFrequencyHz: 1_700, scenario: ambient,
+    }]);
+
+    expect(engine.observe([{ text: 'W1VRB BG0VRT NN00', audioFrequencyHz: 1_400 }])).toEqual([{
+      peerId: 'ambient-1', text: 'BG0VRT W1VRB R FN42', audioFrequencyHz: 1_700, delayCycles: 1,
+    }]);
+    expect(engine.getSnapshots()[0]).toMatchObject({ state: 'await-final' });
+
+    expect(engine.observe([{ text: 'W1VRB BG0VRT NN00', audioFrequencyHz: 1_400 }])).toHaveLength(1);
+    expect(engine.observe([{ text: 'W1VRB BG0VRT RR73', audioFrequencyHz: 1_400 }])).toEqual([]);
+    expect(engine.getSnapshots()[0]).toMatchObject({ state: 'idle' });
+
+    expect(engine.observe([{ text: 'W1VRB BG0VRT R NN00', audioFrequencyHz: 1_400 }])).toEqual([{
+      peerId: 'ambient-1', text: 'BG0VRT W1VRB RR73', audioFrequencyHz: 1_700, delayCycles: 1,
     }]);
   });
 });

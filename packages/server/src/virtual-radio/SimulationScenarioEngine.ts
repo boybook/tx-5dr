@@ -120,7 +120,11 @@ export class SimulationScenarioEngine {
       if (peer.complete) continue;
       const state = peer.definition.scenario.states[peer.state]!;
       let matched = false;
-      for (const rule of state.rules ?? []) {
+      const rules = [
+        ...(peer.definition.scenario.globalRules ?? []).map((rule) => ({ rule, scope: 'global' as const })),
+        ...(state.rules ?? []).map((rule) => ({ rule, scope: 'state' as const })),
+      ];
+      for (const { rule, scope } of rules) {
         const matcher = compileRule(rule, peer.definition);
         const selected = ordered.find((message) => (
           message.sourcePeerId !== peer.definition.id && matcher.test(normalizeMessage(message.text))
@@ -132,7 +136,7 @@ export class SimulationScenarioEngine {
         peer.lastReceived = normalizeMessage(selected.text);
         peer.lastReceivedFrequencyHz = selected.audioFrequencyHz;
         peer.lastCaptures = { ...(match?.groups ?? {}) };
-        this.emitTrace(peer, 'matched', { text: peer.lastReceived, pattern: rule.pattern });
+        this.emitTrace(peer, 'matched', { text: peer.lastReceived, pattern: rule.pattern, scope });
         this.applyChoice(peer, rule.choices, selected.audioFrequencyHz, match?.groups ?? {}, replies);
         break;
       }
