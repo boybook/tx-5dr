@@ -17,6 +17,7 @@ import type {
   StrategyRuntimeSlot,
   StrategyRuntimeSlotContentUpdate,
   StrategyRuntimeSnapshot,
+  StrategyStreamStateUpdate,
   StreamPhysicalReceipt,
 } from '@tx5dr/plugin-api';
 import { normalizeCallsign } from '@tx5dr/plugin-api';
@@ -34,6 +35,7 @@ export interface WWDigiRuntimeConfig extends WWDigiLaneConfig {
   frequency: number;
   transmitCycles: number[];
   parallelStreams: number;
+  maxConcurrentStreams: number;
 }
 
 export interface WWDigiRuntimeOperator {
@@ -205,6 +207,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   }
 
   getQueueSnapshot(): AssistedQueueSnapshot {
+    this.syncParallelStreams();
     const snapshot = this.coordinator.getQueueSnapshot();
     const streamsById = new Map(this.coordinator.getStreams().map((stream) => [stream.streamId, stream]));
     return {
@@ -212,6 +215,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       activeEntryId: snapshot.activeEntryIds[0],
       activeEntryIds: snapshot.activeEntryIds,
       maxActiveStreams: snapshot.maxActiveStreams,
+      requestedMaxActiveStreams: this.requestedParallelStreams(),
       rows: snapshot.entries.map((row, order) => {
         const stream = row.streamId ? streamsById.get(row.streamId) : undefined;
         const status = row.entry.data.status;
@@ -270,6 +274,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   }
 
   getTransmissions() {
+    this.syncParallelStreams();
     if (!this.operator.isTransmitting) return [];
     const transmissions = this.coordinator.getTransmissions();
     if (transmissions.length > 0) return transmissions;
@@ -286,6 +291,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   }
 
   getSnapshot(): StrategyRuntimeSnapshot {
+    this.syncParallelStreams();
     const streams = this.coordinator.getStreams();
     const primary = streams[0];
     return {
@@ -304,6 +310,9 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
 
   patchContext(_patch: Partial<StrategyRuntimeContext>): void {}
   setState(_state: StrategyRuntimeSlot): void {}
+  setStreamState(update: StrategyStreamStateUpdate): void {
+    this.coordinator.setStreamState(update.streamId, update.stateId, update.expectedLifecycleEpoch);
+  }
   setSlotContent(_update: StrategyRuntimeSlotContentUpdate): void {}
 
   settleQSOCompletion(settlement: StrategyQSOCompletionSettlement): void {
@@ -347,11 +356,23 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
 
   private syncParallelStreams(): void {
     const streams = this.parallelStreams();
-    if (streams !== this.coordinator.getMaxStreams()) this.coordinator.setMaxStreams(streams);
+    if (streams === this.coordinator.getMaxStreams()) return;
+    const preemptedEntryIds = this.coordinator.setMaxStreams(streams, { preemptExcess: true });
+    for (const entryId of preemptedEntryIds) {
+      this.coordinator.updateEntry(entryId, (data) => {
+        data.status = 'queued';
+        return true;
+      });
+    }
+  }
+
+  private requestedParallelStreams(): number {
+    return Math.max(1, Math.min(3, Math.trunc(this.operator.config.parallelStreams || 1)));
   }
 
   private parallelStreams(): number {
-    return Math.max(1, Math.min(3, Math.trunc(this.operator.config.parallelStreams || 3)));
+    const hostLimit = Math.max(1, Math.min(3, Math.trunc(this.operator.config.maxConcurrentStreams || 1)));
+    return Math.min(this.requestedParallelStreams(), hostLimit);
   }
 
   private mutationResult(result: ParallelQueueMutationResult<WWDigiEntryData>): QueuedStrategyMutationResult {

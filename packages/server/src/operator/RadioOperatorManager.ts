@@ -58,7 +58,6 @@ type QueuedTransmitRequest = TransmitRequest & {
 
 const DEFAULT_MAX_SAME_TRANSMISSION_COUNT = 20;
 const SAME_TRANSMISSION_GUARD_RESET_REASON = 'same transmission guard limit';
-const WW_DIGI_STRATEGY_NAME = 'ww-digi';
 const DISTINCT_QSO_BATCH_MAX_REPLANS = 2;
 const AP_DECODE_QSO_PROGRESS: Record<string, number | undefined> = {
   TX3: 3,
@@ -230,14 +229,9 @@ export class RadioOperatorManager {
     return baseFreq > 1_000_000 ? getBandFromFrequency(baseFreq) : 'Unknown';
   }
 
-  private getWwDigiStandardFrequencyRestriction(
-    operatorId: string,
+  private getStandardFrequencyStreamRestriction(
     mode: ModeDescriptor = this.getCurrentMode(),
   ): StandardDigitalFrequencyMatch | null {
-    if (this._pluginManager?.getOperatorRuntimeStatus(operatorId)?.strategyName !== WW_DIGI_STRATEGY_NAME) {
-      return null;
-    }
-
     let frequency: number | null = null;
     try {
       frequency = this.getKnownRadioFrequency?.() ?? null;
@@ -247,43 +241,41 @@ export class RadioOperatorManager {
     return getStandardDigitalFrequencyMatch(mode.name, frequency);
   }
 
-  private describeWwDigiStandardFrequencyRestriction(match: StandardDigitalFrequencyMatch): string {
-    return `WW Digi is unavailable on the standard ${match.modeName} dial frequency `
-      + `${match.standardFrequency / 1_000_000} MHz`;
-  }
-
-  assertWwDigiFrequencyAllowed(
-    operatorIds: readonly string[],
+  assertStandardFrequencyStreamLimit(
+    tracks: readonly { operatorId: string; streamId?: string }[],
     mode: ModeDescriptor = this.getCurrentMode(),
   ): void {
-    for (const operatorId of operatorIds) {
-      const restriction = this.getWwDigiStandardFrequencyRestriction(operatorId, mode);
-      if (restriction) {
-        throw new Error(this.describeWwDigiStandardFrequencyRestriction(restriction));
-      }
-    }
+    const restriction = this.getStandardFrequencyStreamRestriction(mode);
+    if (!restriction) return;
+    const counts = new Map<string, number>();
+    for (const track of tracks) counts.set(track.operatorId, (counts.get(track.operatorId) ?? 0) + 1);
+    const violation = [...counts.entries()].find(([, count]) => count > 1);
+    if (!violation) return;
+    throw new Error(
+      `Operator ${violation[0]} cannot transmit ${violation[1]} TX slots on the standard `
+      + `${restriction.modeName} dial frequency ${restriction.standardFrequency / 1_000_000} MHz`,
+    );
   }
 
-  private stopWwDigiForStandardFrequency(
+  private notifyStandardFrequencyStreamFallback(
     operatorId: string,
     match: StandardDigitalFrequencyMatch,
   ): void {
-    logger.warn('Stopped WW Digi before RF admission on a standard digital frequency', {
+    logger.warn('Rejected multi-stream transmission on a standard digital frequency', {
       operatorId,
       ...match,
     });
     this.eventEmitter.emit('textMessage', {
-      title: 'WW Digi unavailable',
-      text: this.describeWwDigiStandardFrequencyRestriction(match),
+      title: 'Multi-slot transmission reduced',
+      text: `The standard ${match.modeName} frequency allows one TX slot per operator; multi-slot transmission was rejected.`,
       color: 'warning',
       timeout: 8000,
-      key: 'wwDigiStandardFrequencyBlocked',
+      key: 'standardFrequencyMultiStreamFallback',
       params: {
         mode: match.modeName,
         frequency: String(match.standardFrequency / 1_000_000),
       },
     });
-    this.stopOperator(operatorId);
   }
 
   // 📊 Day13优化：记录上次发射的操作员状态哈希，用于去重
@@ -347,7 +339,8 @@ export class RadioOperatorManager {
       if (this.transmissionMaintenanceReason) return;
       const operator = this.operators.get(request.operatorId);
       if (!operator) return;
-      const maxStreams = operator.config.maxConcurrentStreams ?? 3;
+      const standardFrequencyRestriction = this.getStandardFrequencyStreamRestriction();
+      const maxStreams = standardFrequencyRestriction ? 1 : (operator.config.maxConcurrentStreams ?? 3);
       const uniqueStreamIds = new Set(request.transmissions.map((item) => normalizeStreamId(item.streamId)));
       if (request.transmissions.length > maxStreams || uniqueStreamIds.size !== request.transmissions.length) {
         logger.warn('Rejected invalid operator transmission set', {
@@ -355,6 +348,9 @@ export class RadioOperatorManager {
           transmissionCount: request.transmissions.length,
           maxStreams,
         });
+        if (standardFrequencyRestriction && request.transmissions.length > 1) {
+          this.notifyStandardFrequencyStreamFallback(request.operatorId, standardFrequencyRestriction);
+        }
         return;
       }
 
@@ -806,6 +802,21 @@ export class RadioOperatorManager {
     };
     this.eventEmitter.on('operatorSlotChanged', handleOperatorSlotChanged);
     this.eventListeners.set('operatorSlotChanged', handleOperatorSlotChanged);
+
+    const handleOperatorStreamStateChanged = (data: { operatorId: string; streamId: string; state: string }) => {
+      logger.info('operatorStreamStateChanged -> requestOperatorFrameMutation', {
+        operatorId: data.operatorId,
+        streamId: data.streamId,
+        newState: data.state,
+      });
+      this.requestOperatorFrameMutation(data.operatorId, {
+        kind: 'slot',
+        reason: `operator stream ${data.streamId} state changed`,
+      });
+      this.emitOperatorStatusUpdate(data.operatorId);
+    };
+    this.eventEmitter.on('operatorStreamStateChanged', handleOperatorStreamStateChanged);
+    this.eventListeners.set('operatorStreamStateChanged', handleOperatorStreamStateChanged);
 
     // 兼容仍通过事件更新频率的 host 入口；内置 Manager 路径直接调用同一 mutation 方法。
     const handleOperatorFrequencyChanged = (data: { operatorId: string; frequency: number }) => {
@@ -1281,6 +1292,16 @@ export class RadioOperatorManager {
     this.emitOperatorStatusUpdate(operatorId);
   }
 
+  setOperatorStreamState(
+    operatorId: string,
+    update: { streamId: string; stateId: string; expectedLifecycleEpoch: number },
+  ): void {
+    const operator = this.operators.get(operatorId);
+    if (!operator) throw new Error(`operator ${operatorId} not found`);
+    this._pluginManager?.setOperatorStreamState(operatorId, update);
+    this.emitOperatorStatusUpdate(operatorId);
+  }
+
   async setOperatorRuntimeSlotContent(
     operatorId: string,
     slot: import('@tx5dr/contracts').OperatorRuntimeSlot,
@@ -1322,7 +1343,6 @@ export class RadioOperatorManager {
     if (!operator) {
       throw new Error(`operator ${operatorId} not found`);
     }
-    this.assertWwDigiFrequencyAllowed([operatorId]);
     if ([...this.unsavedQsoAttempts.values()].some(attempt => attempt.operatorId === operatorId)) {
       throw new LogbookOperationError(
         'LOGBOOK_MAINTENANCE',
@@ -1775,12 +1795,9 @@ export class RadioOperatorManager {
       const operator = this.operators.get(group.operatorId);
       if (!operator?.isTransmitting) continue;
 
-      const standardFrequencyRestriction = this.getWwDigiStandardFrequencyRestriction(
-        group.operatorId,
-        currentMode,
-      );
-      if (standardFrequencyRestriction) {
-        this.stopWwDigiForStandardFrequency(group.operatorId, standardFrequencyRestriction);
+      const standardFrequencyRestriction = this.getStandardFrequencyStreamRestriction(currentMode);
+      if (standardFrequencyRestriction && group.requests.length > 1) {
+        this.notifyStandardFrequencyStreamFallback(group.operatorId, standardFrequencyRestriction);
         continue;
       }
 

@@ -111,6 +111,7 @@ export enum WSMessageType {
   OPERATOR_STATUS_UPDATE = 'operatorStatusUpdate',
   SET_OPERATOR_CONTEXT = 'setOperatorContext',
   SET_OPERATOR_RUNTIME_STATE = 'setOperatorRuntimeState',
+  SET_OPERATOR_STREAM_STATE = 'setOperatorStreamState',
   SET_OPERATOR_RUNTIME_SLOT_CONTENT = 'setOperatorRuntimeSlotContent',
   SET_OPERATOR_TRANSMIT_CYCLES = 'setOperatorTransmitCycles',
   START_OPERATOR = 'startOperator',
@@ -440,6 +441,13 @@ export const StrategyRuntimeContextSchema = z.object({
 });
 export type StrategyRuntimeContext = z.infer<typeof StrategyRuntimeContextSchema>;
 
+export const StrategyStateOptionSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1).optional(),
+  transmitText: z.string().optional(),
+});
+export type StrategyStateOption = z.infer<typeof StrategyStateOptionSchema>;
+
 export const StrategyStreamSnapshotSchema = z.object({
   streamId: z.string().min(1),
   currentState: z.string(),
@@ -447,6 +455,7 @@ export const StrategyStreamSnapshotSchema = z.object({
   targetGrid: z.string().optional(),
   audioFrequencyHz: z.number().min(0).max(5000),
   qsoLifecycleEpoch: z.number().int().nonnegative(),
+  stateOptions: z.array(StrategyStateOptionSchema).optional(),
 });
 export type StrategyStreamSnapshot = z.infer<typeof StrategyStreamSnapshotSchema>;
 
@@ -487,6 +496,7 @@ export const AssistedQueueSnapshotSchema = z.object({
   activeEntryId: z.string().optional(),
   activeEntryIds: z.array(z.string()).optional(),
   maxActiveStreams: z.number().int().min(1).max(5).optional(),
+  requestedMaxActiveStreams: z.number().int().min(1).max(5).optional(),
   rows: z.array(AssistedQueueRowSchema),
 });
 export type AssistedQueueDisplayState = z.infer<typeof AssistedQueueDisplayStateSchema>;
@@ -901,6 +911,17 @@ export const WSSetOperatorRuntimeStateMessageSchema = WSBaseMessageSchema.extend
   }),
 });
 
+/** Sets one strategy-owned stream to a protocol-approved state. */
+export const WSSetOperatorStreamStateMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SET_OPERATOR_STREAM_STATE),
+  data: z.object({
+    operatorId: z.string(),
+    streamId: z.string().min(1),
+    stateId: z.string().min(1),
+    expectedLifecycleEpoch: z.number().int().nonnegative(),
+  }),
+});
+
 /**
  * 设置操作员运行时槽位内容消息
  */
@@ -1073,6 +1094,7 @@ export type WSOperatorsListMessage = z.infer<typeof WSOperatorsListMessageSchema
 export type WSOperatorStatusUpdateMessage = z.infer<typeof WSOperatorStatusUpdateMessageSchema>;
 export type WSSetOperatorContextMessage = z.infer<typeof WSSetOperatorContextMessageSchema>;
 export type WSSetOperatorRuntimeStateMessage = z.infer<typeof WSSetOperatorRuntimeStateMessageSchema>;
+export type WSSetOperatorStreamStateMessage = z.infer<typeof WSSetOperatorStreamStateMessageSchema>;
 export type WSSetOperatorRuntimeSlotContentMessage = z.infer<typeof WSSetOperatorRuntimeSlotContentMessageSchema>;
 export type WSSetOperatorTransmitCyclesMessage = z.infer<typeof WSSetOperatorTransmitCyclesMessageSchema>;
 export type WSStartOperatorMessage = z.infer<typeof WSStartOperatorMessageSchema>;
@@ -1699,6 +1721,7 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSOperatorStatusUpdateMessageSchema,
   WSSetOperatorContextMessageSchema,
   WSSetOperatorRuntimeStateMessageSchema,
+  WSSetOperatorStreamStateMessageSchema,
   WSSetOperatorRuntimeSlotContentMessageSchema,
   WSSetOperatorTransmitCyclesMessageSchema,
   WSStartOperatorMessageSchema,
@@ -2033,6 +2056,7 @@ export interface DigitalRadioEngineEvents {
   transmitStart: (slotInfo: z.infer<typeof SlotInfoSchema>) => void;
   timingWarning: (data: { title: string; text: string }) => void;
   operatorSlotChanged: (data: { operatorId: string; slot: string }) => void;
+  operatorStreamStateChanged: (data: { operatorId: string; streamId: string; state: string }) => void;
   operatorSlotContentChanged: (data: { operatorId: string; slot: string; content: string }) => void;
   operatorFrequencyChanged: (data: { operatorId: string; frequency: number }) => void;
   operatorTransmitCyclesChanged: (data: {

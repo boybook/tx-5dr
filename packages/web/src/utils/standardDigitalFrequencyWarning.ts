@@ -22,14 +22,14 @@ export interface SameCallsignStandardFrequencyWarning {
   groups: SameCallsignStandardFrequencyWarningGroup[];
 }
 
-export interface WwDigiStandardFrequencyRestriction {
+export interface MultiStreamStandardFrequencyRestriction {
   modeName: StandardDigitalModeName;
   standardFrequency: number;
   operatorIds: string[];
 }
 
 type WarningOperatorInput = Pick<OperatorStatus, 'id' | 'isTransmitting' | 'context' | 'transmitCycles'>;
-type StrategyOperatorInput = Pick<OperatorStatus, 'id' | 'strategy'>;
+type StrategyOperatorInput = Pick<OperatorStatus, 'id' | 'runtime'>;
 
 function normalizeCallsign(callsign: string | null | undefined): string {
   return (callsign ?? '').trim().toUpperCase();
@@ -122,16 +122,16 @@ export function deriveSameCallsignStandardFrequencyWarning(
   };
 }
 
-export function deriveWwDigiStandardFrequencyRestriction(
+export function deriveMultiStreamStandardFrequencyRestriction(
   operators: readonly StrategyOperatorInput[],
   modeName: string | null | undefined,
   frequency: number | null | undefined,
-): WwDigiStandardFrequencyRestriction | null {
+): MultiStreamStandardFrequencyRestriction | null {
   const match = getStandardDigitalFrequencyMatch(modeName, frequency);
   if (!match) return null;
 
   const operatorIds = operators
-    .filter((operator) => operator.strategy.name === 'ww-digi')
+    .filter((operator) => (operator.runtime?.queue?.requestedMaxActiveStreams ?? 1) > 1)
     .map((operator) => operator.id);
   return operatorIds.length > 0 ? { ...match, operatorIds } : null;
 }

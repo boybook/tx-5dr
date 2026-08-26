@@ -61,19 +61,23 @@ function createRuntime(options: {
   transmitting?: boolean;
   operator?: StandardQSOPluginOperator;
   maxStreams?: number;
+  streamLimit?: number;
 } = {}) {
   let transmitting = options.transmitting ?? false;
   let maxStreams = options.maxStreams ?? 1;
+  let streamLimit = options.streamLimit ?? 3;
   const runtimeOptions: AssistedQSOQueueRuntimeOptions = {
     operator: options.operator ?? createOperator(),
     isTransmitting: () => transmitting,
     logger: createLogger(),
     getMaxStreams: () => maxStreams,
+    getStreamLimit: () => streamLimit,
   };
   return {
     runtime: new AssistedQSOQueueRuntime(runtimeOptions),
     setTransmitting(value: boolean) { transmitting = value; },
     setMaxStreams(value: number) { maxStreams = value; },
+    setStreamLimit(value: number) { streamLimit = value; },
     logger: runtimeOptions.logger,
   };
 }
@@ -216,7 +220,7 @@ describe('AssistedQSOQueueRuntime queue capability', () => {
     expect(parallel.getQueueSnapshot().activeEntryIds).toHaveLength(3);
   });
 
-  it('applies non-preemptive dynamic shrink and uses a newly raised limit on the next decision', async () => {
+  it('preempts excess lanes on shrink and uses a newly raised limit on the next decision', async () => {
     const { runtime, setMaxStreams } = createRuntime({ transmitting: true, maxStreams: 2 });
     runtime.enqueueTarget({ callsign: 'JA1AAA' });
     runtime.enqueueTarget({ callsign: 'JA2BBB' });
@@ -232,7 +236,22 @@ describe('AssistedQSOQueueRuntime queue capability', () => {
     setMaxStreams(1);
     await runtime.decide([], decision(3));
     expect(runtime.getQueueSnapshot()).toMatchObject({ maxActiveStreams: 1 });
-    expect(runtime.getQueueSnapshot().activeEntryIds).toHaveLength(3);
+    expect(runtime.getQueueSnapshot().activeEntryIds).toHaveLength(1);
+    expect(runtime.getQueueSnapshot().rows.slice(1).map((row) => row.displayState)).toEqual(['TX1', 'TX1']);
+  });
+
+  it('reports the requested count while a Host safety limit forces one active stream', async () => {
+    const { runtime, setStreamLimit } = createRuntime({ transmitting: true, maxStreams: 3, streamLimit: 1 });
+    for (const callsign of ['JA1AAA', 'JA2BBB', 'JA3CCC']) runtime.enqueueTarget({ callsign });
+
+    expect((await runtime.decide([], decision())).transmissions).toHaveLength(1);
+    expect(runtime.getQueueSnapshot()).toMatchObject({
+      maxActiveStreams: 1,
+      requestedMaxActiveStreams: 3,
+    });
+
+    setStreamLimit(3);
+    expect((await runtime.decide([], decision(2))).transmissions).toHaveLength(3);
   });
 
   it('routes decoded replies to one standard protocol lane without advancing its peers', async () => {

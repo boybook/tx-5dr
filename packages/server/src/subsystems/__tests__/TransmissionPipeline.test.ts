@@ -264,7 +264,7 @@ describe('TransmissionPipeline lifecycle integration', () => {
 
   it('revalidates the digital frame after encoding and before asserting PTT', async () => {
     const validateStart = vi.fn(() => {
-      throw new Error('WW Digi is unavailable on the standard FT8 dial frequency 14.074 MHz');
+      throw new Error('Multi-slot transmission is unavailable on the standard FT8 dial frequency 14.074 MHz');
     });
     const harness = createHarness({ validateDigitalFrameStart: validateStart });
 
@@ -572,7 +572,7 @@ describe('TransmissionPipeline lifecycle integration', () => {
     const harness = createHarness({
       stopPlayback: stopPlayback.promise,
       validateDigitalFrameStart: () => {
-        if (blocked) throw new Error('WW Digi is unavailable on the standard FT8 dial frequency');
+        if (blocked) throw new Error('Multi-slot transmission is unavailable on the standard FT8 dial frequency');
       },
     });
     const initialHandling = (harness.pipeline as any).handleMixedAudioReady(harness.mixedAudio);

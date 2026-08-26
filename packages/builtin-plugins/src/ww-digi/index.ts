@@ -188,6 +188,12 @@ function renderCabrillo(ctx: WWDigiContext, contestYear: number): string {
   return generateWWDigiCabrillo(contestConfig(ctx), readLedger(ctx, contestYear));
 }
 
+function notifyContestLogChanged(ctx: WWDigiContext): void {
+  for (const session of ctx.ui.listActivePageSessions('contest-log')) {
+    ctx.ui.pushToSession(session.sessionId, 'stateChanged');
+  }
+}
+
 function contestConfig(ctx: WWDigiContext): ContestConfig {
   return {
     callsign: ctx.operator.callsign,
@@ -202,7 +208,7 @@ function contestConfig(ctx: WWDigiContext): ContestConfig {
   };
 }
 
-function parallelStreams(value: unknown, fallback = 3): number {
+function parallelStreams(value: unknown, fallback = 1): number {
   const numeric = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(numeric) ? Math.max(1, Math.min(3, Math.trunc(numeric))) : fallback;
 }
@@ -233,7 +239,7 @@ export const wwDigiStrategyPlugin = definePlugin({
       type: 'number', default: DEFAULT_CONTEST_YEAR, label: 'contestYear', description: 'contestYearDesc', scope: 'operator',
       min: WW_DIGI_MIN_CONTEST_YEAR, max: WW_DIGI_MAX_CONTEST_YEAR,
     },
-    parallelStreams: { type: 'number', default: 3, label: 'parallelStreams', description: 'parallelStreamsDesc', scope: 'operator', min: 1, max: 3 },
+    parallelStreams: { type: 'number', default: 1, label: 'parallelStreams', description: 'parallelStreamsDesc', scope: 'operator', min: 1, max: 3 },
     maxAttempts: { type: 'number', default: 5, label: 'maxAttempts', description: 'maxAttemptsDesc', scope: 'operator', min: 1, max: 20 },
     location: { type: 'string', default: '', label: 'location', description: 'locationDesc', scope: 'operator' },
     categoryBand: {
@@ -247,12 +253,13 @@ export const wwDigiStrategyPlugin = definePlugin({
   },
   quickSettings: wwDigiQuickSettings,
   panels: [{
-    id: 'contest-log', title: 'contestLogTitle', component: 'iframe', pageId: 'contest-log', slot: 'main-right', width: 'full',
+    id: 'contest-log', title: 'contestLogTitle', component: 'iframe', pageId: 'contest-log',
+    slot: 'operator-action', openMode: 'page', icon: 'file-lines',
   }],
   ui: {
     dir: 'ui',
     pages: [{
-      id: 'contest-log', title: 'contestLogTitle', entry: 'contest-log.html', accessScope: 'operator', resourceBinding: 'none',
+      id: 'contest-log', title: 'contestLogTitle', entry: 'contest-log.html', accessScope: 'operator', resourceBinding: 'operator',
     }],
   },
   createStrategyRuntime(ctx) {
@@ -272,6 +279,7 @@ export const wwDigiStrategyPlugin = definePlugin({
           slotMs: ctx.operator.mode.slotMs,
           transmitCycles: [...ctx.operator.transmitCycles],
           parallelStreams: parallelStreams(ctx.config.parallelStreams),
+          maxConcurrentStreams: ctx.operator.maxConcurrentStreams,
           maxAttempts: Math.max(1, Math.min(20, Math.trunc(Number(ctx.config.maxAttempts) || 5))),
         };
       },
@@ -310,12 +318,17 @@ export const wwDigiStrategyPlugin = definePlugin({
         if (action === 'renderCabrillo') {
           return { text: renderCabrillo(typed, selectedYear) };
         }
-        if (action === 'reconcile') return reconcileLedgerWithHealth(typed, selectedYear);
+        if (action === 'reconcile') {
+          const result = await reconcileLedgerWithHealth(typed, selectedYear);
+          notifyContestLogChanged(typed);
+          return result;
+        }
         if (action === 'setStatus') {
           const qsoId = typeof payload.qsoId === 'string' ? payload.qsoId : '';
           const status = payload.status === 'x-qso' ? 'x-qso' : 'included';
           const next = setContestQsoStatus(readLedger(typed, selectedYear), qsoId, status);
           await persistLedger(typed, selectedYear, next);
+          notifyContestLogChanged(typed);
           return { records: next };
         }
         throw new Error(`Unknown action: ${action}`);
@@ -336,8 +349,10 @@ export const wwDigiStrategyPlugin = definePlugin({
       if (!contestQso) return;
       try {
         await persistLedger(typed, contestYear, upsertContestQso(existing, contestQso));
+        notifyContestLogChanged(typed);
       } catch (error) {
         await markLedgerDegraded(typed, contestYear, error);
+        notifyContestLogChanged(typed);
         await typed.operatorCommands.submit({ type: 'stop-automation' });
         throw error;
       }

@@ -62,6 +62,7 @@ export interface ProtocolLane<TData> {
 
   getTransmitText(): string | null;
   getSnapshot(): ProtocolLaneSnapshot | null;
+  setUserState?(stateId: string): boolean;
 
   checkpoint(): unknown;
   restore(checkpoint: unknown): void;

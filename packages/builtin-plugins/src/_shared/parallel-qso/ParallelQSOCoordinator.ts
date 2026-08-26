@@ -154,11 +154,20 @@ export class ParallelQSOCoordinator<TData> {
     return this.maxStreams;
   }
 
-  setMaxStreams(maxStreams: number): void {
+  setMaxStreams(maxStreams: number, options: { preemptExcess?: boolean } = {}): string[] {
     const next = this.validateMaxStreams(maxStreams);
-    if (next === this.maxStreams) return;
+    const limitChanged = next !== this.maxStreams;
     this.maxStreams = next;
-    this.bumpVersion();
+    const preemptedEntryIds: string[] = [];
+    if (options.preemptExcess) {
+      for (const streamId of this.getActiveStreamIds().slice(next)) {
+        const binding = this.bindings.get(streamId);
+        if (binding) preemptedEntryIds.push(binding.entryId);
+        this.releaseBinding(streamId, 'active stream limit reduced', true);
+      }
+    }
+    if (limitChanged || preemptedEntryIds.length > 0) this.bumpVersion();
+    return preemptedEntryIds;
   }
 
   enqueue(input: {
@@ -507,6 +516,21 @@ export class ParallelQSOCoordinator<TData> {
         audioFrequencyHz: lane.audioFrequencyHz,
       }] : [];
     });
+  }
+
+  setStreamState(streamId: string, stateId: string, expectedLifecycleEpoch: number): boolean {
+    const lane = this.lanesByStreamId.get(streamId);
+    const snapshot = lane?.getSnapshot();
+    if (!lane || !snapshot) throw new Error('stream_not_found');
+    if (snapshot.qsoLifecycleEpoch !== expectedLifecycleEpoch) {
+      throw new Error('stream_lifecycle_conflict');
+    }
+    if (!snapshot.stateOptions?.some((option) => option.id === stateId) || !lane.setUserState) {
+      throw new Error('stream_state_not_available');
+    }
+    const changed = lane.setUserState(stateId);
+    if (changed) this.bumpVersion();
+    return changed;
   }
 
   onPhysicalReceipts(receipts: StreamPhysicalReceipt[]): string[] {

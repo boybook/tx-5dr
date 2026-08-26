@@ -195,6 +195,7 @@ interface ElectronAPI {
   };
   window?: {
     openLogbookWindow(queryString: string): Promise<void>;
+    openPluginPageWindow(queryString: string): Promise<void>;
     openSpectrumWindow(): Promise<void>;
     onSpectrumWindowClosed(callback: () => void): void;
     offSpectrumWindowClosed(callback: () => void): void;

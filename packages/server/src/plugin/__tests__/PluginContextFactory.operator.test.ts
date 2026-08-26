@@ -96,6 +96,17 @@ async function createOperatorContext(plugin: LoadedPlugin, deps = createDeps()) 
 }
 
 describe('PluginContextFactory operator access', () => {
+  it('projects a one-stream Host limit on standard digital frequencies', async () => {
+    let dialFrequency = 14_074_000;
+    const { ctx } = await createOperatorContext(createPlugin(), createDeps({
+      getKnownRadioFrequency: () => dialFrequency,
+    }));
+
+    expect(ctx.operator.maxConcurrentStreams).toBe(1);
+    dialFrequency = 14_090_000;
+    expect(ctx.operator.maxConcurrentStreams).toBe(3);
+  });
+
   it('exposes read-only snapshots for other operators only', async () => {
     const operators = [
       {

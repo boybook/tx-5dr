@@ -16,6 +16,7 @@ import type {
   StrategyRuntimeSlot,
   StrategyRuntimeSlotContentUpdate,
   StrategyRuntimeSnapshot,
+  StrategyStreamStateUpdate,
   StreamPhysicalReceipt,
   SlotInfo,
 } from '@tx5dr/plugin-api';
@@ -61,6 +62,7 @@ export interface AssistedQSOQueueRuntimeOptions {
   isTransmitting: () => boolean;
   logger: PluginLogger;
   getMaxStreams?: () => number;
+  getStreamLimit?: () => number;
 }
 
 function clone<T>(value: T): T {
@@ -89,6 +91,7 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
   private readonly isTransmitting: () => boolean;
   private readonly logger: PluginLogger;
   private readonly getConfiguredMaxStreams: () => number;
+  private readonly getStreamLimit: () => number;
   private readonly coordinator: ParallelQSOCoordinator<AssistedQueueEntryData>;
   private readonly lanes: StandardQSOProtocolLane[] = [];
   private latestSlotStartMs = 0;
@@ -99,6 +102,7 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
     this.isTransmitting = options.isTransmitting;
     this.logger = options.logger;
     this.getConfiguredMaxStreams = options.getMaxStreams ?? (() => 1);
+    this.getStreamLimit = options.getStreamLimit ?? (() => MAX_PARALLEL_STREAMS);
     this.coordinator = new ParallelQSOCoordinator({
       maxSupportedStreams: MAX_PARALLEL_STREAMS,
       initialMaxStreams: this.readMaxStreams(),
@@ -354,12 +358,14 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
   }
 
   getQueueSnapshot(): AssistedQueueSnapshot {
+    this.syncMaxStreams();
     const snapshot = this.coordinator.getQueueSnapshot();
     return {
       version: snapshot.version,
       activeEntryId: snapshot.activeEntryIds[0],
       activeEntryIds: snapshot.activeEntryIds,
       maxActiveStreams: snapshot.maxActiveStreams,
+      requestedMaxActiveStreams: this.readRequestedMaxStreams(),
       rows: snapshot.entries.map((row, order) => {
         const lane = row.active ? this.lanes.find((candidate) => candidate.streamId === row.streamId) : undefined;
         const data = lane?.getActiveData() ?? row.entry.data;
@@ -434,6 +440,7 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
   }
 
   getTransmissions() {
+    this.syncMaxStreams();
     if (!this.isTransmitting()) return [];
     const transmissions = this.coordinator.getTransmissions();
     if (transmissions.length > 0) return transmissions;
@@ -450,6 +457,7 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
   }
 
   getSnapshot(): StrategyRuntimeSnapshot {
+    this.syncMaxStreams();
     const primary = this.primaryLane().getLegacySnapshot();
     return {
       ...primary,
@@ -460,6 +468,9 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
 
   patchContext(patch: Partial<StrategyRuntimeContext>): void { this.primaryLane().patchContext(patch); }
   setState(state: StrategyRuntimeSlot): void { this.primaryLane().setState(state); }
+  setStreamState(update: StrategyStreamStateUpdate): void {
+    this.coordinator.setStreamState(update.streamId, update.stateId, update.expectedLifecycleEpoch);
+  }
   setSlotContent(update: StrategyRuntimeSlotContentUpdate): void { this.primaryLane().setSlotContent(update); }
 
   settleQSOCompletion(settlement: StrategyQSOCompletionSettlement): void {
@@ -722,12 +733,27 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
     return this.operator.config.transmitCycles[0] === 1 ? 1 : 0;
   }
 
-  private readMaxStreams(): number {
+  private readRequestedMaxStreams(): number {
     return clampMaxStreams(this.getConfiguredMaxStreams());
   }
 
+  private readMaxStreams(): number {
+    return Math.min(this.readRequestedMaxStreams(), clampMaxStreams(this.getStreamLimit()));
+  }
+
   private syncMaxStreams(): void {
-    this.coordinator.setMaxStreams(this.readMaxStreams());
+    const preemptedEntryIds = this.coordinator.setMaxStreams(
+      this.readMaxStreams(),
+      { preemptExcess: true },
+    );
+    for (const entryId of preemptedEntryIds) {
+      this.coordinator.updateEntry(entryId, (data) => {
+        data.state = 'queued';
+        data.pauseReason = undefined;
+        data.noResponseCycles = undefined;
+        return true;
+      });
+    }
   }
 
   private fromCoordinatorMutation(

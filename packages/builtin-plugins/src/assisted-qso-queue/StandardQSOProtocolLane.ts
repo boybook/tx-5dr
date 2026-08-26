@@ -405,11 +405,20 @@ export class StandardQSOProtocolLane implements ProtocolLane<AssistedQueueEntryD
     const active = this.activeEntry;
     if (active) {
       const protocol = this.delegate.getSnapshot();
+      const canSelectState = !this.delegateReleased
+        && (active.data.state === 'active' || active.data.state === 'engaged' || active.data.state === 'closing');
       return {
         currentState: protocol.currentState,
         targetCallsign: active.callsign,
         targetGrid: active.data.targetGrid ?? protocol.context?.targetGrid,
         qsoLifecycleEpoch: protocol.qsoLifecycleEpoch ?? 0,
+        stateOptions: canSelectState
+          ? (protocol.availableSlots ?? []).map((id) => ({
+            id,
+            label: id,
+            transmitText: protocol.slots?.[id as StrategyRuntimeSlot],
+          }))
+          : [],
       };
     }
     const legacy = this.getLegacySnapshot();
@@ -419,6 +428,7 @@ export class StandardQSOProtocolLane implements ProtocolLane<AssistedQueueEntryD
       targetCallsign: legacy.context?.targetCallsign,
       targetGrid: legacy.context?.targetGrid,
       qsoLifecycleEpoch: legacy.qsoLifecycleEpoch ?? 0,
+      stateOptions: [],
     };
   }
 
@@ -513,6 +523,18 @@ export class StandardQSOProtocolLane implements ProtocolLane<AssistedQueueEntryD
 
   setState(state: StrategyRuntimeSlot): void {
     this.delegate.setState(state);
+  }
+
+  setUserState(stateId: string): boolean {
+    if (!this.activeEntry || this.delegateReleased
+        || (this.activeEntry.data.state !== 'active'
+          && this.activeEntry.data.state !== 'engaged'
+          && this.activeEntry.data.state !== 'closing')) return false;
+    const snapshot = this.delegate.getSnapshot();
+    if (!snapshot.availableSlots?.includes(stateId)) return false;
+    if (snapshot.currentState === stateId) return false;
+    this.delegate.setState(stateId as StrategyRuntimeSlot);
+    return true;
   }
 
   setSlotContent(update: StrategyRuntimeSlotContentUpdate): void {

@@ -263,6 +263,7 @@ export function createMockOperatorSnapshot(
     callsign: overrides?.callsign ?? 'W1AW',
     grid: overrides?.grid ?? 'FN31',
     frequency: overrides?.frequency ?? 1500,
+    maxConcurrentStreams: overrides?.maxConcurrentStreams ?? 3,
     get mode() { return cloneStructuredValue(mode); },
     get transmitCycles() { return cloneStructuredValue(transmitCycles); },
     get automation() { return cloneStructuredValue(automation); },

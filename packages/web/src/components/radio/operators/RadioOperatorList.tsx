@@ -4,20 +4,28 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPlus } from '@fortawesome/free-solid-svg-icons';
 import { useOperators, useConnection } from '../../../store/radioStore';
 import { useRadioModeState } from '../../../store/radio/hooks';
-import { useAuth } from '../../../store/authStore';
+import { useAuth, useHasMinRole } from '../../../store/authStore';
+import { UserRole } from '@tx5dr/contracts';
 import { RadioOperator } from './RadioOperator';
 import { useTranslation } from 'react-i18next';
 import {
   deriveSameCallsignStandardFrequencyWarning,
-  deriveWwDigiStandardFrequencyRestriction,
+  deriveMultiStreamStandardFrequencyRestriction,
   formatSameCallsignWarningCallsigns,
 } from '../../../utils/standardDigitalFrequencyWarning';
 import { usePluginSnapshot } from '../../../hooks/usePluginSnapshot';
+import { usePluginPanelMeta } from '../../../hooks/usePluginPanelMeta';
+import {
+  resolveOperatorPluginPageActions,
+  type OperatorPluginPageActionEntry,
+} from './OperatorPluginPageActions';
 import { formatFrequencyMHz } from '../../../utils/frequencyMHz';
 
 interface RadioOperatorListProps {
   onCreateOperator?: () => void; // 创建操作员的回调
 }
+
+const EMPTY_PLUGIN_PAGE_ACTIONS: OperatorPluginPageActionEntry[] = [];
 
 export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOperator }) => {
   const { t } = useTranslation('radio');
@@ -26,6 +34,27 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
   const { currentMode, currentRadioFrequency } = useRadioModeState();
   const { state: authState } = useAuth();
   const pluginSnapshot = usePluginSnapshot();
+  const getPluginPanelMeta = usePluginPanelMeta(pluginSnapshot.panelMeta);
+  const canAccessOperator = useHasMinRole(UserRole.OPERATOR);
+  const canAccessAdmin = useHasMinRole(UserRole.ADMIN);
+  const pluginPageActionsByOperator = React.useMemo(() => Object.fromEntries(
+    operators.map((operator) => [
+      operator.id,
+      resolveOperatorPluginPageActions({
+        snapshot: pluginSnapshot,
+        getMeta: getPluginPanelMeta,
+        operatorId: operator.id,
+        canAccessOperator,
+        canAccessAdmin,
+      }),
+    ]),
+  ), [
+    canAccessAdmin,
+    canAccessOperator,
+    getPluginPanelMeta,
+    operators,
+    pluginSnapshot,
+  ]);
   const standardFrequencyWarning = React.useMemo(
     () => deriveSameCallsignStandardFrequencyWarning(
       operators,
@@ -37,17 +66,13 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
   const standardFrequencyWarningCallsigns = standardFrequencyWarning
     ? formatSameCallsignWarningCallsigns(standardFrequencyWarning.groups)
     : '';
-  const wwDigiRestriction = React.useMemo(
-    () => deriveWwDigiStandardFrequencyRestriction(
+  const multiStreamRestriction = React.useMemo(
+    () => deriveMultiStreamStandardFrequencyRestriction(
       operators,
       currentMode?.name,
       currentRadioFrequency,
     ),
     [operators, currentMode?.name, currentRadioFrequency],
-  );
-  const restrictedWwDigiOperatorIds = React.useMemo(
-    () => new Set(wwDigiRestriction?.operatorIds ?? []),
-    [wwDigiRestriction],
   );
 
   // 连接后请求操作员列表
@@ -114,16 +139,16 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
 
   return (
     <div className="space-y-4">
-      {wwDigiRestriction && (
+      {multiStreamRestriction && (
         <Alert
           color="warning"
           variant="flat"
-          title={t('operator.wwDigiStandardFrequencyBlockedTitle')}
+          title={t('operator.standardFrequencyMultiStreamTitle')}
           className="text-xs"
         >
-          {t('operator.wwDigiStandardFrequencyBlockedDesc', {
-            mode: wwDigiRestriction.modeName,
-            frequency: formatFrequencyMHz(wwDigiRestriction.standardFrequency),
+          {t('operator.standardFrequencyMultiStreamDesc', {
+            mode: multiStreamRestriction.modeName,
+            frequency: formatFrequencyMHz(multiStreamRestriction.standardFrequency),
           })}
         </Alert>
       )}
@@ -144,7 +169,7 @@ export const RadioOperatorList: React.FC<RadioOperatorListProps> = ({ onCreateOp
           key={operator.id}
           operatorStatus={operator}
           pluginStatuses={pluginSnapshot.plugins}
-          isWwDigiStandardFrequencyBlocked={restrictedWwDigiOperatorIds.has(operator.id)}
+          pluginPageActions={pluginPageActionsByOperator[operator.id] ?? EMPTY_PLUGIN_PAGE_ACTIONS}
         />
       ))}
     </div>

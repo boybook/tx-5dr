@@ -363,6 +363,28 @@ export class RadioService {
     }
   }
 
+  setOperatorStreamState(
+    operatorId: string,
+    streamId: string,
+    stateId: string,
+    expectedLifecycleEpoch: number,
+  ): void {
+    if (this.isConnected) {
+      logger.info('UI command: setOperatorStreamState', {
+        operatorId,
+        streamId,
+        stateId,
+        expectedLifecycleEpoch,
+      });
+      this.wsClient.send('setOperatorStreamState', {
+        operatorId,
+        streamId,
+        stateId,
+        expectedLifecycleEpoch,
+      });
+    }
+  }
+
   /**
    * 设置操作员策略运行时槽位内容
    */

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { ModeDescriptorSchema } from './mode.schema.js';
 import { sanitizeCallsignInput } from '../utils/callsign.js';
 import { sanitizeGridInput } from '../utils/grid.js';
+import { StrategyRuntimeSnapshotSchema } from './websocket.schema.js';
 
 const OperatorCallsignSchema = z
   .string()
@@ -79,25 +80,7 @@ export const RadioOperatorStatusResponseSchema = z.object({
       state: z.string(),
       availableSlots: z.array(z.string()),
     }),
-    runtime: z.object({
-      currentState: z.string(),
-      slots: z.object({
-        TX1: z.string().optional(),
-        TX2: z.string().optional(),
-        TX3: z.string().optional(),
-        TX4: z.string().optional(),
-        TX5: z.string().optional(),
-        TX6: z.string().optional(),
-      }).optional(),
-      context: z.object({
-        targetCallsign: z.string().optional(),
-        targetGrid: z.string().optional(),
-        reportSent: z.number().optional(),
-        reportReceived: z.number().optional(),
-        actualFrequency: z.number().optional(),
-      }).optional(),
-      availableSlots: z.array(z.string()).optional(),
-    }).optional(),
+    runtime: StrategyRuntimeSnapshotSchema.optional(),
     slots: z.object({
       TX1: z.string().optional(),
       TX2: z.string().optional(),

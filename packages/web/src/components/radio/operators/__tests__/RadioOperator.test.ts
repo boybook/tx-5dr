@@ -9,6 +9,7 @@ import { pickManualIdleFrequency } from '../radioOperatorIdleFrequency';
 import {
   resolveRadioOperatorCurrentTransmissions,
   resolveRadioOperatorCyclePresentation,
+  resolveSingleControllableStream,
   resolveRadioOperatorStreamPresentations,
   summarizeRadioOperatorTransmissions,
 } from '../radioOperatorPresentation';
@@ -188,6 +189,7 @@ describe('RadioOperator memo comparison', () => {
           targetCallsign: 'JA1AAA',
           audioFrequencyHz: 1200,
           qsoLifecycleEpoch: 1,
+          stateOptions: [{ id: 'TX1', label: 'TX1', transmitText: 'JA1AAA BG5DRB PM01' }],
         }],
       },
     });
@@ -284,6 +286,7 @@ describe('RadioOperator transmit content', () => {
           targetCallsign: 'JA1AAA',
           audioFrequencyHz: 1200,
           qsoLifecycleEpoch: 1,
+          stateOptions: [{ id: 'TX1', label: 'TX1', transmitText: 'JA1AAA BG5DRB PM01' }],
         }, {
           streamId: 'stream-2',
           currentState: 'TX3',
@@ -306,22 +309,30 @@ describe('RadioOperator transmit content', () => {
     expect(resolveRadioOperatorStreamPresentations(operator)).toEqual([{
       streamId: 'stream-1',
       currentState: 'TX1',
+      qsoLifecycleEpoch: 1,
+      stateOptions: [{ id: 'TX1', label: 'TX1', transmitText: 'JA1AAA BG5DRB PM01' }],
       targetCallsign: 'JA1AAA',
       audioFrequencyHz: 1200,
       text: 'JA1AAA BG5DRB PM01',
     }, {
       streamId: 'stream-2',
       currentState: 'TX3',
+      qsoLifecycleEpoch: 2,
       targetCallsign: 'JA2BBB',
       audioFrequencyHz: 1560,
       text: 'JA2BBB BG5DRB R-09',
     }, {
       streamId: 'stream-3',
       currentState: 'send-rr73',
+      qsoLifecycleEpoch: 3,
       targetCallsign: 'JA3CCC',
       audioFrequencyHz: 1800,
       text: 'JA3CCC BG5DRB RR73',
     }]);
+
+    const streams = resolveRadioOperatorStreamPresentations(operator);
+    expect(resolveSingleControllableStream(streams, 1)?.streamId).toBe('stream-1');
+    expect(resolveSingleControllableStream(streams, 3)).toBeUndefined();
   });
 
   it('keeps a closing stream visible after its transmission has cleared', () => {
@@ -342,6 +353,7 @@ describe('RadioOperator transmit content', () => {
     expect(resolveRadioOperatorStreamPresentations(operator)).toEqual([{
       streamId: 'stream-2',
       currentState: 'closing',
+      qsoLifecycleEpoch: 2,
       targetCallsign: 'JA2BBB',
       audioFrequencyHz: 1560,
     }]);

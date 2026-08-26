@@ -805,6 +805,13 @@
   "voice": {
     "qsoTab": "交信"
   },
+  "pluginPage": {
+    "title": "プラグインページ",
+    "invalidRoute": "プラグインページのアドレスが不完全です。",
+    "unavailable": "このプラグインページは現在利用できません。",
+    "operatorRequired": "このプラグインページを開く前にオペレーターを選択してください。",
+    "loadFailed": "プラグインページを読み込めませんでした。"
+  },
   "bootstrapStatus": {
     "chip": {
       "failed": "一部の機能は準備ができていません",

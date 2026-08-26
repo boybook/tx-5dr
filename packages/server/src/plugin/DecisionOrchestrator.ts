@@ -444,7 +444,9 @@ export class DecisionOrchestrator {
           }] : [];
         },
       ) ?? [];
-      const operatorMaxStreams = operator.config.maxConcurrentStreams ?? 3;
+      const operatorMaxStreams = this.deps.getEffectiveOperatorMaxConcurrentStreams?.(operatorId)
+        ?? operator.config.maxConcurrentStreams
+        ?? 3;
       const strategyMaxStreams = this.deps.getStrategyMaxConcurrentStreams?.(operatorId);
       if (strategyMaxStreams !== undefined
           && (!Number.isInteger(strategyMaxStreams) || strategyMaxStreams < 1)) {

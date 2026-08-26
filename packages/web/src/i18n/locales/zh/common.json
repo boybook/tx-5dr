@@ -805,6 +805,13 @@
   "voice": {
     "qsoTab": "通联"
   },
+  "pluginPage": {
+    "title": "插件页面",
+    "invalidRoute": "插件页面地址不完整。",
+    "unavailable": "此插件页面当前不可用。",
+    "operatorRequired": "请先选择操作员，再打开此插件页面。",
+    "loadFailed": "无法加载插件页面。"
+  },
   "bootstrapStatus": {
     "chip": {
       "failed": "部分功能未准备好",

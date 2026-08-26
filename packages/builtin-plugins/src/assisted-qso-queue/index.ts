@@ -95,6 +95,7 @@ export const assistedQSOQueueStrategyPlugin = definePlugin({
       isTransmitting: () => ctx.operator.isTransmitting,
       logger: ctx.log,
       getMaxStreams: () => Number(ctx.config.parallelStreams ?? 1),
+      getStreamLimit: () => ctx.operator.maxConcurrentStreams,
     });
   },
 });

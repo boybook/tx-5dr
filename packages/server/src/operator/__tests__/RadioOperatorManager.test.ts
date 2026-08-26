@@ -2554,17 +2554,15 @@ describe('RadioOperatorManager operator status payloads', () => {
   });
 });
 
-describe('RadioOperatorManager WW Digi standard-frequency restriction', () => {
+describe('RadioOperatorManager standard-frequency stream restriction', () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('refuses to start WW Digi on a standard dial frequency', async () => {
-    let strategyName = 'ww-digi';
-    let dialFrequency = 14_074_000;
+  it('allows single-stream queue strategies to start on a standard dial frequency', async () => {
     const { manager } = createManager({
       logBook: { id: 'log-1', name: 'Test Log', provider: {} },
-      getKnownRadioFrequency: () => dialFrequency,
+      getKnownRadioFrequency: () => 14_074_000,
     });
     await manager.addOperator({
       id: 'op1',
@@ -2574,27 +2572,30 @@ describe('RadioOperatorManager WW Digi standard-frequency restriction', () => {
       transmitCycles: [0],
     } as RadioOperatorConfig);
     manager.setPluginManager({
-      getOperatorRuntimeStatus: vi.fn(() => ({ strategyName, currentSlot: 'TX6' })),
+      getOperatorRuntimeStatus: vi.fn(() => ({ strategyName: 'ww-digi', currentSlot: 'TX6' })),
       getCurrentTransmissions: vi.fn(() => []),
     } as any);
 
-    expect(() => manager.startOperator('op1')).toThrow(
-      'WW Digi is unavailable on the standard FT8 dial frequency 14.074 MHz',
-    );
-    expect(manager.getOperatorById('op1')?.isTransmitting).toBe(false);
-
-    strategyName = 'standard-qso';
-    expect(() => manager.startOperator('op1')).not.toThrow();
-    expect(manager.getOperatorById('op1')?.isTransmitting).toBe(true);
-    manager.stopOperator('op1');
-
-    strategyName = 'ww-digi';
-    dialFrequency = 14_090_000;
     expect(() => manager.startOperator('op1')).not.toThrow();
     expect(manager.getOperatorById('op1')?.isTransmitting).toBe(true);
   });
 
-  it('stops a bypassed WW Digi operator before RF encoding', async () => {
+  it('allows one track but rejects a second same-operator track at final RF validation', () => {
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      getKnownRadioFrequency: () => 14_074_000,
+    });
+
+    expect(() => manager.assertStandardFrequencyStreamLimit([
+      { operatorId: 'op1', streamId: 'stream-1' },
+    ])).not.toThrow();
+    expect(() => manager.assertStandardFrequencyStreamLimit([
+      { operatorId: 'op1', streamId: 'stream-1' },
+      { operatorId: 'op1', streamId: 'stream-2' },
+    ])).toThrow(/cannot transmit 2 TX slots/);
+  });
+
+  it('rejects a bypassed multi-stream batch without stopping the operator', async () => {
     const encodeQueue = { push: vi.fn() };
     const { manager, eventEmitter } = createManager({
       logBook: { id: 'log-1', name: 'Test Log', provider: {} },
@@ -2631,9 +2632,9 @@ describe('RadioOperatorManager WW Digi standard-frequency restriction', () => {
     manager.processPendingTransmissions(createSlotInfo(0));
 
     expect(encodeQueue.push).not.toHaveBeenCalled();
-    expect(manager.getOperatorById('op1')?.isTransmitting).toBe(false);
+    expect(manager.getOperatorById('op1')?.isTransmitting).toBe(true);
     expect(textMessageSpy).toHaveBeenCalledWith(expect.objectContaining({
-      key: 'wwDigiStandardFrequencyBlocked',
+      key: 'standardFrequencyMultiStreamFallback',
       params: { mode: 'FT8', frequency: '14.074' },
     }));
   });
