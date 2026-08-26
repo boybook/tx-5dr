@@ -465,7 +465,10 @@
       "no-response": "非アクティブ",
       "noResponseCycles": "非アクティブ · {{count}} 周期応答なし",
       "later": "後で",
-      "review": "確認"
+      "review": "確認",
+      "candidate": "候補",
+      "authorized": "承認済み",
+      "dupe": "重複QSO"
     },
     "queuePauseReason": {
       "targetBusy": "相手局が交信中",

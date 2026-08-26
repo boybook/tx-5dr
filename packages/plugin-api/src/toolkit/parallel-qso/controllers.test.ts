@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { AuthorizationLease } from './AuthorizationLease.js';
-import { ExplicitCQController } from './ExplicitCQController.js';
 import { LaneFrequencyController } from './LaneFrequencyController.js';
 import { PostCompletionRecoveryLease } from './PostCompletionRecoveryLease.js';
 
@@ -12,17 +11,6 @@ describe('parallel QSO toolkit controllers', () => {
     lease.reauthorize('b', 14);
     expect(lease.authorizationId).toBe('b');
     expect(lease.isFresh(17)).toBe(true);
-  });
-
-  it('consumes one-shot CQ only after physical success and honors suppression', () => {
-    const cq = new ExplicitCQController();
-    cq.setMode('once');
-    expect(cq.shouldTransmit()).toBe(true);
-    cq.setSuppressed(true);
-    expect(cq.shouldTransmit()).toBe(false);
-    cq.setSuppressed(false);
-    cq.onPhysicalSuccess();
-    expect(cq.currentMode).toBe('off');
   });
 
   it('keeps manual lane frequency until reset to automatic', () => {

@@ -88,11 +88,15 @@ function createRuntime(options: {
   parallelStreams?: number;
   maxAttempts?: number;
   streamLimit?: number;
-  authorizationReceiveCycles?: number;
+  authorizedStaleReceiveCycles?: number;
+  cqMaxAttempts?: number;
+  cqSelectionPolicy?: WWDigiRuntimeConfig['cqSelectionPolicy'];
+  workedCallsigns?: string[];
   busyCallsigns?: string[];
 } = {}) {
   let transmitting = options.transmitting ?? false;
   const busy = new Set((options.busyCallsigns ?? []).map((callsign) => callsign.toUpperCase()));
+  const worked = new Set((options.workedCallsigns ?? []).map((callsign) => callsign.toUpperCase()));
   const config: WWDigiRuntimeConfig = {
     myCallsign: 'BG5DRB',
     myGrid: 'OL32',
@@ -103,12 +107,15 @@ function createRuntime(options: {
     parallelStreams: options.parallelStreams ?? 1,
     maxConcurrentStreams: options.streamLimit ?? 3,
     maxAttempts: options.maxAttempts ?? 5,
-    authorizationReceiveCycles: options.authorizationReceiveCycles,
+    authorizedStaleReceiveCycles: options.authorizedStaleReceiveCycles,
+    cqMaxAttempts: options.cqMaxAttempts ?? 6,
+    cqSelectionPolicy: options.cqSelectionPolicy ?? 'MAX_DISTANCE',
   };
   const operator: WWDigiRuntimeOperator = {
     get config() { return config; },
     get isTransmitting() { return transmitting; },
     isTargetBeingWorkedByOthers: vi.fn((callsign: string) => busy.has(callsign.toUpperCase())),
+    hasWorkedCallsign: vi.fn(async (callsign: string) => worked.has(callsign.toUpperCase())),
   };
   return {
     runtime: new WWDigiStrategyRuntime(operator, logger(), () => [
@@ -276,8 +283,8 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
     }]);
   });
 
-  it('allows an armed CQ after queued targets become stale', async () => {
-    const { runtime } = createRuntime({ transmitting: true, authorizationReceiveCycles: 1 });
+  it('does not turn an expired authorized target into a new CQ session', async () => {
+    const { runtime } = createRuntime({ transmitting: true, authorizedStaleReceiveCycles: 1 });
     runtime.enqueueTarget({ callsign: 'JA1AAA' });
     await runtime.invokeAction({ target: { kind: 'runtime' }, actionId: 'cq-repeat' });
 
@@ -285,11 +292,82 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
 
     runtime.observeDecodedMessages([], observation());
     expect(runtime.getQueueSnapshot().rows[0]).toMatchObject({ displayState: 'paused', pauseReason: 'stale' });
-    expect(runtime.getTransmissions()).toEqual([{
-      streamId: 'cq',
-      text: 'CQ WW BG5DRB OL32',
-      audioFrequencyHz: 1_500,
-    }]);
+    expect(runtime.getTransmissions()).toEqual([]);
+    expect((await runtime.decide([], decision())).stop).toBe(true);
+  });
+
+  it('collects a CQ pile-up, auto-authorizes three, and retains overflow candidates', async () => {
+    const { runtime, setTransmitting } = createRuntime({ transmitting: true, parallelStreams: 3, cqSelectionPolicy: 'FIRST' });
+    await runtime.invokeAction({ target: { kind: 'runtime' }, actionId: 'cq-repeat' });
+    const cq = await runtime.decide([], decision());
+    confirmTransmissions(runtime, cq);
+
+    const callers = ['JA1AAA', 'JA2BBB', 'JA3CCC', 'JA4DDD', 'JA5EEE'].map((callsign, index) => (
+      parsed(`BG5DRB ${callsign} PM9${index}`, BASE_TIME + MODES.FT8.slotMs)
+    ));
+    runtime.observeDecodedMessages(callers, observation(BASE_TIME + MODES.FT8.slotMs));
+    const selected = await runtime.decide(callers, decision(2));
+
+    expect(selected.transmissions).toHaveLength(3);
+    expect(runtime.getQueueSnapshot().rows.map((row) => row.displayState)).toEqual([
+      'engaged', 'engaged', 'engaged', 'candidate', 'candidate',
+    ]);
+    setTransmitting(false);
+    const queue = runtime.getQueueSnapshot();
+    const candidate = queue.rows.find((row) => row.displayState === 'candidate')!;
+    const authorized = await runtime.invokeAction({
+      target: { kind: 'queue-entry', entryId: candidate.entryId, queueVersion: queue.version },
+      actionId: 'authorize-target',
+    });
+    expect(authorized).toMatchObject({ requestOperatorStart: true, requestDecision: true });
+    expect(runtime.getQueueSnapshot().rows.find((row) => row.entryId === candidate.entryId))
+      .toMatchObject({ displayState: 'authorized' });
+  });
+
+  it('keeps dupes as candidates but excludes them from automatic CQ selection', async () => {
+    const { runtime } = createRuntime({
+      transmitting: true, parallelStreams: 2, cqSelectionPolicy: 'FIRST', workedCallsigns: ['JA1AAA'],
+    });
+    await runtime.invokeAction({ target: { kind: 'runtime' }, actionId: 'cq-repeat' });
+    confirmTransmissions(runtime, await runtime.decide([], decision()));
+    const callers = [
+      parsed('BG5DRB JA1AAA PM95', BASE_TIME + MODES.FT8.slotMs),
+      parsed('BG5DRB JA2BBB PM96', BASE_TIME + MODES.FT8.slotMs),
+    ];
+    runtime.observeDecodedMessages(callers, observation(BASE_TIME + MODES.FT8.slotMs));
+    const selected = await runtime.decide(callers, decision(2));
+    expect(selected.transmissions?.map((item) => item.text)).toEqual(['JA2BBB BG5DRB R OL32']);
+    expect(runtime.getQueueSnapshot().rows.find((row) => row.callsign === 'JA1AAA'))
+      .toMatchObject({ displayState: 'dupe' });
+  });
+
+  it('uses the same CQ authorization to fill an empty slot from a late decode', async () => {
+    const { runtime } = createRuntime({ transmitting: true, parallelStreams: 3, cqSelectionPolicy: 'FIRST' });
+    await runtime.invokeAction({ target: { kind: 'runtime' }, actionId: 'cq-repeat' });
+    confirmTransmissions(runtime, await runtime.decide([], decision()));
+    const first = parsed('BG5DRB JA1AAA PM95', BASE_TIME + MODES.FT8.slotMs);
+    runtime.observeDecodedMessages([first], observation(BASE_TIME + MODES.FT8.slotMs));
+    expect((await runtime.decide([first], decision(2))).transmissions).toHaveLength(1);
+
+    const late = parsed('BG5DRB JA2BBB PM96', BASE_TIME + MODES.FT8.slotMs);
+    runtime.observeDecodedMessages([late], observation(BASE_TIME + MODES.FT8.slotMs));
+    expect((await runtime.decide([late], { ...decision(3), source: 'late-decode', isReDecision: true })).transmissions)
+      .toHaveLength(2);
+  });
+
+  it('stops after the configured number of physically completed unanswered CQs', async () => {
+    const { runtime } = createRuntime({ transmitting: true, cqMaxAttempts: 2 });
+    await runtime.invokeAction({ target: { kind: 'runtime' }, actionId: 'cq-repeat' });
+    const first = await runtime.decide([], decision());
+    confirmTransmissions(runtime, first);
+    const second = await runtime.decide([], decision(2));
+    confirmTransmissions(runtime, second);
+    runtime.observeDecodedMessages([], observation(BASE_TIME + MODES.FT8.slotMs));
+    const stopped = await runtime.decide([], decision(3));
+    expect(stopped.stop).toBe(true);
+    expect(stopped.snapshot.attentions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'cq-no-response', params: { count: 2 } }),
+    ]));
   });
 });
 

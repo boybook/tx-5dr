@@ -29,13 +29,19 @@ import {
 } from './protocol.js';
 
 export interface WWDigiEntryData {
-  authorizationId: string;
-  authorizedAt: number;
+  authorizationId?: string;
+  authorizedAt?: number;
   lastMessageRaw?: string;
   targetGrid?: string;
   lastSnr?: number;
-  status?: 'queued' | 'paused' | 'stale' | 'no-response' | 'review';
+  status?: 'candidate' | 'authorized' | 'paused' | 'stale' | 'no-response' | 'review' | 'dupe';
   authorizedReceiveEpoch?: number;
+  lastHeardReceiveEpoch?: number;
+  firstHeardAt?: number;
+  firstAudioFrequencyHz?: number;
+  evidenceRevision?: number;
+  dupe?: boolean;
+  source?: 'manual' | 'cq';
   noResponseCycles?: number;
   alternateText?: string;
   encodingError?: string;

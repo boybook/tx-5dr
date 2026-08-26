@@ -282,7 +282,9 @@ function parallelStreams(value: unknown, fallback = 1): number {
 export const wwDigiQuickSettings: PluginQuickSetting[] = [
   { settingKey: 'parallelStreams' },
   { settingKey: 'maxAttempts' },
-  { settingKey: 'authorizationReceiveCycles' },
+  { settingKey: 'cqMaxAttempts' },
+  { settingKey: 'cqSelectionPolicy' },
+  { settingKey: 'authorizedStaleReceiveCycles' },
 ];
 
 export const wwDigiStrategyPlugin = definePlugin({
@@ -309,8 +311,15 @@ export const wwDigiStrategyPlugin = definePlugin({
     },
     parallelStreams: { type: 'number', default: 1, label: 'parallelStreams', description: 'parallelStreamsDesc', scope: 'operator', min: 1, max: 3 },
     maxAttempts: { type: 'number', default: 5, label: 'maxAttempts', description: 'maxAttemptsDesc', scope: 'operator', min: 1, max: 20 },
-    authorizationReceiveCycles: {
-      type: 'number', default: 4, label: 'authorizationReceiveCycles', description: 'authorizationReceiveCyclesDesc', scope: 'operator', min: 1, max: 20,
+    cqMaxAttempts: {
+      type: 'number', default: 6, label: 'cqMaxAttempts', description: 'cqMaxAttemptsDesc', scope: 'operator', min: 1, max: 20,
+    },
+    cqSelectionPolicy: {
+      type: 'string', default: 'MAX_DISTANCE', label: 'cqSelectionPolicy', description: 'cqSelectionPolicyDesc', scope: 'operator',
+      options: ['FIRST', 'MAX_DISTANCE', 'MAX_SNR', 'MIN_SNR'].map((value) => ({ label: `selection${value}`, value })),
+    },
+    authorizedStaleReceiveCycles: {
+      type: 'number', default: 12, label: 'authorizedStaleReceiveCycles', description: 'authorizedStaleReceiveCyclesDesc', scope: 'operator', min: 1, max: 60,
     },
     location: { type: 'string', default: '', label: 'location', description: 'locationDesc', scope: 'operator' },
     categoryBand: {
@@ -364,12 +373,18 @@ export const wwDigiStrategyPlugin = definePlugin({
           parallelStreams: parallelStreams(ctx.config.parallelStreams),
           maxConcurrentStreams: ctx.operator.maxConcurrentStreams,
           maxAttempts: Math.max(1, Math.min(20, Math.trunc(Number(ctx.config.maxAttempts) || 5))),
-          authorizationReceiveCycles: Math.max(1, Math.min(20, Math.trunc(Number(ctx.config.authorizationReceiveCycles) || 4))),
+          cqMaxAttempts: Math.max(1, Math.min(20, Math.trunc(Number(ctx.config.cqMaxAttempts) || 6))),
+          cqSelectionPolicy: ['FIRST', 'MAX_DISTANCE', 'MAX_SNR', 'MIN_SNR'].includes(String(ctx.config.cqSelectionPolicy))
+            ? String(ctx.config.cqSelectionPolicy) as WWDigiRuntimeConfig['cqSelectionPolicy'] : 'MAX_DISTANCE',
+          authorizedStaleReceiveCycles: Math.max(1, Math.min(60, Math.trunc(Number(ctx.config.authorizedStaleReceiveCycles) || 12))),
         };
       },
       get isTransmitting() { return ctx.operator.isTransmitting; },
       isTargetBeingWorkedByOthers(callsign: string) {
         return ctx.operator.isTargetBeingWorkedByOthers(callsign);
+      },
+      hasWorkedCallsign(callsign: string) {
+        return ctx.operator.hasWorkedCallsign(callsign);
       },
     };
     return new WWDigiStrategyRuntime(operator, ctx.log, () => {

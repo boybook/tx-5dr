@@ -21,6 +21,7 @@ describe('WW Digi simulation scenarios', () => {
       'invalid-grid',
       'alternate-text',
       'ambient-band',
+      'cq-pileup',
       'seeded-random',
     ]));
   });

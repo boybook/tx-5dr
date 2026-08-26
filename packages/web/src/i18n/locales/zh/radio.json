@@ -477,7 +477,10 @@
       "no-response": "不活跃",
       "noResponseCycles": "不活跃 · {{count}} 回合无响应",
       "later": "稍后",
-      "review": "复核"
+      "review": "复核",
+      "candidate": "候选",
+      "authorized": "已授权",
+      "dupe": "重复通联"
     },
     "queuePauseReason": {
       "targetBusy": "对方正忙",

@@ -11,7 +11,7 @@ import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../../utils/logger';
 import { OperatorPluginPanels } from '../../plugins/OperatorPluginPanels';
 import { AutomationSettingsPanel } from '../automation/AutomationSettingsPanel';
-import { resolvePluginLabel, resolvePluginName } from '../../../utils/pluginLocales';
+import { resolvePluginLabel, resolvePluginLabelWithValues, resolvePluginName } from '../../../utils/pluginLocales';
 import {
   getRadioOperatorProgressAnimation,
   shouldRadioOperatorPropsBeEqual,
@@ -769,6 +769,27 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
     (value: string) => resolvePluginLabel(value, operatorStatus.strategy.name),
     [operatorStatus.strategy.name],
   );
+  const strategyText = React.useCallback(
+    (value: string, params?: Record<string, string | number>) => (
+      resolvePluginLabelWithValues(value, operatorStatus.strategy.name, params)
+    ),
+    [operatorStatus.strategy.name],
+  );
+  const notifiedAttentionIdsRef = React.useRef(new Set<string>());
+  React.useEffect(() => {
+    const current = new Set((operatorStatus.runtime?.attentions ?? []).map((attention) => attention.id));
+    for (const attention of operatorStatus.runtime?.attentions ?? []) {
+      if (!attention.notify || notifiedAttentionIdsRef.current.has(attention.id)) continue;
+      addToast({
+        title: strategyText(attention.title, attention.params),
+        description: attention.description ? strategyText(attention.description, attention.params) : undefined,
+        color: attention.tone === 'danger' ? 'danger'
+          : attention.tone === 'warning' ? 'warning'
+            : attention.tone === 'success' ? 'success' : 'primary',
+      });
+    }
+    notifiedAttentionIdsRef.current = current;
+  }, [operatorStatus.runtime?.attentions, strategyText]);
   const invokeStrategyAction = React.useCallback((
     target: import('@tx5dr/contracts').StrategyActionTarget,
     action: import('@tx5dr/contracts').StrategyActionDescriptor,
@@ -1591,6 +1612,28 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
               resolveLabel={strategyLabel}
               onInvoke={(action, payload) => invokeStrategyAction({ kind: 'runtime' }, action, payload)}
             />
+          </div>
+        )}
+
+        {(operatorStatus.runtime?.attentions?.length ?? 0) > 0 && (
+          <div className="mb-2 space-y-1">
+            {operatorStatus.runtime!.attentions!.map((attention) => (
+              <div
+                key={attention.id}
+                role="alert"
+                className={`rounded-md px-2 py-1.5 text-[11px] ${
+                  attention.tone === 'danger' ? 'bg-danger-50 text-danger-700'
+                    : attention.tone === 'warning' ? 'bg-warning-50 text-warning-700'
+                      : attention.tone === 'success' ? 'bg-success-50 text-success-700'
+                        : 'bg-primary-50 text-primary-700'
+                }`}
+              >
+                <span className="font-medium">{strategyText(attention.title, attention.params)}</span>
+                {attention.description && (
+                  <span className="ml-1">{strategyText(attention.description, attention.params)}</span>
+                )}
+              </div>
+            ))}
           </div>
         )}
 
