@@ -132,7 +132,18 @@ class TestProtocolLane implements ProtocolLane<TestEntryData> {
       currentState: this.active.data.state ?? 'calling',
       targetCallsign: this.active.callsign,
       qsoLifecycleEpoch: this.lifecycleEpoch,
+      stateOptions: [
+        { id: 'calling', label: 'stateCalling', transmitText: this.active.data.text },
+        { id: 'answering', label: 'stateAnswering', transmitText: `R ${this.active.data.text}` },
+      ],
     };
+  }
+
+  setUserState(stateId: string): boolean {
+    if (!this.active || !['calling', 'answering'].includes(stateId)) return false;
+    if (this.active.data.state === stateId) return false;
+    this.active.data.state = stateId;
+    return true;
   }
 
   checkpoint(): TestLaneCheckpoint {
@@ -222,6 +233,20 @@ const decisionMeta: StrategyDecisionMetaV2 = {
 };
 
 describe('ParallelQSOCoordinator', () => {
+  it('routes custom state changes to one lifecycle-scoped stream', async () => {
+    const { coordinator } = createCoordinator(1);
+    enqueue(coordinator, 'JA1AAA');
+    await coordinator.fillAvailableLanes({ currentTransmitCycle: 0 });
+    const epoch = coordinator.getStreams()[0]!.qsoLifecycleEpoch;
+
+    expect(coordinator.setStreamState('stream-1', 'answering', epoch)).toBe(true);
+    expect(coordinator.getStreams()[0]).toMatchObject({ currentState: 'answering' });
+    expect(() => coordinator.setStreamState('stream-1', 'calling', epoch + 1))
+      .toThrow('stream_lifecycle_conflict');
+    expect(() => coordinator.setStreamState('stream-1', 'not-exposed', epoch))
+      .toThrow('stream_state_not_available');
+  });
+
   it('assigns stable streams in queue order and keeps incompatible cycles waiting', async () => {
     const { coordinator } = createCoordinator();
     const first = enqueue(coordinator, 'JA1AAA', {}, 1).entry!;
@@ -274,6 +299,20 @@ describe('ParallelQSOCoordinator', () => {
       streamId: 'stream-1',
       entry: { entryId: entries[3]!.entryId },
     });
+  });
+
+  it('can preempt excess lanes when a Host safety limit is reduced', async () => {
+    const { coordinator } = createCoordinator();
+    const entries = ['JA1AAA', 'JA2BBB', 'JA3CCC']
+      .map((callsign) => enqueue(coordinator, callsign).entry!);
+    await coordinator.fillAvailableLanes({ currentTransmitCycle: 0 });
+    coordinator.setMaxStreams(1);
+
+    expect(coordinator.setMaxStreams(1, { preemptExcess: true })).toEqual([
+      entries[1]!.entryId,
+      entries[2]!.entryId,
+    ]);
+    expect(coordinator.getQueueSnapshot().activeEntryIds).toEqual([entries[0]!.entryId]);
   });
 
   it('does not assign a new target to an unbound lane with protocol-owned pending work', async () => {

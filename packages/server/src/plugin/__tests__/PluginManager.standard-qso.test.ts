@@ -454,6 +454,35 @@ describe('PluginManager standard-qso late re-decision', () => {
   }
 
   describe('assisted QSO queue integration', () => {
+    it('routes a lifecycle-scoped state change to one active queue stream', async () => {
+      const { operator, pluginManager, eventEmitter } = await createRuntimeHarness({
+        strategy: 'assisted-qso-queue',
+      });
+      const operatorId = operator.config.id;
+      await pluginManager.enqueueQueueTarget(operatorId, { callsign: 'JA1AAA' });
+      await pluginManager.resumeQueueExecution(operatorId);
+      const stream = pluginManager.getOperatorRuntimeStatus(operatorId).streams?.[0];
+      expect(stream?.stateOptions?.map((option) => option.id)).toEqual([
+        'TX1', 'TX2', 'TX3', 'TX4', 'TX5', 'TX6',
+      ]);
+      const changed = vi.fn();
+      eventEmitter.on('operatorStreamStateChanged', changed);
+
+      pluginManager.setOperatorStreamState(operatorId, {
+        streamId: stream!.streamId,
+        stateId: 'TX4',
+        expectedLifecycleEpoch: stream!.qsoLifecycleEpoch,
+      });
+
+      expect(pluginManager.getOperatorRuntimeStatus(operatorId).streams?.[0]?.currentState).toBe('TX4');
+      expect(changed).toHaveBeenCalledWith({ operatorId, streamId: stream!.streamId, state: 'TX4' });
+      expect(() => pluginManager.setOperatorStreamState(operatorId, {
+        streamId: stream!.streamId,
+        stateId: 'TX3',
+        expectedLifecycleEpoch: stream!.qsoLifecycleEpoch + 1,
+      })).toThrow('stream_lifecycle_conflict');
+    });
+
     it('observes direct callers while stopped without starting the operator', async () => {
       const { operator, pluginManager } = await createRuntimeHarness({
         strategy: 'assisted-qso-queue',

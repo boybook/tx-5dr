@@ -615,8 +615,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       getCurrentMode: () => this.currentMode,
       getCompensationMs: () => this.slotClock?.getCompensation() ?? 0,
       onBeforeStartPTT: () => this.stopTuneTone('another transmission started'),
-      validateDigitalFrameStart: (operatorIds) => {
-        this._operatorManager.assertWwDigiFrequencyAllowed(operatorIds);
+      validateDigitalFrameStart: (operatorIds, tracks) => {
+        this._operatorManager.assertStandardFrequencyStreamLimit(
+          tracks ?? operatorIds.map((operatorId) => ({ operatorId, streamId: 'default' })),
+        );
       },
     });
 

@@ -111,7 +111,7 @@ export function validatePluginDefinition(def: AnyPluginDefinition): void {
     if (!uiPageIds.has(panel.pageId)) {
       throw new Error(`Iframe panel "${panel.id}" references unknown ui page "${panel.pageId}"`);
     }
-    validateRadioControlToolbarPanel(manifest, panel, uiPageById.get(panel.pageId));
+    validateSpecialPanel(manifest, panel, uiPageById.get(panel.pageId));
   }
 
   if (manifest.instanceScope === 'global') {
@@ -216,11 +216,23 @@ function validatePluginUiPaths(manifest: ReturnType<typeof PluginManifestSchema.
   }
 }
 
-function validateRadioControlToolbarPanel(
+function validateSpecialPanel(
   manifest: ReturnType<typeof PluginManifestSchema.parse>,
   panel: PluginPanelDescriptor,
   page: PluginUIPageDescriptor | undefined,
 ): void {
+  if (panel.slot === 'operator-action') {
+    if (manifest.instanceScope !== 'operator') {
+      throw new Error('operator-action panels are only supported for operator-scoped plugins');
+    }
+    if (panel.openMode !== 'page') {
+      throw new Error(`operator-action panel "${panel.id}" must use openMode "page"`);
+    }
+    if (page?.resourceBinding !== 'operator') {
+      throw new Error(`operator-action panel "${panel.id}" must reference a UI page with resourceBinding "operator"`);
+    }
+    return;
+  }
   if (panel.slot !== 'radio-control-toolbar') {
     return;
   }

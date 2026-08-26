@@ -1,4 +1,4 @@
-import type { OperatorStatus, SlotInfo } from '@tx5dr/contracts';
+import type { OperatorStatus, SlotInfo, StrategyStateOption } from '@tx5dr/contracts';
 import { CycleUtils } from '@tx5dr/core';
 
 export type RadioOperatorCurrentTransmission = NonNullable<
@@ -11,6 +11,8 @@ export interface RadioOperatorStreamPresentation {
   targetCallsign?: string;
   audioFrequencyHz?: number;
   text?: string;
+  qsoLifecycleEpoch?: number;
+  stateOptions?: StrategyStateOption[];
 }
 
 /**
@@ -67,6 +69,8 @@ export function resolveRadioOperatorStreamPresentations(
       currentState: stream.currentState,
       targetCallsign: stream.targetCallsign,
       audioFrequencyHz: stream.audioFrequencyHz,
+      qsoLifecycleEpoch: stream.qsoLifecycleEpoch,
+      ...(stream.stateOptions ? { stateOptions: stream.stateOptions } : {}),
     });
   }
 
@@ -89,6 +93,15 @@ export function resolveRadioOperatorStreamPresentations(
   }
 
   return [...rows.values()];
+}
+
+export function resolveSingleControllableStream(
+  streams: readonly RadioOperatorStreamPresentation[],
+  maxActiveStreams: number | undefined,
+): RadioOperatorStreamPresentation | undefined {
+  if (maxActiveStreams !== 1) return undefined;
+  const controllable = streams.filter((stream) => (stream.stateOptions?.length ?? 0) > 0);
+  return controllable.length === 1 ? controllable[0] : undefined;
 }
 
 export interface RadioOperatorCyclePresentation {

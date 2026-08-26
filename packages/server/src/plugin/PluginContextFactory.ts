@@ -4,6 +4,7 @@ import * as hostHamlib from 'hamlib';
 import type { RemoteInfo, Socket, SocketType } from 'node:dgram';
 import {
   getBandFromFrequency,
+  getStandardDigitalFrequencyMatch,
   LogbookOperationError,
   toAdifMode,
 } from '@tx5dr/core';
@@ -678,6 +679,7 @@ export class PluginContextFactory {
         get frequency() { return 0; },
         get mode(): ModeDescriptor { return MODES.FT8; },
         get transmitCycles() { return []; },
+        get maxConcurrentStreams() { return 1; },
         get automation() { return null; },
         getOtherOperators: () => this.createOtherOperatorSnapshots(undefined),
         async hasWorkedCallsign(_callsign: string, _options?: { anyBand?: boolean }) { return false; },
@@ -704,6 +706,14 @@ export class PluginContextFactory {
       },
       get transmitCycles() {
         return deps.getOperatorById(operatorId)?.getTransmitCycles() ?? [];
+      },
+      get maxConcurrentStreams() {
+        const configured = deps.getOperatorById(operatorId)?.config.maxConcurrentStreams ?? 3;
+        const standardFrequency = getStandardDigitalFrequencyMatch(
+          deps.getCurrentMode().name,
+          deps.getKnownRadioFrequency?.() ?? null,
+        );
+        return standardFrequency ? 1 : configured;
       },
       get automation() {
         return deps.getOperatorAutomationSnapshot(operatorId);

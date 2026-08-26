@@ -52,6 +52,16 @@ export interface StrategyRuntimeSnapshot {
   queue?: AssistedQueueSnapshot;
 }
 
+/** One user-selectable state exposed by a strategy-owned state machine. */
+export interface StrategyStateOption {
+  /** Stable state identifier understood only by the owning strategy. */
+  id: string;
+  /** Literal label or plugin locale key shown by the Host UI. */
+  label?: string;
+  /** Exact transmission produced when this state is selected, when applicable. */
+  transmitText?: string;
+}
+
 /** One independently progressing QSO lane inside an operator strategy. */
 export interface StrategyStreamSnapshot {
   /** Stable identity within the owning strategy runtime. */
@@ -66,6 +76,15 @@ export interface StrategyStreamSnapshot {
   audioFrequencyHz: number;
   /** Lane-local lifecycle epoch used to correlate durable QSO effects. */
   qsoLifecycleEpoch: number;
+  /** Protocol-approved states that the operator may select for this lane. */
+  stateOptions?: StrategyStateOption[];
+}
+
+/** Optimistic request to move one strategy-owned lane to a user-selectable state. */
+export interface StrategyStreamStateUpdate {
+  streamId: string;
+  stateId: string;
+  expectedLifecycleEpoch: number;
 }
 
 /** One independently encoded transmission contributed by a strategy. */
@@ -138,6 +157,8 @@ export interface AssistedQueueSnapshot {
   activeEntryIds?: string[];
   /** Maximum number of entries that may be active at once. */
   maxActiveStreams?: number;
+  /** User-requested stream count before Host radio-frequency policy is applied. */
+  requestedMaxActiveStreams?: number;
   /** Queue rows in display order. */
   rows: AssistedQueueRow[];
 }
@@ -351,6 +372,9 @@ export interface StrategyRuntime {
    * Switches the runtime to a specific logical transmit slot/state.
    */
   setState(state: StrategyRuntimeSlot): void;
+
+  /** Switches one independently progressing lane to a strategy-approved state. */
+  setStreamState?(update: StrategyStreamStateUpdate): void;
 
   /**
    * Updates the human-readable content associated with a logical slot.

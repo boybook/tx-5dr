@@ -513,7 +513,7 @@ onLoad(ctx) {
 },
 ```
 
-可用 slot：`operator`、`automation`、`main-right`、`voice-left-top`、
+可用 slot：`operator`、`automation`、`operator-action`、`main-right`、`voice-left-top`、
 `voice-right-top`、`cw-left-top`、`cw-right-top`、`radio-control-toolbar`。
 运行期 panel 使用 `setPanelContributions()` / `clearPanelContributions()` 管理。
 
@@ -551,6 +551,46 @@ await window.tx5dr.ready;
 const result = await window.tx5dr.invoke('read');
 window.tx5dr.onPush('updated', (data) => console.log(data));
 ```
+
+需要较大工作区的操作员自定义 UI，可以声明为操作员卡片中的独立页面入口：
+
+```ts
+ui: {
+  pages: [
+    {
+      id: 'history',
+      title: 'historyTitle',
+      entry: 'history.html',
+      accessScope: 'operator',
+      resourceBinding: 'operator',
+    },
+  ],
+},
+
+panels: [
+  {
+    id: 'history',
+    title: 'historyTitle',
+    component: 'iframe',
+    pageId: 'history',
+    slot: 'operator-action',
+    openMode: 'page',
+    icon: 'file-lines',
+  },
+],
+```
+
+`operator-action` 会把固定的图标加文字按钮横向追加到操作员卡片的日志入口旁，并且要求页面使用
+`resourceBinding: 'operator'`。`openMode: 'page'` 由 Host 统一实现：Electron 打开应用窗口，普通
+Web 打开新标签页，Android 在当前 WebView 中导航并使用系统返回栈。Host 会绑定按钮所属的
+`operatorId`；不同操作员以及同一操作员重复打开的页面使用相互独立的 page session，插件应通过
+`ctx.ui.listActivePageSessions(pageId)` 和 `ctx.ui.pushToSession(...)` 向所有需要更新的页面推送。
+页面入口、路由、鉴权和 bridge 都由通用插件 Host 负责，插件不应自行调用 Electron IPC 或判断平台。
+
+Host 注入的 `tokens.css` 只提供 CSS 变量，不提供按钮、Chip 或表格组件 class。插件自行组织 DOM 和
+class，并使用 `--tx5dr-control-*` 组装尺寸与交互状态，使用语义色的 `*-soft`、`*-soft-hover` 和
+`*-foreground` 组装 solid / flat / bordered / light 变体。紧凑状态、数据表格和反馈区域分别使用
+`--tx5dr-chip-*`、`--tx5dr-table-*`、`--tx5dr-alert-*`；基础主题切换由 Host 自动更新。
 
 启用类型补全：
 

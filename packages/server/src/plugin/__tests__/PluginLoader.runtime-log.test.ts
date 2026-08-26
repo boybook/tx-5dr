@@ -384,6 +384,45 @@ describe('PluginLoader runtime logs', () => {
     expect(errorLog?.message).toContain('radio-control-toolbar panels are only supported for global utility plugins');
   });
 
+  it('loads an operator-scoped page action', async () => {
+    const pluginRoot = await createPluginRoot();
+    const pluginDir = join(pluginRoot, 'operator-toolbar-page');
+    await mkdir(join(pluginDir, 'ui'), { recursive: true });
+    await writeFile(join(pluginDir, 'index.mjs'), `
+      export default {
+        name: 'operator-toolbar-page',
+        version: '1.0.0',
+        type: 'utility',
+        panels: [
+          {
+            id: 'operator-log',
+            title: 'Operator log',
+            component: 'iframe',
+            pageId: 'operator-log',
+            slot: 'operator-action',
+            openMode: 'page',
+          },
+        ],
+        ui: {
+          dir: 'ui',
+          pages: [
+            { id: 'operator-log', title: 'Operator log', entry: 'operator-log.html', resourceBinding: 'operator' },
+          ],
+        },
+      };
+    `, 'utf8');
+    await writeFile(join(pluginDir, 'ui', 'operator-log.html'), '<!doctype html><html><body>log</body></html>', 'utf8');
+
+    const loader = new PluginLoader();
+    const loaded = await loader.scanAndLoad(pluginRoot);
+
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]?.definition.panels?.[0]).toMatchObject({
+      slot: 'operator-action',
+      openMode: 'page',
+    });
+  });
+
   it('rejects radio-control-toolbar panels bound to operator or callsign resources', async () => {
     const pluginRoot = await createPluginRoot();
     const pluginDir = join(pluginRoot, 'invalid-radio-toolbar-binding');

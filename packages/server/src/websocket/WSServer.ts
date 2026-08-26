@@ -431,6 +431,7 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.GET_OPERATORS]: (_data, id) => this.handleGetOperators(id),
       [WSMessageType.SET_OPERATOR_CONTEXT]: (data, id) => this.handleSetOperatorContext(data, id),
       [WSMessageType.SET_OPERATOR_RUNTIME_STATE]: (data, id) => this.handleSetOperatorRuntimeState(data, id),
+      [WSMessageType.SET_OPERATOR_STREAM_STATE]: (data, id) => this.handleSetOperatorStreamState(data, id),
       [WSMessageType.SET_OPERATOR_RUNTIME_SLOT_CONTENT]: (data, id) => this.handleSetOperatorRuntimeSlotContent(data, id),
       [WSMessageType.SET_OPERATOR_TRANSMIT_CYCLES]: (data, id) => this.handleSetOperatorTransmitCycles(data, id),
       [WSMessageType.START_OPERATOR]: (data, id) => this.handleStartOperator(data, id),
@@ -887,6 +888,7 @@ export class WSServer extends WSMessageHandler {
     [WSMessageType.STOP_OPERATOR]: { ability: { action: 'manage', subject: 'Operator' } },
     [WSMessageType.SET_OPERATOR_CONTEXT]: { ability: { action: 'manage', subject: 'Operator' } },
     [WSMessageType.SET_OPERATOR_RUNTIME_STATE]: { ability: { action: 'manage', subject: 'Operator' } },
+    [WSMessageType.SET_OPERATOR_STREAM_STATE]: { ability: { action: 'manage', subject: 'Operator' } },
     [WSMessageType.SET_OPERATOR_RUNTIME_SLOT_CONTENT]: { ability: { action: 'manage', subject: 'Operator' } },
     [WSMessageType.SET_OPERATOR_TRANSMIT_CYCLES]: { ability: { action: 'manage', subject: 'Operator' } },
     [WSMessageType.OPERATOR_REQUEST_CALL]: { ability: { action: 'manage', subject: 'Operator' } },
@@ -905,6 +907,7 @@ export class WSServer extends WSMessageHandler {
     WSMessageType.STOP_OPERATOR,
     WSMessageType.SET_OPERATOR_CONTEXT,
     WSMessageType.SET_OPERATOR_RUNTIME_STATE,
+    WSMessageType.SET_OPERATOR_STREAM_STATE,
     WSMessageType.SET_OPERATOR_RUNTIME_SLOT_CONTENT,
     WSMessageType.SET_OPERATOR_TRANSMIT_CYCLES,
     WSMessageType.OPERATOR_REQUEST_CALL,
@@ -1434,6 +1437,41 @@ export class WSServer extends WSMessageHandler {
     }
   }
 
+  private async handleSetOperatorStreamState(data: any, connectionId: string): Promise<void> {
+    try {
+      const { operatorId, streamId, stateId, expectedLifecycleEpoch } = data;
+      this.logOperatorCommand('setOperatorStreamState', connectionId, {
+        operatorId,
+        streamId,
+        stateId,
+        expectedLifecycleEpoch,
+      });
+      this.digitalRadioEngine.operatorManager.setOperatorStreamState(operatorId, {
+        streamId,
+        stateId,
+        expectedLifecycleEpoch,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : '';
+      const messageKey = {
+        stream_not_found: 'qsoChanged',
+        stream_lifecycle_conflict: 'qsoChanged',
+        stream_state_not_available: 'stateUnavailable',
+        stream_state_control_not_supported: 'unsupported',
+      }[reason];
+      if (messageKey) {
+        this.sendToConnection(connectionId, WSMessageType.ERROR, {
+          message: reason,
+          userMessageKey: `radio:operator.streamStateErrors.${messageKey}`,
+          code: RadioErrorCode.INVALID_OPERATION,
+          context: { command: 'setOperatorStreamState' },
+        });
+        return;
+      }
+      this.handleCommandError(error, 'setOperatorStreamState');
+    }
+  }
+
   /**
    * 处理设置操作员策略运行时槽位内容命令
    * 📊 Day14优化：使用统一的错误处理方法
@@ -1484,7 +1522,6 @@ export class WSServer extends WSMessageHandler {
     try {
       const { operatorId } = data;
       this.logOperatorCommand('startOperator', connectionId, { operatorId });
-      this.digitalRadioEngine.operatorManager.assertWwDigiFrequencyAllowed([operatorId]);
       await this.digitalRadioEngine.pluginManager.resumeTransmitControlPlugins(operatorId);
       this.digitalRadioEngine.operatorManager.startOperator(operatorId);
       logger.debug(`operator started: ${operatorId}`);

@@ -287,6 +287,8 @@ export interface OperatorSnapshot {
   readonly mode: ModeDescriptor;
   /** Current transmit cycle selection where `0` is even and `1` is odd. */
   readonly transmitCycles: number[];
+  /** Host-admitted stream ceiling after radio-frequency and operator safety policy. */
+  readonly maxConcurrentStreams: number;
   /** Current automation runtime snapshot visible to the operator UI. */
   readonly automation: StrategyRuntimeSnapshot | null;
 

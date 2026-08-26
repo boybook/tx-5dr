@@ -152,6 +152,7 @@ export interface DecisionOrchestratorDeps {
   getStrategyRuntime: (operatorId: string) => import('@tx5dr/plugin-api').StrategyRuntime | undefined;
   getStrategyRuntimeGeneration: (operatorId: string) => number | undefined;
   getStrategyMaxConcurrentStreams?: (operatorId: string) => number | undefined;
+  getEffectiveOperatorMaxConcurrentStreams?: (operatorId: string) => number;
   invokeStrategyRuntime: <T>(
     operatorId: string,
     operation: string,

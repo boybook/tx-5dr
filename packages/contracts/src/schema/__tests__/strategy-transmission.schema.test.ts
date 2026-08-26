@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   OperatorStatusSchema,
+  StrategyStreamSnapshotSchema,
   StrategyTransmissionSchema,
+  WSMessageSchema,
 } from '../../index.js';
 
 describe('strategy transmission contracts', () => {
@@ -44,5 +46,30 @@ describe('strategy transmission contracts', () => {
       text: 'CQ WW BG5DRB OL32',
       audioFrequencyHz: 5001,
     }).success).toBe(false);
+  });
+
+  it('accepts strategy-defined stream states and a lifecycle-scoped switch command', () => {
+    expect(StrategyStreamSnapshotSchema.parse({
+      streamId: 'stream-7',
+      currentState: 'awaiting-confirmation',
+      audioFrequencyHz: 1320,
+      qsoLifecycleEpoch: 4,
+      stateOptions: [{
+        id: 'send-final',
+        label: 'stateSendFinal',
+        transmitText: 'JA1AAA BG5DRB RR73',
+      }],
+    }).stateOptions?.[0]?.id).toBe('send-final');
+
+    expect(WSMessageSchema.parse({
+      type: 'setOperatorStreamState',
+      timestamp: new Date().toISOString(),
+      data: {
+        operatorId: 'operator-1',
+        streamId: 'stream-7',
+        stateId: 'send-final',
+        expectedLifecycleEpoch: 4,
+      },
+    }).type).toBe('setOperatorStreamState');
   });
 });

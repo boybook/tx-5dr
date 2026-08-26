@@ -380,6 +380,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openLogbookWindow: (_queryString: string) => ipcRenderer.invoke('window:openLogbook', _queryString),
 
     /**
+     * Open a plugin custom UI in the standalone application page host.
+     */
+    openPluginPageWindow: (_queryString: string) => ipcRenderer.invoke('window:openPluginPage', _queryString),
+
+    /**
      * 打开独立频谱图窗口
      */
     openSpectrumWindow: () => ipcRenderer.invoke('window:openSpectrumWindow'),
@@ -558,6 +563,7 @@ declare global {
       window: {
         openAbout(): Promise<void>;
         openLogbookWindow(queryString: string): Promise<void>;
+        openPluginPageWindow(queryString: string): Promise<void>;
         openSpectrumWindow(): Promise<void>;
         onSpectrumWindowClosed(callback: () => void): void;
         offSpectrumWindowClosed(callback: () => void): void;

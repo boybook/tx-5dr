@@ -136,6 +136,28 @@ describe('WW Digi contest edition persistence', () => {
     });
   });
 
+  it('defaults to one active QSO while allowing up to three', () => {
+    expect(wwDigiStrategyPlugin.settings?.parallelStreams).toMatchObject({
+      type: 'number',
+      default: 1,
+      min: 1,
+      max: 3,
+    });
+  });
+
+  it('opens the contest log through an operator-bound standalone page entry', () => {
+    expect(wwDigiStrategyPlugin.panels).toContainEqual(expect.objectContaining({
+      id: 'contest-log',
+      slot: 'operator-action',
+      openMode: 'page',
+    }));
+    expect(wwDigiStrategyPlugin.ui?.pages).toContainEqual(expect.objectContaining({
+      id: 'contest-log',
+      accessScope: 'operator',
+      resourceBinding: 'operator',
+    }));
+  });
+
   it('defaults DX locations while requiring an explicit US or Canadian section', () => {
     expect(wwDigiTestables.resolveContestLocation('BG5DRB', '')).toBe('DX');
     expect(wwDigiTestables.resolveContestLocation('K1ABC', '')).toBe('');

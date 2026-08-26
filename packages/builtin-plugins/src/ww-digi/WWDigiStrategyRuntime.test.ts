@@ -87,6 +87,7 @@ function createRuntime(options: {
   transmitting?: boolean;
   parallelStreams?: number;
   maxAttempts?: number;
+  streamLimit?: number;
   busyCallsigns?: string[];
 } = {}) {
   let transmitting = options.transmitting ?? false;
@@ -98,7 +99,8 @@ function createRuntime(options: {
     modeName: 'FT8',
     slotMs: MODES.FT8.slotMs,
     transmitCycles: [0],
-    parallelStreams: options.parallelStreams ?? 3,
+    parallelStreams: options.parallelStreams ?? 1,
+    maxConcurrentStreams: options.streamLimit ?? 3,
     maxAttempts: options.maxAttempts ?? 5,
   };
   const operator: WWDigiRuntimeOperator = {
@@ -183,7 +185,7 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
   });
 
   it('starts three manually authorized targets in parallel', async () => {
-    const { runtime, setTransmitting } = createRuntime();
+    const { runtime, setTransmitting } = createRuntime({ parallelStreams: 3 });
     for (const callsign of ['JA1AAA', 'JA2BBB', 'JA3CCC']) {
       expect(runtime.enqueueTarget({ callsign }).outcome).toBe('accepted');
     }
@@ -197,6 +199,52 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
     ]);
     expect(result.snapshot.streams).toHaveLength(3);
     expect(runtime.getQueueSnapshot().activeEntryIds).toHaveLength(3);
+  });
+
+  it('keeps the requested count while the Host forces one active contest stream', async () => {
+    const { runtime, setTransmitting, config } = createRuntime({ parallelStreams: 3, streamLimit: 1 });
+    for (const callsign of ['JA1AAA', 'JA2BBB', 'JA3CCC']) runtime.enqueueTarget({ callsign });
+    setTransmitting(true);
+
+    expect((await runtime.decide([], decision())).transmissions).toHaveLength(1);
+    expect(runtime.getQueueSnapshot()).toMatchObject({
+      maxActiveStreams: 1,
+      requestedMaxActiveStreams: 3,
+    });
+
+    config.maxConcurrentStreams = 3;
+    expect((await runtime.decide([], decision(2))).transmissions).toHaveLength(3);
+  });
+
+  it('switches one lane to an exposed protocol state and rejects a stale lifecycle', async () => {
+    const { runtime, setTransmitting } = createRuntime();
+    runtime.enqueueTarget({ callsign: 'JA1AAA' });
+    setTransmitting(true);
+    await runtime.decide([], decision());
+    const stream = runtime.getSnapshot().streams?.[0];
+
+    expect(stream?.stateOptions?.map((option) => option.id)).toEqual([
+      'wait-r-grid',
+      'wait-rr73',
+      'wait-standard-final',
+      'send-rr73',
+    ]);
+    runtime.setStreamState({
+      streamId: stream!.streamId,
+      stateId: 'send-rr73',
+      expectedLifecycleEpoch: stream!.qsoLifecycleEpoch,
+    });
+    expect(runtime.getSnapshot().streams?.[0]).toMatchObject({ currentState: 'send-rr73' });
+    expect(runtime.getTransmissions()).toEqual([{
+      streamId: 'stream-1',
+      text: 'JA1AAA BG5DRB RR73',
+      audioFrequencyHz: 1_200,
+    }]);
+    expect(() => runtime.setStreamState({
+      streamId: stream!.streamId,
+      stateId: 'wait-r-grid',
+      expectedLifecycleEpoch: stream!.qsoLifecycleEpoch + 1,
+    })).toThrow('stream_lifecycle_conflict');
   });
 
   it('keeps stable stream identities while following an operator frequency change', async () => {
@@ -378,7 +426,7 @@ describe('WWDigiStrategyRuntime settlement and refill', () => {
   });
 
   it('settles one inbound QSO and continuously refills its released lane', async () => {
-    const { runtime } = createRuntime({ transmitting: true });
+    const { runtime } = createRuntime({ transmitting: true, parallelStreams: 3 });
     for (const [callsign, grid] of [
       ['JA1AAA', 'PM95'],
       ['JA2BBB', 'PM96'],

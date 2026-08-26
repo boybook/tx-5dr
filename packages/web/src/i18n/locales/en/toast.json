@@ -51,9 +51,9 @@
       "title": "Stopped: repeated message",
       "description": "Operator {{operatorId}} was stopped before sending the same message again (attempt {{attemptedCount}}, limit {{maxCount}}) to avoid repeatedly occupying the frequency: {{transmission}}"
     },
-    "wwDigiStandardFrequencyBlocked": {
-      "title": "WW Digi transmission stopped",
-      "description": "WW Digi cannot transmit on the standard {{mode}} calling frequency, {{frequency}} MHz. Move to a non-standard frequency before restarting it."
+    "standardFrequencyMultiStreamFallback": {
+      "title": "Multi-slot transmission reduced to one TX slot",
+      "description": "The standard {{mode}} calling frequency, {{frequency}} MHz, allows one TX slot per operator. This multi-slot transmission was blocked."
     },
     "repeaterDuplexUnsupported": {
       "title": "Repeater DUP not applied",

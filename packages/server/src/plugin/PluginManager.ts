@@ -26,6 +26,7 @@ import type {
   StrategyRuntime,
   StrategyRuntimeSlot,
   StrategyRuntimeSnapshot,
+  StrategyStreamStateUpdate,
   AssistedQueueSnapshot,
   QueuedStrategyMutationResult,
   QueuedStrategyTargetRequest,
@@ -38,7 +39,7 @@ import {
   type PluginLoaderRuntimeLogEvent,
 } from './PluginLoader.js';
 import { ConfigManager } from '../config/config-manager.js';
-import { isUndecodedCallsignPlaceholder } from '@tx5dr/core';
+import { getStandardDigitalFrequencyMatch, isUndecodedCallsignPlaceholder } from '@tx5dr/core';
 import { PluginDevWatcher } from './PluginDevWatcher.js';
 import { PluginHookDispatcher } from './PluginHookDispatcher.js';
 import { PluginInvocationGuard } from './PluginInvocationGuard.js';
@@ -220,6 +221,9 @@ export class PluginManager {
       getStrategyRuntimeGeneration: (operatorId) => this.getStrategyInstance(operatorId)?.generation,
       getStrategyMaxConcurrentStreams: (operatorId) => this.getStrategyInstance(operatorId)
         ?.plugin.definition.strategyFeatures?.maxConcurrentStreams,
+      getEffectiveOperatorMaxConcurrentStreams: (operatorId) => (
+        this.getEffectiveOperatorMaxConcurrentStreams(operatorId)
+      ),
       invokeStrategyRuntime: (operatorId, operation, callback, options) =>
         this.invokeStrategyRuntime(operatorId, operation, callback, options),
       invokeStrategyRuntimeSync: (operatorId, operation, callback) =>
@@ -944,6 +948,28 @@ export class PluginManager {
     });
     this.orchestrator.invalidateDecisionMessageSet(operatorId);
     this.eventEmitter.emit('operatorSlotChanged', { operatorId, slot: state });
+  }
+
+  setOperatorStreamState(operatorId: string, update: StrategyStreamStateUpdate): void {
+    const before = this.getOperatorAutomationSnapshot(operatorId)?.streams
+      ?.find((stream) => stream.streamId === update.streamId);
+    this.invokeStrategyRuntimeSync(operatorId, 'setStreamState', (runtime) => {
+      if (!runtime.setStreamState) throw new Error('stream_state_control_not_supported');
+      runtime.setStreamState(update);
+    });
+    this.orchestrator.invalidateDecisionMessageSet(operatorId);
+    logger.info('PluginManager.setOperatorStreamState applied', {
+      operatorId,
+      streamId: update.streamId,
+      before: before?.currentState ?? null,
+      after: update.stateId,
+      lifecycleEpoch: update.expectedLifecycleEpoch,
+    });
+    this.eventEmitter.emit('operatorStreamStateChanged', {
+      operatorId,
+      streamId: update.streamId,
+      state: update.stateId,
+    });
   }
 
   setOperatorRuntimeSlotContent(
@@ -1780,7 +1806,17 @@ export class PluginManager {
     }
     this.bumpGeneration();
     this.broadcastStatusChanged(pluginName);
+    this.deps.notifyOperatorStatusChanged?.(operatorId);
     return mergedSettings;
+  }
+
+  getEffectiveOperatorMaxConcurrentStreams(operatorId: string): number {
+    const configured = this.deps.getOperatorById(operatorId)?.config.maxConcurrentStreams ?? 3;
+    const standardFrequency = getStandardDigitalFrequencyMatch(
+      this.deps.getCurrentMode().name,
+      this.deps.getKnownRadioFrequency?.() ?? null,
+    );
+    return standardFrequency ? 1 : configured;
   }
 
   private mergePreservedHiddenOperatorSettings(
@@ -2523,13 +2559,26 @@ export class PluginManager {
         }
       }
 
+      if (panel.slot === 'operator-action') {
+        if ((plugin.definition.instanceScope ?? 'operator') !== 'operator') {
+          throw new Error('operator-action panels are only supported for operator-scoped plugins');
+        }
+        if (instanceTarget.kind !== 'operator') {
+          throw new Error(`operator-action panel "${panel.id}" must be contributed by an operator plugin instance`);
+        }
+        if (panel.component !== 'iframe' || !panel.pageId) {
+          throw new Error(`operator-action panel "${panel.id}" must reference an iframe UI page`);
+        }
+        if (panel.openMode !== 'page') {
+          throw new Error(`operator-action panel "${panel.id}" must use openMode "page"`);
+        }
+        const page = uiPageById.get(panel.pageId);
+        if (page?.resourceBinding !== 'operator') {
+          throw new Error(`operator-action panel "${panel.id}" must reference a UI page with resourceBinding "operator"`);
+        }
+      }
+
       if (panel.slot === 'radio-control-toolbar') {
-        if (plugin.definition.type !== 'utility' || (plugin.definition.instanceScope ?? 'operator') !== 'global') {
-          throw new Error('radio-control-toolbar panels are only supported for global utility plugins');
-        }
-        if (instanceTarget.kind !== 'global') {
-          throw new Error(`radio-control-toolbar panel "${panel.id}" must be contributed by a global plugin instance`);
-        }
         if (panel.component !== 'iframe') {
           throw new Error(`radio-control-toolbar panel "${panel.id}" must use iframe component`);
         }
@@ -2540,6 +2589,12 @@ export class PluginManager {
           throw new Error(`Iframe panel "${panel.id}" references unknown ui page "${panel.pageId}"`);
         }
         const page = uiPageById.get(panel.pageId);
+        if (plugin.definition.type !== 'utility' || (plugin.definition.instanceScope ?? 'operator') !== 'global') {
+          throw new Error('radio-control-toolbar panels are only supported for global utility plugins');
+        }
+        if (instanceTarget.kind !== 'global') {
+          throw new Error(`radio-control-toolbar panel "${panel.id}" must be contributed by a global plugin instance`);
+        }
         if ((page?.resourceBinding ?? 'none') !== 'none') {
           throw new Error(`radio-control-toolbar panel "${panel.id}" must reference a UI page with resourceBinding "none"`);
         }

@@ -42,6 +42,14 @@ export interface WWDigiLaneConfig {
 }
 
 type LanePhase = 'idle' | 'wait-r-grid' | 'wait-rr73' | 'wait-standard-final' | 'send-rr73' | 'closing' | 'review';
+type UserSelectableLanePhase = Extract<LanePhase, 'wait-r-grid' | 'wait-rr73' | 'wait-standard-final' | 'send-rr73'>;
+
+const USER_SELECTABLE_PHASES: Array<{ id: UserSelectableLanePhase; label: string }> = [
+  { id: 'wait-r-grid', label: 'stateWaitRGrid' },
+  { id: 'wait-rr73', label: 'stateWaitRr73' },
+  { id: 'wait-standard-final', label: 'stateWaitStandardFinal' },
+  { id: 'send-rr73', label: 'stateSendRr73' },
+];
 
 interface CompletionState {
   effect: StrategyQSOCompletionEffect;
@@ -286,7 +294,34 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
       targetCallsign: this.active?.callsign ?? this.finalRetry?.callsign,
       targetGrid: this.targetGrid,
       qsoLifecycleEpoch: this.qsoLifecycleEpoch,
+      stateOptions: this.active && !this.completion && this.phase !== 'review' && this.phase !== 'closing'
+        ? USER_SELECTABLE_PHASES.map(({ id, label }) => ({
+          id,
+          label,
+          transmitText: id === this.phase ? this.outgoing ?? undefined : this.transmitTextForPhase(id) ?? undefined,
+        }))
+        : [],
     };
+  }
+
+  setUserState(stateId: string): boolean {
+    if (!this.active || this.completion) return false;
+    const option = USER_SELECTABLE_PHASES.find((candidate) => candidate.id === stateId);
+    if (!option) return false;
+    if (this.phase === option.id) return false;
+    const outgoing = this.transmitTextForPhase(option.id);
+    if (!outgoing) return false;
+    const previousPhase = this.phase;
+    this.phase = option.id;
+    this.outgoing = outgoing;
+    this.attempts = 0;
+    this.logger.info('WW Digi lane state changed by operator', {
+      streamId: this.streamId,
+      targetCallsign: this.active.callsign,
+      from: previousPhase,
+      to: option.id,
+    });
+    return true;
   }
 
   checkpoint(): unknown {
@@ -366,6 +401,26 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
 
   private acceptInbound(rawMessage: string): void {
     if (this.history[this.history.length - 1] !== rawMessage) this.history.push(rawMessage);
+  }
+
+  private transmitTextForPhase(phase: UserSelectableLanePhase): string | null {
+    if (!this.active) return null;
+    const config = this.getConfig();
+    if (phase === 'wait-r-grid') {
+      return buildWWDigiGrid(this.active.callsign, config.myCallsign, config.myGrid);
+    }
+    if (phase === 'wait-rr73') {
+      return buildWWDigiRogerGrid(this.active.callsign, config.myCallsign, config.myGrid);
+    }
+    if (phase === 'wait-standard-final') {
+      return FT8MessageParser.generateMessage({
+        type: FT8MessageType.ROGER_REPORT,
+        senderCallsign: config.myCallsign,
+        targetCallsign: this.active.callsign,
+        report: this.active.data.lastSnr ?? 0,
+      });
+    }
+    return buildWWDigiRR73(this.active.callsign, config.myCallsign);
   }
 
   private prepareCompletion(withFinalRetry: boolean): void {

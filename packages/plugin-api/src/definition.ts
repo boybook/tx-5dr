@@ -210,12 +210,16 @@ export interface PluginDefinition<
    *
    * Each panel has a `slot` that controls where it renders: `'operator'` (the
    * default, shown in the operator card), `'automation'` (shown in the
-   * top-right automation popover), `'main-right'` (the optional far-right main
+   * top-right automation popover), `'operator-action'` (an icon-and-text page
+   * action beside the operator logbook button), `'main-right'` (the optional far-right main
    * pane), `'voice-left-top'` (above the voice frequency card),
    * `'voice-right-top'` (the tabbed top area of the voice right panel),
    * `'cw-left-top'` (above the CW frequency card),
    * `'cw-right-top'` (the tabbed top area of the CW right panel), or
    * `'radio-control-toolbar'` (a global utility iframe button in RadioControl).
+   * An `operator-action` panel must use `component: 'iframe'` and
+   * `openMode: 'page'`; the Host binds it to that operator and opens the
+   * referenced custom UI as a standalone page.
    * Panels may also declare a preferred `width`, such as `'full'`, so hosts can
    * promote more important live panels.
    */

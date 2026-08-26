@@ -805,6 +805,13 @@
   "voice": {
     "qsoTab": "QSOs"
   },
+  "pluginPage": {
+    "title": "Plugin page",
+    "invalidRoute": "The plugin page address is incomplete.",
+    "unavailable": "This plugin page is unavailable.",
+    "operatorRequired": "Select an operator before opening this plugin page.",
+    "loadFailed": "Failed to load the plugin page."
+  },
   "bootstrapStatus": {
     "chip": {
       "failed": "Some services are not ready",
