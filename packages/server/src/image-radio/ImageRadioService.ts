@@ -19,7 +19,10 @@ import type {
   ImageSstvReceiveProfile,
   SstvTxStatus,
   SstvTxCommandResult,
+  SstvTxEnvelopeSnapshot,
+  SstvTxStartCommand,
 } from '@tx5dr/contracts';
+import { sanitizeCallsignInput } from '@tx5dr/contracts';
 import type { FaxDecodeEvent, FaxDecoder, SstvDecodeEvent, SstvDecoder, SstvEncoder, SstvMode } from 'rasterwave-node';
 
 import type { AudioStreamManager } from '../audio/AudioStreamManager.js';
@@ -75,6 +78,8 @@ interface TxPreviewState {
   sampleRate: number;
   failed: boolean;
   started: boolean;
+  playedSamples: number;
+  rasterEndSample: number;
 }
 
 interface ActiveSstvTx {
@@ -87,6 +92,7 @@ interface ActiveSstvTx {
   receiveSuspended: boolean;
   preview?: TxPreviewState;
   interruptedReceiveCapture: boolean;
+  envelope: SstvTxEnvelopeSnapshot;
 }
 
 export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
@@ -128,6 +134,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     private readonly physicalTx: PhysicalTxCoordinator,
     private readonly getFrequency: () => number,
     private readonly getRadioMode: () => string | undefined,
+    private readonly getOperatorCallsign: (operatorId: string) => string | undefined = () => undefined,
     private readonly runtime: RasterwaveRuntime = rasterwaveRuntime,
     paperSpool?: ImagePaperSpool,
   ) {
@@ -312,7 +319,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     (this.decoder as FaxDecoder).markSignalLost();
   }
 
-  async startSstvTx(command: { requestId: string; operatorId: string; artifactId: string; mode: string; expectedFrequency: number; interruptActiveCapture?: boolean }): Promise<SstvTxCommandResult> {
+  async startSstvTx(command: SstvTxStartCommand): Promise<SstvTxCommandResult> {
     const previous = this.txResults.get(command.requestId);
     if (previous) return previous;
     const reject = (errorCode: string): SstvTxCommandResult => {
@@ -333,6 +340,23 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     if (this.activeTx || this.physicalTx.getSnapshot().phase !== 'idle') return reject('PHYSICAL_TX_BUSY');
     if (Math.round(this.getFrequency()) !== Math.round(command.expectedFrequency)) return reject('IMAGE_FREQUENCY_CHANGED');
 
+    const callsign = sanitizeCallsignInput(this.getOperatorCallsign(command.operatorId));
+    if (command.envelope.stationIdMode !== 'none' && !callsign) {
+      return reject('IMAGE_TX_CALLSIGN_REQUIRED');
+    }
+    if (command.envelope.stationIdMode !== 'none' && callsign && !/^[A-Z0-9/]{1,16}$/.test(callsign)) {
+      return reject('IMAGE_TX_CALLSIGN_UNSUPPORTED');
+    }
+    const envelope: SstvTxEnvelopeSnapshot = {
+      enhancedPreamble: command.envelope.enhancedPreamble,
+      stationIdMode: command.envelope.stationIdMode,
+      callsign: command.envelope.stationIdMode === 'none' ? undefined : callsign,
+      postImageGapMs: 500,
+      endGuardMs: 300,
+      cwWpm: 20,
+      cwToneHz: 800,
+    };
+
     const native = this.runtime.load();
     const modeInfo = native.sstvModes().find((item) => item.mode === command.mode);
     if (!modeInfo) return reject('IMAGE_MODE_INVALID');
@@ -348,16 +372,29 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
       playbackKind: 'sstv',
       onPlaybackChunk: (samples, sampleRate) => this.acceptTxPreviewAudio(sessionId, samples, sampleRate),
     });
-    const encoder = new native.SstvEncoder(source.pixels, command.mode as SstvMode, playback.sampleRate);
+    const stationId = envelope.stationIdMode === 'none'
+      ? { kind: 'none' as const }
+      : envelope.stationIdMode === 'fsk'
+        ? { kind: 'fsk' as const, callsign: envelope.callsign! }
+        : { kind: 'cw' as const, callsign: envelope.callsign!, wpm: envelope.cwWpm, toneHz: envelope.cwToneHz };
+    const encoder = new native.SstvEncoder(source.pixels, command.mode as SstvMode, playback.sampleRate, {
+      includeVisHeader: true,
+      enhancedPreamble: envelope.enhancedPreamble,
+      stationId,
+      postImageGapMs: envelope.postImageGapMs,
+      endGuardMs: envelope.endGuardMs,
+    });
     this.activeTx = {
       sessionId, operatorId: command.operatorId, revision: 0, playback, encoder,
-      receiveSuspended: false, interruptedReceiveCapture,
+      receiveSuspended: false, interruptedReceiveCapture, envelope,
     };
     if (interruptedReceiveCapture) this.sstvCaptureActive = false;
     this.updateTx({
       phase: 'preparing', sessionId, requestId: command.requestId, operatorId: command.operatorId,
       artifactId: command.artifactId, mode: command.mode, revision: 0, samplesEmitted: 0,
       estimatedTotalSamples: encoder.progress.estimatedTotalSamples,
+      encoderStage: encoder.progress.stage,
+      envelope,
     });
     const accepted = { requestId: command.requestId, accepted: true, sessionId };
     this.txResults.set(command.requestId, accepted);
@@ -818,7 +855,13 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     }
   }
 
-  private startLocalTxPreview(sessionId: string, mode: SstvMode, width: number, sampleRate: number): void {
+  private startLocalTxPreview(
+    sessionId: string,
+    mode: SstvMode,
+    width: number,
+    sampleRate: number,
+    rasterEndSample: number,
+  ): void {
     const active = this.activeTx;
     if (!active || active.sessionId !== sessionId || this.family !== 'sstv') return;
     const baseLine = this.paper.getSession()?.receivedLines ?? 0;
@@ -832,7 +875,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
       decoder: null, baseLine, mode, width, sampleRate,
       backlog: [], backlogSamples: 0, maxBacklogSamples: Math.max(1, Math.round(sampleRate * JS_BACKLOG_MS / 1000)),
       draining: false, drainPromise: null, pendingDiscontinuitySamples: 0,
-      failed: false, started: true,
+      failed: false, started: true, playedSamples: 0, rasterEndSample,
     };
     active.preview = preview;
     try {
@@ -851,6 +894,11 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
   private acceptTxPreviewAudio(sessionId: string, samples: Float32Array, sampleRate: number): void {
     const preview = this.activeTx?.sessionId === sessionId ? this.activeTx.preview : undefined;
     if (!preview || preview.failed || !preview.decoder || sampleRate !== preview.sampleRate || samples.length === 0) return;
+    const chunkStart = preview.playedSamples;
+    preview.playedSamples += samples.length;
+    if (chunkStart >= preview.rasterEndSample) return;
+    samples = samples.subarray(0, Math.min(samples.length, preview.rasterEndSample - chunkStart));
+    if (samples.length === 0) return;
     if (!preview.draining && preview.backlog.length === 0) {
       try {
         if (preview.decoder.pushF32(samples)) return;
@@ -977,7 +1025,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
   }
 
   private async runSstvTx(
-    command: { requestId: string; operatorId: string; artifactId: string; mode: string },
+    command: SstvTxStartCommand,
     playback: DeterministicPlaybackSession,
     encoder: SstvEncoder,
     sessionId: string,
@@ -1008,7 +1056,15 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
       this.updateTx({ ...this.txStatus, phase: 'keying', revision: this.txStatus.revision + 1 });
       await this.suspendReceiveForLocalTx(sessionId);
       const modeInfo = this.runtime.load().sstvModes().find((item) => item.mode === command.mode);
-      if (modeInfo) this.startLocalTxPreview(sessionId, command.mode as SstvMode, modeInfo.width, playback.sampleRate);
+      if (modeInfo) {
+        this.startLocalTxPreview(
+          sessionId,
+          command.mode as SstvMode,
+          modeInfo.width,
+          playback.sampleRate,
+          encoder.progress.rasterEndSample,
+        );
+      }
       await new Promise<void>((resolve) => setTimeout(resolve, 300));
       await playback.start();
       this.physicalTx.markStreamingLeaseActive(leaseId);
@@ -1016,7 +1072,16 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
       historyId = randomUUID();
       const artifact = this.artifacts.get(command.artifactId);
       historyWrite = artifact
-        ? this.history.recordTransmitStarted({ id: historyId, artifact, operatorId: command.operatorId, sessionId, startedAt })
+        ? this.history.recordTransmitStarted({
+          id: historyId,
+          artifact,
+          operatorId: command.operatorId,
+          sessionId,
+          startedAt,
+          envelope: this.activeTx!.envelope,
+          sampleRate: playback.sampleRate,
+          estimatedTotalSamples: encoder.progress.estimatedTotalSamples,
+        })
           .then(() => true)
           .catch((error) => {
             logger.error('Failed to persist SSTV transmit history', { sessionId, error: error instanceof Error ? error.message : String(error) });
@@ -1034,12 +1099,12 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
           samplesEmitted: progress.samplesEmitted,
           estimatedTotalSamples: progress.estimatedTotalSamples,
           currentRow: progress.currentRow,
+          encoderStage: progress.stage,
         });
       }
       this.physicalTx.markStreamingLeaseDraining(leaseId);
       this.updateTx({ ...this.txStatus, phase: 'draining', revision: this.txStatus.revision + 1 });
       await playback.end();
-      await new Promise<void>((resolve) => setTimeout(resolve, 150));
       const result = await this.physicalTx.releaseLease(leaseId, 'SSTV transmission completed');
       if (!result.success || !result.physicalConfirmed) throw new Error(result.error ?? result.reason);
       if (historyId && await historyWrite) {

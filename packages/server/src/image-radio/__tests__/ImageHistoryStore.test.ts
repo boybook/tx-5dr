@@ -8,6 +8,14 @@ import { ImageArtifactStore } from '../ImageArtifactStore.js';
 import { ImageHistoryStore } from '../ImageHistoryStore.js';
 
 const dirs: string[] = [];
+const txMetadata = {
+  envelope: {
+    enhancedPreamble: false, stationIdMode: 'fsk' as const, callsign: 'BG5DRB',
+    postImageGapMs: 500 as const, endGuardMs: 300 as const, cwWpm: 20 as const, cwToneHz: 800 as const,
+  },
+  sampleRate: 12_000,
+  estimatedTotalSamples: 100_000,
+};
 
 afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
@@ -45,7 +53,7 @@ describe('ImageHistoryStore', () => {
       width: 1, height: 1, pixels: new Uint8Array(3), frequency: 14_230_000, complete: true,
     });
     const history = new ImageHistoryStore(dir);
-    const started = await history.recordTransmitStarted({ artifact, operatorId: 'op', sessionId: 'session', startedAt: 100 });
+    const started = await history.recordTransmitStarted({ artifact, operatorId: 'op', sessionId: 'session', startedAt: 100, ...txMetadata });
     await history.finishTransmit(started.id, 'completed');
 
     const restored = new ImageHistoryStore(dir);
@@ -65,7 +73,7 @@ describe('ImageHistoryStore', () => {
         family: 'sstv', direction: 'tx', operatorId: 'op', codecMode: 'robot36', pixelFormat: 'rgb8',
         width: 1, height: 1, pixels: new Uint8Array(3), frequency: 14_230_000, complete: true,
       });
-      await history.recordTransmitStarted({ artifact, operatorId: 'op', sessionId: `session-${index}`, startedAt: 100 + index });
+      await history.recordTransmitStarted({ artifact, operatorId: 'op', sessionId: `session-${index}`, startedAt: 100 + index, ...txMetadata });
     }
 
     const first = history.list({ direction: 'all', txOperatorId: 'op', limit: 2 });

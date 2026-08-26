@@ -38,8 +38,14 @@ describe('image radio contracts', () => {
   it('bounds templates and validates idempotent TX requests', () => {
     const layer = { id: 'line', text: '{MYCALL}', x: 0, y: 0, width: 1, height: 0.2, fontSize: 0.1, color: '#ffffff', align: 'center' };
     expect(() => ImageTemplateSchema.parse({ id: 't', name: 'T', layers: Array.from({ length: 17 }, (_, index) => ({ ...layer, id: String(index) })), createdAt: 1, updatedAt: 1 })).toThrow();
-    expect(SstvTxStartCommandSchema.parse({ requestId: 'request-1', operatorId: 'op', artifactId: 'a', mode: 'robot36', expectedFrequency: 14_230_000 }).requestId).toBe('request-1');
+    expect(SstvTxStartCommandSchema.parse({ requestId: 'request-1', operatorId: 'op', artifactId: 'a', mode: 'robot36', expectedFrequency: 14_230_000 })).toMatchObject({
+      requestId: 'request-1', envelope: { enhancedPreamble: true, stationIdMode: 'fsk' },
+    });
     expect(SstvTxStartCommandSchema.parse({ requestId: 'request-2', operatorId: 'op', artifactId: 'a', mode: 'robot36', expectedFrequency: 14_230_000, interruptActiveCapture: true }).interruptActiveCapture).toBe(true);
+    expect(SstvTxStartCommandSchema.parse({
+      requestId: 'request-3', operatorId: 'op', artifactId: 'a', mode: 'robot36', expectedFrequency: 14_230_000,
+      envelope: { enhancedPreamble: true, stationIdMode: 'cw' },
+    }).envelope).toEqual({ enhancedPreamble: true, stationIdMode: 'cw' });
   });
 
   it('separates received captures from real transmit history', () => {

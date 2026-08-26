@@ -197,7 +197,10 @@ describe('ImageRadioService native streaming integration', () => {
     const store = new ImageArtifactStore(dir);
     const history = new ImageHistoryStore(dir);
     const physicalTx = new FakePhysicalTx();
-    const service = new ImageRadioService(audio as never, store, history, physicalTx as never, () => 14_230_000, () => 'USB');
+    const service = new ImageRadioService(
+      audio as never, store, history, physicalTx as never,
+      () => 14_230_000, () => 'USB', (operatorId) => operatorId === 'op' ? 'BG5DRB' : undefined,
+    );
     const paperStarted = new Promise<void>((resolve) => {
       service.on('rxEvent', (event) => { if (event.type === 'paperStarted') resolve(); });
     });
@@ -220,13 +223,22 @@ describe('ImageRadioService native streaming integration', () => {
     const rejected = await service.startSstvTx({
       requestId: 'tx-rejected', operatorId: 'op', artifactId: artifact.id,
       mode: 'robot8Bw', expectedFrequency: 14_231_000,
+      envelope: { enhancedPreamble: true, stationIdMode: 'fsk' },
     });
     expect(rejected.accepted).toBe(false);
     expect(history.list({ direction: 'tx', txOperatorId: 'op' }).records).toHaveLength(0);
 
+    const missingCallsign = await service.startSstvTx({
+      requestId: 'tx-no-callsign', operatorId: 'missing', artifactId: artifact.id,
+      mode: 'robot8Bw', expectedFrequency: 14_230_000,
+      envelope: { enhancedPreamble: false, stationIdMode: 'fsk' },
+    });
+    expect(missingCallsign).toMatchObject({ accepted: false, errorCode: 'IMAGE_TX_CALLSIGN_REQUIRED' });
+
     const result = await service.startSstvTx({
       requestId: 'tx-1', operatorId: 'op', artifactId: artifact.id,
       mode: 'robot8Bw', expectedFrequency: 14_230_000,
+      envelope: { enhancedPreamble: true, stationIdMode: 'fsk' },
     });
     expect(result.accepted).toBe(true);
     await Promise.race([completed, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('SSTV TX timeout')), 5_000))]);
@@ -234,12 +246,15 @@ describe('ImageRadioService native streaming integration', () => {
     expect(history.list({ direction: 'tx', txOperatorId: 'op' }).records).toHaveLength(1);
     expect(history.list({ direction: 'tx', txOperatorId: 'op' }).records[0]).toMatchObject({
       artifactId: artifact.id, direction: 'tx', outcome: 'completed', operatorId: 'op',
+      envelope: { enhancedPreamble: true, stationIdMode: 'fsk', callsign: 'BG5DRB' },
+      sampleRate: 12_000,
     });
     const txStart = rxEvents.find((event) => event.type === 'boundary' && event.boundary?.kind === 'localTxStart')?.boundary;
     const txEnd = rxEvents.find((event) => event.type === 'boundary' && event.boundary?.kind === 'localTxEnd')?.boundary;
     expect(txStart).toMatchObject({ source: 'localTx', codecMode: 'robot8Bw' });
     expect(txEnd).toMatchObject({ source: 'rx', codecMode: 'robot36' });
     expect(txEnd!.lineIndex).toBeGreaterThan(txStart!.lineIndex);
+    expect(txEnd!.lineIndex - txStart!.lineIndex).toBe(148);
     expect(rxEvents.some((event) => event.type === 'rows' && event.rows?.some((row) => row.rowIndex >= txStart!.lineIndex && row.rowIndex < txEnd!.lineIndex))).toBe(true);
     expect(service.getStatus().receiveProfile).toEqual({ family: 'sstv', strategy: 'manual', mode: 'robot36' });
     expect(store.list({ family: 'sstv', direction: 'rx' })).toHaveLength(0);
@@ -253,7 +268,7 @@ describe('ImageRadioService native streaming integration', () => {
     const store = new ImageArtifactStore(dir);
     const history = new ImageHistoryStore(dir);
     const physicalTx = new FakePhysicalTx();
-    const service = new ImageRadioService(audio as never, store, history, physicalTx as never, () => 14_230_000, () => 'USB');
+    const service = new ImageRadioService(audio as never, store, history, physicalTx as never, () => 14_230_000, () => 'USB', () => 'BG5DRB');
     await service.start('sstv');
     const transmitArtifact = await store.save({
       family: 'sstv', direction: 'tx', operatorId: 'op', codecMode: 'robot8Bw', pixelFormat: 'rgb8',
@@ -278,6 +293,7 @@ describe('ImageRadioService native streaming integration', () => {
     const rejected = await service.startSstvTx({
       requestId: 'tx-confirm-required', operatorId: 'op', artifactId: transmitArtifact.id,
       mode: 'robot8Bw', expectedFrequency: 14_230_000,
+      envelope: { enhancedPreamble: false, stationIdMode: 'fsk' },
     });
     expect(rejected).toMatchObject({ accepted: false, errorCode: 'IMAGE_RX_CAPTURE_CONFIRM_REQUIRED' });
 
@@ -287,6 +303,7 @@ describe('ImageRadioService native streaming integration', () => {
     const accepted = await service.startSstvTx({
       requestId: 'tx-confirmed', operatorId: 'op', artifactId: transmitArtifact.id,
       mode: 'robot8Bw', expectedFrequency: 14_230_000, interruptActiveCapture: true,
+      envelope: { enhancedPreamble: false, stationIdMode: 'fsk' },
     });
     expect(accepted.accepted).toBe(true);
     expect(service.getStatus().rxCaptureActive).toBe(false);

@@ -1070,6 +1070,17 @@ export const api = {
     return apiRequest(`/image-radio/composer-backgrounds/${encodePathSegment(operatorId)}`, { method: 'PUT', body: form }, apiBase);
   },
 
+  async getSstvTxPreferences(operatorId: string, apiBase?: string): Promise<{ success: boolean; preferences: import('@tx5dr/contracts').SstvTxPreferences }> {
+    return apiRequest(`/image-radio/sstv-tx-preferences/${encodePathSegment(operatorId)}`, { cache: 'no-store' }, apiBase);
+  },
+
+  async saveSstvTxPreferences(operatorId: string, selection: import('@tx5dr/contracts').SstvTxEnvelopeSelection, apiBase?: string): Promise<{ success: boolean; preferences: import('@tx5dr/contracts').SstvTxPreferences }> {
+    return apiRequest(`/image-radio/sstv-tx-preferences/${encodePathSegment(operatorId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(selection),
+    }, apiBase);
+  },
+
   async getImageTemplates(operatorId?: string, apiBase?: string): Promise<{ success: boolean; templates: import('@tx5dr/contracts').ImageTemplate[] }> {
     return apiRequest(`/image-radio/templates${operatorId ? `?operatorId=${encodePathSegment(operatorId)}` : ''}`, undefined, apiBase);
   },

@@ -52,7 +52,7 @@
     "node-wav": "^0.0.2",
     "onnxruntime-node": "^1.26.0",
     "pngjs": "^7.0.0",
-    "rasterwave-node": "0.3.1",
+    "rasterwave-node": "0.4.0",
     "rubato-fft-node": "^0.1.0",
     "serialport": "^13.0.0",
     "tci-client-node": "^0.1.2",

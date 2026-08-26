@@ -6,6 +6,7 @@ import {
   type ImageArtifact,
   type ImageFamily,
   type ImageHistoryRecord,
+  type SstvTxEnvelopeSnapshot,
 } from '@tx5dr/contracts';
 
 import { SafeFileWriter, loadJsonWithRecovery } from '../utils/persistence/index.js';
@@ -138,6 +139,9 @@ export class ImageHistoryStore {
     operatorId: string;
     sessionId: string;
     startedAt: number;
+    envelope: SstvTxEnvelopeSnapshot;
+    sampleRate: number;
+    estimatedTotalSamples: number;
   }): Promise<ImageHistoryRecord> {
     await this.initialize();
     if (input.artifact.direction !== 'tx' || input.artifact.family !== 'sstv') throw new Error('IMAGE_HISTORY_DIRECTION_INVALID');
@@ -151,6 +155,9 @@ export class ImageHistoryStore {
       occurredAt: input.startedAt,
       startedAt: input.startedAt,
       outcome: 'transmitting',
+      envelope: input.envelope,
+      sampleRate: input.sampleRate,
+      estimatedTotalSamples: input.estimatedTotalSamples,
     });
     this.records.set(record.id, record);
     await this.persist();
