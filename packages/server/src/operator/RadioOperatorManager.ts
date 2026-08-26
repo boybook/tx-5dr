@@ -2831,6 +2831,7 @@ export class RadioOperatorManager {
    * - isActive, isTransmitting, currentSlot（核心状态）
    * - context（完整上下文）
    * - strategy.name, strategy.state（策略模式和状态）
+   * - runtime（完整插件运行时投影）
    * - slots（时隙内容）
    * - transmitCycles（发射周期）
    *
@@ -2849,8 +2850,7 @@ export class RadioOperatorManager {
       context: status.context,
       strategyName: status.strategy?.name,
       strategyState: status.strategy?.state,
-      runtimeQueue: status.runtime?.queue,
-      runtimeStreams: status.runtime?.streams,
+      runtime: status.runtime,
       currentTransmissions: status.currentTransmissions,
       slots: status.slots,
       transmitCycles: status.transmitCycles,
