@@ -1679,13 +1679,6 @@ export class PluginManager {
     return structuredClone(scenarios);
   }
 
-  getEnabledUtilityPluginNames(): string[] {
-    return [...this.loadedPlugins]
-      .filter(([, plugin]) => plugin.definition.type === 'utility' && this.resolveUtilityEnabled(plugin.definition.name, plugin))
-      .map(([name]) => name)
-      .sort();
-  }
-
   getPluginStorageDir(pluginName: string): string {
     return path.join(this.getPluginPaths().pluginDataDir, pluginName);
   }

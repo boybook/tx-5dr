@@ -496,6 +496,8 @@
     "switchFailed": "「{{name}}」への切り替えに失敗しました"
   },
   "profileModal": {
+    "virtual": "仮想",
+    "virtualRadio": "開発用 FT4/FT8 仮想無線機",
     "edit": "編集",
     "cannotDeleteActive": "現在アクティブなプロファイルを削除できません",
     "createNew": "新しい無線構成",

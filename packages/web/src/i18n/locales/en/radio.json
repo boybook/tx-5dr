@@ -508,6 +508,8 @@
     "switchFailed": "Failed to switch to \"{{name}}\""
   },
   "profileModal": {
+    "virtual": "Virtual",
+    "virtualRadio": "Development virtual FT4/FT8 radio",
     "edit": "Edit",
     "cannotDeleteActive": "Cannot delete the currently active Profile",
     "createNew": "New Radio Config",

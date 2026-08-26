@@ -19,32 +19,24 @@ function config() {
 }
 
 describe('virtual radio safety', () => {
-  it('accepts an isolated opt-in configuration', () => {
+  it('accepts a configured virtual profile without environment opt-in', () => {
     expect(validateVirtualRadioSafety(profile, config() as never, {
       getSimulationScenarios: () => [scenario],
-      getEnabledUtilityPluginNames: () => [],
-    }, 'FT8', {
-      TX5DR_ENABLE_VIRTUAL_RADIO: '1', TX5DR_CONFIG_DIR: '/tmp/tx5dr-sim-config', TX5DR_DATA_DIR: '/tmp/tx5dr-sim-data',
-    })).toEqual([scenario]);
+    }, 'FT8')).toEqual([scenario]);
   });
 
-  it('fails closed before a real or shared environment can be used', () => {
-    expect(() => validateVirtualRadioSafety(profile, config() as never, {
-      getSimulationScenarios: () => [scenario], getEnabledUtilityPluginNames: () => [],
-    }, 'FT8', {})).toThrow('TX5DR_ENABLE_VIRTUAL_RADIO=1');
-    expect(() => validateVirtualRadioSafety(profile, config() as never, {
-      getSimulationScenarios: () => [scenario], getEnabledUtilityPluginNames: () => [],
-    }, 'FT8', {
-      TX5DR_ENABLE_VIRTUAL_RADIO: '1', TX5DR_CONFIG_DIR: '/tmp/shared', TX5DR_DATA_DIR: '/tmp/shared',
-    })).toThrow('separate TX5DR_CONFIG_DIR and TX5DR_DATA_DIR');
-  });
+  it('rejects external reporter and rigctld side effects', () => {
+    const pskConfig = config();
+    pskConfig.getPSKReporterConfig.mockReturnValue({ enabled: true });
+    expect(() => validateVirtualRadioSafety(profile, pskConfig as never, {
+      getSimulationScenarios: () => [scenario],
+    }, 'FT8')).toThrow('pskreporter.enabled=false');
 
-  it('rejects enabled external utilities unless explicitly allowlisted', () => {
-    expect(() => validateVirtualRadioSafety(profile, config() as never, {
-      getSimulationScenarios: () => [scenario], getEnabledUtilityPluginNames: () => ['qso-udp-broadcast'],
-    }, 'FT8', {
-      TX5DR_ENABLE_VIRTUAL_RADIO: '1', TX5DR_CONFIG_DIR: '/tmp/config', TX5DR_DATA_DIR: '/tmp/data',
-    })).toThrow('qso-udp-broadcast');
+    const rigctldConfig = config();
+    rigctldConfig.getRigctldConfig.mockReturnValue({ enabled: true });
+    expect(() => validateVirtualRadioSafety(profile, rigctldConfig as never, {
+      getSimulationScenarios: () => [scenario],
+    }, 'FT8')).toThrow('rigctld to be disabled');
   });
 
   it('rejects an effective peer frequency outside the supported passband', () => {
@@ -59,9 +51,7 @@ describe('virtual radio safety', () => {
       },
     });
     expect(() => validateVirtualRadioSafety(outsidePassband, config() as never, {
-      getSimulationScenarios: () => [scenario], getEnabledUtilityPluginNames: () => [],
-    }, 'FT8', {
-      TX5DR_ENABLE_VIRTUAL_RADIO: '1', TX5DR_CONFIG_DIR: '/tmp/config', TX5DR_DATA_DIR: '/tmp/data',
-    })).toThrow('effective audio frequency');
+      getSimulationScenarios: () => [scenario],
+    }, 'FT8')).toThrow('effective audio frequency');
   });
 });

@@ -29,7 +29,7 @@ describe('virtual radio profile', () => {
     expect(() => parseInternalProfiles([invalid])).toThrow('config.profiles[0].radio.virtual.peers.0.grid');
   });
 
-  it('keeps virtual profiles hidden and stable while public profiles are reordered', async () => {
+  it('projects virtual profiles as read-only entries and reorders their internal definitions', async () => {
     const first = RadioProfileSchema.parse({
       id: 'first', name: 'first', radio: { type: 'none' }, audio: {}, audioLockedToRadio: false, createdAt: 1, updatedAt: 1,
     });
@@ -44,10 +44,16 @@ describe('virtual radio profile', () => {
     mutable.config = { profiles: [first, parseInternalProfiles([profile()])[0]!, second], activeProfileId: 'virtual-dev' };
     mutable.saveConfig = async () => undefined;
 
-    expect(manager.getProfiles().map((item) => item.id)).toEqual(['first', 'second']);
-    expect(manager.getPublicActiveProfileId()).toBeNull();
+    expect(manager.getProfiles()).toEqual([
+      expect.objectContaining({ id: 'first' }),
+      expect.objectContaining({ id: 'virtual-dev', isVirtual: true, readOnly: true, radio: { type: 'none' } }),
+      expect.objectContaining({ id: 'second' }),
+    ]);
+    expect(manager.getProfile('virtual-dev')).toMatchObject({ isVirtual: true, readOnly: true });
+    expect(manager.getPublicActiveProfileId()).toBe('virtual-dev');
     expect(manager.getActiveVirtualRadioProfile()?.id).toBe('virtual-dev');
-    await manager.reorderProfiles(['second', 'first']);
+    await manager.reorderProfiles(['second', 'virtual-dev', 'first']);
     expect(manager.getInternalProfiles().map((item) => item.id)).toEqual(['second', 'virtual-dev', 'first']);
+    expect(isVirtualRadioProfile(manager.getInternalProfiles()[1])).toBe(true);
   });
 });
