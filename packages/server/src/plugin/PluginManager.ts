@@ -986,6 +986,12 @@ export class PluginManager {
       if (result?.qsoCompletions?.length) {
         this.orchestrator.commitQSOCompletionEffectsFromAction(operatorId, result.qsoCompletions);
       }
+      if (result?.requestOperatorStart) {
+        await this.deps.requestOperatorStrategyStart?.(
+          operatorId,
+          `strategy action ${invocation.actionId}`,
+        );
+      }
       if (result?.requestDecision) {
         this.orchestrator.invalidateDecisionMessageSet(operatorId);
         this.deps.triggerReEncode?.(operatorId, {

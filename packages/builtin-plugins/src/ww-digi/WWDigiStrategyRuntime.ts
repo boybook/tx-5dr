@@ -20,14 +20,20 @@ import type {
   StrategyStreamStateUpdate,
   StrategyActionInvocation,
   StrategyActionResult,
+  StrategyAttention,
   StreamPhysicalReceipt,
 } from '@tx5dr/plugin-api';
 import { normalizeCallsign } from '@tx5dr/plugin-api';
-import { FT8MessageParser, isValidCallsign, isUndecodedCallsignPlaceholder } from '@tx5dr/core';
+import {
+  FT8MessageParser,
+  calculateGridDistance,
+  isValidCallsign,
+  isUndecodedCallsignPlaceholder,
+} from '@tx5dr/core';
 import { ParallelQSOCoordinator } from '@tx5dr/plugin-api/toolkit';
 import type { ParallelQueueMutationResult } from '@tx5dr/plugin-api/toolkit';
-import { AuthorizationLease, ExplicitCQController } from '@tx5dr/plugin-api/toolkit';
-import { buildWWDigiCQ, parseWWDigiMessage } from './protocol.js';
+import { AuthorizationLease, BoundedCallSessionController } from '@tx5dr/plugin-api/toolkit';
+import { buildWWDigiCQ, buildWWDigiRogerGrid, parseWWDigiMessage } from './protocol.js';
 import {
   WWDigiProtocolLane,
   type WWDigiEntryData,
@@ -39,20 +45,28 @@ export interface WWDigiRuntimeConfig extends WWDigiLaneConfig {
   transmitCycles: number[];
   parallelStreams: number;
   maxConcurrentStreams: number;
-  authorizationReceiveCycles?: number;
+  cqMaxAttempts?: number;
+  cqSelectionPolicy?: 'FIRST' | 'MAX_DISTANCE' | 'MAX_SNR' | 'MIN_SNR';
+  authorizedStaleReceiveCycles?: number;
 }
 
 export interface WWDigiRuntimeOperator {
   readonly config: WWDigiRuntimeConfig;
   readonly isTransmitting: boolean;
   isTargetBeingWorkedByOthers(callsign: string): boolean;
+  hasWorkedCallsign(callsign: string): Promise<boolean>;
 }
 
 interface RuntimeCheckpoint {
   coordinator: ReturnType<ParallelQSOCoordinator<WWDigiEntryData>['checkpoint']>;
-  cq: ReturnType<ExplicitCQController['checkpoint']>;
+  cqPolicy: 'off' | 'repeat';
+  callSession: ReturnType<BoundedCallSessionController['checkpoint']>;
   receiveEpoch: number;
   lastObservedSlotId?: string;
+  previousTransmitting: boolean;
+  startPurpose?: 'authorized-work';
+  exhaustedAtReceiveEpoch?: number;
+  stopAttention?: StrategyAttention;
 }
 
 function targetKey(callsign: string): string {
@@ -80,9 +94,14 @@ function selectedSender(raw: string): { callsign?: string; grid?: string } {
 
 export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   private readonly coordinator: ParallelQSOCoordinator<WWDigiEntryData>;
-  private readonly cq = new ExplicitCQController();
+  private cqPolicy: 'off' | 'repeat' = 'off';
+  private readonly callSession = new BoundedCallSessionController();
   private receiveEpoch = 0;
   private lastObservedSlotId?: string;
+  private previousTransmitting = false;
+  private startPurpose?: 'authorized-work';
+  private exhaustedAtReceiveEpoch?: number;
+  private stopAttention?: StrategyAttention;
 
   constructor(
     private readonly operator: WWDigiRuntimeOperator,
@@ -119,9 +138,14 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   checkpoint(): StrategyRuntimeCheckpoint {
     return {
       coordinator: this.coordinator.checkpoint(),
-      cq: this.cq.checkpoint(),
+      cqPolicy: this.cqPolicy,
+      callSession: this.callSession.checkpoint(),
       receiveEpoch: this.receiveEpoch,
       lastObservedSlotId: this.lastObservedSlotId,
+      previousTransmitting: this.previousTransmitting,
+      startPurpose: this.startPurpose,
+      exhaustedAtReceiveEpoch: this.exhaustedAtReceiveEpoch,
+      stopAttention: this.stopAttention,
     } satisfies RuntimeCheckpoint;
   }
 
@@ -129,12 +153,18 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     const state = checkpoint as RuntimeCheckpoint;
     if (!state?.coordinator) throw new Error('Invalid WW Digi runtime checkpoint');
     this.coordinator.restore(state.coordinator);
-    if (state.cq) this.cq.restore(state.cq);
+    this.cqPolicy = state.cqPolicy ?? 'off';
+    if (state.callSession) this.callSession.restore(state.callSession);
     this.receiveEpoch = state.receiveEpoch ?? 0;
     this.lastObservedSlotId = state.lastObservedSlotId;
+    this.previousTransmitting = state.previousTransmitting === true;
+    this.startPurpose = state.startPurpose;
+    this.exhaustedAtReceiveEpoch = state.exhaustedAtReceiveEpoch;
+    this.stopAttention = state.stopAttention;
   }
 
   observeDecodedMessages(messages: ParsedFT8Message[], meta: QueuedStrategyObservationMeta): boolean {
+    if (!this.operator.isTransmitting) this.previousTransmitting = false;
     let changed = false;
     if (meta.slotInfo.id !== this.lastObservedSlotId) {
       this.lastObservedSlotId = meta.slotInfo.id;
@@ -145,8 +175,52 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       if (message.isPartialDecode) continue;
       const sender = selectedSender(message.rawMessage);
       if (!sender.callsign) continue;
-      const entry = this.coordinator.findEntryByTargetKey(targetKey(sender.callsign));
+      const callsign = sender.callsign.trim().toUpperCase();
+      const parsed = parseWWDigiMessage(message.rawMessage);
+      let entry = this.coordinator.findEntryByTargetKey(targetKey(callsign));
+      const isDirectedGridReply = parsed.type === 'grid'
+        && targetKey(parsed.targetCallsign) === targetKey(this.operator.config.myCallsign)
+        && targetKey(parsed.senderCallsign) === targetKey(callsign);
+      if (!entry && this.callSession.isArmed && isDirectedGridReply
+          && this.isPermissiveTarget(callsign)
+          && !this.operator.isTargetBeingWorkedByOthers(callsign)
+          && this.callSession.beginCollecting(meta.slotInfo.id)) {
+        const result = this.coordinator.enqueue({
+          targetKey: targetKey(callsign),
+          callsign,
+          requestedTransmitCycle: ((meta.slotInfo.cycleNumber + 1) % 2) as 0 | 1,
+          data: {
+            status: 'candidate',
+            source: 'cq',
+            lastMessageRaw: message.rawMessage,
+            lastSnr: message.snr,
+            targetGrid: sender.grid,
+            firstHeardAt: message.timestamp,
+            firstAudioFrequencyHz: message.df,
+            lastHeardReceiveEpoch: this.receiveEpoch,
+            evidenceRevision: 1,
+          },
+        });
+        if (result.outcome !== 'rejected') {
+          entry = result.entry ?? this.coordinator.findEntryByTargetKey(targetKey(callsign));
+          changed = true;
+        }
+      }
       if (!entry) continue;
+      const targetCallsign = 'targetCallsign' in parsed ? parsed.targetCallsign : undefined;
+      const activeEntryIds = this.coordinator.getQueueSnapshot().activeEntryIds;
+      if (!activeEntryIds.includes(entry.entryId)
+          && entry.data.status === 'authorized' && targetCallsign
+          && targetKey(targetCallsign) !== targetKey(this.operator.config.myCallsign)) {
+        if (this.coordinator.updateEntry(entry.entryId, (data) => {
+          data.status = 'paused';
+          data.authorizationId = undefined;
+          data.authorizedAt = undefined;
+          data.authorizedReceiveEpoch = undefined;
+          return true;
+        })) changed = true;
+        continue;
+      }
       if (this.coordinator.updateEntry(entry.entryId, (data) => {
         let updated = false;
         if (sender.grid && data.targetGrid !== sender.grid) {
@@ -155,27 +229,27 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
         }
         if (data.lastMessageRaw !== message.rawMessage) {
           data.lastMessageRaw = message.rawMessage;
+          data.evidenceRevision = (data.evidenceRevision ?? 0) + 1;
           updated = true;
         }
         if (data.lastSnr !== message.snr) {
           data.lastSnr = message.snr;
           updated = true;
         }
+        if (data.lastHeardReceiveEpoch !== this.receiveEpoch) {
+          data.lastHeardReceiveEpoch = this.receiveEpoch;
+          updated = true;
+        }
         return updated;
       })) changed = true;
     }
     const observed = this.coordinator.observe(messages, meta);
-    this.cq.setSuppressed(Boolean(this.coordinator.getStreams().some((stream) => (stream.attentions?.length ?? 0) > 0)));
     return observed || changed;
   }
 
   enqueueTarget(request: QueuedStrategyTargetRequest): QueuedStrategyMutationResult {
     const callsign = request.callsign.trim().toUpperCase();
-    const permissiveCallsign = /^[A-Z0-9]+(?:\/[A-Z0-9]+)*$/.test(callsign)
-      && /[A-Z]/.test(callsign) && /[0-9]/.test(callsign) && callsign.length <= 13;
-    if (!permissiveCallsign
-        || isUndecodedCallsignPlaceholder(callsign)
-        || targetKey(callsign) === targetKey(this.operator.config.myCallsign)) {
+    if (!this.isPermissiveTarget(callsign)) {
       return this.mutationResult({
         outcome: 'rejected', reason: 'invalid_target', version: this.coordinator.getQueueSnapshot().version, affectedStreamIds: [],
       });
@@ -200,10 +274,13 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
         authorizationId: randomUUID(),
         authorizedAt: Date.now(),
         authorizedReceiveEpoch: this.receiveEpoch,
+        lastHeardReceiveEpoch: this.receiveEpoch,
+        source: 'manual',
+        evidenceRevision: 1,
         lastMessageRaw,
         lastSnr: request.lastMessage?.message.snr,
         targetGrid,
-        status: requiresAlternate ? 'review' : 'queued',
+        status: requiresAlternate ? 'review' : 'authorized',
         encodingError: requiresAlternate ? 'special_callsign_requires_preflight' : undefined,
       },
     }));
@@ -224,7 +301,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       return { outcome: 'rejected', reason: 'entry_not_retryable', snapshot: this.getQueueSnapshot() };
     }
     this.coordinator.updateEntry(entryId, (data) => {
-      data.status = 'queued';
+      data.status = 'authorized';
       data.authorizationId = randomUUID();
       data.authorizedAt = Date.now();
       data.authorizedReceiveEpoch = this.receiveEpoch;
@@ -255,7 +332,10 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       rows: snapshot.entries.map((row, order) => {
         const stream = row.streamId ? streamsById.get(row.streamId) : undefined;
         const status = row.entry.data.status;
-        const displayState: AssistedQueueDisplayState = status === 'review' || stream?.currentState === 'review' ? 'review'
+        const displayState: AssistedQueueDisplayState = status === 'candidate' ? 'candidate'
+          : status === 'dupe' ? 'dupe'
+          : status === 'authorized' && !row.active ? 'authorized'
+          : status === 'review' || stream?.currentState === 'review' ? 'review'
           : status === 'stale' || status === 'paused' ? 'paused'
           : status === 'no-response' ? 'no-response'
             : stream?.currentState === 'closing' ? 'closing'
@@ -266,15 +346,23 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
           order,
           draggable: !row.active,
           displayState,
-          tone: status === 'review' || stream?.currentState === 'review' ? 'danger'
+          tone: status === 'dupe' ? 'warning'
+            : status === 'authorized' && !row.active ? 'success'
+            : status === 'review' || stream?.currentState === 'review' ? 'danger'
             : status === 'stale' || status === 'paused' ? 'warning'
             : status === 'no-response' ? 'warning'
               : row.active ? 'active' : 'neutral',
-          icon: status === 'review' || stream?.currentState === 'review' ? 'triangle-alert'
+          icon: status === 'dupe' ? 'triangle-alert'
+            : status === 'authorized' && !row.active ? 'check-circle'
+            : status === 'review' || stream?.currentState === 'review' ? 'triangle-alert'
             : status === 'stale' || status === 'paused' ? 'pause'
             : status === 'no-response' ? 'clock'
               : row.active ? 'radio' : 'circle',
           targetGrid: row.entry.data.targetGrid,
+          lastSnr: row.entry.data.lastSnr,
+          lastHeardCyclesAgo: row.entry.data.lastHeardReceiveEpoch === undefined
+            ? undefined
+            : Math.max(0, this.receiveEpoch - row.entry.data.lastHeardReceiveEpoch),
           streamId: row.streamId,
           audioFrequencyHz: row.audioFrequencyHz,
           authorizationId: row.entry.data.authorizationId,
@@ -288,7 +376,20 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
 
   async decide(messages: ParsedFT8Message[], meta: StrategyDecisionMetaV2): Promise<StrategyDecisionResult> {
     this.syncParallelStreams();
-    if (!this.operator.isTransmitting) return this.result();
+    if (!this.operator.isTransmitting) {
+      this.previousTransmitting = false;
+      return this.result();
+    }
+    if (!this.previousTransmitting) {
+      this.previousTransmitting = true;
+      this.stopAttention = undefined;
+      if (this.startPurpose === 'authorized-work' || this.hasAuthorizedEntries()) {
+        this.startPurpose = undefined;
+        this.callSession.reset();
+      } else if (this.cqPolicy === 'repeat') {
+        this.armCallSession();
+      }
+    }
 
     const decision = await this.coordinator.decide(messages, meta);
     for (const released of decision.releasedEntries) {
@@ -302,17 +403,58 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
         return true;
       });
     }
+    await this.classifyCandidateDupes();
+    if (this.callSession.state === 'collecting' || this.callSession.state === 'batch-active') {
+      await this.authorizeCollectedBatch();
+    }
+
+    if (this.callSession.state === 'calling'
+        && this.exhaustedAtReceiveEpoch !== undefined
+        && this.receiveEpoch > this.exhaustedAtReceiveEpoch) {
+      this.callSession.finishNoResponse();
+      this.stopAttention = {
+        id: 'cq-no-response', tone: 'warning', title: 'attentionCqNoResponse',
+        description: 'attentionCqNoResponseDesc',
+        params: { count: this.callSession.successfulCalls },
+        notify: true,
+      };
+      this.previousTransmitting = false;
+      return this.result({ stop: true });
+    }
     const configuredCycle = this.operator.config.transmitCycles[0] === 1 ? 1 : 0;
     const fill = await this.coordinator.fillAvailableLanes({
       currentTransmitCycle: configuredCycle,
-      isEligible: (entry) => entry.data.status === 'queued'
+      isEligible: (entry) => entry.data.status === 'authorized'
         && !this.operator.isTargetBeingWorkedByOthers(entry.callsign),
     });
-    return this.result({
+    const projected = this.result({
       qsoCompletions: decision.qsoCompletions,
       qsoFailures: decision.qsoFailures,
       requestedTransmitCycle: fill.requestedTransmitCycle,
     });
+    if ((projected.transmissions?.length ?? 0) === 0 && this.shouldStopForIdle()) {
+      const candidates = this.countCandidates();
+      const invalid = this.countInvalidAuthorizations();
+      this.stopAttention = candidates > 0
+        ? {
+            id: 'cq-candidates-awaiting-authorization', tone: 'info',
+            title: 'attentionCandidatesAwaitingAuthorization',
+            description: 'attentionCandidatesAwaitingAuthorizationDesc', params: { count: candidates },
+            notify: true,
+          }
+        : invalid > 0 ? {
+            id: 'cq-authorizations-invalid', tone: 'warning', title: 'attentionAuthorizationsInvalid',
+            description: 'attentionAuthorizationsInvalidDesc', params: { count: invalid }, notify: true,
+          } : {
+            id: 'cq-session-complete', tone: 'success', title: 'attentionSessionComplete',
+            description: 'attentionSessionCompleteDesc',
+            notify: true,
+          };
+      this.callSession.finish('authorized-work-drained');
+      this.previousTransmitting = false;
+      return { ...projected, stop: true, snapshot: this.getSnapshot() };
+    }
+    return projected;
   }
 
   getTransmitText(): string | null {
@@ -321,14 +463,17 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
 
   getTransmissions() {
     this.syncParallelStreams();
-    if (!this.operator.isTransmitting) return [];
+    if (!this.operator.isTransmitting) {
+      this.previousTransmitting = false;
+      return [];
+    }
     const transmissions = this.coordinator.getTransmissions();
     if (transmissions.length > 0) return transmissions;
     const queue = this.coordinator.getQueueSnapshot();
     const hasCqBlockingWork = this.coordinator.getStreams().length > 0
-      || queue.entries.some((row) => row.entry.data.status === 'queued' || row.entry.data.status === 'review');
+      || queue.entries.some((row) => row.entry.data.status === 'authorized' || row.entry.data.status === 'review');
     if (hasCqBlockingWork) return [];
-    if (!this.cq.shouldTransmit()) return [];
+    if (this.callSession.state !== 'calling') return [];
     return [{
       streamId: 'cq',
       text: buildWWDigiCQ(this.operator.config.myCallsign, this.operator.config.myGrid),
@@ -355,16 +500,27 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       qsoLifecycleEpoch: primary?.qsoLifecycleEpoch,
       streams,
       queue: this.getQueueSnapshot(),
-      actions: (['off', 'once', 'repeat'] as const).map((mode) => ({
+      actions: (['off', 'repeat'] as const).map((mode) => ({
         id: `cq-${mode}`,
-        label: mode === 'off' ? 'cqOff' : mode === 'once' ? 'cqOnce' : 'cqRepeat',
-        icon: mode === 'off' ? 'ban' : mode === 'once' ? 'tower-broadcast' : 'repeat',
+        label: mode === 'off' ? 'cqOff' : 'cqRepeat',
+        icon: mode === 'off' ? 'ban' : 'repeat',
         presentation: 'segmented' as const,
         groupId: 'cq-mode',
-        selected: this.cq.currentMode === mode,
-        tone: this.cq.currentMode === mode ? 'primary' as const : 'default' as const,
+        selected: this.cqPolicy === mode,
+        tone: this.cqPolicy === mode ? 'primary' as const : 'default' as const,
       })),
-      attentions: streams.flatMap((stream) => stream.attentions ?? []),
+      attentions: [
+        ...(this.callSession.state === 'calling' ? [{
+          id: 'cq-calling', tone: 'info' as const, title: 'attentionCqCalling',
+          description: 'attentionCqCallingDesc',
+          params: { current: this.callSession.successfulCalls, total: this.callSession.maxAttempts },
+        }] : []),
+        ...(this.callSession.state === 'collecting' ? [{
+          id: 'cq-collecting', tone: 'info' as const, title: 'attentionCqCollecting',
+          description: 'attentionCqCollectingDesc', params: { count: this.countCandidates() },
+        }] : []),
+        ...(this.stopAttention ? [this.stopAttention] : []),
+      ],
     };
   }
 
@@ -376,8 +532,12 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   async invokeAction(invocation: StrategyActionInvocation): Promise<StrategyActionResult | void> {
     if (invocation.target.kind === 'runtime') {
       const mode = invocation.actionId.replace(/^cq-/, '');
-      if (mode !== 'off' && mode !== 'once' && mode !== 'repeat') throw new Error('strategy_action_not_available');
-      this.cq.setMode(mode);
+      if (mode !== 'off' && mode !== 'repeat') throw new Error('strategy_action_not_available');
+      this.cqPolicy = mode;
+      this.stopAttention = undefined;
+      if (this.operator.isTransmitting) this.previousTransmitting = true;
+      if (mode === 'off') this.callSession.reset();
+      else if (this.operator.isTransmitting && !this.hasAuthorizedEntries()) this.armCallSession();
       return { requestDecision: true, outcome: { code: `cq_${mode}` } };
     }
     if (invocation.target.kind === 'stream') {
@@ -402,6 +562,26 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       this.coordinator.remove(entry.entryId, invocation.target.queueVersion);
       return { requestDecision: true };
     }
+    if (invocation.actionId === 'authorize-target' || invocation.actionId === 'authorize-dupe') {
+      this.authorizeEntry(entry.entryId);
+      this.stopAttention = undefined;
+      const requestOperatorStart = !this.operator.isTransmitting;
+      if (requestOperatorStart) {
+        this.startPurpose = 'authorized-work';
+        this.previousTransmitting = false;
+      }
+      return { requestDecision: true, requestOperatorStart };
+    }
+    if (invocation.actionId === 'revoke-authorization') {
+      this.coordinator.updateEntry(entry.entryId, (data) => {
+        data.status = data.dupe ? 'dupe' : 'candidate';
+        data.authorizationId = undefined;
+        data.authorizedAt = undefined;
+        data.authorizedReceiveEpoch = undefined;
+        return true;
+      });
+      return { requestDecision: true };
+    }
     if (invocation.actionId === 'set-alternate-and-authorize') {
       const text = (invocation.payload as { value?: unknown } | undefined)?.value;
       if (typeof text !== 'string') throw new Error('alternate_message_invalid');
@@ -409,11 +589,21 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       const checked = await this.preflightMessage(normalized, this.operator.config.modeName);
       if (!checked.encodable) throw new Error(checked.error || checked.reason || 'alternate_message_not_encodable');
       this.authorizeEntry(entry.entryId, { alternateText: normalized });
-      return { requestDecision: true };
+      const requestOperatorStart = !this.operator.isTransmitting;
+      if (requestOperatorStart) {
+        this.startPurpose = 'authorized-work';
+        this.previousTransmitting = false;
+      }
+      return { requestDecision: true, requestOperatorStart };
     }
     if (invocation.actionId === 'retry-target' || invocation.actionId === 'reauthorize-target') {
       this.authorizeEntry(entry.entryId);
-      return { requestDecision: true };
+      const requestOperatorStart = !this.operator.isTransmitting;
+      if (requestOperatorStart) {
+        this.startPurpose = 'authorized-work';
+        this.previousTransmitting = false;
+      }
+      return { requestDecision: true, requestOperatorStart };
     }
     if (invocation.actionId === 'pause-target') {
       this.coordinator.updateEntry(entry.entryId, (data) => { data.status = 'paused'; return true; });
@@ -428,7 +618,11 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   }
 
   onTransmissionsCompleted(receipts: StreamPhysicalReceipt[]): void {
-    if (receipts.some((receipt) => receipt.streamId === 'cq')) this.cq.onPhysicalSuccess();
+    if (receipts.some((receipt) => receipt.streamId === 'cq')
+        && this.callSession.onPhysicalCallSuccess()
+        && this.callSession.attemptsExhausted) {
+      this.exhaustedAtReceiveEpoch = this.receiveEpoch;
+    }
     this.coordinator.onPhysicalReceipts(receipts.filter((receipt) => receipt.streamId !== 'cq'));
   }
 
@@ -445,16 +639,21 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
 
   reset(reason?: string): void {
     this.coordinator.reset(reason);
-    this.cq.setMode('off');
-    this.cq.setSuppressed(false);
+    this.cqPolicy = 'off';
+    this.callSession.reset();
     this.receiveEpoch = 0;
     this.lastObservedSlotId = undefined;
+    this.previousTransmitting = false;
+    this.startPurpose = undefined;
+    this.exhaustedAtReceiveEpoch = undefined;
+    this.stopAttention = undefined;
   }
 
   private result(options: {
     qsoCompletions?: StrategyDecisionResult['qsoCompletions'];
     qsoFailures?: StrategyDecisionResult['qsoFailures'];
     requestedTransmitCycle?: number;
+    stop?: boolean;
   } = {}): StrategyDecisionResult {
     return {
       transmission: null,
@@ -463,7 +662,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       qsoCompletions: options.qsoCompletions,
       qsoFailures: options.qsoFailures,
       requestedTransmitCycle: options.requestedTransmitCycle,
-      stop: false,
+      stop: options.stop ?? false,
     };
   }
 
@@ -473,7 +672,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     const preemptedEntryIds = this.coordinator.setMaxStreams(streams, { preemptExcess: true });
     for (const entryId of preemptedEntryIds) {
       this.coordinator.updateEntry(entryId, (data) => {
-        data.status = 'queued';
+        data.status = 'authorized';
         return true;
       });
     }
@@ -483,7 +682,149 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     return Math.max(1, Math.min(3, Math.trunc(this.operator.config.parallelStreams || 1)));
   }
 
+  private isPermissiveTarget(callsign: string): boolean {
+    return /^[A-Z0-9]+(?:\/[A-Z0-9]+)*$/.test(callsign)
+      && /[A-Z]/.test(callsign)
+      && /[0-9]/.test(callsign)
+      && callsign.length <= 13
+      && !isUndecodedCallsignPlaceholder(callsign)
+      && targetKey(callsign) !== targetKey(this.operator.config.myCallsign);
+  }
+
+  private armCallSession(): void {
+    this.exhaustedAtReceiveEpoch = undefined;
+    this.callSession.arm({
+      authorizationId: randomUUID(),
+      maxAttempts: Math.max(1, Math.min(20, Math.trunc(this.operator.config.cqMaxAttempts ?? 6))),
+      capacity: this.parallelStreams(),
+    });
+  }
+
+  private hasAuthorizedEntries(): boolean {
+    return this.coordinator.getQueueSnapshot().entries.some((row) => row.entry.data.status === 'authorized');
+  }
+
+  private countCandidates(): number {
+    return this.coordinator.getQueueSnapshot().entries.filter((row) => (
+      row.entry.data.status === 'candidate' || row.entry.data.status === 'dupe'
+    )).length;
+  }
+
+  private countInvalidAuthorizations(): number {
+    return this.coordinator.getQueueSnapshot().entries.filter((row) => (
+      row.entry.data.status === 'stale'
+      || row.entry.data.status === 'paused'
+      || row.entry.data.status === 'no-response'
+    )).length;
+  }
+
+  private shouldStopForIdle(): boolean {
+    if (this.callSession.state === 'calling' || this.callSession.state === 'collecting') return false;
+    if (this.coordinator.getStreams().length > 0) return false;
+    return !this.coordinator.getQueueSnapshot().entries.some((row) => (
+      row.entry.data.status === 'authorized' || row.entry.data.status === 'review'
+    ));
+  }
+
+  private async classifyCandidateDupes(): Promise<void> {
+    for (const row of this.coordinator.getQueueSnapshot().entries) {
+      if (row.entry.data.status !== 'candidate' || row.entry.data.dupe !== undefined) continue;
+      const dupe = await this.operator.hasWorkedCallsign(row.entry.callsign);
+      this.coordinator.updateEntry(row.entry.entryId, (data) => {
+        data.dupe = dupe;
+        if (dupe) data.status = 'dupe';
+        return true;
+      });
+    }
+  }
+
+  private async authorizeCollectedBatch(): Promise<void> {
+    const candidates = this.coordinator.getQueueSnapshot().entries
+      .filter((row) => row.entry.data.status === 'candidate' && row.entry.data.dupe !== true)
+      .sort((left, right) => this.compareCandidates(left.entry, right.entry));
+    const selected: typeof candidates = [];
+    const remainingCapacity = this.callSession.capacity - this.callSession.selectedTargetKeys.length;
+    for (const row of candidates) {
+      if (selected.length >= remainingCapacity) break;
+      const text = buildWWDigiRogerGrid(
+        row.entry.callsign,
+        this.operator.config.myCallsign,
+        this.operator.config.myGrid,
+      );
+      const checked = await this.preflightMessage(text, this.operator.config.modeName);
+      if (!checked.encodable) {
+        this.coordinator.updateEntry(row.entry.entryId, (data) => {
+          data.status = 'review';
+          data.encodingError = checked.error || checked.reason || 'message_not_encodable';
+          return true;
+        });
+        continue;
+      }
+      selected.push(row);
+    }
+    const authorizationId = this.callSession.authorizationId!;
+    for (const row of selected) {
+      this.coordinator.updateEntry(row.entry.entryId, (data) => {
+        data.status = 'authorized';
+        data.authorizationId = authorizationId;
+        data.authorizedAt = Date.now();
+        data.authorizedReceiveEpoch = this.receiveEpoch;
+        return true;
+      });
+    }
+    if (this.callSession.state === 'collecting') {
+      this.callSession.activateBatch(selected.map((row) => row.entry.targetKey));
+    } else if (selected.length > 0) {
+      this.callSession.extendBatch(selected.map((row) => row.entry.targetKey));
+    }
+    this.exhaustedAtReceiveEpoch = undefined;
+  }
+
+  private compareCandidates(left: import('@tx5dr/plugin-api/toolkit').ParallelQSOQueueEntry<WWDigiEntryData>, right: import('@tx5dr/plugin-api/toolkit').ParallelQSOQueueEntry<WWDigiEntryData>): number {
+    const policy = this.operator.config.cqSelectionPolicy ?? 'MAX_DISTANCE';
+    if (policy === 'MAX_DISTANCE') {
+      const leftDistance = left.data.targetGrid
+        ? calculateGridDistance(this.operator.config.myGrid, left.data.targetGrid) : null;
+      const rightDistance = right.data.targetGrid
+        ? calculateGridDistance(this.operator.config.myGrid, right.data.targetGrid) : null;
+      if (leftDistance !== rightDistance) {
+        if (leftDistance === null) return 1;
+        if (rightDistance === null) return -1;
+        return rightDistance - leftDistance;
+      }
+    } else if (policy === 'MAX_SNR' || policy === 'MIN_SNR') {
+      const leftSnr = left.data.lastSnr ?? Number.NEGATIVE_INFINITY;
+      const rightSnr = right.data.lastSnr ?? Number.NEGATIVE_INFINITY;
+      if (leftSnr !== rightSnr) return policy === 'MAX_SNR' ? rightSnr - leftSnr : leftSnr - rightSnr;
+    }
+    return (left.data.firstHeardAt ?? 0) - (right.data.firstHeardAt ?? 0)
+      || (left.data.firstAudioFrequencyHz ?? 0) - (right.data.firstAudioFrequencyHz ?? 0)
+      || left.callsign.localeCompare(right.callsign);
+  }
+
   private queueActions(entry: import('@tx5dr/plugin-api/toolkit').ParallelQSOQueueEntry<WWDigiEntryData>) {
+    if (entry.data.status === 'candidate') {
+      return [{
+        id: 'authorize-target', label: 'actionAuthorize', icon: 'check', tone: 'primary' as const, presentation: 'primary' as const,
+      }, {
+        id: 'end-queued-target', label: 'actionEndQso', icon: 'xmark', tone: 'danger' as const, presentation: 'menu' as const,
+      }];
+    }
+    if (entry.data.status === 'dupe') {
+      return [{
+        id: 'authorize-dupe', label: 'actionAuthorizeDupe', icon: 'triangle-alert', tone: 'warning' as const, presentation: 'primary' as const,
+        confirmation: { title: 'confirmAuthorizeDupe', description: 'confirmAuthorizeDupeDesc', confirmLabel: 'actionAuthorizeDupe' },
+      }, {
+        id: 'end-queued-target', label: 'actionEndQso', icon: 'xmark', tone: 'danger' as const, presentation: 'menu' as const,
+      }];
+    }
+    if (entry.data.status === 'authorized') {
+      return [{
+        id: 'revoke-authorization', label: 'actionRevokeAuthorization', icon: 'ban', presentation: 'menu' as const,
+      }, {
+        id: 'end-queued-target', label: 'actionEndQso', icon: 'xmark', tone: 'danger' as const, presentation: 'menu' as const,
+      }];
+    }
     if (entry.data.status === 'review') {
       const template = `<${entry.callsign}> ${this.operator.config.myCallsign} ${this.operator.config.myGrid}`;
       return [{
@@ -521,12 +862,13 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
 
   private expireAuthorizations(): boolean {
     let changed = false;
-    const expiry = Math.max(1, Math.min(20, Math.trunc(this.operator.config.authorizationReceiveCycles ?? 4)));
+    const expiry = Math.max(1, Math.min(60, Math.trunc(this.operator.config.authorizedStaleReceiveCycles ?? 12)));
     for (const row of this.coordinator.getQueueSnapshot().entries) {
-      if (row.active || row.entry.data.status !== 'queued') continue;
-      const authorizedAt = row.entry.data.authorizedReceiveEpoch ?? this.receiveEpoch;
+      if (row.active || row.entry.data.status !== 'authorized') continue;
+      const authorizedAt = row.entry.data.lastHeardReceiveEpoch
+        ?? row.entry.data.authorizedReceiveEpoch ?? this.receiveEpoch;
       const lease = new AuthorizationLease({
-        authorizationId: row.entry.data.authorizationId,
+        authorizationId: row.entry.data.authorizationId!,
         authorizedAtCycle: authorizedAt,
         expiresAfterReceiveCycles: expiry,
       });
@@ -546,7 +888,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
 
   private authorizeEntry(entryId: string, options: { alternateText?: string } = {}): void {
     if (!this.coordinator.updateEntry(entryId, (data) => {
-      data.status = 'queued';
+      data.status = 'authorized';
       data.authorizationId = randomUUID();
       data.authorizedAt = Date.now();
       data.authorizedReceiveEpoch = this.receiveEpoch;

@@ -516,6 +516,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       requestOperatorStrategyStop: (operatorId, reason) => {
         this._operatorManager.requestStrategyStop(operatorId, reason);
       },
+      requestOperatorStrategyStart: (operatorId) => {
+        this._operatorManager.startOperator(operatorId);
+      },
       transitionTargetReservation: (operatorId, epoch, targetCallsign) => (
         this._operatorManager.transitionTargetReservation(operatorId, epoch, targetCallsign)
       ),

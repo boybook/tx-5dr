@@ -138,7 +138,7 @@ export interface PluginDefinition<
     parallelTargetQueue?: 1;
     /** Controls whether enqueueing may start a stopped operator. */
     queueActivation?: 'immediate' | 'operator-toggle';
-    /** Requires every new target to enter through an audited manual queue action. */
+    /** Blocks unscoped plugin commands; the strategy may consume its own audited operator authorization. */
     manualInitiation?: 1;
     /** Strategy-specific cap applied in addition to the operator cap. */
     maxConcurrentStreams?: number;

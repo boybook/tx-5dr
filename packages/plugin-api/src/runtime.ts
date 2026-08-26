@@ -103,6 +103,8 @@ export interface StrategyAttention {
   tone: 'info' | 'warning' | 'danger' | 'success';
   title: string;
   description?: string;
+  params?: Record<string, string | number>;
+  notify?: boolean;
   expiresAt?: number;
   actionIds?: string[];
 }
@@ -159,6 +161,8 @@ export interface StrategyActionInvocation {
 
 export interface StrategyActionResult {
   requestDecision?: boolean;
+  /** Start this operator through the Host's normal automation path after a direct user action. */
+  requestOperatorStart?: boolean;
   qsoCompletions?: StrategyQSOCompletionEffect[];
   outcome?: { code: string; message?: string };
 }
@@ -190,7 +194,8 @@ export interface StreamPhysicalReceipt extends StrategyTransmission {
 /** User-facing phase shown for one row in a queue-capable strategy. */
 export type AssistedQueueDisplayState =
   | 'TX1' | 'TX2' | 'TX3' | 'TX4' | 'TX5'
-  | 'engaged' | 'closing' | 'paused' | 'no-response' | 'later' | 'review';
+  | 'engaged' | 'closing' | 'paused' | 'no-response' | 'later' | 'review'
+  | 'candidate' | 'authorized' | 'dupe';
 
 /** Why a queued target is temporarily paused instead of being selected. */
 export type AssistedQueuePauseReason = 'target-busy' | 'stale';
@@ -228,6 +233,9 @@ export interface AssistedQueueRow {
   lastSnr?: number;
   /** Receive cycles elapsed since this target was last decoded. */
   lastHeardCyclesAgo?: number;
+  streamId?: string;
+  audioFrequencyHz?: number;
+  authorizationId?: string;
   /** Plugin-declared row actions. Omission preserves legacy queue controls. */
   actions?: StrategyActionDescriptor[];
 }

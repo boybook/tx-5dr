@@ -18,7 +18,9 @@ function managerHarness(invokeAction: () => unknown | Promise<unknown>) {
     commitQSOCompletionEffectsFromAction: vi.fn(),
     invalidateDecisionMessageSet: vi.fn(),
   };
-  manager.deps = { triggerReEncode: vi.fn(), notifyOperatorStatusChanged: vi.fn() };
+  manager.deps = {
+    triggerReEncode: vi.fn(), notifyOperatorStatusChanged: vi.fn(), requestOperatorStrategyStart: vi.fn(),
+  };
   return { manager, runtime };
 }
 
@@ -42,6 +44,12 @@ describe('PluginManager strategy actions', () => {
     expect(manager.orchestrator.commitQSOCompletionEffectsFromAction).toHaveBeenCalledWith('op-1', [effect]);
     expect(manager.orchestrator.invalidateDecisionMessageSet).toHaveBeenCalledWith('op-1');
     expect(manager.deps.triggerReEncode).toHaveBeenCalled();
+  });
+
+  it('starts the operator only when a direct strategy action requests it', async () => {
+    const { manager } = managerHarness(() => ({ requestOperatorStart: true, requestDecision: true }));
+    await manager.invokeOperatorStrategyAction('op-1', { target: { kind: 'runtime' }, actionId: 'do-work' });
+    expect(manager.deps.requestOperatorStrategyStart).toHaveBeenCalledWith('op-1', 'strategy action do-work');
   });
 
   it('restores the runtime checkpoint when a plugin action fails', async () => {

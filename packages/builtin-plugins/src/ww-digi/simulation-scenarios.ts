@@ -33,6 +33,26 @@ export const wwDigiSimulationScenarios: SimulationScenarioDescriptor[] = [
   finalScenario('final-rr73', 'RR73'),
   finalScenario('final-73', '73'),
   {
+    id: 'cq-pileup', modes: ['FT8', 'FT4'], initialState: 'await-cq',
+    globalRules: [{
+      pattern: '{{peerCallsign}} (?<operatorCallsign>[A-Z0-9/]+) R [A-R]{2}[0-9]{2}',
+      choices: [{
+        reply: '{{operatorCallsign}} {{peerCallsign}} RR73', replyFrequency: 'peer', nextState: 'done',
+      }],
+    }],
+    states: {
+      'await-cq': { rules: [{
+        pattern: 'CQ WW (?<operatorCallsign>[A-Z0-9/]+) [A-R]{2}[0-9]{2}',
+        choices: [{
+          reply: '{{operatorCallsign}} {{peerCallsign}} {{peerGrid}}',
+          replyFrequency: 'peer', nextState: 'await-r-grid',
+        }],
+      }] },
+      'await-r-grid': { timeouts: [{ afterReceiveCycles: 3, choices: [{ silence: true, nextState: 'done' }] }] },
+      done: {},
+    },
+  },
+  {
     id: 'ambient-band', modes: ['FT8', 'FT4'], initialState: 'idle',
     globalRules: [{
       pattern: '{{peerCallsign}} (?<contactCallsign>[A-Z0-9/]+) R [A-R]{2}[0-9]{2}',

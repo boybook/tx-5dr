@@ -155,6 +155,56 @@ describe('VirtualRadioSession real codec loop', () => {
     }
   }, 30_000);
 
+  it('mixes five deterministic CQ pile-up replies into one decodable frame', async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), 'tx5dr-virtual-pileup-'));
+    tempDirs.push(dataDir);
+    const peers = ['JA1AAA', 'JA2BBB', 'JA3CCC', 'JA4DDD', 'JA5EEE'].map((callsign, index) => ({
+      id: `pileup-${index}`, callsign, grid: `PM9${index}`,
+      scenarioId: 'cq-pileup', audioFrequencyHz: 700 + index * 300,
+    }));
+    const profile = VirtualRadioProfileSchema.parse({
+      id: 'virtual-pileup', name: 'hidden', createdAt: 1, updatedAt: 1,
+      radio: { type: 'virtual', virtual: {
+        dialFrequencyHz: 14_090_000, scenarioProvider: 'ww-digi', seed: 'pileup', peers,
+      } },
+    });
+    const scenarios = BUILTIN_PLUGINS.find((plugin) => plugin.definition.name === BUILTIN_WW_DIGI_PLUGIN_NAME)!.definition.simulationScenarios!;
+    const now = Date.UTC(2026, 7, 26, 12, 0, 0) + MODES.FT8.transmitTiming;
+    const session = new VirtualRadioSession({
+      profile, scenarios, mode: MODES.FT8, dataDir, now: () => now,
+      getOutputGain: () => 1, ingestInput: async () => undefined,
+    });
+    const encoder = new WSJTXEncodeWorkQueue(1);
+    const decoder = new WSJTXDecodeProcessPool({ workerCount: 1 });
+    try {
+      await session.start();
+      const cq = await encode(encoder, {
+        operatorId: 'operator-1', requestId: 'pileup-cq', mode: 'FT8', frequency: 1_500,
+        message: 'CQ WW BG5DRB OL32',
+      });
+      await (session as unknown as {
+        decodeHostTransmission(audio: Float32Array, sampleRate: number): Promise<void>;
+      }).decodeHostTransmission(cq.audioData, cq.sampleRate);
+      const scheduled = (session as unknown as {
+        scheduledAudio: Array<{ startMs: number; samples: Float32Array }>;
+      }).scheduledAudio;
+      expect(scheduled).toHaveLength(1);
+      const slot = new Float32Array(MODES.FT8.slotMs / 1_000 * 12_000);
+      slot.set(scheduled[0]!.samples, MODES.FT8.transmitTiming / 1_000 * 12_000);
+      const reply = await decoder.decode({
+        slotId: `verify-pileup-${now}`, mode: 'FT8', windowIdx: 0,
+        pcm: slot.buffer, sampleRate: 12_000, timestamp: now, windowOffsetMs: 0,
+      });
+      expect(reply.frames.map((frame) => frame.message)).toEqual(expect.arrayContaining(
+        peers.map((peer) => `BG5DRB ${peer.callsign} ${peer.grid}`),
+      ));
+    } finally {
+      await session.stop('test complete');
+      await encoder.destroy();
+      await decoder.destroy();
+    }
+  }, 30_000);
+
   it('uses the same isolated loop for FT4', async () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), 'tx5dr-virtual-ft4-'));
     tempDirs.push(dataDir);

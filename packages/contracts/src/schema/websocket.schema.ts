@@ -494,6 +494,8 @@ export const StrategyAttentionSchema = z.object({
   tone: z.enum(['info', 'warning', 'danger', 'success']),
   title: z.string().min(1),
   description: z.string().optional(),
+  params: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
+  notify: z.boolean().optional(),
   expiresAt: z.number().optional(),
   actionIds: z.array(z.string()).optional(),
 });
@@ -531,6 +533,7 @@ export type StrategyTransmission = z.infer<typeof StrategyTransmissionSchema>;
 
 export const AssistedQueueDisplayStateSchema = z.enum([
   'TX1', 'TX2', 'TX3', 'TX4', 'TX5', 'engaged', 'closing', 'paused', 'no-response', 'later', 'review',
+  'candidate', 'authorized', 'dupe',
 ]);
 export const AssistedQueuePauseReasonSchema = z.enum(['target-busy', 'stale']);
 export const AssistedQueueToneSchema = z.enum(['neutral', 'active', 'success', 'warning', 'danger']);

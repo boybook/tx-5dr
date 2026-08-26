@@ -477,7 +477,10 @@
       "no-response": "Inactive",
       "noResponseCycles": "Inactive · no reply for {{count}} cycles",
       "later": "Later",
-      "review": "Review"
+      "review": "Review",
+      "candidate": "Candidate",
+      "authorized": "Authorized",
+      "dupe": "Dupe"
     },
     "queuePauseReason": {
       "targetBusy": "Station busy",
