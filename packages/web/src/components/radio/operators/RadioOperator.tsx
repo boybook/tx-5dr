@@ -1278,7 +1278,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
           transitionTimingFunction: 'cubic-bezier(0.23, 1, 0.32, 1)',
         }}
       >
-        <div ref={expandedContentRef} className="p-4 flex flex-col gap-3">
+        <div ref={expandedContentRef} className="flex flex-col gap-2 p-4">
         {/* 第一行 - 发射周期和发射槽位选择 */}
         <div className="flex min-w-0 gap-2 -my-1">
           <div className="flex shrink-0 items-center gap-0">
@@ -1606,7 +1606,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
         </div>
 
         {(operatorStatus.runtime?.actions?.length ?? 0) > 0 && (
-          <div className="mb-2 rounded-md bg-default-100 px-2 py-1.5">
+          <div className="rounded-md bg-default-100 px-2 py-1.5">
             <OperatorStrategyActions
               actions={operatorStatus.runtime!.actions!}
               resolveLabel={strategyLabel}
@@ -1616,7 +1616,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
         )}
 
         {(operatorStatus.runtime?.attentions?.length ?? 0) > 0 && (
-          <div className="mb-2 space-y-1">
+          <div className="space-y-1">
             {operatorStatus.runtime!.attentions!.map((attention) => (
               <div
                 key={attention.id}
