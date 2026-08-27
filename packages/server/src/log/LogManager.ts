@@ -295,6 +295,18 @@ export class LogManager {
     let logBookId = this.callsignLogBookMap.get(normalizedCallsign);
     
     if (!logBookId) {
+      // A managed callsign logbook can outlive its operator binding. Reuse the
+      // registered instance instead of trying to create the same deterministic
+      // ID again when an operator with that callsign is added later.
+      const managedLogBookId = `logbook-${normalizedCallsign}`;
+      const managedLogBook = this.logBooks.get(managedLogBookId);
+      if (managedLogBook) {
+        this.callsignLogBookMap.set(normalizedCallsign, managedLogBookId);
+        managedLogBook.lastUsed = Date.now();
+        logger.info(`Restored callsign binding for existing logbook ${managedLogBookId}`);
+        return managedLogBook;
+      }
+
       const inFlight = this.callsignLogBookInFlight.get(normalizedCallsign);
       if (inFlight) {
         logger.debug(`Reusing in-flight logbook creation for callsign ${normalizedCallsign}`);
@@ -302,7 +314,7 @@ export class LogManager {
       }
 
       // 为该呼号创建新的日志本 - 存储在logbook子目录
-      logBookId = `logbook-${normalizedCallsign}`;
+      logBookId = managedLogBookId;
       const logFileName = `logbook/${normalizedCallsign}.adi`;
       
       logger.info(`Creating logbook for callsign ${normalizedCallsign}`);
@@ -437,6 +449,16 @@ export class LogManager {
     const normalizedCallsign = callsign.toUpperCase();
     this.operatorCallsignMap.set(operatorId, normalizedCallsign);
     logger.info(`Operator ${operatorId} registered callsign: ${normalizedCallsign}`);
+  }
+
+  /**
+   * Remove an operator identity without disconnecting the callsign logbook.
+   * Callsign logbooks and their ADIF files outlive individual operator records.
+   */
+  unregisterOperatorCallsign(operatorId: string): void {
+    if (this.operatorCallsignMap.delete(operatorId)) {
+      logger.info(`Operator ${operatorId} callsign registration removed`);
+    }
   }
 
   /**

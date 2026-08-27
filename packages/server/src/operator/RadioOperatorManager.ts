@@ -768,8 +768,9 @@ export class RadioOperatorManager {
       throw new Error(`operator ${operatorId} not found`);
     }
 
-    // 断开与日志本的连接
-    this.logManager.disconnectOperatorFromLogBook(operatorId);
+    // Remove only the operator identity. The callsign logbook is durable and
+    // may still be shared by another operator or reused by a replacement.
+    this.logManager.unregisterOperatorCallsign(operatorId);
     
     this.operators.delete(operatorId);
     this.targetReservations.releaseOperator(operatorId);
@@ -2186,6 +2187,11 @@ export class RadioOperatorManager {
    */
   async syncAddOperator(config: RadioOperatorConfig): Promise<RadioOperator> {
     const operator = await this.addOperator(config);
+
+    // Runtime-created operators can be opened immediately after this method
+    // returns. Wait until their callsign logbook is registered, while leaving
+    // the full provider scan in the background.
+    await this.logManager.getOrCreateLogBookByCallsign(config.myCallsign);
     
     /* if (this.isRunning) {
       operator.start();

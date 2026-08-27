@@ -73,6 +73,7 @@ function createManager(options: {
     getOrCreateLogBookByCallsign: vi.fn().mockResolvedValue(options.logBook),
     prewarmLogBookByCallsign: vi.fn(),
     registerOperatorCallsign: vi.fn(),
+    unregisterOperatorCallsign: vi.fn(),
     connectOperatorToLogBook: vi.fn().mockResolvedValue(undefined),
     disconnectOperatorFromLogBook: vi.fn(),
     getOperatorLogBookId: vi.fn().mockReturnValue(options.logBook.id),
@@ -284,6 +285,60 @@ describe('RadioOperatorManager logbook startup binding', () => {
 
     expect(manager.getOperatorById('op1')).toBeDefined();
     expect(fakeLogManager.connectOperatorToLogBook).toHaveBeenCalledWith('op1', 'log-1');
+  });
+
+  it('waits for a runtime-created operator logbook to be registered', async () => {
+    const logBook = {
+      id: 'logbook-BG4IAJ',
+      name: 'Test Log',
+      provider: {},
+    };
+    const { manager, fakeLogManager } = createManager({ logBook, callsign: 'BG4IAJ' });
+    let releaseRegistration: (() => void) | undefined;
+    fakeLogManager.getOrCreateLogBookByCallsign.mockImplementation(() => new Promise((resolve) => {
+      releaseRegistration = () => resolve(logBook);
+    }));
+
+    const adding = manager.syncAddOperator({
+      id: 'op1',
+      myCallsign: 'BG4IAJ',
+      myGrid: 'OM96',
+      frequency: 14_074_000,
+      transmitCycles: [0],
+      mode: MODES.FT8,
+    });
+    let settled = false;
+    void adding.then(() => { settled = true; });
+
+    await vi.waitFor(() => {
+      expect(fakeLogManager.getOrCreateLogBookByCallsign).toHaveBeenCalledWith('BG4IAJ');
+    });
+    expect(settled).toBe(false);
+
+    releaseRegistration!();
+    await expect(adding).resolves.toBeDefined();
+  });
+
+  it('removes an operator identity without disconnecting its callsign logbook', async () => {
+    const logBook = {
+      id: 'logbook-BG4IAJ',
+      name: 'Test Log',
+      provider: {},
+    };
+    const { manager, fakeLogManager } = createManager({ logBook, callsign: 'BG4IAJ' });
+
+    await manager.addOperator({
+      id: 'op1',
+      myCallsign: 'BG4IAJ',
+      myGrid: 'OM96',
+      frequency: 14_074_000,
+      transmitCycles: [0],
+      mode: MODES.FT8,
+    });
+    await manager.syncRemoveOperator('op1');
+
+    expect(fakeLogManager.unregisterOperatorCallsign).toHaveBeenCalledWith('op1');
+    expect(fakeLogManager.disconnectOperatorFromLogBook).not.toHaveBeenCalled();
   });
 
   it('normalizes operator callsign and grid updates before persisting and broadcasting', async () => {
