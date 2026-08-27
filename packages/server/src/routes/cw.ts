@@ -9,7 +9,7 @@ import {
   CWMessageSlotSwapSchema,
 } from '@tx5dr/contracts';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
-import { requireAbility, requireRole } from '../auth/authPlugin.js';
+import { requireAbility, requireCallsignAccess, requireRole } from '../auth/authPlugin.js';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -145,7 +145,7 @@ export async function cwRoutes(fastify: FastifyInstance) {
 
   // GET /panel/:callsign - get message panel
   fastify.get('/panel/:callsign', {
-    preHandler: [requireRole(UserRole.OPERATOR)],
+    preHandler: [requireRole(UserRole.OPERATOR), requireCallsignAccess()],
   }, async (req, reply) => {
     const { callsign } = req.params as { callsign: string };
     const manager = engine.getCWKeyerManager();
@@ -155,7 +155,7 @@ export async function cwRoutes(fastify: FastifyInstance) {
 
   // PATCH /panel/:callsign - update panel (slot count)
   fastify.patch('/panel/:callsign', {
-    preHandler: [requireRole(UserRole.OPERATOR)],
+    preHandler: [requireRole(UserRole.OPERATOR), requireCallsignAccess()],
   }, async (req, reply) => {
     const { callsign } = req.params as { callsign: string };
     const body = CWMessagePanelUpdateSchema.parse(req.body);
@@ -166,7 +166,7 @@ export async function cwRoutes(fastify: FastifyInstance) {
 
   // PATCH /panel/:callsign/slots/:slotId - update slot
   fastify.patch('/panel/:callsign/slots/:slotId', {
-    preHandler: [requireRole(UserRole.OPERATOR)],
+    preHandler: [requireRole(UserRole.OPERATOR), requireCallsignAccess()],
   }, async (req, reply) => {
     const { callsign, slotId } = req.params as { callsign: string; slotId: string };
     const body = CWMessageSlotUpdateSchema.parse(req.body);
@@ -177,7 +177,7 @@ export async function cwRoutes(fastify: FastifyInstance) {
 
   // DELETE /panel/:callsign/slots/:slotId - clear slot text
   fastify.delete('/panel/:callsign/slots/:slotId', {
-    preHandler: [requireRole(UserRole.OPERATOR)],
+    preHandler: [requireRole(UserRole.OPERATOR), requireCallsignAccess()],
   }, async (req, reply) => {
     const { callsign, slotId } = req.params as { callsign: string; slotId: string };
     const manager = engine.getCWKeyerManager();
@@ -187,7 +187,7 @@ export async function cwRoutes(fastify: FastifyInstance) {
 
   // POST /panel/:callsign/slots/swap - swap two slots
   fastify.post('/panel/:callsign/slots/swap', {
-    preHandler: [requireRole(UserRole.OPERATOR)],
+    preHandler: [requireRole(UserRole.OPERATOR), requireCallsignAccess()],
   }, async (req, reply) => {
     const { callsign } = req.params as { callsign: string };
     const body = CWMessageSlotSwapSchema.parse(req.body);
