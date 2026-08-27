@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { MockTciServer } from 'tci-client-node/testing';
 import { TciSampleType, payloadToFloat32 } from 'tci-client-node';
-import { TciConnection } from '../connections/TciConnection.js';
+import { TciConnection, resolveTciEndpointCandidates } from '../connections/TciConnection.js';
 import { RadioConnectionState, RadioConnectionType, type MeterData } from '../connections/IRadioConnection.js';
 
 let server: MockTciServer | undefined;
@@ -14,6 +14,13 @@ afterEach(async () => {
 describe('TciConnection', () => {
   it('maps IRadioConnection calls to TCI CAT commands and state', async () => {
     server = new MockTciServer();
+    let drive = 30;
+    server.onCommand(({ socket, command }) => {
+      if (command.name !== 'drive') return false;
+      if (command.args.length >= 2) drive = Number(command.args[1]);
+      socket.send(`DRIVE:${command.args[0] ?? '0'},${drive};`);
+      return true;
+    });
     await server.start();
     const endpoint = new URL(server.url());
     const connection = new TciConnection();
@@ -23,6 +30,8 @@ describe('TciConnection', () => {
       tci: {
         host: endpoint.hostname,
         port: Number(endpoint.port),
+        dialect: 'auto',
+        autoDiscoverPorts: true,
         receiver: 0,
         trx: 1,
         vfo: 0,
@@ -70,6 +79,8 @@ describe('TciConnection', () => {
       tci: {
         host: endpoint.hostname,
         port: Number(endpoint.port),
+        dialect: 'auto',
+        autoDiscoverPorts: true,
         receiver: 0,
         trx: 0,
         vfo: 0,
@@ -114,6 +125,8 @@ describe('TciConnection', () => {
       tci: {
         host: endpoint.hostname,
         port: Number(endpoint.port),
+        dialect: 'auto',
+        autoDiscoverPorts: true,
         receiver: 0,
         trx: 0,
         vfo: 0,
@@ -144,6 +157,8 @@ describe('TciConnection', () => {
       tci: {
         host: endpoint.hostname,
         port: Number(endpoint.port),
+        dialect: 'auto',
+        autoDiscoverPorts: true,
         receiver: 0,
         trx: 0,
         vfo: 0,
@@ -183,6 +198,8 @@ describe('TciConnection', () => {
       tci: {
         host: endpoint.hostname,
         port: Number(endpoint.port),
+        dialect: 'auto',
+        autoDiscoverPorts: true,
         receiver: 0,
         trx: 0,
         vfo: 0,
@@ -215,6 +232,8 @@ describe('TciConnection', () => {
       tci: {
         host: endpoint.hostname,
         port: Number(endpoint.port),
+        dialect: 'auto',
+        autoDiscoverPorts: true,
         receiver: 0,
         trx: 0,
         vfo: 0,
@@ -246,6 +265,8 @@ describe('TciConnection', () => {
       tci: {
         host: endpoint.hostname,
         port: Number(endpoint.port),
+        dialect: 'auto',
+        autoDiscoverPorts: true,
         receiver: 0,
         trx: 0,
         vfo: 0,
@@ -261,6 +282,26 @@ describe('TciConnection', () => {
     expect(connection.isHealthy()).toBe(true);
 
     await connection.disconnect('test complete');
+  });
+});
+
+describe('resolveTciEndpointCandidates', () => {
+  it('tries ExpertSDR and Thetis/Aether defaults for legacy auto configuration', () => {
+    expect(resolveTciEndpointCandidates({
+      host: '127.0.0.1', port: 40001, receiver: 0, trx: 0, vfo: 0,
+      audioEnabled: true, audioSampleRate: 12000, dialect: 'auto', autoDiscoverPorts: true,
+    })).toEqual(['ws://127.0.0.1:40001/', 'ws://127.0.0.1:50001/']);
+  });
+
+  it('preserves explicit URLs and brackets IPv6 hosts', () => {
+    expect(resolveTciEndpointCandidates({
+      host: 'ignored', port: 40001, url: 'wss://radio.example/tci', receiver: 0, trx: 0, vfo: 0,
+      audioEnabled: true, audioSampleRate: 12000, dialect: 'auto', autoDiscoverPorts: true,
+    })).toEqual(['wss://radio.example/tci']);
+    expect(resolveTciEndpointCandidates({
+      host: '::1', port: 50001, receiver: 0, trx: 0, vfo: 0,
+      audioEnabled: true, audioSampleRate: 12000, dialect: 'auto', autoDiscoverPorts: false,
+    })).toEqual(['ws://[::1]:50001/']);
   });
 });
 

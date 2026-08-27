@@ -911,4 +911,25 @@ describe('RadioCapabilityManager', () => {
     await expect(manager.writeCapability('rf_power', 0.57)).resolves.toBeUndefined();
     expect(setRFPower).toHaveBeenCalledWith(0.57);
   });
+
+  it('publishes the applied rf_power value and clamping metadata', async () => {
+    const manager = new RadioCapabilityManager();
+    const connection = new MockConnection(RadioConnectionType.TCI, {
+      getRFPower: vi.fn().mockResolvedValue(0.5),
+      setRFPower: vi.fn().mockResolvedValue({
+        requested: 1,
+        applied: 0.5,
+        outcome: 'clamped',
+        acknowledgement: 'state',
+      }),
+    });
+
+    await manager.onConnected(connection as never);
+    await manager.writeCapability('rf_power', 1);
+
+    expect(manager.getCapabilityStates().find((state) => state.id === 'rf_power')).toMatchObject({
+      value: 0.5,
+      meta: { requested: 1, applied: 0.5, limited: true, acknowledgement: 'state' },
+    });
+  });
 });

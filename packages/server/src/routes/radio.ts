@@ -20,6 +20,7 @@ import serialport from 'serialport';
 const { SerialPort } = serialport;
 
 import { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
+import { resolveTciEndpointCandidates } from '../radio/connections/TciConnection.js';
 import type { RepeaterDuplexApplyResult, RepeaterDuplexConfig, ToneSquelchApplyResult, ToneSquelchConfig } from '../radio/PhysicalRadioManager.js';
 import { PhysicalTxCoordinator } from '../transmission/PhysicalTxCoordinator.js';
 import { FrequencyManager } from '../radio/FrequencyManager.js';
@@ -287,7 +288,11 @@ function isHardwareSameTarget(a: HamlibConfig, b: HamlibConfig): boolean {
     case 'serial': return a.serial?.path === b.serial?.path;
     case 'network': return a.network?.host === b.network?.host && a.network?.port === b.network?.port;
     case 'icom-wlan': return a.icomWlan?.ip === b.icomWlan?.ip && a.icomWlan?.port === b.icomWlan?.port;
-    case 'tci': return a.tci?.host === b.tci?.host && a.tci?.port === b.tci?.port;
+    case 'tci': {
+      if (!a.tci || !b.tci) return false;
+      const right = new Set(resolveTciEndpointCandidates(b.tci));
+      return resolveTciEndpointCandidates(a.tci).some((endpoint) => right.has(endpoint));
+    }
     default: return true;
   }
 }
@@ -302,7 +307,10 @@ function isHardwareConflict(active: HamlibConfig, test: HamlibConfig): boolean {
       && active.icomWlan?.ip === test.icomWlan?.ip) return true;
   // TCI：同一 ExpertSDR WebSocket endpoint 视为冲突
   if (test.type === 'tci' && active.type === 'tci'
-      && active.tci?.host === test.tci?.host && active.tci?.port === test.tci?.port) return true;
+      && active.tci && test.tci) {
+    const testTargets = new Set(resolveTciEndpointCandidates(test.tci));
+    if (resolveTciEndpointCandidates(active.tci).some((endpoint) => testTargets.has(endpoint))) return true;
+  }
   return false;
 }
 
@@ -312,9 +320,24 @@ function describeHardware(config: HamlibConfig): string {
     case 'serial': return `Serial ${config.serial?.path || ''}`;
     case 'network': return `Network ${config.network?.host || ''}:${config.network?.port || ''}`;
     case 'icom-wlan': return `ICOM WLAN ${config.icomWlan?.ip || ''}`;
-    case 'tci': return `TCI ${config.tci?.host || ''}:${config.tci?.port || ''}`;
+    case 'tci': return config.tci ? `TCI ${resolveTciEndpointCandidates(config.tci).join(', ')}` : 'TCI';
     default: return 'Unknown';
   }
+}
+
+function buildConnectionTestSuccess(manager: PhysicalRadioManager) {
+  const diagnostics = manager.getCurrentConnection()?.getConnectionInfo().diagnostics;
+  if (diagnostics?.dialect) {
+    const identity = [diagnostics.device, diagnostics.protocolName, diagnostics.protocolVersion]
+      .filter((value) => typeof value === 'string' && value.length > 0)
+      .join(' / ');
+    return {
+      success: true,
+      message: `TCI connected: ${identity || 'unknown device'} via ${String(diagnostics.dialect)} at ${String(diagnostics.endpoint)}`,
+      details: diagnostics,
+    };
+  }
+  return { success: true, message: 'Connection test successful! Radio responding normally.' };
 }
 
 function hasNonEmptyString(value: unknown): value is string {
@@ -915,7 +938,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
         logger.debug('Reusing existing connection for test');
         try {
           await radioManager.testConnection();
-          return reply.send({ success: true, message: 'Connection test successful! Radio responding normally.' });
+          return reply.send(buildConnectionTestSuccess(radioManager));
         } catch (error) {
           throw RadioError.from(error, RadioErrorCode.CONNECTION_FAILED);
         }
@@ -936,7 +959,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
       await tester.applyConfig(config);
       await tester.testConnection();
       logger.info('Connection test succeeded');
-      return reply.send({ success: true, message: 'Connection test successful! Radio responding normally.' });
+      return reply.send(buildConnectionTestSuccess(tester));
     } catch (e) {
       logger.error('Connection test failed:', e);
       throw RadioError.from(e, RadioErrorCode.CONNECTION_FAILED);

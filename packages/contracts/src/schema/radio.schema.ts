@@ -201,9 +201,27 @@ export const IcomWlanConfigSchema = z.object({
 /**
  * TCI / SunSDR 连接配置Schema
  */
+const TciWebSocketUrlSchema = z.string().url()
+  .refine((value) => /^wss?:\/\//i.test(value), 'TCI URL must use ws:// or wss://')
+  .refine((value) => {
+    const parsed = new URL(value);
+    return !parsed.username && !parsed.password;
+  }, 'TCI URL must not contain credentials');
+
 export const TciConfigSchema = z.object({
   host: z.string().default('127.0.0.1'),
   port: z.number().int().min(1).max(65535).default(40001),
+  url: TciWebSocketUrlSchema.optional(),
+  dialect: z.enum([
+    'auto',
+    'expertsdr-1.4',
+    'expertsdr-1.5-1.8',
+    'expertsdr-1.9-2.0',
+    'aethersdr-1.5',
+    'thetis-2.0',
+    'generic-observed',
+  ]).default('auto'),
+  autoDiscoverPorts: z.boolean().default(true),
   receiver: z.number().int().min(0).default(0),
   trx: z.number().int().min(0).default(0),
   vfo: z.number().int().min(0).default(0),
@@ -390,6 +408,7 @@ export const SerialPortsResponseSchema = z.object({
 export const TestResponseSchema = z.object({
   success: z.boolean(),
   message: z.string().optional(),
+  details: z.record(z.unknown()).optional(),
 });
 
 /**
