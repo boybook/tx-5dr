@@ -570,6 +570,37 @@ describe('StandardQSOPluginRuntime partial-decode `<...>` handling', () => {
     expect(snapshot.context?.targetCallsign).toBeUndefined();
   });
 
+  it('starts a new call when the operator explicitly selects a known partial-message sender', () => {
+    const runtime = new StandardQSOPluginRuntime(createOperator({ myCallsign: 'BG5DRB' }));
+    const message: FrameMessage = {
+      snr: -7,
+      freq: 1450,
+      dt: 0.1,
+      message: '<...> JA1ABC RR73',
+      confidence: 1,
+    };
+    const slotInfo: SlotInfo = {
+      id: 'slot-partial-known-sender',
+      startMs: 15_000,
+      phaseMs: 0,
+      driftMs: 0,
+      cycleNumber: 1,
+      utcSeconds: 15,
+      mode: 'FT8',
+    };
+
+    expect(runtime.requestCall('JA1ABC', { message, slotInfo })).toBe(true);
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.currentState).toBe('TX1');
+    expect(snapshot.context).toMatchObject({
+      targetCallsign: 'JA1ABC',
+      reportSent: -7,
+    });
+    expect(snapshot.context?.reportReceived).toBeUndefined();
+    expect(snapshot.slots?.TX1).toBe('JA1ABC BG5DRB OL32');
+  });
+
   it('refuses requestCall with an undecoded placeholder callsign', () => {
     const runtime = new StandardQSOPluginRuntime(createOperator({ myCallsign: 'BG5DRB' }));
 
