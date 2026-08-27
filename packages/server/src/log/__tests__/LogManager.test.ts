@@ -155,6 +155,54 @@ describe('LogManager callsign logbook creation', () => {
     await expect(Promise.all([first, second])).resolves.toEqual([logBook, logBook]);
   });
 
+  it('restores a missing callsign binding from an existing managed logbook', async () => {
+    const manager = LogManager.getInstance();
+    const logBook: LogBookInstance = {
+      id: 'logbook-BG4IAJ',
+      name: 'BG4IAJ QSO Log',
+      filePath: '/tmp/BG4IAJ.adi',
+      storageKind: 'managed',
+      provider: { close: vi.fn().mockResolvedValue(undefined) } as any,
+      createdAt: 1,
+      lastUsed: 1,
+      isActive: true,
+    };
+    const books = (manager as unknown as { logBooks: Map<string, LogBookInstance> }).logBooks;
+    books.set(logBook.id, logBook);
+    const createLogBook = vi.spyOn(manager, 'createLogBook');
+
+    await expect(manager.getOrCreateLogBookByCallsign('bg4iaj')).resolves.toBe(logBook);
+
+    expect(manager.resolveLogBookId('BG4IAJ')).toBe(logBook.id);
+    expect(createLogBook).not.toHaveBeenCalled();
+  });
+
+  it('unregisters one operator without removing a shared callsign binding', async () => {
+    const manager = LogManager.getInstance();
+    const logBook: LogBookInstance = {
+      id: 'logbook-BG4IAJ',
+      name: 'BG4IAJ QSO Log',
+      filePath: '/tmp/BG4IAJ.adi',
+      storageKind: 'managed',
+      provider: { close: vi.fn().mockResolvedValue(undefined) } as any,
+      createdAt: 1,
+      lastUsed: 1,
+      isActive: true,
+    };
+    const books = (manager as unknown as { logBooks: Map<string, LogBookInstance> }).logBooks;
+    const bindings = (manager as unknown as { callsignLogBookMap: Map<string, string> }).callsignLogBookMap;
+    books.set(logBook.id, logBook);
+    bindings.set('BG4IAJ', logBook.id);
+    manager.registerOperatorCallsign('op1', 'BG4IAJ');
+    manager.registerOperatorCallsign('op2', 'BG4IAJ');
+
+    manager.unregisterOperatorCallsign('op1');
+
+    expect(manager.getOperatorCallsign('op1')).toBeNull();
+    expect(manager.getOperatorIdsForLogBook(logBook.id)).toEqual(['op2']);
+    expect(manager.resolveLogBookId('BG4IAJ')).toBe(logBook.id);
+  });
+
   it('drains every registered logbook when one close fails', async () => {
     const manager = LogManager.getInstance();
     const failedClose = vi.fn().mockRejectedValue(new Error('first drain failed'));
