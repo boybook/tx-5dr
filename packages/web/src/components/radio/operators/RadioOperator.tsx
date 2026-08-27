@@ -5,7 +5,7 @@ import { faChevronRight, faWandMagicSparkles, faRepeat, faBook, faRotateLeft, fa
 import { useConnection, useCurrentOperatorId, useOperators, useRadioState, useSlotPacks } from '../../../store/radioStore';
 import type { OperatorRuntimeSlot, OperatorStatus, PluginStatus, WSSetOperatorContextMessage } from '@tx5dr/contracts';
 import { CycleUtils } from '@tx5dr/core';
-import { openLogbookWindow } from '../../../utils/windowManager';
+import { openLogbookWindow, openPluginPageWindow } from '../../../utils/windowManager';
 import { addToast } from '@heroui/toast';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../../utils/logger';
@@ -755,6 +755,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
   const currentTransmissionLineCount = currentTransmissions.filter((transmission) => Boolean(transmission.text)).length;
   const usesStackedHeaderLayout = cyclePresentation.isTransmit && currentTransmissionLineCount > 1;
   const activeStrategyStatus = pluginStatuses.find((plugin) => plugin.name === operatorStatus.strategy.name);
+  const transmitGate = operatorStatus.runtime?.transmitGate;
   const usesStreamProjection = activeStrategyStatus?.strategyFeatures?.parallelTargetQueue === 1
     || currentTransmissions.some((transmission) => transmission.streamId !== 'default')
     || operatorStatus.runtime?.streams !== undefined;
@@ -802,6 +803,18 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
       payload,
     );
   }, [connection.state.radioService, operatorStatus.id]);
+  const navigateStrategyAction = React.useCallback((
+    action: import('@tx5dr/contracts').StrategyActionDescriptor,
+  ) => {
+    const pageId = action.navigation?.kind === 'plugin-page' ? action.navigation.pageId : undefined;
+    const page = pageId ? activeStrategyStatus?.ui?.pages?.find((candidate) => candidate.id === pageId) : undefined;
+    if (!page || page.resourceBinding !== 'operator') return;
+    openPluginPageWindow({
+      pluginName: operatorStatus.strategy.name,
+      pageId: page.id,
+      operatorId: operatorStatus.id,
+    });
+  }, [activeStrategyStatus?.ui?.pages, operatorStatus.id, operatorStatus.strategy.name]);
   const configuredStreamCount = operatorStatus.runtime?.queue?.maxActiveStreams;
   const singleStateStream = resolveSingleControllableStream(streamPresentations, configuredStreamCount);
   const legacyStateChoices: OperatorStateChoice[] = operatorStatus.strategy.availableSlots.map((slot) => ({
@@ -1140,8 +1153,9 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
                     size="sm"
                     color="danger"
                     classNames={pttSwitchClassNames}
-                    isDisabled={!connection.state.isConnected}
+                    isDisabled={!connection.state.isConnected || (!operatorStatus.isTransmitting && Boolean(transmitGate))}
                     aria-label={t('operator.toggleTx')}
+                    title={transmitGate ? strategyLabel(transmitGate.reason) : undefined}
                   />
                 </div>
               </PopoverTrigger>
@@ -1611,6 +1625,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
               actions={operatorStatus.runtime!.actions!}
               resolveLabel={strategyLabel}
               onInvoke={(action, payload) => invokeStrategyAction({ kind: 'runtime' }, action, payload)}
+              onNavigate={navigateStrategyAction}
             />
           </div>
         )}
@@ -1694,6 +1709,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
                           streamId: singleStateStream.streamId,
                           lifecycleEpoch: singleStateStream.qsoLifecycleEpoch!,
                         }, action, payload)}
+                        onNavigate={navigateStrategyAction}
                         onRequestSpectrumPick={(action) => requestStrategyFrequencyPick({
                           operatorId: operatorStatus.id,
                           target: {
@@ -1718,7 +1734,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
                   && stream.qsoLifecycleEpoch !== undefined;
                 const isStreamExpanded = canControlState && expandedStreamId === stream.streamId;
                 const currentStateLabel = stateChoices.find((choice) => choice.id === stream.currentState)?.label
-                  ?? stream.currentState;
+                  ?? (stream.currentState ? strategyLabel(stream.currentState) : undefined);
                 return (
                   <div
                     key={stream.streamId}
@@ -1803,6 +1819,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
                               streamId: stream.streamId,
                               lifecycleEpoch: stream.qsoLifecycleEpoch!,
                             }, action, payload)}
+                            onNavigate={navigateStrategyAction}
                             onRequestSpectrumPick={(action) => requestStrategyFrequencyPick({
                               operatorId: operatorStatus.id,
                               target: {

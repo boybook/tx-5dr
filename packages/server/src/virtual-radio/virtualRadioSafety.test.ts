@@ -54,4 +54,20 @@ describe('virtual radio safety', () => {
       getSimulationScenarios: () => [scenario],
     }, 'FT8')).toThrow('effective audio frequency');
   });
+
+  it('requires a declared scenario pool when a peer opts into identity rotation', () => {
+    const pooled = VirtualRadioProfileSchema.parse({
+      ...profile,
+      radio: { type: 'virtual', virtual: {
+        ...profile.radio.virtual,
+        peers: [{ ...profile.radio.virtual.peers[0], identityPool: 'scenario' }],
+      } },
+    });
+    expect(() => validateVirtualRadioSafety(pooled, config() as never, {
+      getSimulationScenarios: () => [scenario],
+    }, 'FT8')).toThrow('does not declare an identity pool');
+    expect(validateVirtualRadioSafety(pooled, config() as never, {
+      getSimulationScenarios: () => [{ ...scenario, identityPool: [{ callsign: 'JA1AAA', grid: 'PM95' }] }],
+    }, 'FT8')).toHaveLength(1);
+  });
 });

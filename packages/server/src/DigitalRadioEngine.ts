@@ -10,6 +10,7 @@ import {
   type ModeDescriptor,
   type SlotInfo,
   type SlotPack,
+  type SlotPackFrequencyContext,
   type DigitalRadioEngineEvents,
   type DecodeWorkerTelemetrySnapshot,
   type WorkerPoolTelemetrySnapshot,
@@ -1333,6 +1334,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       getTransmissionPipeline: () => this.transmissionPipeline,
       getRadioBridge: () => this.radioBridge,
       getCurrentMode: () => this.currentMode,
+      getFrequencyContext: () => this.getCurrentSlotPackFrequencyContext(),
     });
     this.clockCoordinator.setPSKReporterService(pskreporterService);
 
@@ -1924,7 +1926,27 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       return Math.round(lastFrequency);
     }
 
+    const virtualFrequency = configManager.getActiveVirtualRadioProfile()?.radio.virtual.dialFrequencyHz;
+    if (this.isValidFrequency(virtualFrequency)) {
+      return Math.round(virtualFrequency);
+    }
+
     return null;
+  }
+
+  private getCurrentSlotPackFrequencyContext(): SlotPackFrequencyContext | undefined {
+    const configManager = ConfigManager.getInstance();
+    const frequency = this.resolveCurrentDigitalFrequency(configManager);
+    if (!frequency) return undefined;
+    const saved = configManager.getLastSelectedFrequency();
+    const radioMode = this.getCurrentRadioMode();
+    return {
+      frequency,
+      mode: this.currentMode.name,
+      band: getBandFromFrequency(frequency),
+      ...(radioMode ? { radioMode } : {}),
+      ...(saved?.frequency === frequency && saved.description ? { description: saved.description } : {}),
+    };
   }
 
   private findNearestPresetForMode(

@@ -25,6 +25,30 @@ function managerHarness(invokeAction: () => unknown | Promise<unknown>) {
 }
 
 describe('PluginManager strategy actions', () => {
+  it('exposes live read-only storage and radio state to strategy runtimes', () => {
+    const manager = Object.create(PluginManager.prototype) as any;
+    const values: Record<string, unknown> = { session: { revision: 1 } };
+    const store = {
+      get: (key: string, fallback?: unknown) => values[key] ?? fallback,
+      getAll: () => structuredClone(values),
+      set: vi.fn(), update: vi.fn(), delete: vi.fn(), flush: vi.fn(),
+    };
+    const context = manager.createStrategyPluginContext({
+      plugin: { definition: { storage: { scopes: ['global'] } } },
+      ctx: {
+        config: {}, log: {}, operator: {}, radio: { band: '20m' },
+        store: { global: store, operator: store }, digitalMessagePreflight: {},
+      },
+    });
+
+    expect(context.radio.band).toBe('20m');
+    expect(context.store.global.get('session')).toEqual({ revision: 1 });
+    expect(context.store.operator.keys()).toEqual([]);
+    expect((context.store.global as any).set).toBeUndefined();
+    values.session = { revision: 2 };
+    expect(context.store.global.get('session')).toEqual({ revision: 2 });
+  });
+
   it('projects the complete generic runtime snapshot to the operator host', () => {
     const { manager } = managerHarness(() => undefined);
     manager.getResolvedStrategyName = vi.fn(() => 'test-strategy');

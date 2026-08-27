@@ -24,6 +24,7 @@ interface OperatorStrategyActionsProps {
   actions: readonly StrategyActionDescriptor[];
   resolveLabel: (value: string) => string;
   onInvoke: (action: StrategyActionDescriptor, payload?: unknown) => void;
+  onNavigate?: (action: StrategyActionDescriptor) => void;
   onRequestSpectrumPick?: (action: StrategyActionDescriptor) => void;
   compact?: boolean;
 }
@@ -40,6 +41,7 @@ export function OperatorStrategyActions({
   actions,
   resolveLabel,
   onInvoke,
+  onNavigate,
   onRequestSpectrumPick,
   compact = false,
 }: OperatorStrategyActionsProps) {
@@ -52,6 +54,10 @@ export function OperatorStrategyActions({
 
   const begin = (action: StrategyActionDescriptor) => {
     if (action.disabledReason) return;
+    if (action.navigation) {
+      onNavigate?.(action);
+      return;
+    }
     if (action.input || action.confirmation) {
       setPending(action);
       setInputValue(action.input?.value === undefined ? '' : String(action.input.value));

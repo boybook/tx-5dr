@@ -1,6 +1,13 @@
 import { fileURLToPath } from 'node:url';
 import { wwDigiSimulationScenarios } from './simulation-scenarios.js';
-import { definePlugin, type PluginContextFor, type QSORecord } from '@tx5dr/plugin-api';
+import {
+  definePlugin,
+  type PluginContextFor,
+  type QSORecord,
+  type StrategyMessagePresentationProjection,
+  type StrategyPluginContext,
+  type StrategyRuntimeSnapshot,
+} from '@tx5dr/plugin-api';
 import type { PluginQuickSetting } from '@tx5dr/plugin-api';
 import { getCallsignInfo } from '@tx5dr/core';
 import { ContestSessionNotifier, ContestSessionRepository } from '@tx5dr/plugin-api/toolkit';
@@ -10,8 +17,11 @@ import {
   isWithinWWDigiContestPeriod,
   resolveWWDigiBand,
   resolveWWDigiContestPeriod,
+  resolveWWDigiLogDeadline,
+  validateContestConfig,
   WW_DIGI_MAX_CONTEST_YEAR,
   WW_DIGI_MIN_CONTEST_YEAR,
+  WW_DIGI_BANDS,
   type ContestConfig,
   type ContestQso,
 } from './contest-log.js';
@@ -31,13 +41,15 @@ interface ContestQsoOverride {
 }
 
 interface WWDigiContestSession {
-  schemaVersion: 1;
+  schemaVersion: 2;
   revision: number;
   config: ContestConfig;
   overrides: Record<string, ContestQsoOverride>;
   operatorTransmitters: Record<string, 0 | 1>;
   migratedOperators: Record<string, true>;
   health: ContestLedgerHealth;
+  setup: ContestSetupState;
+  operatingIndex: ContestOperatingIndex;
 }
 
 const SESSION_CHANGED_TOPIC = 'ww-digi.session.changed';
@@ -47,6 +59,26 @@ interface ContestLedgerHealth {
   updatedAt?: number;
   error?: string;
 }
+
+interface ContestSetupState {
+  status: 'unconfirmed' | 'confirmed';
+  fingerprint?: string;
+  confirmedAt?: number;
+  confirmedByOperatorId?: string;
+}
+
+interface ContestOperatingIndex {
+  revision: number;
+  contestYear: number;
+  callsign: string;
+  workedByBand: Record<string, string[]>;
+  workedFieldsByBand: Record<string, string[]>;
+}
+
+type WWDigiIdentityContext = {
+  config: Readonly<Record<string, unknown>>;
+  operator: { callsign: string; grid: string; id: string };
+};
 
 function configuredContestYear(value: unknown): number {
   if (value === undefined || value === null || value === '') return DEFAULT_CONTEST_YEAR;
@@ -66,24 +98,137 @@ function sessionKey(callsign: string, contestYear: number): string {
   return `contestSession:${callsign.trim().toUpperCase()}:${contestYear}`;
 }
 
-function createSession(ctx: WWDigiContext, _contestYear: number): WWDigiContestSession {
+function createSession(ctx: WWDigiIdentityContext, _contestYear: number): WWDigiContestSession {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     revision: 0,
     config: seedContestConfig(ctx),
     overrides: {},
     operatorTransmitters: {},
     migratedOperators: {},
     health: { state: 'unknown' },
+    setup: { status: 'unconfirmed' },
+    operatingIndex: {
+      revision: 0,
+      contestYear: _contestYear,
+      callsign: ctx.operator.callsign.trim().toUpperCase(),
+      workedByBand: {},
+      workedFieldsByBand: {},
+    },
+  };
+}
+
+function normalizeSession(
+  ctx: WWDigiIdentityContext,
+  contestYear: number,
+  stored: Partial<WWDigiContestSession> & { schemaVersion?: number; revision?: number },
+): WWDigiContestSession {
+  const created = createSession(ctx, contestYear);
+  const setup = stored.schemaVersion === 2 && stored.setup?.status === 'confirmed'
+    ? { ...stored.setup }
+    : { status: 'unconfirmed' as const };
+  const workedByBand = Object.fromEntries(Object.entries(stored.operatingIndex?.workedByBand ?? {})
+    .filter(([, callsigns]) => Array.isArray(callsigns))
+    .map(([band, callsigns]) => [band.toUpperCase(), Array.from(new Set(callsigns.map((value) => String(value).trim().toUpperCase()).filter(Boolean))).sort()]));
+  const workedFieldsByBand = Object.fromEntries(Object.entries(stored.operatingIndex?.workedFieldsByBand ?? {})
+    .filter(([, fields]) => Array.isArray(fields))
+    .map(([band, fields]) => [band.toUpperCase(), Array.from(new Set(fields.map((value) => String(value).trim().toUpperCase()).filter((value) => /^[A-R]{2}$/.test(value)))).sort()]));
+  return {
+    ...created,
+    config: stored.config ?? created.config,
+    overrides: stored.overrides ?? {},
+    operatorTransmitters: stored.operatorTransmitters ?? {},
+    migratedOperators: stored.migratedOperators ?? {},
+    health: stored.health ?? created.health,
+    schemaVersion: 2,
+    revision: stored.revision ?? 0,
+    setup,
+    operatingIndex: {
+      revision: stored.operatingIndex?.revision ?? 0,
+      contestYear,
+      callsign: ctx.operator.callsign.trim().toUpperCase(),
+      workedByBand,
+      workedFieldsByBand,
+    },
   };
 }
 
 function sessionRepository(ctx: WWDigiContext, contestYear: number) {
-  return new ContestSessionRepository<WWDigiContestSession>(
+  const repository = new ContestSessionRepository<WWDigiContestSession>(
     ctx.store.global,
     sessionKey(ctx.operator.callsign, contestYear),
     () => createSession(ctx, contestYear),
   );
+  return {
+    read: () => normalizeSession(ctx, contestYear, repository.read()),
+    update: (mutator: (session: WWDigiContestSession) => WWDigiContestSession) => repository.update(
+      (session) => mutator(normalizeSession(ctx, contestYear, session)),
+    ),
+    flush: () => repository.flush(),
+  };
+}
+
+function normalizedOperators(operators: readonly string[] | undefined): string[] {
+  return Array.from(new Set((operators ?? []).map((value) => value.trim().toUpperCase()).filter(Boolean))).sort();
+}
+
+function sessionFingerprint(ctx: WWDigiIdentityContext, contestYear: number, config: ContestConfig): string {
+  return JSON.stringify({
+    callsign: ctx.operator.callsign.trim().toUpperCase(),
+    contestYear,
+    grid: ctx.operator.grid.trim().toUpperCase().slice(0, 4),
+    location: config.location.trim().toUpperCase(),
+    categoryBand: config.categoryBand,
+    categoryPower: config.categoryPower,
+    categoryOperator: config.categoryOperator,
+    categoryTransmitter: config.categoryTransmitter,
+    operators: normalizedOperators(config.operators),
+  });
+}
+
+function isSessionConfirmed(ctx: WWDigiIdentityContext, contestYear: number, session: WWDigiContestSession): boolean {
+  const grid = ctx.operator.grid.trim().toUpperCase().slice(0, 4);
+  if (!/^[A-R]{2}\d{2}$/.test(grid)) return false;
+  if (session.config.callsign.trim().toUpperCase() !== ctx.operator.callsign.trim().toUpperCase()) return false;
+  try {
+    validateSessionConfig(ctx, session.config);
+  } catch {
+    return false;
+  }
+  return session.setup.status === 'confirmed'
+    && session.setup.fingerprint === sessionFingerprint(ctx, contestYear, session.config);
+}
+
+function buildOperatingIndex(
+  callsign: string,
+  contestYear: number,
+  records: readonly ContestQso[],
+  revision: number,
+): ContestOperatingIndex {
+  const worked = new Map<string, Set<string>>();
+  const workedFields = new Map<string, Set<string>>();
+  for (const record of records) {
+    if (record.status === 'x-qso') continue;
+    const normalized = record.callsign.trim().toUpperCase();
+    if (!normalized) continue;
+    const band = record.band.toUpperCase();
+    const bucket = worked.get(band) ?? new Set<string>();
+    bucket.add(normalized);
+    worked.set(band, bucket);
+    const field = record.receivedGrid?.trim().toUpperCase().slice(0, 2);
+    if (field && /^[A-R]{2}$/.test(field)) {
+      const fieldBucket = workedFields.get(band) ?? new Set<string>();
+      fieldBucket.add(field);
+      workedFields.set(band, fieldBucket);
+    }
+  }
+  return {
+    revision,
+    contestYear,
+    callsign: callsign.trim().toUpperCase(),
+    workedByBand: Object.fromEntries(Array.from(worked, ([band, values]) => [band, Array.from(values).sort()])),
+    workedFieldsByBand: Object.fromEntries(Array.from(workedFields, ([band, values]) => [band, Array.from(values).sort()])),
+  };
 }
 
 function resolveContestLocation(callsign: string, configured: unknown): string {
@@ -92,7 +237,25 @@ function resolveContestLocation(callsign: string, configured: unknown): string {
   if (countryCode === 'US' || countryCode === 'CA') {
     return location === 'DX' ? '' : location;
   }
-  return location || 'DX';
+  return 'DX';
+}
+
+function requiresContestSection(callsign: string): boolean {
+  const countryCode = getCallsignInfo(callsign)?.countryCode?.toUpperCase();
+  return countryCode === 'US' || countryCode === 'CA';
+}
+
+function validateSessionConfig(ctx: WWDigiIdentityContext, config: ContestConfig): ContestConfig {
+  const normalized = validateContestConfig(config);
+  const location = normalized.location.trim().toUpperCase();
+  if (requiresContestSection(ctx.operator.callsign)) {
+    if (!location || location === 'DX') {
+      throw new Error('ARRL/RAC section is required for US and Canadian stations');
+    }
+  } else if (location !== 'DX') {
+    throw new Error('LOCATION must be DX for stations outside the US and Canada');
+  }
+  return normalized;
 }
 
 function modeOf(record: QSORecord): 'FT4' | 'FT8' | null {
@@ -208,6 +371,12 @@ async function reconcileLedger(
   repository.update((session) => ({
     ...session,
     health: { state: 'healthy', updatedAt: Date.now() },
+    operatingIndex: buildOperatingIndex(
+      ctx.operator.callsign,
+      contestYear,
+      records,
+      session.operatingIndex.revision + 1,
+    ),
   }));
   await repository.flush();
   return {
@@ -234,6 +403,9 @@ async function renderCabrillo(ctx: WWDigiContext, contestYear: number): Promise<
   if (health.state !== 'healthy') {
     throw new Error(`WW Digi ${contestYear} log is not reconciled; reconcile it before download`);
   }
+  if (!isSessionConfirmed(ctx, contestYear, session)) {
+    throw new Error(`WW Digi ${contestYear} contest settings are not confirmed`);
+  }
   return generateWWDigiCabrillo(session.config, await readContestRecords(ctx, contestYear));
 }
 
@@ -245,13 +417,14 @@ function notifyLocalContestLogChanged(ctx: WWDigiContext): void {
 
 function notifyContestLogChanged(ctx: WWDigiContext, contestYear: number): void {
   notifyLocalContestLogChanged(ctx);
+  ctx.ui.refreshOperatorProjection();
   new ContestSessionNotifier(ctx.eventBus, SESSION_CHANGED_TOPIC).publish({
     callsign: ctx.operator.callsign.trim().toUpperCase(),
     contestYear,
   });
 }
 
-function seedContestConfig(ctx: WWDigiContext): ContestConfig {
+function seedContestConfig(ctx: WWDigiIdentityContext): ContestConfig {
   return {
     callsign: ctx.operator.callsign,
     location: resolveContestLocation(ctx.operator.callsign, ctx.config.location),
@@ -272,6 +445,88 @@ function seedContestConfig(ctx: WWDigiContext): ContestConfig {
       : [],
     createdBy: 'TX-5DR WW Digi',
   };
+}
+
+function runtimeSession(ctx: StrategyPluginContext, contestYear: number): WWDigiContestSession {
+  const stored = ctx.store.global.get<Partial<WWDigiContestSession> & { schemaVersion?: number; revision?: number }>(
+    sessionKey(ctx.operator.callsign, contestYear),
+    {},
+  );
+  return normalizeSession(ctx, contestYear, stored);
+}
+
+function runtimePresentation(ctx: StrategyPluginContext): Pick<
+  StrategyRuntimeSnapshot,
+  'actions' | 'attentions' | 'messagePresentation' | 'transmitGate'
+> {
+  const contestYear = configuredContestYear(ctx.config.contestYear);
+  const session = runtimeSession(ctx, contestYear);
+  const callableMessageMatchers = [
+    { firstTokenIn: ['CQ'] },
+    { anyTokenIn: ['RR73', 'RRR', '73'] },
+  ];
+  const messagePresentation: StrategyMessagePresentationProjection = {
+    revision: session.operatingIndex.revision,
+    mode: 'replace-logbook',
+    subject: 'sender-callsign',
+    partitionBy: 'band',
+    eligiblePartitions: [...WW_DIGI_BANDS],
+    defaultClass: 'contest-new-call',
+    classes: {
+      'contest-new-field': {
+        badges: [{ label: 'contestNewGridField', tone: 'secondary' }],
+        row: { tone: 'secondary', background: 'soft', accent: true },
+        emphasisWhen: callableMessageMatchers,
+      },
+      'contest-new-call': {
+        badges: [{ label: 'contestNewCallsign', tone: 'warning' }],
+        row: { tone: 'warning', background: 'soft', accent: true },
+        emphasisWhen: callableMessageMatchers,
+      },
+      'contest-worked': { textDecoration: 'line-through', opacity: 'muted' },
+    },
+    assignments: Object.entries(session.operatingIndex.workedByBand).flatMap(([band, callsigns]) => (
+      callsigns.map((subject) => ({ subject, partition: band, classId: 'contest-worked' }))
+    )),
+    noveltyRules: [{
+      fact: 'grid-field-2',
+      knownValuesByPartition: session.operatingIndex.workedFieldsByBand,
+      classId: 'contest-new-field',
+    }],
+  };
+  const confirmed = isSessionConfirmed(ctx, contestYear, session);
+  const gateReason = !confirmed
+    ? 'transmitBlockedSetupUnconfirmed'
+    : session.health.state !== 'healthy'
+      ? 'transmitBlockedLedgerUnhealthy'
+      : undefined;
+  if (!gateReason) return { messagePresentation };
+  return {
+    messagePresentation,
+    transmitGate: { allowed: false, reason: gateReason, actionId: 'open-contest-settings' },
+    actions: [{
+      id: 'open-contest-settings',
+      label: 'actionOpenContestSettings',
+      icon: 'file-lines',
+      tone: 'warning',
+      presentation: 'primary',
+      navigation: { kind: 'plugin-page', pageId: 'contest-log' },
+    }],
+    attentions: [{
+      id: `contest-session-gate:${contestYear}:${gateReason}`,
+      tone: session.health.state === 'degraded' ? 'danger' : 'warning',
+      title: !confirmed ? 'attentionContestSetupRequired' : 'attentionContestLedgerUnhealthy',
+      description: !confirmed ? 'attentionContestSetupRequiredDesc' : 'attentionContestLedgerUnhealthyDesc',
+      actionIds: ['open-contest-settings'],
+    }],
+  };
+}
+
+function hasWorkedInRuntimeSession(ctx: StrategyPluginContext, callsign: string): boolean {
+  const contestYear = configuredContestYear(ctx.config.contestYear);
+  const session = runtimeSession(ctx, contestYear);
+  const band = ctx.radio.band.trim().toUpperCase();
+  return (session.operatingIndex.workedByBand[band] ?? []).includes(callsign.trim().toUpperCase());
 }
 
 function parallelStreams(value: unknown, fallback = 1): number {
@@ -384,13 +639,13 @@ export const wwDigiStrategyPlugin = definePlugin({
         return ctx.operator.isTargetBeingWorkedByOthers(callsign);
       },
       hasWorkedCallsign(callsign: string) {
-        return ctx.operator.hasWorkedCallsign(callsign);
+        return Promise.resolve(hasWorkedInRuntimeSession(ctx, callsign));
       },
     };
     return new WWDigiStrategyRuntime(operator, ctx.log, () => {
       const base = resolveBaseFrequency();
       return [base - 100, base, base + 100];
-    }, async (text, mode) => ctx.digitalMessagePreflight.check({ text, mode }));
+    }, async (text, mode) => ctx.digitalMessagePreflight.check({ text, mode }), () => runtimePresentation(ctx));
   },
   isTransmitControlEnabled: () => true,
   async onLoad(ctx) {
@@ -421,11 +676,13 @@ export const wwDigiStrategyPlugin = definePlugin({
     notifier.subscribe((event) => {
       if (event.callsign === typed.operator.callsign.trim().toUpperCase() && event.contestYear === contestYear) {
         notifyLocalContestLogChanged(typed);
+        typed.ui.refreshOperatorProjection();
       }
     });
     await reconcileLedgerWithHealth(typed, contestYear).catch((error) => {
       typed.log.warn('WW Digi ledger reconciliation failed', { error: error instanceof Error ? error.message : String(error) });
     });
+    typed.ui.refreshOperatorProjection();
     typed.ui.registerPageHandler({
       async onMessage(pageId, action, data) {
         if (pageId !== 'contest-log') throw new Error(`Unknown page: ${pageId}`);
@@ -438,9 +695,18 @@ export const wwDigiStrategyPlugin = definePlugin({
             config: session.config,
             contestYear: selectedYear,
             period,
-            deadline: period.endTime + 48 * 60 * 60 * 1000,
+            deadline: resolveWWDigiLogDeadline(selectedYear),
             records: await readContestRecords(typed, selectedYear),
             health: session.health,
+            station: {
+              callsign: typed.operator.callsign.trim().toUpperCase(),
+              grid: typed.operator.grid.trim().toUpperCase().slice(0, 4),
+              requiresSection: requiresContestSection(typed.operator.callsign),
+            },
+            setup: {
+              ...session.setup,
+              status: isSessionConfirmed(typed, selectedYear, session) ? 'confirmed' : 'unconfirmed',
+            },
           };
         }
         if (action === 'renderCabrillo') {
@@ -466,6 +732,7 @@ export const wwDigiStrategyPlugin = definePlugin({
             },
           }));
           await repository.flush();
+          await reconcileLedgerWithHealth(typed, selectedYear);
           notifyContestLogChanged(typed, selectedYear);
           return { records: await readContestRecords(typed, selectedYear) };
         }
@@ -482,26 +749,42 @@ export const wwDigiStrategyPlugin = definePlugin({
             },
           }));
           await repository.flush();
+          await reconcileLedgerWithHealth(typed, selectedYear);
           notifyContestLogChanged(typed, selectedYear);
           return { records: await readContestRecords(typed, selectedYear) };
         }
         if (action === 'updateSession') {
           const repository = sessionRepository(typed, selectedYear);
-          repository.update((session) => ({
-            ...session,
-            config: {
+          repository.update((session) => {
+            const config = validateSessionConfig(typed, {
               ...session.config,
+              callsign: typed.operator.callsign.trim().toUpperCase(),
               ...(typeof payload.location === 'string' ? { location: payload.location } : {}),
               ...(typeof payload.categoryBand === 'string' ? { categoryBand: payload.categoryBand as ContestConfig['categoryBand'] } : {}),
               ...(typeof payload.categoryPower === 'string' ? { categoryPower: payload.categoryPower as ContestConfig['categoryPower'] } : {}),
               ...(typeof payload.categoryOperator === 'string' ? { categoryOperator: payload.categoryOperator as ContestConfig['categoryOperator'] } : {}),
               ...(typeof payload.categoryTransmitter === 'string' ? { categoryTransmitter: payload.categoryTransmitter as ContestConfig['categoryTransmitter'] } : {}),
               ...(Array.isArray(payload.operators) ? { operators: payload.operators.filter((value): value is string => typeof value === 'string') } : {}),
-            },
-          }));
+            });
+            const grid = typed.operator.grid.trim().toUpperCase().slice(0, 4);
+            if (!/^[A-R]{2}\d{2}$/.test(grid)) {
+              throw new Error('Operator grid must be a four-character Maidenhead grid');
+            }
+            return {
+              ...session,
+              config,
+              setup: {
+                status: 'confirmed',
+                fingerprint: sessionFingerprint(typed, selectedYear, config),
+                confirmedAt: Date.now(),
+                confirmedByOperatorId: typed.operator.id,
+              },
+            };
+          });
           await repository.flush();
           notifyContestLogChanged(typed, selectedYear);
-          return { config: repository.read().config };
+          const session = repository.read();
+          return { config: session.config, setup: session.setup };
         }
         throw new Error(`Unknown action: ${action}`);
       },
@@ -534,6 +817,7 @@ export const wwDigiStrategyPlugin = definePlugin({
           health: { state: 'healthy', updatedAt: Date.now() },
         }));
         await repository.flush();
+        await reconcileLedgerWithHealth(typed, contestYear);
         notifyContestLogChanged(typed, contestYear);
       } catch (error) {
         await markLedgerDegraded(typed, contestYear, error);
@@ -551,6 +835,12 @@ export const wwDigiTestables = {
   healthKey,
   sessionKey,
   resolveContestLocation,
+  buildOperatingIndex,
+  sessionFingerprint,
+  runtimePresentation,
+  isSessionConfirmed,
+  requiresContestSection,
+  validateSessionConfig,
   readLedger,
   readLedgerHealth,
   reconcileLedger,

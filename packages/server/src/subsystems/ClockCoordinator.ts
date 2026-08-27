@@ -1,5 +1,5 @@
 import type { EventEmitter } from 'eventemitter3';
-import type { DigitalRadioEngineEvents, ModeDescriptor, SlotInfo, SlotPack } from '@tx5dr/contracts';
+import type { DigitalRadioEngineEvents, ModeDescriptor, SlotInfo, SlotPack, SlotPackFrequencyContext } from '@tx5dr/contracts';
 import { FT8MessageParser, type SlotClock } from '@tx5dr/core';
 import type { WSJTXDecodeWorkQueue } from '../decode/WSJTXDecodeWorkQueue.js';
 import type { SlotPackManager } from '../slot/SlotPackManager.js';
@@ -26,6 +26,8 @@ export interface ClockCoordinatorDeps {
   getTransmissionPipeline: () => TransmissionPipeline;
   getRadioBridge: () => RadioBridge;
   getCurrentMode: () => ModeDescriptor;
+  /** Synchronous authoritative RF context captured immediately before a decode batch is stored. */
+  getFrequencyContext?: () => SlotPackFrequencyContext | undefined;
 }
 
 /**
@@ -130,6 +132,10 @@ export class ClockCoordinator {
     // ─── DecodeQueue 事件 ──────────────────────────
 
     this.lm.listen(decodeQueue, 'decodeComplete', (result: Parameters<typeof slotPackManager.processDecodeResult>[0]) => {
+      const frequencyContext = this.deps.getFrequencyContext?.();
+      if (frequencyContext) {
+        slotPackManager.setFrequencyContext(frequencyContext);
+      }
       slotPackManager.processDecodeResult(result);
     });
 

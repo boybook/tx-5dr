@@ -1351,6 +1351,12 @@ export class RadioOperatorManager {
     if (!operator) {
       throw new Error(`operator ${operatorId} not found`);
     }
+    const transmitGate = typeof this._pluginManager?.getOperatorTransmitGate === 'function'
+      ? this._pluginManager.getOperatorTransmitGate(operatorId)
+      : undefined;
+    if (transmitGate) {
+      throw new Error(`strategy_transmit_blocked: ${transmitGate.reason}`);
+    }
     if ([...this.unsavedQsoAttempts.values()].some(attempt => attempt.operatorId === operatorId)) {
       throw new LogbookOperationError(
         'LOGBOOK_MAINTENANCE',

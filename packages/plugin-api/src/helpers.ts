@@ -69,6 +69,13 @@ export interface KVStore {
   flush(): Promise<void>;
 }
 
+/** Read-only live view of one plugin storage scope. */
+export interface ReadonlyKVStore {
+  get<T = unknown>(key: string, defaultValue?: T): T;
+  has(key: string): boolean;
+  keys(): string[];
+}
+
 export interface DigitalMessagePreflightRequest {
   mode: 'FT8' | 'FT4';
   text: string;
@@ -785,6 +792,9 @@ export interface UIBridge {
    * Clears a runtime-owned panel contribution group for this plugin instance.
    */
   clearPanelContributions(groupId: string): void;
+
+  /** Requests a fresh operator/runtime projection after plugin-owned state changes. */
+  refreshOperatorProjection(): void;
 
   /**
    * Registers a handler for custom messages sent from iframe UI pages via the

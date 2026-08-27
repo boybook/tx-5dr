@@ -117,7 +117,7 @@ describe('PluginManager standard-qso late re-decision', () => {
   });
 
   async function createRuntimeHarness(options?: {
-    strategy?: 'standard-qso' | 'assisted-qso-queue';
+    strategy?: 'standard-qso' | 'assisted-qso-queue' | 'ww-digi';
     myCallsign?: string;
     myGrid?: string;
     targetCallsign?: string;
@@ -288,6 +288,52 @@ describe('PluginManager standard-qso late re-decision', () => {
       pluginManager,
     };
   }
+
+  it('projects the complete WW Digi message presentation through operator runtime status', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      strategy: 'ww-digi',
+      myCallsign: 'BG0VRT',
+      myGrid: 'NN00',
+      startOperator: false,
+      radioBand: '20m',
+      operatorPluginSettings: {
+        'ww-digi': {
+          contestYear: 2026,
+          parallelStreams: 3,
+          location: 'DX',
+          categoryBand: 'ALL',
+          categoryPower: 'QRP',
+          categoryOperator: 'SINGLE-OP',
+          categoryTransmitter: 'ONE',
+          operators: '',
+        },
+      },
+    });
+
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).messagePresentation).toMatchObject({
+      mode: 'replace-logbook',
+      defaultClass: 'contest-new-call',
+      classes: {
+        'contest-new-field': {
+          row: { tone: 'secondary', background: 'soft', accent: true },
+          emphasisWhen: expect.arrayContaining([
+            { firstTokenIn: ['CQ'] },
+            { anyTokenIn: ['RR73', 'RRR', '73'] },
+          ]),
+        },
+        'contest-new-call': {
+          row: { tone: 'warning', background: 'soft', accent: true },
+          emphasisWhen: expect.arrayContaining([
+            { firstTokenIn: ['CQ'] },
+            { anyTokenIn: ['RR73', 'RRR', '73'] },
+          ]),
+        },
+        'contest-worked': { textDecoration: 'line-through', opacity: 'muted' },
+      },
+      noveltyRules: [{ fact: 'grid-field-2', classId: 'contest-new-field' }],
+    });
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).messagePresentation?.tagRules).toBeUndefined();
+  });
 
   async function createMultiOperatorRuntimeHarness(options?: {
     strategy?: 'standard-qso' | 'assisted-qso-queue';

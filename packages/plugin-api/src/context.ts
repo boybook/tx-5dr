@@ -1,5 +1,6 @@
 import type {
   KVStore,
+  ReadonlyKVStore,
   PluginLogger,
   PluginTimers,
   OperatorSnapshot,
@@ -247,6 +248,13 @@ export interface StrategyPluginContext {
   readonly log: PluginLogger;
   /** Read-only operator snapshot; mutation ports are deliberately absent. */
   readonly operator: OperatorSnapshot;
+  /** Read-only projection of the current radio band and operating mode. */
+  readonly radio: RadioView;
+  /** Live, read-only views of the storage scopes declared by this plugin. */
+  readonly store: {
+    readonly global: ReadonlyKVStore;
+    readonly operator: ReadonlyKVStore;
+  };
   /** Read-only exact-message encoding validation. */
   readonly digitalMessagePreflight: import('./helpers.js').DigitalMessagePreflight;
 }

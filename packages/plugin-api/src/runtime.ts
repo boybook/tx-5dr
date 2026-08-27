@@ -54,6 +54,74 @@ export interface StrategyRuntimeSnapshot {
   actions?: StrategyActionDescriptor[];
   /** Plugin-declared operator attention items. */
   attentions?: StrategyAttention[];
+  /** Optional strategy-owned presentation for decoded message history. */
+  messagePresentation?: StrategyMessagePresentationProjection;
+  /** Strategy-owned operator-start gate, enforced by both Host UI and Server. */
+  transmitGate?: StrategyTransmitGate;
+}
+
+export type StrategyMessagePresentationTone = 'neutral' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger';
+
+export interface StrategyMessagePresentationBadge {
+  label: string;
+  tone: StrategyMessagePresentationTone;
+}
+
+export interface StrategyMessagePresentationTokenMatch {
+  /** Exact, case-insensitive token matching; arbitrary regular expressions are not accepted. */
+  firstTokenIn?: string[];
+  anyTokenIn?: string[];
+}
+
+export interface StrategyMessagePresentationClass {
+  /** @deprecated Use `badges`; retained for API v2 snapshot compatibility. */
+  badge?: { label: string; tone: StrategyMessagePresentationTone };
+  badges?: StrategyMessagePresentationBadge[];
+  /** Semantic row treatment; Host maps tones to its theme and never accepts plugin CSS. */
+  row?: {
+    tone: StrategyMessagePresentationTone;
+    background?: 'none' | 'soft';
+    accent?: boolean;
+  };
+  /**
+   * Only expose badges and soft row emphasis when any matcher succeeds.
+   * The accent, text decoration and opacity remain visible when none match.
+   */
+  emphasisWhen?: StrategyMessagePresentationTokenMatch[];
+  textDecoration?: 'line-through';
+  opacity?: 'normal' | 'muted';
+}
+
+export interface StrategyMessagePresentationNoveltyRule {
+  /** Canonical message fact extracted by Host before comparing plugin-owned known values. */
+  fact: 'grid-field-2';
+  knownValuesByPartition: Record<string, string[]>;
+  classId: string;
+}
+
+export interface StrategyMessagePresentationTagRule {
+  id: string;
+  match: StrategyMessagePresentationTokenMatch;
+  badge: StrategyMessagePresentationBadge;
+}
+
+export interface StrategyMessagePresentationProjection {
+  revision: number;
+  mode: 'replace-logbook' | 'augment';
+  subject: 'sender-callsign';
+  partitionBy: 'band' | 'mode' | 'none';
+  eligiblePartitions?: string[];
+  defaultClass?: string;
+  classes: Record<string, StrategyMessagePresentationClass>;
+  assignments: Array<{ subject: string; partition?: string; classId: string }>;
+  noveltyRules?: StrategyMessagePresentationNoveltyRule[];
+  tagRules?: StrategyMessagePresentationTagRule[];
+}
+
+export interface StrategyTransmitGate {
+  allowed: false;
+  reason: string;
+  actionId?: string;
 }
 
 export type StrategyActionTone = 'default' | 'primary' | 'success' | 'warning' | 'danger';
@@ -96,6 +164,8 @@ export interface StrategyActionDescriptor {
     confirmLabel?: string;
   };
   input?: StrategyActionInput;
+  /** Host-validated navigation to a page declared by the owning plugin. */
+  navigation?: { kind: 'plugin-page'; pageId: string };
 }
 
 export interface StrategyAttention {

@@ -9,6 +9,7 @@ export const VirtualRadioPeerSchema = z.object({
   callsign: z.string().regex(CALLSIGN).transform((value) => value.toUpperCase()),
   grid: z.string().regex(GRID).transform((value) => value.toUpperCase()),
   scenarioId: z.string().min(1),
+  identityPool: z.literal('scenario').optional(),
   audioFrequencyHz: z.number().finite().min(200).max(4_000),
   dropProbability: z.number().finite().min(0).max(1).optional().default(0),
   frequencyOffsetHz: z.number().finite().min(-200).max(200).optional().default(0),

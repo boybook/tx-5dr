@@ -98,6 +98,19 @@ export function resolveWWDigiContestPeriod(contestYear: number): WWDigiContestPe
   };
 }
 
+/** Official WW Digi deadline: 23:59:59 UTC two calendar days after the contest ends. */
+export function resolveWWDigiLogDeadline(contestYear: number): number {
+  const end = new Date(resolveWWDigiContestPeriod(contestYear).endTime);
+  return Date.UTC(
+    end.getUTCFullYear(),
+    end.getUTCMonth(),
+    end.getUTCDate() + 2,
+    23,
+    59,
+    59,
+  );
+}
+
 export function isWithinWWDigiContestPeriod(timestamp: number, contestYear: number): boolean {
   if (!Number.isFinite(timestamp)) return false;
   const period = resolveWWDigiContestPeriod(contestYear);
@@ -187,6 +200,14 @@ function normalizeConfig(config: ContestConfig): NormalizedContestConfig {
   }
   if ((categoryOperator === 'MULTI-OP' || categoryTransmitter === 'UNLIMITED') && categoryBand !== 'ALL') {
     fail('config.categoryBand', 'must be ALL for this operator/transmitter category');
+  }
+  if (categoryOperator === 'MULTI-OP' && categoryTransmitter === 'ONE' && categoryPower === 'QRP') {
+    fail('config.categoryPower', 'MULTI-ONE is available only as HIGH or LOW');
+  }
+  if (categoryOperator === 'MULTI-OP'
+      && (categoryTransmitter === 'TWO' || categoryTransmitter === 'UNLIMITED')
+      && categoryPower !== 'HIGH') {
+    fail('config.categoryPower', 'MULTI-TWO and MULTI-UNLIMITED require HIGH');
   }
 
   return {
@@ -319,8 +340,9 @@ export function projectContestQsos(records: readonly ContestQso[]): ContestQsoRu
     .sort(compareQso)
     .map((qso) => {
       const key = `${qso.callsign}:${qso.band}`;
-      const dupe = qso.status === 'included' && worked.has(key);
-      if (qso.status === 'included') worked.add(key);
+      const countsAsWorked = qso.status === 'included' || qso.status === 'review';
+      const dupe = countsAsWorked && worked.has(key);
+      if (countsAsWorked) worked.add(key);
       return {
         ...qso,
         receivedGrid: qso.receivedGrid ?? 'ZZ00',

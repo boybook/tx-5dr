@@ -21,6 +21,8 @@ import type {
   StrategyActionInvocation,
   StrategyActionResult,
   StrategyAttention,
+  StrategyMessagePresentationProjection,
+  StrategyTransmitGate,
   StreamPhysicalReceipt,
 } from '@tx5dr/plugin-api';
 import { normalizeCallsign } from '@tx5dr/plugin-api';
@@ -57,6 +59,13 @@ export interface WWDigiRuntimeOperator {
   hasWorkedCallsign(callsign: string): Promise<boolean>;
 }
 
+type WWDigiSnapshotExtension = {
+  actions?: StrategyRuntimeSnapshot['actions'];
+  attentions?: StrategyRuntimeSnapshot['attentions'];
+  messagePresentation?: StrategyMessagePresentationProjection;
+  transmitGate?: StrategyTransmitGate;
+};
+
 interface RuntimeCheckpoint {
   coordinator: ReturnType<ParallelQSOCoordinator<WWDigiEntryData>['checkpoint']>;
   cqPolicy: 'off' | 'repeat';
@@ -64,7 +73,7 @@ interface RuntimeCheckpoint {
   receiveEpoch: number;
   lastObservedSlotId?: string;
   previousTransmitting: boolean;
-  startPurpose?: 'authorized-work';
+  startPurpose?: 'authorized-work' | 'recovery-work';
   exhaustedAtReceiveEpoch?: number;
   stopAttention?: StrategyAttention;
 }
@@ -99,7 +108,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   private receiveEpoch = 0;
   private lastObservedSlotId?: string;
   private previousTransmitting = false;
-  private startPurpose?: 'authorized-work';
+  private startPurpose?: 'authorized-work' | 'recovery-work';
   private exhaustedAtReceiveEpoch?: number;
   private stopAttention?: StrategyAttention;
 
@@ -111,6 +120,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       text: string,
       mode: 'FT8' | 'FT4',
     ) => Promise<{ encodable: boolean; error?: string; reason?: string }> = async () => ({ encodable: true }),
+    private readonly snapshotExtension: () => WWDigiSnapshotExtension = () => ({}),
   ) {
     const resolveFrequencies = typeof audioFrequenciesHz === 'function'
       ? audioFrequenciesHz
@@ -376,6 +386,10 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
 
   async decide(messages: ParsedFT8Message[], meta: StrategyDecisionMetaV2): Promise<StrategyDecisionResult> {
     this.syncParallelStreams();
+    if (this.snapshotExtension().transmitGate) {
+      this.previousTransmitting = false;
+      return this.result({ stop: this.operator.isTransmitting });
+    }
     if (!this.operator.isTransmitting) {
       this.previousTransmitting = false;
       return this.result();
@@ -383,7 +397,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     if (!this.previousTransmitting) {
       this.previousTransmitting = true;
       this.stopAttention = undefined;
-      if (this.startPurpose === 'authorized-work' || this.hasAuthorizedEntries()) {
+      if (this.startPurpose !== undefined || this.hasAuthorizedEntries()) {
         this.startPurpose = undefined;
         this.callSession.reset();
       } else if (this.cqPolicy === 'repeat') {
@@ -470,7 +484,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     const transmissions = this.coordinator.getTransmissions();
     if (transmissions.length > 0) return transmissions;
     const queue = this.coordinator.getQueueSnapshot();
-    const hasCqBlockingWork = this.coordinator.getStreams().length > 0
+    const hasCqBlockingWork = this.coordinator.getQueueSnapshot().activeEntryIds.length > 0
       || queue.entries.some((row) => row.entry.data.status === 'authorized' || row.entry.data.status === 'review');
     if (hasCqBlockingWork) return [];
     if (this.callSession.state !== 'calling') return [];
@@ -489,6 +503,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     this.syncParallelStreams();
     const streams = this.coordinator.getStreams();
     const primary = streams[0];
+    const extension = this.snapshotExtension();
     return {
       currentState: streams.length > 0 ? 'parallel' : 'TX6',
       context: primary ? {
@@ -500,7 +515,8 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       qsoLifecycleEpoch: primary?.qsoLifecycleEpoch,
       streams,
       queue: this.getQueueSnapshot(),
-      actions: (['off', 'repeat'] as const).map((mode) => ({
+      actions: [
+        ...(['off', 'repeat'] as const).map((mode) => ({
         id: `cq-${mode}`,
         label: mode === 'off' ? 'cqOff' : 'cqRepeat',
         icon: mode === 'off' ? 'ban' : 'repeat',
@@ -508,7 +524,9 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
         groupId: 'cq-mode',
         selected: this.cqPolicy === mode,
         tone: this.cqPolicy === mode ? 'primary' as const : 'default' as const,
-      })),
+        })),
+        ...(extension.actions ?? []),
+      ],
       attentions: [
         ...(this.callSession.state === 'calling' ? [{
           id: 'cq-calling', tone: 'info' as const, title: 'attentionCqCalling',
@@ -520,7 +538,10 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
           description: 'attentionCqCollectingDesc', params: { count: this.countCandidates() },
         }] : []),
         ...(this.stopAttention ? [this.stopAttention] : []),
+        ...(extension.attentions ?? []),
       ],
+      messagePresentation: extension.messagePresentation,
+      transmitGate: extension.transmitGate,
     };
   }
 
@@ -554,6 +575,12 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
         invocation.payload,
       );
       this.validateLaneSpacing();
+      if ((invocation.actionId === 'send-73-once' || invocation.actionId === 'resend-rr73')
+          && !this.operator.isTransmitting) {
+        this.startPurpose = 'recovery-work';
+        this.previousTransmitting = false;
+        return { ...(result ?? {}), requestDecision: true, requestOperatorStart: true };
+      }
       return result;
     }
     const entry = this.coordinator.getEntry(invocation.target.entryId);
@@ -720,7 +747,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
 
   private shouldStopForIdle(): boolean {
     if (this.callSession.state === 'calling' || this.callSession.state === 'collecting') return false;
-    if (this.coordinator.getStreams().length > 0) return false;
+    if (this.coordinator.getQueueSnapshot().activeEntryIds.length > 0) return false;
     return !this.coordinator.getQueueSnapshot().entries.some((row) => (
       row.entry.data.status === 'authorized' || row.entry.data.status === 'review'
     ));

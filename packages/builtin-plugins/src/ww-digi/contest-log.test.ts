@@ -5,6 +5,7 @@ import {
   isWithinWWDigiContestPeriod,
   projectContestQsos,
   resolveWWDigiContestPeriod,
+  resolveWWDigiLogDeadline,
   setContestQsoStatus,
   type ContestConfig,
   type ContestQso,
@@ -55,6 +56,10 @@ describe('WW Digi contest log model', () => {
       startTime: Date.UTC(2025, 7, 30, 12),
       endTime: Date.UTC(2025, 7, 31, 12),
     });
+  });
+
+  it('uses the official 23:59 UTC submission deadline', () => {
+    expect(resolveWWDigiLogDeadline(2026)).toBe(Date.UTC(2026, 8, 1, 23, 59, 59));
   });
 
   it('excludes adjacent editions and the exact Sunday end boundary', () => {
@@ -189,6 +194,7 @@ describe('WW Digi Cabrillo generation', () => {
       ...CONFIG,
       categoryOperator: 'MULTI-OP',
       categoryTransmitter: 'TWO',
+      categoryPower: 'HIGH',
       operators: ['BG5AAA', 'BG5BBB'],
     };
     expect(() => generateWWDigiCabrillo(multi, [qso()])).toThrow(/transmitterId/);
@@ -210,6 +216,18 @@ describe('WW Digi contest log validation', () => {
       .toThrowError(ContestLogValidationError);
     expect(() => validateContestConfig({ ...CONFIG, location: 'DX\nSOAPBOX: injected' }))
       .toThrowError(/line breaks/);
+  });
+
+  it('enforces the official 2026 multi-operator power categories', () => {
+    const multi = { ...CONFIG, categoryOperator: 'MULTI-OP' as const, categoryBand: 'ALL' as const, operators: ['BG5AAA'] };
+    expect(() => validateContestConfig({ ...multi, categoryTransmitter: 'ONE', categoryPower: 'QRP' }))
+      .toThrow(/MULTI-ONE/);
+    expect(() => validateContestConfig({ ...multi, categoryTransmitter: 'TWO', categoryPower: 'LOW' }))
+      .toThrow(/MULTI-TWO/);
+    expect(() => validateContestConfig({ ...multi, categoryTransmitter: 'UNLIMITED', categoryPower: 'QRP' }))
+      .toThrow(/MULTI-TWO and MULTI-UNLIMITED/);
+    expect(validateContestConfig({ ...multi, categoryTransmitter: 'ONE', categoryPower: 'LOW' }).categoryPower)
+      .toBe('LOW');
   });
 
   it('rejects malformed callsigns, grids, modes, and mismatched bands', () => {

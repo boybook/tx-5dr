@@ -486,6 +486,10 @@ export const StrategyActionDescriptorSchema = z.object({
     confirmLabel: z.string().optional(),
   }).optional(),
   input: StrategyActionInputSchema.optional(),
+  navigation: z.object({
+    kind: z.literal('plugin-page'),
+    pageId: z.string().min(1),
+  }).optional(),
 });
 export type StrategyActionDescriptor = z.infer<typeof StrategyActionDescriptorSchema>;
 
@@ -576,6 +580,60 @@ export type AssistedQueueSnapshot = z.infer<typeof AssistedQueueSnapshotSchema>;
 /** Null clears an unsettable runtime report field over JSON/WebSocket. */
 export const OperatorContextReportFieldSchema = z.number().nullish();
 
+export const StrategyMessagePresentationToneSchema = z.enum([
+  'neutral', 'primary', 'secondary', 'success', 'warning', 'danger',
+]);
+export const StrategyMessagePresentationBadgeSchema = z.object({
+  label: z.string().min(1),
+  tone: StrategyMessagePresentationToneSchema,
+});
+export const StrategyMessagePresentationTokenMatchSchema = z.object({
+  firstTokenIn: z.array(z.string().min(1)).optional(),
+  anyTokenIn: z.array(z.string().min(1)).optional(),
+});
+export const StrategyMessagePresentationClassSchema = z.object({
+  badge: StrategyMessagePresentationBadgeSchema.optional(),
+  badges: z.array(StrategyMessagePresentationBadgeSchema).optional(),
+  row: z.object({
+    tone: StrategyMessagePresentationToneSchema,
+    background: z.enum(['none', 'soft']).optional(),
+    accent: z.boolean().optional(),
+  }).optional(),
+  emphasisWhen: z.array(StrategyMessagePresentationTokenMatchSchema).min(1).optional(),
+  textDecoration: z.literal('line-through').optional(),
+  opacity: z.enum(['normal', 'muted']).optional(),
+});
+export const StrategyMessagePresentationProjectionSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  mode: z.enum(['replace-logbook', 'augment']),
+  subject: z.literal('sender-callsign'),
+  partitionBy: z.enum(['band', 'mode', 'none']),
+  eligiblePartitions: z.array(z.string()).optional(),
+  defaultClass: z.string().optional(),
+  classes: z.record(z.string(), StrategyMessagePresentationClassSchema),
+  assignments: z.array(z.object({
+    subject: z.string().min(1),
+    partition: z.string().optional(),
+    classId: z.string().min(1),
+  })),
+  noveltyRules: z.array(z.object({
+    fact: z.literal('grid-field-2'),
+    knownValuesByPartition: z.record(z.string(), z.array(z.string().min(1))),
+    classId: z.string().min(1),
+  })).optional(),
+  tagRules: z.array(z.object({
+    id: z.string().min(1),
+    match: StrategyMessagePresentationTokenMatchSchema,
+    badge: StrategyMessagePresentationBadgeSchema,
+  })).optional(),
+});
+
+export type StrategyMessagePresentationTone = z.infer<typeof StrategyMessagePresentationToneSchema>;
+export type StrategyMessagePresentationBadge = z.infer<typeof StrategyMessagePresentationBadgeSchema>;
+export type StrategyMessagePresentationTokenMatch = z.infer<typeof StrategyMessagePresentationTokenMatchSchema>;
+export type StrategyMessagePresentationClass = z.infer<typeof StrategyMessagePresentationClassSchema>;
+export type StrategyMessagePresentationProjection = z.infer<typeof StrategyMessagePresentationProjectionSchema>;
+
 export const StrategyRuntimeSnapshotSchema = z.object({
   currentState: z.string(),
   slots: z.object({
@@ -593,6 +651,12 @@ export const StrategyRuntimeSnapshotSchema = z.object({
   queue: AssistedQueueSnapshotSchema.optional(),
   actions: z.array(StrategyActionDescriptorSchema).optional(),
   attentions: z.array(StrategyAttentionSchema).optional(),
+  messagePresentation: StrategyMessagePresentationProjectionSchema.optional(),
+  transmitGate: z.object({
+    allowed: z.literal(false),
+    reason: z.string().min(1),
+    actionId: z.string().optional(),
+  }).optional(),
 });
 
 export const StrategyActionTargetSchema = z.discriminatedUnion('kind', [

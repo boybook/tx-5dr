@@ -454,6 +454,9 @@ export function createMockUIBridge(): MockUIBridge {
     clearPanelContributions(groupId: string): void {
       events.push({ type: 'panel-contributions', id: groupId, data: [] });
     },
+    refreshOperatorProjection(): void {
+      events.push({ type: 'operator-projection-refresh', id: 'operator' });
+    },
     registerPageHandler(_handler: Parameters<UIBridge['registerPageHandler']>[0]): void {
       // no-op in mock
     },

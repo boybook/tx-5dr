@@ -86,7 +86,13 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
 
   // 处理SlotPack数据转换为FT8Group格式
   useEffect(() => {
-    const groupsMap = new Map<string, { messages: FrameDisplayMessage[], cycle: 'even' | 'odd', hasTransmission: boolean, alignedMs: number }>();
+    const groupsMap = new Map<string, {
+      messages: FrameDisplayMessage[];
+      cycle: 'even' | 'odd';
+      hasTransmission: boolean;
+      alignedMs: number;
+      frequencyContext?: FrameGroup['frequencyContext'];
+    }>();
     const currentMode = radio.state.currentMode;
     
     if (!currentMode) {
@@ -138,7 +144,8 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
             messages: [],
             cycle: isEvenCycle ? 'even' : 'odd',
             hasTransmission: false,
-            alignedMs
+            alignedMs,
+            frequencyContext: slotPack.frequencyContext,
           });
         }
         
@@ -178,12 +185,13 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
 
     // 转换为FT8Group数组并按时间排序
     const groups: FrameGroup[] = Array.from(groupsMap.entries())
-      .map(([time, { messages, cycle, hasTransmission: _hasTransmission, alignedMs }]) => ({
+      .map(([time, { messages, cycle, hasTransmission: _hasTransmission, alignedMs, frequencyContext }]) => ({
         time,
         startMs: alignedMs,
         messages: messages.sort((a, b) => a.utc.localeCompare(b.utc)),
         type: 'receive' as const,
-        cycle
+        cycle,
+        frequencyContext,
       }))
       .sort((a, b) => a.startMs - b.startMs);
 
@@ -254,6 +262,8 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
       myCallsigns={getMyCallsigns()}
       targetCallsign={getTargetCallsign()}
       queueCallsignOrder={queueCallsignOrder}
+      strategyName={selectedOperator?.strategy.name}
+      strategyMessagePresentation={selectedOperator?.runtime?.messagePresentation}
       onRowDoubleClick={handleRowDoubleClick}
       onMessageHover={onMessageHover}
       enableCallsignPopover

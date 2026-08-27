@@ -1,4 +1,5 @@
 import type { SimulationScenarioDescriptor } from '@tx5dr/plugin-api';
+import { wwDigiAmbientIdentityPool } from './simulation-identities.js';
 
 const GRID_MESSAGE = '{{peerCallsign}} (?<operatorCallsign>[A-Z0-9/]+) (?<operatorGrid>[A-R]{2}[0-9]{2})';
 const FINAL_MESSAGE = '{{peerCallsign}} (?<operatorCallsign>[A-Z0-9/]+) RR73';
@@ -54,16 +55,18 @@ export const wwDigiSimulationScenarios: SimulationScenarioDescriptor[] = [
   },
   {
     id: 'ambient-band', modes: ['FT8', 'FT4'], initialState: 'idle',
+    identityPool: wwDigiAmbientIdentityPool,
     globalRules: [{
       pattern: '{{peerCallsign}} (?<contactCallsign>[A-Z0-9/]+) R [A-R]{2}[0-9]{2}',
       choices: [{
         reply: '{{contactCallsign}} {{peerCallsign}} RR73',
         replyFrequency: 'peer',
         nextState: 'idle',
+        advanceIdentity: true,
       }],
     }, {
       pattern: '{{peerCallsign}} [A-Z0-9/]+ (?:RRR|RR73|73)',
-      choices: [{ silence: true, nextState: 'idle' }],
+      choices: [{ silence: true, nextState: 'idle', advanceIdentity: true }],
     }, {
       pattern: '{{peerCallsign}} (?<contactCallsign>[A-Z0-9/]+) [A-R]{2}[0-9]{2}',
       choices: [{
@@ -94,14 +97,14 @@ export const wwDigiSimulationScenarios: SimulationScenarioDescriptor[] = [
       calling: {
         timeouts: [{ afterReceiveCycles: 2, choices: [
           { weight: 1, repeatLast: true },
-          { weight: 2, silence: true },
+          { weight: 2, silence: true, nextState: 'idle', advanceIdentity: true },
         ] }],
       },
       'await-r-grid': {
-        timeouts: [{ afterReceiveCycles: 3, choices: [{ silence: true, nextState: 'idle' }] }],
+        timeouts: [{ afterReceiveCycles: 3, choices: [{ silence: true, nextState: 'idle', advanceIdentity: true }] }],
       },
       'await-final': {
-        timeouts: [{ afterReceiveCycles: 3, choices: [{ silence: true, nextState: 'idle' }] }],
+        timeouts: [{ afterReceiveCycles: 3, choices: [{ silence: true, nextState: 'idle', advanceIdentity: true }] }],
       },
     },
   },

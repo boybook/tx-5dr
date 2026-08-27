@@ -1,4 +1,5 @@
 import type {
+  SimulationPeerIdentity,
   SimulationScenarioChoice,
   SimulationScenarioDescriptor,
   SimulationScenarioRule,
@@ -10,6 +11,7 @@ export interface SimulationPeerDefinition {
   grid: string;
   audioFrequencyHz: number;
   scenario: SimulationScenarioDescriptor;
+  identityPool?: SimulationPeerIdentity[];
 }
 
 export interface SimulationDecodedMessage {
@@ -34,12 +36,15 @@ export interface SimulationScenarioTraceEvent {
   peerId: string;
   scenarioId: string;
   state: string;
-  kind: 'matched' | 'timeout' | 'choice' | 'transition' | 'complete';
+  kind: 'matched' | 'timeout' | 'choice' | 'transition' | 'identity' | 'complete';
   data?: Record<string, unknown>;
 }
 
 interface PeerRuntime {
   definition: SimulationPeerDefinition;
+  identity: SimulationPeerIdentity;
+  identities: SimulationPeerIdentity[];
+  identityIndex: number;
   state: string;
   quietReceiveCycles: number;
   lastReceived?: string;
@@ -78,33 +83,51 @@ function normalizeMessage(value: string): string {
   return value.trim().toUpperCase().replace(/\s+/g, ' ');
 }
 
-function compileRule(rule: SimulationScenarioRule, peer: SimulationPeerDefinition): RegExp {
+function compileRule(rule: SimulationScenarioRule, identity: SimulationPeerIdentity): RegExp {
   const pattern = rule.pattern
-    .replaceAll('{{peerCallsign}}', escapeRegExp(peer.callsign))
-    .replaceAll('{{peerGrid}}', escapeRegExp(peer.grid));
+    .replaceAll('{{peerCallsign}}', escapeRegExp(identity.callsign))
+    .replaceAll('{{peerGrid}}', escapeRegExp(identity.grid));
   return new RegExp(`^(?:${pattern})$`, 'i');
 }
 
 export class SimulationScenarioEngine {
   private readonly peers: PeerRuntime[];
+  private readonly identityOwners = new Map<string, string>();
 
   constructor(
     sessionSeed: string | number,
     definitions: SimulationPeerDefinition[],
     private readonly trace?: (event: SimulationScenarioTraceEvent) => void,
   ) {
-    this.peers = definitions.map((definition) => ({
-      definition: {
+    this.peers = definitions.map((definition) => {
+      const normalizedDefinition = {
         ...definition,
         callsign: normalizeMessage(definition.callsign),
         grid: normalizeMessage(definition.grid),
-      },
-      state: definition.scenario.initialState,
-      quietReceiveCycles: 0,
-      complete: false,
-      lastCaptures: {},
-      random: seededRandom(hashSeed(`${String(sessionSeed)}\u0000${definition.id}`)),
-    }));
+      };
+      const identities = (definition.identityPool?.length
+        ? definition.identityPool
+        : [{ callsign: normalizedDefinition.callsign, grid: normalizedDefinition.grid }])
+        .map((identity) => ({
+          callsign: normalizeMessage(identity.callsign),
+          grid: normalizeMessage(identity.grid),
+        }));
+      const preferredIndex = hashSeed(`${String(sessionSeed)}\u0000identity\u0000${definition.id}`) % identities.length;
+      const identityIndex = this.findAvailableIdentityIndex(identities, preferredIndex);
+      const identity = identities[identityIndex]!;
+      this.identityOwners.set(identity.callsign, definition.id);
+      return {
+        definition: normalizedDefinition,
+        identity,
+        identities,
+        identityIndex,
+        state: definition.scenario.initialState,
+        quietReceiveCycles: 0,
+        complete: false,
+        lastCaptures: {},
+        random: seededRandom(hashSeed(`${String(sessionSeed)}\u0000${definition.id}`)),
+      };
+    });
   }
 
   observe(
@@ -125,7 +148,7 @@ export class SimulationScenarioEngine {
         ...(state.rules ?? []).map((rule) => ({ rule, scope: 'state' as const })),
       ];
       for (const { rule, scope } of rules) {
-        const matcher = compileRule(rule, peer.definition);
+        const matcher = compileRule(rule, peer.identity);
         const selected = ordered.find((message) => (
           message.sourcePeerId !== peer.definition.id && matcher.test(normalizeMessage(message.text))
         ));
@@ -162,10 +185,19 @@ export class SimulationScenarioEngine {
     return replies;
   }
 
-  getSnapshots(): Array<{ peerId: string; scenarioId: string; state: string; complete: boolean }> {
+  getSnapshots(): Array<{
+    peerId: string;
+    scenarioId: string;
+    callsign: string;
+    grid: string;
+    state: string;
+    complete: boolean;
+  }> {
     return this.peers.map((peer) => ({
       peerId: peer.definition.id,
       scenarioId: peer.definition.scenario.id,
+      callsign: peer.identity.callsign,
+      grid: peer.identity.grid,
       state: peer.state,
       complete: peer.complete,
     }));
@@ -204,6 +236,7 @@ export class SimulationScenarioEngine {
     }
     if (choice.complete) {
       peer.complete = true;
+      this.identityOwners.delete(peer.identity.callsign);
       this.emitTrace(peer, 'complete');
     }
     if (choice.nextState && choice.nextState !== peer.state) {
@@ -212,6 +245,7 @@ export class SimulationScenarioEngine {
       peer.quietReceiveCycles = 0;
       this.emitTrace(peer, 'transition', { previous, next: peer.state });
     }
+    if (choice.advanceIdentity && !peer.complete) this.advanceIdentity(peer);
   }
 
   private choose(peer: PeerRuntime, choices: SimulationScenarioChoice[]): SimulationScenarioChoice {
@@ -226,8 +260,8 @@ export class SimulationScenarioEngine {
 
   private renderTemplate(template: string, peer: PeerRuntime, captures: Record<string, string>): string {
     const values: Record<string, string> = {
-      peerCallsign: peer.definition.callsign,
-      peerGrid: peer.definition.grid,
+      peerCallsign: peer.identity.callsign,
+      peerGrid: peer.identity.grid,
       lastReceived: peer.lastReceived ?? '',
       lastSent: peer.lastSent ?? '',
       ...captures,
@@ -241,7 +275,42 @@ export class SimulationScenarioEngine {
       scenarioId: peer.definition.scenario.id,
       state: peer.state,
       kind,
-      data,
+      data: { callsign: peer.identity.callsign, grid: peer.identity.grid, ...data },
+    });
+  }
+
+  private findAvailableIdentityIndex(identities: SimulationPeerIdentity[], startIndex: number): number {
+    for (let offset = 0; offset < identities.length; offset += 1) {
+      const index = (startIndex + offset) % identities.length;
+      if (!this.identityOwners.has(identities[index]!.callsign)) return index;
+    }
+    return startIndex;
+  }
+
+  private advanceIdentity(peer: PeerRuntime): void {
+    if (peer.identities.length < 2) return;
+    const previous = peer.identity;
+    this.identityOwners.delete(previous.callsign);
+    const nextIndex = this.findAvailableIdentityIndex(
+      peer.identities,
+      (peer.identityIndex + 1) % peer.identities.length,
+    );
+    const next = peer.identities[nextIndex]!;
+    if (this.identityOwners.has(next.callsign)) {
+      this.identityOwners.set(previous.callsign, peer.definition.id);
+      return;
+    }
+    peer.identityIndex = nextIndex;
+    peer.identity = next;
+    peer.lastReceived = undefined;
+    peer.lastReceivedFrequencyHz = undefined;
+    peer.lastSent = undefined;
+    peer.lastCaptures = {};
+    peer.quietReceiveCycles = 0;
+    this.identityOwners.set(next.callsign, peer.definition.id);
+    this.emitTrace(peer, 'identity', {
+      previousCallsign: previous.callsign,
+      previousGrid: previous.grid,
     });
   }
 }

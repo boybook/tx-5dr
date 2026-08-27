@@ -53,6 +53,8 @@ Add a Profile like this to `config.json`, then configure a dedicated operator to
 }
 ```
 
+Peers may opt into a scenario-owned callsign/grid pool with `"identityPool": "scenario"`. This keeps the configured RF peer count, frequencies, encoder load, and mixer load bounded while rotating each peer through a larger identity set. The selected scenario must declare enough identities for every peer using that pool.
+
 Start the normal Electron development runtime:
 
 ```sh

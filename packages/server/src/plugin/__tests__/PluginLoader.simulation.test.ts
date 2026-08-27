@@ -35,4 +35,21 @@ describe('PluginLoader simulation scenarios', () => {
     invalidGlobal.simulationScenarios![0]!.globalRules![0]!.choices[0] = { silence: true, nextState: 'missing' };
     expect(() => validatePluginDefinition(invalidGlobal)).toThrow('missing state');
   });
+
+  it('validates scenario identity pools', () => {
+    const valid = definition();
+    valid.simulationScenarios![0]!.identityPool = [
+      { callsign: 'JA1AAA', grid: 'PM95' },
+      { callsign: 'K1ABC', grid: 'FN31' },
+    ];
+    valid.simulationScenarios![0]!.states.idle!.rules![0]!.choices[0]!.advanceIdentity = true;
+    expect(() => validatePluginDefinition(valid)).not.toThrow();
+
+    const duplicate = definition();
+    duplicate.simulationScenarios![0]!.identityPool = [
+      { callsign: 'JA1AAA', grid: 'PM95' },
+      { callsign: 'ja1aaa', grid: 'FN31' },
+    ];
+    expect(() => validatePluginDefinition(duplicate)).toThrow('duplicate identity callsign');
+  });
 });
