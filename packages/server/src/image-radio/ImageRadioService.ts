@@ -550,7 +550,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
         trusted: event.trusted, detection: event.boundaryKind,
       });
     } else if (event.type === 'rasterLineReady') {
-      this.acceptPaperRow(event.lineIndex, event.width, 0, event.pixels, 'final');
+      this.acceptPaperRow(event.lineIndex, event.width, 0, event.pixels, 'final', event.basis);
     } else if (event.type === 'clockCalibration') {
       this.acceptFaxCalibration(event.boundaryId, {
         revision: event.revision, referenceLine: this.nativeLineOffset + event.referenceLine,
@@ -641,7 +641,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
   }
 
   private async correctFaxSnapshot(snapshot: PaperRangeSnapshot): Promise<Uint8Array> {
-    if (snapshot.family !== 'fax' || snapshot.pixelFormat !== 'gray8' || !snapshot.calibration) return snapshot.pixels;
+    if (snapshot.family !== 'fax' || snapshot.pixelFormat !== 'gray8' || snapshot.basis === 'calibrated' || !snapshot.calibration) return snapshot.pixels;
     const calibration = snapshot.calibration;
     return this.runtime.load().correctFaxPaper(
       snapshot.pixels, snapshot.width, snapshot.height, snapshot.startLine,
@@ -714,14 +714,14 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     this.emit('rxEvent', { type: 'boundary', sessionId: updated.sessionId, generation: this.generation, revision: updated.revision, boundary });
   }
 
-  private acceptPaperRow(nativeLineIndex: number, width: number, rowRevision: number, pixels: Uint8Array, completeness: 'provisional' | 'final'): void {
+  private acceptPaperRow(nativeLineIndex: number, width: number, rowRevision: number, pixels: Uint8Array, completeness: 'provisional' | 'final', basis?: 'calibrated' | 'nominalPaper'): void {
     const rowIndex = this.nativeLineOffset + nativeLineIndex;
     const pixelFormat = this.family === 'fax' ? 'gray8' : 'rgb8';
-    this.appendPaperRow(rowIndex, width, pixelFormat, rowRevision, pixels, completeness);
+    this.appendPaperRow(rowIndex, width, pixelFormat, rowRevision, pixels, completeness, basis);
   }
 
-  private appendPaperRow(rowIndex: number, width: number, pixelFormat: ImagePixelFormat, rowRevision: number, pixels: Uint8Array, completeness: 'provisional' | 'final'): void {
-    if (!this.paper.appendRow({ lineIndex: rowIndex, width, pixelFormat, revision: rowRevision, pixels })) return;
+  private appendPaperRow(rowIndex: number, width: number, pixelFormat: ImagePixelFormat, rowRevision: number, pixels: Uint8Array, completeness: 'provisional' | 'final', basis?: 'calibrated' | 'nominalPaper'): void {
+    if (!this.paper.appendRow({ lineIndex: rowIndex, width, pixelFormat, revision: rowRevision, pixels, basis })) return;
     const currentSession = this.paper.getSession();
     if (currentSession && currentSession.firstAvailableLine > this.lastFirstAvailableLine) {
       this.lastFirstAvailableLine = currentSession.firstAvailableLine;
