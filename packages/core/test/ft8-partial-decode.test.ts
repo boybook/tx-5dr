@@ -74,6 +74,7 @@ test('parseDecodedSenderCallsign only exposes a decoded sender from supported pa
     '<...> BG5DRB RR73 EXTRA',
     '<...> BG5DRB INVALID',
     '<...> BG5DRB R12',
+    '<...> <THANKS> 73',
     'TNX BG5DRB 73',
     'BG5BNW RR73; RY3PAG <...> -20',
     'JA0OAV RR73; JG1MPG <4>',

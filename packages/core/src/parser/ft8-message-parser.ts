@@ -33,11 +33,12 @@ export class FT8MessageParser {
   }
 
   /**
-   * 解析报文中已可靠解码的发送者呼号，仅供显示等被动信息使用。
+   * 解析报文中已可靠解码的发送者呼号。
    *
    * 普通报文直接使用结构化解析结果。部分解码报文仅支持目标呼号为
    * `<...>`/`...`、发送者呼号完整可用的标准双呼号格式；其他未知报文
-   * 不会通过扫描 token 猜测发送者。
+   * 不会通过扫描 token 猜测发送者。该身份可用于被动展示或操作员显式
+   * 选择，但部分解码报文本身仍不得驱动自动回复或 QSO 协议状态。
    */
   static parseDecodedSenderCallsign(raw: string): string | undefined {
     const parsed = this.parseMessage(raw);
@@ -53,10 +54,12 @@ export class FT8MessageParser {
     }
 
     const [targetToken, senderToken, suffixToken] = parts;
+    const senderCallsign = senderToken ? this.cleanCallsign(senderToken) : '';
     if (!this.isUndecodedCallsignPlaceholder(targetToken)
         || !senderToken
         || this.isUndecodedCallsignPlaceholder(senderToken)
-        || !this.isValidCallsign(senderToken)) {
+        || !this.isValidCallsign(senderToken)
+        || !/\d/.test(senderCallsign)) {
       return undefined;
     }
 
@@ -64,7 +67,7 @@ export class FT8MessageParser {
       return undefined;
     }
 
-    return this.cleanCallsign(senderToken);
+    return senderCallsign;
   }
 
   /**
