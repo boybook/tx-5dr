@@ -1,4 +1,5 @@
 import { createLogger } from './logger';
+import { createPrefixedClientId } from './clientId';
 
 const logger = createLogger('WSClientInstance');
 
@@ -6,10 +7,7 @@ const SESSION_STORAGE_KEY = 'tx5dr_ws_client_instance_id';
 
 function createInstanceId(): string {
   const prefix = window.location.pathname.includes('spectrum') ? 'spectrum' : 'main';
-  const randomPart = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  return `${prefix}-${randomPart}`;
+  return createPrefixedClientId(prefix);
 }
 
 export function getWebSocketClientInstanceId(): string {

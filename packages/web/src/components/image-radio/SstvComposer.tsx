@@ -10,6 +10,7 @@ import { useTranslation } from 'react-i18next';
 import { useImageRadioControls } from '../../hooks/useImageRadio';
 import { useSstvTxStart } from '../../hooks/useSstvTxStart';
 import { useConnection, useCurrentOperatorId, useOperators, useRadioModeState } from '../../store/radioStore';
+import { createClientId } from '../../utils/clientId';
 import { fitComposerBackgroundSize, validateComposerBackgroundFile } from './composerBackground';
 import { SstvCaptureConfirmModal } from './SstvCaptureConfirmModal';
 import { SstvTextLayerInspector } from './SstvTextLayerInspector';
@@ -219,7 +220,7 @@ export function SstvComposer() {
   };
 
   const addTextLayer = () => {
-    const layer = { id: crypto.randomUUID(), text: '{NOTE}', x: 0.1, y: 0.4, width: 0.8, height: 0.16, fontSize: 0.09, color: '#ffffff', strokeColor: '#000000', strokeWidth: 0.12, align: 'center' as const, rotation: 0 };
+    const layer = { id: createClientId(), text: '{NOTE}', x: 0.1, y: 0.4, width: 0.8, height: 0.16, fontSize: 0.09, color: '#ffffff', strokeColor: '#000000', strokeWidth: 0.12, align: 'center' as const, rotation: 0 };
     setLayers((current) => [...current, layer]);
     setSelectedLayerId(layer.id);
     setInspectorOpen(true);
@@ -241,7 +242,7 @@ export function SstvComposer() {
     if (!operatorId || !templateName.trim()) return;
     try {
       await api.saveImageTemplate({
-        id: crypto.randomUUID(), operatorId, name: templateName.trim(), builtIn: false,
+        id: createClientId(), operatorId, name: templateName.trim(), builtIn: false,
         layers, createdAt: Date.now(), updatedAt: Date.now(),
       });
       await refreshTemplates(operatorId);
@@ -533,7 +534,7 @@ export function SstvComposer() {
       {txStart.starting ? <Progress size="sm" value={txProgress} aria-label={t('transmitting')} className="flex-shrink-0" /> : null}
       <div className="flex flex-shrink-0 items-center gap-2 pb-2">
         <Button color="danger" className="min-h-11 flex-1" isLoading={txStart.starting && txStatus?.phase !== 'on_air'} isDisabled={!mode || !operatorId || txStart.isBusy || stationIdBlocked} onPress={send} startContent={<FontAwesomeIcon icon={faPaperPlane} />}>{t('sendImage')} · {durationSeconds}s</Button>
-        {txStatus?.phase === 'on_air' || txStatus?.phase === 'draining' ? <Button isIconOnly className="min-h-11 min-w-11" color="danger" variant="flat" onPress={() => operatorId && txStatus.sessionId && connection.state.radioService?.cancelSstvTx({ requestId: crypto.randomUUID(), operatorId, sessionId: txStatus.sessionId, expectedRevision: txStatus.revision })} aria-label={t('stop')}><FontAwesomeIcon icon={faStop} /></Button> : null}
+        {txStatus?.phase === 'on_air' || txStatus?.phase === 'draining' ? <Button isIconOnly className="min-h-11 min-w-11" color="danger" variant="flat" onPress={() => operatorId && txStatus.sessionId && connection.state.radioService?.cancelSstvTx({ requestId: createClientId(), operatorId, sessionId: txStatus.sessionId, expectedRevision: txStatus.revision })} aria-label={t('stop')}><FontAwesomeIcon icon={faStop} /></Button> : null}
       </div>
     </div>
 

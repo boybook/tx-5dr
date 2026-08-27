@@ -71,6 +71,16 @@ export default [
       'no-empty': ['error', { allowEmptyCatch: true }],
       // 允许无意义的 try/catch(常见于 async/await)
       'no-useless-catch': 'warn',
+      'no-restricted-syntax': ['error',
+        {
+          selector: "MemberExpression[object.name='crypto'][property.name='randomUUID']",
+          message: 'Use createClientId() so remote HTTP and embedded browser contexts remain supported.',
+        },
+        {
+          selector: "MemberExpression[object.type='MemberExpression'][object.property.name='crypto'][property.name='randomUUID']",
+          message: 'Use createClientId() so remote HTTP and embedded browser contexts remain supported.',
+        },
+      ],
     },
   },
   {

@@ -58,6 +58,7 @@ import LogbookRecoveryModal from './LogbookRecoveryModal';
 import { getAuthHeaders, getStoredJwt } from '../../utils/authHeaders';
 import { QrzCallsignLink } from '../common/QrzCallsignLink';
 import { useHasMinRole } from '../../store/authStore';
+import { createPrefixedClientId } from '../../utils/clientId';
 import {
   isLogbookHealthOperationError,
   resolveLogbookViewPolicy,
@@ -74,9 +75,7 @@ const PAGE_SIZE_OPTIONS = [25, 50, 100, 200] as const;
 const MODE_FILTER_OPTIONS = ['FT8', 'FT4', 'SSB', 'USB', 'LSB', 'AM', 'FM', 'CW', 'RTTY', 'PSK31', 'JS8', 'MSK144'] as const;
 
 function createIdempotencyKey(prefix: string): string {
-  const id = globalThis.crypto?.randomUUID?.()
-    ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  return `${prefix}-${id}`;
+  return createPrefixedClientId(prefix);
 }
 
 interface LogbookViewerProps {
