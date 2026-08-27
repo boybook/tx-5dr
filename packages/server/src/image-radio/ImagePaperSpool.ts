@@ -29,6 +29,7 @@ interface PaperSegment {
   activeChunkStart: number;
   activeRows: Map<number, { revision: number; pixels: Uint8Array }>;
   calibration?: ImageFaxCalibration;
+  basis?: 'calibrated' | 'nominalPaper';
 }
 
 export interface PaperRangeSnapshot {
@@ -44,6 +45,7 @@ export interface PaperRangeSnapshot {
   endedAt: number;
   truncated: boolean;
   source: ImagePaperSource;
+  basis?: 'calibrated' | 'nominalPaper';
   calibration?: ImageFaxCalibration;
 }
 
@@ -125,12 +127,14 @@ export class ImagePaperSpool {
     if (this.session) this.session.generation = generation;
   }
 
-  appendRow(input: { lineIndex: number; width: number; pixelFormat: ImagePixelFormat; revision: number; pixels: Uint8Array }): boolean {
+  appendRow(input: { lineIndex: number; width: number; pixelFormat: ImagePixelFormat; revision: number; pixels: Uint8Array; basis?: 'calibrated' | 'nominalPaper' }): boolean {
     const session = this.session;
     const segment = this.segments.at(-1);
     if (!session || !segment || input.width !== segment.boundary.width || input.pixelFormat !== segment.boundary.pixelFormat) return false;
     const channels = input.pixelFormat === 'rgb8' ? 3 : 1;
     if (input.pixels.length !== input.width * channels || input.lineIndex < segment.boundary.lineIndex) return false;
+    if (segment.basis && input.basis && segment.basis !== input.basis) return false;
+    segment.basis ??= input.basis;
     const chunkStart = segment.boundary.lineIndex
       + Math.floor((input.lineIndex - segment.boundary.lineIndex) / CHUNK_LINES) * CHUNK_LINES;
     if (chunkStart !== segment.activeChunkStart) {
@@ -227,6 +231,7 @@ export class ImagePaperSpool {
       endedAt: Date.now(),
       truncated: startLine < segment.boundary.lineIndex || startLine <= session.firstAvailableLine && session.firstAvailableLine > 0,
       source: segment.boundary.source ?? 'rx',
+      basis: segment.basis,
       calibration: segment.calibration ? cloneCalibration(segment.calibration) : undefined,
     };
   }

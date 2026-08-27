@@ -35,6 +35,16 @@ describe('ImagePaperSpool', () => {
     expect(spool.getManifest()?.segments[0].calibration?.manualPhasePixels).toBe(2);
   });
 
+  it('keeps the native raster basis on a segment snapshot', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'tx5dr-paper-spool-'));
+    dirs.push(dir);
+    const spool = new ImagePaperSpool(dir);
+    await spool.initialize();
+    spool.start('fax', 1, { ...boundary('calibrated', 0, false), codecMode: 'ioc576/120/fm', width: 4, pixelFormat: 'gray8' });
+    spool.appendRow({ lineIndex: 0, width: 4, pixelFormat: 'gray8', revision: 0, basis: 'calibrated', pixels: new Uint8Array([1, 2, 3, 4]) });
+    expect((await spool.snapshotRange(0, 1)).basis).toBe('calibrated');
+  });
+
   it('freezes exact boundary ranges across disk chunks and live rows', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'tx5dr-paper-spool-'));
     dirs.push(dir);

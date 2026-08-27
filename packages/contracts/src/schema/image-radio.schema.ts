@@ -158,7 +158,7 @@ export const ImageFaxCalibrationPointSchema = z.object({
   phasePixels: z.number().finite(),
   clockPpm: z.number().finite(),
   confidence: z.number().min(0).max(1),
-  source: z.enum(['nominal', 'phasing', 'deadSector', 'manual']),
+  source: z.enum(['nominal', 'phasing', 'imageContent', 'manual']),
   status: z.enum(['nominal', 'acquiring', 'locked', 'tracking', 'degraded']),
 });
 export type ImageFaxCalibrationPoint = z.infer<typeof ImageFaxCalibrationPointSchema>;
