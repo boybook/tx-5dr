@@ -5,6 +5,7 @@ import type { FaxCalibrationCommandResult, ImageFaxCalibration, ImagePaperBounda
 
 import { useConnection, useCurrentOperatorId, useRadioModeState } from '../store/radioStore';
 import { decodeImageRowBase64, ImagePaperRowStore } from '../components/image-radio/ImagePaperRowStore';
+import { createClientId } from '../utils/clientId';
 
 interface ImageRadioReceiveContextValue {
   session: ImageSessionSummary | null;
@@ -83,7 +84,7 @@ export function ImageRadioProvider({ children }: { children: ReactNode }) {
   const saveCurrentPaper = useCallback(async (operatorId: string) => {
     const current = sessionRef.current;
     if (!current) return;
-    await api.saveCurrentImagePaper({ requestId: crypto.randomUUID(), operatorId, expectedRevision: current.revision });
+    await api.saveCurrentImagePaper({ requestId: createClientId(), operatorId, expectedRevision: current.revision });
   }, []);
 
   const setFaxCalibration = useCallback((calibration: ImageFaxCalibration, autoEnabled: boolean, phasePixels: number, clockPpm: number) => {
@@ -92,7 +93,7 @@ export function ImageRadioProvider({ children }: { children: ReactNode }) {
     const service = connection.state.radioService;
     if (!service || !currentOperatorId) return;
     service.setFaxCalibration({
-      requestId: crypto.randomUUID(), operatorId: currentOperatorId, sessionId: current.sessionId,
+      requestId: createClientId(), operatorId: currentOperatorId, sessionId: current.sessionId,
       boundaryId: calibration.boundaryId, expectedRevision: calibration.revision,
       autoEnabled, phasePixels, clockPpm,
     });
@@ -103,7 +104,7 @@ export function ImageRadioProvider({ children }: { children: ReactNode }) {
     const service = connection.state.radioService;
     if (!current || !service || !currentOperatorId) return;
     service.resetFaxCalibration({
-      requestId: crypto.randomUUID(), operatorId: currentOperatorId, sessionId: current.sessionId,
+      requestId: createClientId(), operatorId: currentOperatorId, sessionId: current.sessionId,
       boundaryId: calibration.boundaryId, expectedRevision: calibration.revision,
     });
   }, [connection.state.radioService, currentOperatorId]);

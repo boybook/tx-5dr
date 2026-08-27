@@ -3,6 +3,7 @@ import { Button, Switch, Input, Select, SelectItem, Textarea } from '@heroui/rea
 import type { PluginSettingDescriptor } from '@tx5dr/contracts';
 import i18n from '../../i18n/index';
 import { resolvePluginLabel } from '../../utils/pluginLocales';
+import { createClientId } from '../../utils/clientId';
 import {
   getPluginSettingDescriptionKey,
   getPluginSettingValidationIssue,
@@ -240,18 +241,12 @@ export const PluginSettingField: React.FC<PluginSettingFieldProps> = ({
   }
 
   const objectFields = descriptor.itemFields ?? [];
-  const nextId = () => {
-    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-      return crypto.randomUUID();
-    }
-    return `item-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  };
   const getObjectFieldDefault = (field: (typeof objectFields)[number]): unknown => {
     if ('default' in field && field.default !== undefined) return field.default;
     return field.type === 'boolean' ? false : '';
   };
   const createEmptyObjectRow = (): Record<string, unknown> => {
-    const row: Record<string, unknown> = { id: nextId() };
+    const row: Record<string, unknown> = { id: createClientId() };
     for (const field of objectFields) {
       row[field.key] = getObjectFieldDefault(field);
     }

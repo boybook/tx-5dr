@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next';
 import { sstvTxErrorTranslationKey } from '../components/image-radio/sstvTxCommand';
 import { useImageRadioControls } from './useImageRadio';
 import { useConnection } from '../store/radioStore';
+import { createClientId } from '../utils/clientId';
 
 export type PreparedSstvTx = {
   artifactId: string;
@@ -42,7 +43,7 @@ export function useSstvTxStart() {
   const dispatch = useCallback((prepared: PreparedSstvTx, interruptActiveCapture: boolean) => {
     const service = connection.state.radioService;
     if (!service || !connection.state.isReady) throw new Error('IMAGE_CONNECTION_UNAVAILABLE');
-    const requestId = crypto.randomUUID();
+    const requestId = createClientId();
     preparedRef.current = prepared;
     setPendingRequestId(requestId);
     setStarting(true);
