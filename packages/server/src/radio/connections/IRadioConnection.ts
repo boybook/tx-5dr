@@ -105,6 +105,13 @@ export interface MeterData {
   power: { raw: number; percent: number; watts: number | null; maxWatts: number | null } | null;
 }
 
+export interface RadioWriteResult<T> {
+  requested: T;
+  applied: T;
+  outcome: 'applied' | 'clamped';
+  acknowledgement: 'state' | 'reply' | 'readback';
+}
+
 export type SpectrumDisplayMode = 'center' | 'fixed' | 'scroll-center' | 'scroll-fixed';
 
 export interface RadioSpectrumDisplayConfig {
@@ -440,6 +447,7 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
     type: RadioConnectionType;
     state: RadioConnectionState;
     config: Partial<RadioConnectionConfig>;
+    diagnostics?: Record<string, unknown>;
   };
 
   // ===== 天线调谐器控制（可选功能） =====
@@ -513,7 +521,7 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
    * 设置发射功率（0.0–1.0）
    * @optional Hamlib: setLevel('RFPOWER', value), icom-wlan: CI-V 0x14 0x0A
    */
-  setRFPower?(value: number): Promise<void>;
+  setRFPower?(value: number): Promise<RadioWriteResult<number> | void>;
 
   /**
    * 获取当前频率/模式下可用的离散发射功率挡位。

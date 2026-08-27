@@ -415,6 +415,24 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
     setTestResult(null);
   };
 
+  const updateTciConfig = (updates: Partial<NonNullable<HamlibConfig['tci']>>) => {
+    updateConfig({
+      tci: {
+        host: '127.0.0.1',
+        port: 40001,
+        dialect: 'auto',
+        autoDiscoverPorts: true,
+        receiver: 0,
+        trx: 0,
+        vfo: 0,
+        audioEnabled: true,
+        audioSampleRate: 12000,
+        ...config.tci,
+        ...updates,
+      },
+    });
+  };
+
   const updateSpectrumConfig = (speed?: number) => {
     setConfig((prev) => {
       const nextSpectrum = speed === undefined ? undefined : { ...(prev.spectrum || {}), speed };
@@ -653,7 +671,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
     try {
       const response = await api.testRadio(config);
       if (response.success) {
-        setTestResult({ type: 'success', message: t('radio.testConnectionSuccess') });
+        setTestResult({ type: 'success', message: response.message || t('radio.testConnectionSuccess') });
       } else {
         setTestResult({ type: 'error', message: response.message || t('radio.testConnectionFailed') });
       }
@@ -1546,36 +1564,73 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                     label={t('radio.host')}
                     placeholder="127.0.0.1"
                     value={config.tci?.host || ''}
-                    onChange={e => updateConfig({ tci: { host: e.target.value, port: config.tci?.port ?? 40001, receiver: config.tci?.receiver ?? 0, trx: config.tci?.trx ?? 0, vfo: config.tci?.vfo ?? 0, audioEnabled: config.tci?.audioEnabled ?? true, audioSampleRate: config.tci?.audioSampleRate ?? 12000 } })}
+                    onChange={e => updateTciConfig({ host: e.target.value })}
                   />
                   <Input
                     label={t('radio.port')}
                     placeholder="40001"
                     type="number"
                     value={String(config.tci?.port ?? '')}
-                    onChange={e => updateConfig({ tci: { host: config.tci?.host ?? '127.0.0.1', port: Number(e.target.value), receiver: config.tci?.receiver ?? 0, trx: config.tci?.trx ?? 0, vfo: config.tci?.vfo ?? 0, audioEnabled: config.tci?.audioEnabled ?? true, audioSampleRate: config.tci?.audioSampleRate ?? 12000 } })}
+                    onChange={e => updateTciConfig({ port: Number(e.target.value) })}
                   />
+                  <Select
+                    label={t('radio.tciDialect')}
+                    selectedKeys={[config.tci?.dialect ?? 'auto']}
+                    onSelectionChange={keys => {
+                      const dialect = String(Array.from(keys)[0] ?? 'auto') as NonNullable<HamlibConfig['tci']>['dialect'];
+                      updateTciConfig({ dialect });
+                    }}
+                    variant="flat"
+                  >
+                    {[
+                      ['auto', 'Auto'],
+                      ['expertsdr-1.4', 'ExpertSDR / TCI 1.4'],
+                      ['expertsdr-1.5-1.8', 'ExpertSDR / TCI 1.5-1.8'],
+                      ['expertsdr-1.9-2.0', 'ExpertSDR / TCI 1.9-2.0'],
+                      ['aethersdr-1.5', 'AetherSDR'],
+                      ['thetis-2.0', 'Thetis'],
+                      ['generic-observed', 'Generic observed'],
+                    ].map(([key, label]) => <SelectItem key={key} textValue={label}>{label}</SelectItem>)}
+                  </Select>
+                  <Input
+                    label={t('radio.tciUrl')}
+                    placeholder="ws://127.0.0.1:50001/"
+                    value={config.tci?.url ?? ''}
+                    onChange={e => updateTciConfig({ url: e.target.value.trim() || undefined })}
+                  />
+                  <div className="flex items-start justify-between gap-4 rounded-lg bg-default-50 p-3">
+                    <div>
+                      <p className="text-sm font-medium text-default-700">{t('radio.tciAutoDiscoverPorts')}</p>
+                      <p className="text-xs text-default-500">{t('radio.tciAutoDiscoverPortsDesc')}</p>
+                    </div>
+                    <Switch
+                      size="sm"
+                      isSelected={config.tci?.autoDiscoverPorts ?? true}
+                      onValueChange={autoDiscoverPorts => updateTciConfig({ autoDiscoverPorts })}
+                      isDisabled={Boolean(config.tci?.url)}
+                    />
+                  </div>
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                     <Input
                       label={t('radio.tciReceiver')}
                       type="number"
                       min="0"
                       value={String(config.tci?.receiver ?? 0)}
-                      onChange={e => updateConfig({ tci: { host: config.tci?.host ?? '127.0.0.1', port: config.tci?.port ?? 40001, receiver: Number(e.target.value), trx: config.tci?.trx ?? 0, vfo: config.tci?.vfo ?? 0, audioEnabled: config.tci?.audioEnabled ?? true, audioSampleRate: config.tci?.audioSampleRate ?? 12000 } })}
+                      onChange={e => updateTciConfig({ receiver: Number(e.target.value) })}
                     />
                     <Input
                       label={t('radio.tciTrx')}
                       type="number"
                       min="0"
                       value={String(config.tci?.trx ?? 0)}
-                      onChange={e => updateConfig({ tci: { host: config.tci?.host ?? '127.0.0.1', port: config.tci?.port ?? 40001, receiver: config.tci?.receiver ?? 0, trx: Number(e.target.value), vfo: config.tci?.vfo ?? 0, audioEnabled: config.tci?.audioEnabled ?? true, audioSampleRate: config.tci?.audioSampleRate ?? 12000 } })}
+                      onChange={e => updateTciConfig({ trx: Number(e.target.value) })}
                     />
                     <Input
                       label={t('radio.tciVfo')}
                       type="number"
                       min="0"
                       value={String(config.tci?.vfo ?? 0)}
-                      onChange={e => updateConfig({ tci: { host: config.tci?.host ?? '127.0.0.1', port: config.tci?.port ?? 40001, receiver: config.tci?.receiver ?? 0, trx: config.tci?.trx ?? 0, vfo: Number(e.target.value), audioEnabled: config.tci?.audioEnabled ?? true, audioSampleRate: config.tci?.audioSampleRate ?? 12000 } })}
+                      onChange={e => updateTciConfig({ vfo: Number(e.target.value) })}
                     />
                   </div>
                   <div className="flex items-start justify-between gap-4 rounded-lg bg-default-50 p-3">
@@ -1586,7 +1641,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                     <Switch
                       size="sm"
                       isSelected={config.tci?.audioEnabled ?? true}
-                      onValueChange={audioEnabled => updateConfig({ tci: { host: config.tci?.host ?? '127.0.0.1', port: config.tci?.port ?? 40001, receiver: config.tci?.receiver ?? 0, trx: config.tci?.trx ?? 0, vfo: config.tci?.vfo ?? 0, audioEnabled, audioSampleRate: config.tci?.audioSampleRate ?? 12000 } })}
+                      onValueChange={audioEnabled => updateTciConfig({ audioEnabled })}
                     />
                   </div>
                   <Select
@@ -1594,7 +1649,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                     selectedKeys={[String(config.tci?.audioSampleRate ?? 12000)]}
                     onSelectionChange={keys => {
                       const value = Number(Array.from(keys)[0] ?? 12000);
-                      updateConfig({ tci: { host: config.tci?.host ?? '127.0.0.1', port: config.tci?.port ?? 40001, receiver: config.tci?.receiver ?? 0, trx: config.tci?.trx ?? 0, vfo: config.tci?.vfo ?? 0, audioEnabled: config.tci?.audioEnabled ?? true, audioSampleRate: value } });
+                      updateTciConfig({ audioSampleRate: value });
                     }}
                     variant="flat"
                   >

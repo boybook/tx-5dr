@@ -7,7 +7,11 @@ import type { IRadioConnection } from '../connections/IRadioConnection.js';
 
 export type CapabilityRuntimeValue = CapabilityState['value'];
 export type ReadFn = (conn: IRadioConnection) => Promise<CapabilityRuntimeValue>;
-export type WriteFn = (conn: IRadioConnection, value: CapabilityValue) => Promise<void>;
+export interface CapabilityWriteResult {
+  value?: CapabilityValue;
+  meta?: Record<string, unknown>;
+}
+export type WriteFn = (conn: IRadioConnection, value: CapabilityValue) => Promise<CapabilityWriteResult | void>;
 export type ActionFn = (conn: IRadioConnection) => Promise<void>;
 export type CapabilitySupportSource = 'static-caps' | 'runtime-probe' | 'backend-declared';
 export type ProbeSupportResult = boolean | {

@@ -383,7 +383,19 @@ function createDefinitions(): CapabilityDefinition[] {
         return { supported: true, source: 'runtime-probe' };
       },
       read: (conn) => conn.getRFPower!(),
-      write: (conn, value) => conn.setRFPower!(value as number),
+      write: async (conn, value) => {
+        const result = await conn.setRFPower!(value as number);
+        if (!result) return;
+        return {
+          value: result.applied,
+          meta: {
+            requested: result.requested,
+            applied: result.applied,
+            limited: result.outcome === 'clamped',
+            acknowledgement: result.acknowledgement,
+          },
+        };
+      },
     },
     {
       id: 'af_gain',
