@@ -9,7 +9,7 @@ import {
 } from '@tx5dr/contracts';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
-import { requireRole } from '../auth/authPlugin.js';
+import { requireCallsignAccess, requireRole } from '../auth/authPlugin.js';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -167,7 +167,7 @@ export async function voiceRoutes(fastify: FastifyInstance) {
   });
 
   fastify.get('/keyer/:callsign', {
-    preHandler: [requireRole(UserRole.OPERATOR)],
+    preHandler: [requireRole(UserRole.OPERATOR), requireCallsignAccess()],
   }, async (req, reply) => {
     const { callsign } = req.params as { callsign: string };
     const manager = engine.getVoiceKeyerManager();
@@ -179,7 +179,7 @@ export async function voiceRoutes(fastify: FastifyInstance) {
   });
 
   fastify.patch('/keyer/:callsign', {
-    preHandler: [requireRole(UserRole.OPERATOR)],
+    preHandler: [requireRole(UserRole.OPERATOR), requireCallsignAccess()],
   }, async (req, reply) => {
     const { callsign } = req.params as { callsign: string };
     const body = VoiceKeyerPanelUpdateSchema.parse(req.body);
@@ -192,7 +192,7 @@ export async function voiceRoutes(fastify: FastifyInstance) {
   });
 
   fastify.patch('/keyer/:callsign/slots/:slotId', {
-    preHandler: [requireRole(UserRole.OPERATOR)],
+    preHandler: [requireRole(UserRole.OPERATOR), requireCallsignAccess()],
   }, async (req, reply) => {
     const { callsign, slotId } = req.params as { callsign: string; slotId: string };
     const body = VoiceKeyerSlotUpdateSchema.parse(req.body);
@@ -205,7 +205,7 @@ export async function voiceRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post('/keyer/:callsign/slots/:slotId/audio', {
-    preHandler: [requireRole(UserRole.OPERATOR)],
+    preHandler: [requireRole(UserRole.OPERATOR), requireCallsignAccess()],
   }, async (req, reply) => {
     const { callsign, slotId } = req.params as { callsign: string; slotId: string };
     const file = await req.file();
@@ -225,7 +225,7 @@ export async function voiceRoutes(fastify: FastifyInstance) {
   });
 
   fastify.get('/keyer/:callsign/slots/:slotId/audio', {
-    preHandler: [requireRole(UserRole.OPERATOR)],
+    preHandler: [requireRole(UserRole.OPERATOR), requireCallsignAccess()],
   }, async (req, reply) => {
     const { callsign, slotId } = req.params as { callsign: string; slotId: string };
     const manager = engine.getVoiceKeyerManager();
@@ -237,7 +237,7 @@ export async function voiceRoutes(fastify: FastifyInstance) {
   });
 
   fastify.delete('/keyer/:callsign/slots/:slotId/audio', {
-    preHandler: [requireRole(UserRole.OPERATOR)],
+    preHandler: [requireRole(UserRole.OPERATOR), requireCallsignAccess()],
   }, async (req, reply) => {
     const { callsign, slotId } = req.params as { callsign: string; slotId: string };
     const manager = engine.getVoiceKeyerManager();

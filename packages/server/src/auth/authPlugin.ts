@@ -206,7 +206,7 @@ export function requireCallsignAccess() {
     if (!userOperatorCallsigns.has(targetBase)) {
       return reply.code(403).send({
         success: false,
-        error: { code: 'FORBIDDEN', message: 'No permission to access sync config for this callsign' },
+        error: { code: 'FORBIDDEN', message: 'No permission to access this callsign' },
       });
     }
   };
