@@ -38,6 +38,12 @@ describe('HamlibConfigSchema TCI connection', () => {
     });
   });
 
+  it('accepts only credential-free WebSocket URLs for TCI', () => {
+    expect(() => HamlibConfigSchema.parse({ type: 'tci', tci: { url: 'wss://radio.example/tci' } })).not.toThrow();
+    expect(() => HamlibConfigSchema.parse({ type: 'tci', tci: { url: 'https://radio.example/tci' } })).toThrow();
+    expect(() => HamlibConfigSchema.parse({ type: 'tci', tci: { url: 'ws://user:secret@radio.example/tci' } })).toThrow();
+  });
+
   it('accepts TCI as a reported radio connection type', () => {
     const parsed = RadioInfoSchema.parse({
       manufacturer: 'Expert Electronics',

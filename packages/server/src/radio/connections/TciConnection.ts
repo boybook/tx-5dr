@@ -7,6 +7,7 @@ import {
   float32ToPcm16,
   type TciTxChronoRequest,
   type TciStreamFrame,
+  type TciHandshakeResult,
 } from 'tci-client-node';
 import type { MeterCapabilities, TunerCapabilities, TunerStatus } from '@tx5dr/contracts';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
@@ -24,6 +25,7 @@ import {
   RadioConnectionType,
   type RadioModeBandwidth,
   type RadioModeInfo,
+  type RadioWriteResult,
   type SetRadioModeOptions,
 } from './IRadioConnection.js';
 
@@ -58,6 +60,9 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
   private lastTxPowerW: number | null = null;
   private lastTxPeakPowerW: number | null = null;
   private lastSWR: number | null = null;
+  private lastDrivePercent: number | null = null;
+  private handshakeResult: TciHandshakeResult | null = null;
+  private connectedUrl: string | null = null;
   private audioRunning = false;
   private readonly audioStreamOwners = new Set<string>();
   private txTransmissionActive = false;
@@ -127,6 +132,9 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     this.lastKnownFrequency = null;
     this.lastKnownMode = null;
     this.lastKnownPtt = null;
+    this.lastDrivePercent = null;
+    this.handshakeResult = null;
+    this.connectedUrl = null;
     this.pttWriteUncertain = false;
     this.audioRunning = false;
     this.audioStreamOwners.clear();
@@ -134,27 +142,53 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     this.clearTxAudioQueue('connect-reset');
     this.setState(RadioConnectionState.CONNECTING);
 
-    const url = `ws://${tci.host}:${tci.port || DEFAULT_TCI_PORT}`;
-    const client = new TciClient({
-      url,
-      receiver: tci.receiver ?? 0,
-      trx: tci.trx ?? 0,
-      vfo: tci.vfo ?? 0,
-      connectTimeoutMs: TCI_CONNECT_TIMEOUT_MS,
-      commandTimeoutMs: TCI_COMMAND_TIMEOUT_MS,
-      writeAckMode: 'state',
-      writeTimeoutMs: this.options.writeTimeoutMs ?? TCI_WRITE_TIMEOUT_MS,
-      frequencyWriteSettleMs: TCI_FREQUENCY_WRITE_SETTLE_MS,
-    });
-    this.client = client;
-    this.setupClientListeners(client);
-
     try {
-      logger.info('Connecting to TCI radio', { url, receiver: tci.receiver ?? 0, trx: tci.trx ?? 0, vfo: tci.vfo ?? 0 });
-      await client.connect();
-      await this.waitForReady(client, 2_000).catch((error) => {
-        logger.warn('TCI READY was not received before timeout; continuing with open WebSocket', error);
-      });
+      let client: TciClient | null = null;
+      let handshake: TciHandshakeResult | null = null;
+      let connectedUrl: string | null = null;
+      let lastError: unknown;
+      for (const url of resolveTciEndpointCandidates(tci)) {
+        const candidate = new TciClient({
+          url,
+          receiver: tci.receiver ?? 0,
+          trx: tci.trx ?? 0,
+          vfo: tci.vfo ?? 0,
+          connectTimeoutMs: TCI_CONNECT_TIMEOUT_MS,
+          handshakeTimeoutMs: 10_000,
+          commandTimeoutMs: TCI_COMMAND_TIMEOUT_MS,
+          writeAckMode: 'state',
+          writeTimeoutMs: this.options.writeTimeoutMs ?? TCI_WRITE_TIMEOUT_MS,
+          frequencyWriteSettleMs: TCI_FREQUENCY_WRITE_SETTLE_MS,
+          dialect: tci.dialect ?? 'auto',
+        });
+        try {
+          logger.info('Connecting to TCI radio candidate', {
+            url,
+            dialect: tci.dialect ?? 'auto',
+            receiver: tci.receiver ?? 0,
+            trx: tci.trx ?? 0,
+            vfo: tci.vfo ?? 0,
+          });
+          handshake = await candidate.connect();
+          client = candidate;
+          connectedUrl = url;
+          break;
+        } catch (error) {
+          lastError = error;
+          logger.warn('TCI endpoint candidate failed', {
+            url,
+            code: error instanceof TciError ? error.code : undefined,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          candidate.removeAllListeners();
+          await candidate.disconnect().catch(() => undefined);
+        }
+      }
+      if (!client || !handshake || !connectedUrl) throw lastError ?? new Error('No TCI endpoint candidate succeeded');
+      this.client = client;
+      this.setupClientListeners(client);
+      this.connectedUrl = connectedUrl;
+      this.handshakeResult = handshake;
       await client.configureAudio({
         sampleRate: tci.audioSampleRate ?? DEFAULT_TCI_AUDIO_RATE,
         sampleType: TciSampleType.FLOAT32,
@@ -171,10 +205,19 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
       this.lastKnownPtt = typeof state.ptt[String(tci.trx ?? 0)] === 'boolean'
         ? state.ptt[String(tci.trx ?? 0)]
         : null;
+      this.lastDrivePercent = state.drive[String(tci.trx ?? 0)] ?? null;
 
       this.setState(RadioConnectionState.CONNECTED);
       this.emit('connected');
-      logger.info('TCI radio connected successfully', { device: state.device, protocol: state.protocol });
+      logger.info('TCI radio connected successfully', {
+        device: handshake.identity.device,
+        protocolName: handshake.identity.programName,
+        protocolVersion: handshake.identity.protocolVersion,
+        dialect: handshake.dialect.dialect.id,
+        confidence: handshake.dialect.confidence,
+        warnings: handshake.dialect.warnings,
+        endpoint: connectedUrl,
+      });
     } catch (error) {
       await this.cleanup();
       this.setState(RadioConnectionState.ERROR);
@@ -411,20 +454,31 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     return this.client?.getState().split[String(trx)] ?? false;
   }
 
-  async setRFPower(value: number): Promise<void> {
-    await this.runTask('setRFPower', async () => {
+  async setRFPower(value: number): Promise<RadioWriteResult<number>> {
+    return this.runTask('setRFPower', async () => {
       this.checkConnected();
-      await this.client!.setDrive(Math.round(Math.max(0, Math.min(1, value)) * 100));
+      const requested = Math.max(0, Math.min(1, value));
+      const result = await this.client!.setDriveWithResult(Math.round(requested * 100));
+      const applied = Math.max(0, Math.min(1, result.applied / 100));
+      this.lastDrivePercent = result.applied;
+      return {
+        requested,
+        applied,
+        outcome: result.outcome,
+        acknowledgement: result.acknowledgement,
+      };
     }, { critical: true });
   }
 
   async getRFPower(): Promise<number> {
-    const trx = this.currentConfig?.tci?.trx ?? 0;
-    const drive = this.client?.getState().drive[String(trx)];
-    if (typeof drive === 'number') {
+    return this.runTask('getRFPower', async () => {
+      this.checkConnected();
+      const trx = this.currentConfig?.tci?.trx ?? 0;
+      const drive = await this.client!.getDrive(trx);
+      if (typeof drive !== 'number') throw new Error('TCI drive level is not available');
+      this.lastDrivePercent = drive;
       return Math.max(0, Math.min(1, drive / 100));
-    }
-    throw new Error('TCI drive level is not available yet');
+    }, { id: 'getRFPower' });
   }
 
   setKnownFrequency(frequencyHz: number): void {
@@ -441,6 +495,15 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
         type: this.currentConfig?.type,
         tci: this.currentConfig?.tci,
       },
+      diagnostics: this.handshakeResult ? {
+        endpoint: this.connectedUrl,
+        device: this.handshakeResult.identity.device,
+        protocolName: this.handshakeResult.identity.programName,
+        protocolVersion: this.handshakeResult.identity.protocolVersion,
+        dialect: this.handshakeResult.dialect.dialect.id,
+        confidence: this.handshakeResult.dialect.confidence,
+        warnings: this.handshakeResult.dialect.warnings,
+      } : undefined,
     };
   }
 
@@ -541,6 +604,9 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     if (typeof state.ptt[trxKey] === 'boolean') {
       this.lastKnownPtt = state.ptt[trxKey];
     }
+    if (typeof state.drive[trxKey] === 'number') {
+      this.lastDrivePercent = state.drive[trxKey];
+    }
 
     this.updateMetersFromState(state.rxSensors, state.txSensors);
   }
@@ -589,7 +655,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
       ? null
       : buildLevelMeterReading(this.lastRxLevelDbm, dbOffset, frequency, 's-meter-dbm', formatSValue(dbOffset));
     const powerWatts = this.lastTxPowerW ?? this.lastTxPeakPowerW;
-    const powerPercent = powerWatts === null || powerWatts === undefined ? 0 : Math.max(0, Math.min(100, powerWatts));
+    const powerPercent = Math.max(0, Math.min(100, this.lastDrivePercent ?? 0));
     return {
       swr: this.lastSWR === null ? null : { raw: this.lastSWR, swr: this.lastSWR, alert: this.lastSWR >= 2.5 },
       alc: null,
@@ -612,7 +678,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
   private handleTxChrono(request: TciTxChronoRequest): void {
     try {
       const channels = Math.max(1, Math.floor(request.channels || 1));
-      const requestedSamples = Math.max(0, Math.floor(request.sampleCount) * channels);
+      const requestedSamples = Math.max(0, Math.floor(request.sampleCount));
       const { samples, copied } = this.dequeueTxAudio(requestedSamples);
       if (copied < requestedSamples) {
         logger.debug('TCI TX chrono underflow; sending silence for missing samples', {
@@ -735,27 +801,6 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     this.emit('stateChanged', state);
   }
 
-  private waitForReady(client: TciClient, timeoutMs: number): Promise<void> {
-    if (client.getState().ready) {
-      return Promise.resolve();
-    }
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        cleanup();
-        reject(new Error('TCI READY timeout'));
-      }, timeoutMs);
-      const onReady = () => {
-        cleanup();
-        resolve();
-      };
-      const cleanup = () => {
-        clearTimeout(timer);
-        client.off('ready', onReady);
-      };
-      client.once('ready', onReady);
-    });
-  }
-
   private normalizeMode(mode: string, options?: SetRadioModeOptions): string {
     const upper = mode.trim().toUpperCase();
     if (upper === 'FT8' || upper === 'FT4') return 'DIGU';
@@ -848,6 +893,18 @@ function isTciWriteOperation(operation: string): boolean {
     || operation === 'setMode'
     || operation === 'applyOperatingState'
     || operation.startsWith('applyOperatingState.');
+}
+
+export function resolveTciEndpointCandidates(tci: NonNullable<RadioConnectionConfig['tci']>): string[] {
+  if (tci.url) return [new URL(tci.url).toString()];
+  const configuredPort = tci.port || DEFAULT_TCI_PORT;
+  const ports = tci.autoDiscoverPorts !== false && configuredPort === DEFAULT_TCI_PORT
+    ? [DEFAULT_TCI_PORT, 50_001]
+    : [configuredPort];
+  return ports.map((port) => {
+    const host = tci.host.includes(':') && !tci.host.startsWith('[') ? `[${tci.host}]` : tci.host;
+    return new URL(`ws://${host}:${port}/`).toString();
+  });
 }
 
 function toNumber(value: unknown): number | undefined {
