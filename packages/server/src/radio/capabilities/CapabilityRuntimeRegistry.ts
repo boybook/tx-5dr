@@ -8,7 +8,7 @@ import type { IRadioConnection } from '../connections/IRadioConnection.js';
 import { createLogger } from '../../utils/logger.js';
 import { isRecoverableOptionalRadioError } from '../optionalRadioError.js';
 import { CAPABILITY_DEFINITION_MAP, CAPABILITY_DEFINITIONS } from './definitions.js';
-import type { CapabilityRuntimeEvents, CapabilitySupportSource, ProbeSupportResult } from './types.js';
+import type { CapabilityRuntimeEvents, CapabilitySupportSource, CapabilityWriteResult, ProbeSupportResult } from './types.js';
 
 const logger = createLogger('CapabilityRuntimeRegistry');
 const RADIO_IO_BACKPRESSURE_WARN_MS = 30_000;
@@ -182,8 +182,9 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
       });
     }
 
+    let writeResult: CapabilityWriteResult | void;
     try {
-      await definition.write(this.connection, value);
+      writeResult = await definition.write(this.connection, value);
       if (isSplitWrite) {
         logger.info('Split capability write completed', {
           value,
@@ -208,12 +209,13 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
       throw error;
     }
 
+    const appliedValue = writeResult?.value ?? value;
     const optimisticState: CapabilityState = {
       id,
       supported: true,
       availability: 'available',
-      value,
-      meta: this.valueCache.get(id)?.meta,
+      value: appliedValue,
+      meta: writeResult?.meta ?? this.valueCache.get(id)?.meta,
       updatedAt: Date.now(),
     };
     this.valueCache.set(id, optimisticState);
