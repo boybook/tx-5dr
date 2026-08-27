@@ -1,5 +1,11 @@
 export type SimulationMode = 'FT8' | 'FT4';
 
+/** One protocol identity that a reusable virtual RF peer may assume. */
+export interface SimulationPeerIdentity {
+  callsign: string;
+  grid: string;
+}
+
 export interface SimulationScenarioChoice {
   weight?: number;
   reply?: string;
@@ -10,6 +16,8 @@ export interface SimulationScenarioChoice {
   complete?: boolean;
   nextState?: string;
   delayCycles?: number;
+  /** Move a reusable peer to another identity after applying this choice. */
+  advanceIdentity?: boolean;
 }
 
 export interface SimulationScenarioRule {
@@ -35,5 +43,7 @@ export interface SimulationScenarioDescriptor {
   initialState: string;
   /** Rules evaluated before the current state's rules, for protocol messages that may interrupt any state. */
   globalRules?: SimulationScenarioRule[];
+  /** Optional identities reused by a bounded number of configured RF peer slots. */
+  identityPool?: SimulationPeerIdentity[];
   states: Record<string, SimulationScenarioState>;
 }

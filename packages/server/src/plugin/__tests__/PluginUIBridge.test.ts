@@ -17,6 +17,21 @@ function createSession(pageId = 'settings') {
 }
 
 describe('PluginUIBridge', () => {
+  it('refreshes only the owning operator projection', () => {
+    const refresh = vi.fn();
+    const bridge = new PluginUIBridge(
+      'demo',
+      { kind: 'operator', operatorId: 'operator-1' },
+      new EventEmitter<DigitalRadioEngineEvents>(),
+      () => [],
+      undefined,
+      undefined,
+      refresh,
+    );
+    bridge.refreshOperatorProjection();
+    expect(refresh).toHaveBeenCalledWith('operator-1');
+  });
+
   it('pushes to the only active page session when using pushToPage', () => {
     const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
     const listener = vi.fn();

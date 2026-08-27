@@ -77,6 +77,7 @@ interface FinalRetryLease {
   seventyThreeText: string;
   expiresAt: number;
   scheduledText?: string;
+  awaitingRr73Decision?: boolean;
   awaiting73Decision: boolean;
 }
 
@@ -137,6 +138,8 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
   activate(entry: Readonly<ParallelQSOQueueEntry<WWDigiEntryData>>): ProtocolLaneActivation {
     if (this.active || this.hasPendingWork()) return { accepted: false };
     const config = this.getConfig();
+    // New authorized work takes precedence over a passive post-completion observer.
+    this.finalRetry = undefined;
     this.active = structuredClone(entry);
     this.qsoLifecycleEpoch += 1;
     this.qsoStartTime = Date.now();
@@ -209,7 +212,12 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
 
   hasPendingWork(): boolean {
     this.expireFinalRetry(Date.now());
-    return Boolean(this.active || this.finalRetry);
+    return Boolean(this.active || this.finalRetry?.scheduledText);
+  }
+
+  shouldObserve(): boolean {
+    this.expireFinalRetry(Date.now());
+    return this.finalRetry !== undefined;
   }
 
   observe(messages: ParsedFT8Message[], _meta: QueuedStrategyObservationMeta): boolean {
@@ -223,7 +231,8 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
       if (parsed.type === 'roger-grid'
           && callsignMatches(parsed.senderCallsign, lease.callsign)
           && callsignMatches(parsed.targetCallsign, config.myCallsign)) {
-        lease.scheduledText = lease.rr73Text;
+        this.lastReceivedText = message.rawMessage;
+        lease.awaitingRr73Decision = true;
         return true;
       }
       const standard = message.message;
@@ -234,6 +243,8 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
       if (repeatedFinal
           && callsignMatches('senderCallsign' in parsed ? parsed.senderCallsign : standardSender, lease.callsign)
           && callsignMatches('targetCallsign' in parsed ? parsed.targetCallsign : standardTarget, config.myCallsign)) {
+        this.lastReceivedText = message.rawMessage;
+        lease.awaitingRr73Decision = false;
         lease.awaiting73Decision = true;
         return true;
       }
@@ -352,7 +363,8 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
 
   getSnapshot(): ProtocolLaneSnapshot | null {
     if (!this.active && !this.finalRetry) return null;
-    const completionState = this.completion?.settled === 'failed' ? 'failed'
+    const completionState = !this.active && this.finalRetry ? 'committed'
+      : this.completion?.settled === 'failed' ? 'failed'
       : this.completion?.settled === 'committed' ? 'committed'
         : this.completion ? 'committing'
           : this.hasDirectedReply ? 'ready' : 'not-ready';
@@ -375,6 +387,18 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
         title: 'attentionRepeatedRr73',
         description: 'attentionRepeatedRr73Desc',
         actionIds: ['send-73-once', 'resend-rr73', 'finish-recovery'],
+      }] : this.finalRetry?.awaitingRr73Decision ? [{
+        id: 'repeated-exchange',
+        tone: 'warning',
+        title: 'attentionRepeatedExchange',
+        description: 'attentionRepeatedExchangeDesc',
+        actionIds: ['resend-rr73', 'finish-recovery'],
+      }] : !this.active && this.finalRetry ? [{
+        id: 'completion-recovery-observing',
+        tone: 'info',
+        title: 'attentionRecoveryObserving',
+        description: 'attentionRecoveryObservingDesc',
+        actionIds: ['resend-rr73', 'finish-recovery'],
       }] : [],
       completion: { state: completionState, recordId: this.completion?.effect.record.id },
       lastReceivedText: this.lastReceivedText,
@@ -424,11 +448,13 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
     if (!retry) throw new Error('strategy_action_not_available');
     if (actionId === 'send-73-once') {
       retry.scheduledText = retry.seventyThreeText;
+      retry.awaitingRr73Decision = false;
       retry.awaiting73Decision = false;
       return { requestDecision: true };
     }
     if (actionId === 'resend-rr73') {
       retry.scheduledText = retry.rr73Text;
+      retry.awaitingRr73Decision = false;
       retry.awaiting73Decision = false;
       return { requestDecision: true };
     }

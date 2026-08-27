@@ -360,6 +360,24 @@ describe('ParallelQSOCoordinator', () => {
     expect(lanes[0]!.shouldObserve()).toBe(false);
   });
 
+  it('prefers a completely idle lane before reusing a passive observer', async () => {
+    const { coordinator } = createCoordinator(2);
+    const observed = enqueue(coordinator, 'JA1AAA', {
+      keepObserveAfterDeactivate: true,
+    }).entry!;
+    await coordinator.fillAvailableLanes({ currentTransmitCycle: 0 });
+    coordinator.releaseEntry(observed.entryId, { removeEntry: true, reason: 'observe after completion' });
+
+    const next = enqueue(coordinator, 'JA2BBB').entry!;
+    const fill = await coordinator.fillAvailableLanes({ currentTransmitCycle: 0 });
+
+    expect(fill.activatedEntryIds).toEqual([next.entryId]);
+    expect(coordinator.getQueueSnapshot().entries[0]).toMatchObject({
+      streamId: 'stream-2',
+      entry: { entryId: next.entryId },
+    });
+  });
+
   it('aggregates lane effects and releases only the lanes that requested it', async () => {
     const { coordinator } = createCoordinator();
     const completed = enqueue(coordinator, 'JA1AAA', {

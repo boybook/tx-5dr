@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { wwDigiSimulationScenarios } from './simulation-scenarios.js';
+import { wwDigiAmbientIdentityPool } from './simulation-identities.js';
 
 describe('WW Digi simulation scenarios', () => {
   it('declares the expected deterministic and exceptional workflows', () => {
@@ -45,5 +46,15 @@ describe('WW Digi simulation scenarios', () => {
     expect(ambient.states.idle?.rules?.some((rule) => rule.pattern.startsWith('CQ WW'))).toBe(true);
     expect(ambient.globalRules).toHaveLength(3);
     expect(ambient.globalRules?.every((rule) => rule.pattern.startsWith('{{peerCallsign}}'))).toBe(true);
+  });
+
+  it('provides hundreds of unique, encodable-looking ambient identities', () => {
+    expect(wwDigiAmbientIdentityPool).toHaveLength(384);
+    expect(new Set(wwDigiAmbientIdentityPool.map((identity) => identity.callsign)).size).toBe(384);
+    expect(wwDigiAmbientIdentityPool.every((identity) => (
+      /^[A-Z0-9]+$/.test(identity.callsign) && /^[A-R]{2}[0-9]{2}$/.test(identity.grid)
+    ))).toBe(true);
+    expect(wwDigiSimulationScenarios.find((scenario) => scenario.id === 'ambient-band')?.identityPool)
+      .toBe(wwDigiAmbientIdentityPool);
   });
 });

@@ -141,6 +141,8 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
           myCallsigns={selectedOperatorCallsigns}
           targetCallsign={targetCallsign}
           queueCallsignOrder={queueCallsignOrder}
+          strategyName={selectedOperator?.strategy.name}
+          strategyMessagePresentation={selectedOperator?.runtime?.messagePresentation}
           showLogbookAnalysisVisuals={false}
           onRowDoubleClick={handleRowDoubleClick}
           showGroupHeader

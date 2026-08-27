@@ -157,6 +157,7 @@ export class PluginContextFactory {
         this.deps.listPluginPageSessions?.(pluginName, instanceTarget, pageId) ?? [],
       this.onPanelMeta,
       this.onPanelContributions,
+      (id) => this.deps.notifyOperatorStatusChanged?.(id),
     );
     const contextRef: { current?: RuntimePluginContext } = {};
     const pluginLogger = this.createLogger(plugin.definition.name);

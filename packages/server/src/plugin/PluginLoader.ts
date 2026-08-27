@@ -16,6 +16,8 @@ import { validateArchiveRelativePath } from './path-security.js';
 
 const logger = createLogger('PluginLoader');
 const ENTRY_FILE_CANDIDATES = ['plugin.js', 'plugin.mjs', 'index.js', 'index.mjs'] as const;
+const SIMULATION_CALLSIGN = /^[A-Z0-9]+(?:\/[A-Z0-9]+)*$/i;
+const SIMULATION_GRID = /^[A-R]{2}[0-9]{2}$/i;
 
 export interface PluginLoaderRuntimeLogEvent {
   stage: PluginRuntimeLogEntry['stage'];
@@ -217,6 +219,20 @@ function validateSimulationScenarios(def: AnyPluginDefinition): void {
     if (!scenario.states[scenario.initialState]) {
       throw new Error(`Simulation scenario "${scenario.id}" references missing initial state "${scenario.initialState}"`);
     }
+    if (scenario.identityPool && scenario.identityPool.length === 0) {
+      throw new Error(`Simulation scenario "${scenario.id}" identity pool must not be empty`);
+    }
+    const identityCallsigns = new Set<string>();
+    for (const identity of scenario.identityPool ?? []) {
+      const callsign = identity.callsign?.trim().toUpperCase();
+      if (!callsign || !SIMULATION_CALLSIGN.test(callsign) || identityCallsigns.has(callsign)) {
+        throw new Error(`Simulation scenario "${scenario.id}" has an invalid or duplicate identity callsign`);
+      }
+      if (!SIMULATION_GRID.test(identity.grid?.trim() ?? '')) {
+        throw new Error(`Simulation scenario "${scenario.id}" identity "${callsign}" has an invalid grid`);
+      }
+      identityCallsigns.add(callsign);
+    }
     for (const rule of scenario.globalRules ?? []) {
       validateSimulationRule(scenario.id, 'global', rule, scenario.states);
     }
@@ -273,6 +289,9 @@ function validateSimulationChoices(
     }
     if (choice.delayCycles !== undefined && (!Number.isInteger(choice.delayCycles) || choice.delayCycles < 1)) {
       throw new Error(`Simulation scenario "${scenarioId}" state "${stateId}" has an invalid delayCycles`);
+    }
+    if (choice.advanceIdentity !== undefined && typeof choice.advanceIdentity !== 'boolean') {
+      throw new Error(`Simulation scenario "${scenarioId}" state "${stateId}" has an invalid advanceIdentity`);
     }
     if (choice.nextState && !states[choice.nextState]) {
       throw new Error(`Simulation scenario "${scenarioId}" references missing state "${choice.nextState}"`);

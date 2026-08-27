@@ -350,7 +350,8 @@ export class ParallelQSOCoordinator<TData> {
 
     const eligibleLanes = this.lanes
       .slice(0, this.maxStreams)
-      .filter((lane) => !this.bindings.has(lane.streamId) && !lane.hasPendingWork());
+      .filter((lane) => !this.bindings.has(lane.streamId) && !lane.hasPendingWork())
+      .sort((left, right) => Number(left.shouldObserve?.() === true) - Number(right.shouldObserve?.() === true));
     if (eligibleLanes.length === 0) return { activatedEntryIds: [], rejectedEntryIds: [] };
 
     const activeCycles = new Set(Array.from(this.bindings.values(), (binding) => binding.transmitCycle));

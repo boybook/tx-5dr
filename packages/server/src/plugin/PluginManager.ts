@@ -433,7 +433,7 @@ export class PluginManager {
             'createStrategyRuntime',
             () => {
               const candidate = plugin.definition.createStrategyRuntime?.(
-                this.createStrategyPluginContext(instance.ctx),
+                this.createStrategyPluginContext(instance),
               );
               this.assertStrategyRuntimeV2(pluginName, candidate);
               return candidate;
@@ -582,13 +582,33 @@ export class PluginManager {
     return instance.ctx;
   }
 
-  private createStrategyPluginContext(ctx: RuntimePluginContext): StrategyPluginContext {
+  private createStrategyPluginContext(instance: PluginInstance): StrategyPluginContext {
+    const ctx = instance.ctx;
+    const declaredScopes = new Set(instance.plugin.definition.storage?.scopes ?? []);
+    const readonlyStore = (scope: 'global' | 'operator') => Object.freeze({
+      get<T>(key: string, fallback?: T): T {
+        if (!declaredScopes.has(scope)) return fallback as T;
+        return ctx.store[scope].get<T>(key, fallback);
+      },
+      has(key: string): boolean {
+        return declaredScopes.has(scope)
+          && Object.prototype.hasOwnProperty.call(ctx.store[scope].getAll(), key);
+      },
+      keys(): string[] {
+        return declaredScopes.has(scope) ? Object.keys(ctx.store[scope].getAll()) : [];
+      },
+    });
     return Object.freeze({
       get config() {
         return ctx.config;
       },
       log: ctx.log,
       operator: ctx.operator,
+      radio: ctx.radio,
+      store: Object.freeze({
+        global: readonlyStore('global'),
+        operator: readonlyStore('operator'),
+      }),
       digitalMessagePreflight: ctx.digitalMessagePreflight,
     });
   }
@@ -626,6 +646,10 @@ export class PluginManager {
       logger.error(`Failed to read strategy snapshot: operator=${operatorId}`, err);
       return null;
     }
+  }
+
+  getOperatorTransmitGate(operatorId: string): StrategyRuntimeSnapshot['transmitGate'] | undefined {
+    return this.getOperatorAutomationSnapshot(operatorId)?.transmitGate;
   }
 
   hasTargetQueue(operatorId: string): boolean {

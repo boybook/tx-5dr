@@ -11,7 +11,10 @@ function profile() {
       dialFrequencyHz: 14_090_000,
       scenarioProvider: 'ww-digi',
       seed: 'repeatable',
-      peers: [{ id: 'peer-1', callsign: 'JA1AAA', grid: 'PM95', scenarioId: 'standard', audioFrequencyHz: 1_500 }],
+      peers: [{
+        id: 'peer-1', callsign: 'JA1AAA', grid: 'PM95', scenarioId: 'standard',
+        identityPool: 'scenario', audioFrequencyHz: 1_500,
+      }],
     } },
   };
 }
@@ -20,7 +23,9 @@ describe('virtual radio profile', () => {
   it('parses and normalizes a server-only profile', () => {
     const parsed = parseInternalProfiles([profile()]);
     expect(isVirtualRadioProfile(parsed[0])).toBe(true);
-    expect(parsed[0]).toMatchObject({ radio: { virtual: { peers: [{ dropProbability: 0, frequencyOffsetHz: 0, timingOffsetMs: 0 }] } } });
+    expect(parsed[0]).toMatchObject({ radio: { virtual: { peers: [{
+      identityPool: 'scenario', dropProbability: 0, frequencyOffsetHz: 0, timingOffsetMs: 0,
+    }] } } });
   });
 
   it('reports the exact profile path for invalid peers', () => {

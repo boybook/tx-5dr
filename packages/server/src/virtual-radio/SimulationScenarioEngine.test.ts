@@ -147,4 +147,33 @@ describe('SimulationScenarioEngine', () => {
       peerId: 'ambient-1', text: 'BG0VRT W1VRB RR73', audioFrequencyHz: 1_700, delayCycles: 1,
     }]);
   });
+
+  it('rotates pooled identities deterministically without concurrent duplicates', () => {
+    const identityPool = [
+      { callsign: 'K1VAA', grid: 'FN31' },
+      { callsign: 'JA1VAA', grid: 'PM95' },
+      { callsign: 'DL1VAA', grid: 'JO62' },
+      { callsign: 'VK2VAA', grid: 'QF56' },
+    ];
+    const rotating: SimulationScenarioDescriptor = {
+      id: 'rotating', modes: ['FT8'], initialState: 'idle', identityPool,
+      states: { idle: { rules: [{
+        pattern: 'PING',
+        choices: [{ reply: '{{peerCallsign}} {{peerGrid}}', advanceIdentity: true }],
+      }] } },
+    };
+    const create = () => new SimulationScenarioEngine('stable-seed', [
+      { id: 'peer-1', callsign: 'N0BASE', grid: 'DM79', audioFrequencyHz: 1_200, scenario: rotating, identityPool },
+      { id: 'peer-2', callsign: 'N1BASE', grid: 'FN42', audioFrequencyHz: 1_800, scenario: rotating, identityPool },
+    ]);
+    const first = create();
+    const second = create();
+
+    for (let cycle = 0; cycle < 12; cycle += 1) {
+      expect(first.observe([{ text: 'PING', audioFrequencyHz: 1_500 }]))
+        .toEqual(second.observe([{ text: 'PING', audioFrequencyHz: 1_500 }]));
+      const snapshots = first.getSnapshots();
+      expect(new Set(snapshots.map((peer) => peer.callsign)).size).toBe(2);
+    }
+  });
 });

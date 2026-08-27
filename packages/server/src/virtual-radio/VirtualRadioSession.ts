@@ -89,6 +89,9 @@ export class VirtualRadioSession {
       grid: peer.grid,
       audioFrequencyHz: peer.audioFrequencyHz,
       scenario: byId.get(peer.scenarioId)!,
+      identityPool: peer.identityPool === 'scenario'
+        ? byId.get(peer.scenarioId)!.identityPool
+        : undefined,
     }));
     this.scenarioEngine = new SimulationScenarioEngine(
       options.profile.radio.virtual.seed,
@@ -118,6 +121,7 @@ export class VirtualRadioSession {
       mode: this.options.mode.name,
       seed: this.options.profile.radio.virtual.seed,
       peers: this.options.profile.radio.virtual.peers,
+      resolvedPeers: this.scenarioEngine.getSnapshots(),
     });
     this.inputCursorSample = this.toSampleIndex(this.options.now());
     this.schedulePumpCheck();

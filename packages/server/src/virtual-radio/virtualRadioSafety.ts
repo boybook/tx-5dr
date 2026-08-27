@@ -24,6 +24,7 @@ export function validateVirtualRadioSafety(
     throw new Error(`virtual radio scenario provider "${profile.radio.virtual.scenarioProvider}" is unavailable`);
   }
   const byId = new Map(scenarios.map((scenario) => [scenario.id, scenario]));
+  const pooledPeerCounts = new Map<string, number>();
   for (let index = 0; index < profile.radio.virtual.peers.length; index += 1) {
     const peer = profile.radio.virtual.peers[index]!;
     const scenario = byId.get(peer.scenarioId);
@@ -32,6 +33,18 @@ export function validateVirtualRadioSafety(
     }
     if (!scenario.modes.includes(modeName as 'FT8' | 'FT4')) {
       throw new Error(`virtual radio scenario "${peer.scenarioId}" does not support ${modeName}`);
+    }
+    if (peer.identityPool === 'scenario' && !scenario.identityPool?.length) {
+      throw new Error(`virtual radio scenario "${peer.scenarioId}" does not declare an identity pool`);
+    }
+    if (peer.identityPool === 'scenario') {
+      pooledPeerCounts.set(peer.scenarioId, (pooledPeerCounts.get(peer.scenarioId) ?? 0) + 1);
+    }
+  }
+  for (const [scenarioId, peerCount] of pooledPeerCounts) {
+    const identityCount = byId.get(scenarioId)!.identityPool!.length;
+    if (identityCount < peerCount) {
+      throw new Error(`virtual radio scenario "${scenarioId}" identity pool must contain at least ${peerCount} identities`);
     }
   }
   const minimumSpacingHz = modeName === 'FT4' ? 100 : 60;

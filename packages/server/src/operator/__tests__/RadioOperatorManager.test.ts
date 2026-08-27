@@ -2602,6 +2602,25 @@ describe('RadioOperatorManager standard-frequency stream restriction', () => {
     expect(manager.getOperatorById('op1')?.isTransmitting).toBe(true);
   });
 
+  it('enforces a strategy transmit gate in the authoritative start path', async () => {
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+    });
+    await addBasicOperator(manager, 'op1');
+    manager.getOperatorById('op1')?.stop();
+    manager.setPluginManager({
+      getOperatorTransmitGate: vi.fn(() => ({ allowed: false, reason: 'confirmSettings' })),
+      getOperatorRuntimeStatus: vi.fn(() => ({
+        strategyName: 'contest-strategy', currentSlot: 'idle',
+        transmitGate: { allowed: false, reason: 'confirmSettings' },
+      })),
+      getCurrentTransmissions: vi.fn(() => []),
+    } as any);
+
+    expect(() => manager.startOperator('op1')).toThrow('strategy_transmit_blocked: confirmSettings');
+    expect(manager.getOperatorById('op1')?.isTransmitting).toBe(false);
+  });
+
   it('allows one track but rejects a second same-operator track at final RF validation', () => {
     const { manager } = createManager({
       logBook: { id: 'log-1', name: 'Test Log', provider: {} },
