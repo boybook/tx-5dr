@@ -25,7 +25,21 @@ const logger = createLogger('HelpImproveSettings');
 
 type UploadState =
   | { kind: 'success'; receipt: DiagnosticUploadReceipt }
-  | { kind: 'error'; message: string }
+  | {
+      kind: 'error';
+      message: string;
+      details?: {
+        code?: string;
+        errorId?: string;
+        stage?: string;
+        httpStatus?: number;
+        upstreamStatus?: number;
+        clientRequestUrl?: string;
+        localRequestUrl?: string;
+        downstreamRequestUrl?: string;
+        technicalMessage?: string;
+      };
+    }
   | null;
 
 export interface HelpImproveSettingsRef {
@@ -55,6 +69,16 @@ function formatRangeBoundary(value: number): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function contextString(context: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = context?.[key];
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function contextNumber(context: Record<string, unknown> | undefined, key: string): number | undefined {
+  const value = context?.[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 export const HelpImproveSettings = forwardRef<HelpImproveSettingsRef, HelpImproveSettingsProps>(
@@ -196,7 +220,24 @@ export const HelpImproveSettings = forwardRef<HelpImproveSettingsRef, HelpImprov
           : error instanceof ApiError
             ? error.userMessage
             : t('helpImprove.status.networkFailed');
-        setUploadState({ kind: 'error', message: translated });
+        const context = error instanceof ApiError ? error.context : undefined;
+        setUploadState({
+          kind: 'error',
+          message: translated,
+          ...(error instanceof ApiError ? {
+            details: {
+              code: error.code,
+              errorId: contextString(context, 'errorId'),
+              stage: contextString(context, 'stage'),
+              httpStatus: error.httpStatus,
+              upstreamStatus: contextNumber(context, 'upstreamStatus'),
+              clientRequestUrl: contextString(context, 'clientRequestUrl'),
+              localRequestUrl: contextString(context, 'localRequestUrl'),
+              downstreamRequestUrl: contextString(context, 'downstreamRequestUrl'),
+              technicalMessage: contextString(context, 'technicalMessage') ?? error.message,
+            },
+          } : {}),
+        });
       } finally {
         setUploading(false);
       }
@@ -402,7 +443,27 @@ export const HelpImproveSettings = forwardRef<HelpImproveSettingsRef, HelpImprov
             />
 
             {uploadState?.kind === 'error' && (
-              <Alert color="danger" variant="flat">{uploadState.message}</Alert>
+              <Alert color="danger" variant="flat">
+                <div className="min-w-0">
+                  <p>{uploadState.message}</p>
+                  {uploadState.details && (
+                    <div className="mt-3 border-t border-danger-200/60 pt-3 text-xs leading-5 dark:border-danger-800/50">
+                      <p className="font-semibold">{t('helpImprove.status.errorDetailsTitle')}</p>
+                      <dl className="mt-1 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1">
+                        {uploadState.details.errorId && <><dt>{t('helpImprove.status.errorId')}</dt><dd className="font-mono break-all">{uploadState.details.errorId}</dd></>}
+                        {uploadState.details.code && <><dt>{t('helpImprove.status.errorCode')}</dt><dd className="font-mono break-all">{uploadState.details.code}</dd></>}
+                        {uploadState.details.stage && <><dt>{t('helpImprove.status.errorStage')}</dt><dd className="font-mono break-all">{uploadState.details.stage}</dd></>}
+                        {uploadState.details.httpStatus !== undefined && <><dt>{t('helpImprove.status.httpStatus')}</dt><dd className="font-mono">{uploadState.details.httpStatus}</dd></>}
+                        {uploadState.details.upstreamStatus !== undefined && <><dt>{t('helpImprove.status.upstreamStatus')}</dt><dd className="font-mono">{uploadState.details.upstreamStatus}</dd></>}
+                        {uploadState.details.clientRequestUrl && <><dt>{t('helpImprove.status.clientRequestUrl')}</dt><dd className="font-mono break-all">{uploadState.details.clientRequestUrl}</dd></>}
+                        {uploadState.details.localRequestUrl && <><dt>{t('helpImprove.status.localRequestUrl')}</dt><dd className="font-mono break-all">{uploadState.details.localRequestUrl}</dd></>}
+                        {uploadState.details.downstreamRequestUrl && <><dt>{t('helpImprove.status.downstreamRequestUrl')}</dt><dd className="font-mono break-all">{uploadState.details.downstreamRequestUrl}</dd></>}
+                        {uploadState.details.technicalMessage && <><dt>{t('helpImprove.status.technicalMessage')}</dt><dd className="font-mono break-words">{uploadState.details.technicalMessage}</dd></>}
+                      </dl>
+                    </div>
+                  )}
+                </div>
+              </Alert>
             )}
             {uploadState?.kind === 'success' && (
               <Alert color="success" variant="flat" icon={<FontAwesomeIcon icon={faCheckCircle} />}>

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerSensitiveLogValue } from '../../utils/sensitive-log.js';
 import {
   DiagnosticLogUploadService,
-  DiagnosticUploadError,
+  sanitizeDiagnosticRequestUrl,
 } from '../DiagnosticLogUploadService.js';
 
 const roots: string[] = [];
@@ -45,6 +45,13 @@ afterEach(async () => {
 });
 
 describe('DiagnosticLogUploadService', () => {
+  it('removes query strings and fragments from diagnostic request URLs', () => {
+    expect(sanitizeDiagnosticRequestUrl('https://oss.example.test/upload?signature=secret#fragment'))
+      .toBe('https://oss.example.test/upload');
+    expect(sanitizeDiagnosticRequestUrl('/api/diagnostics/uploads?token=secret'))
+      .toBe('/api/diagnostics/uploads');
+  });
+
   it('lists only supported regular log files', async () => {
     const { logs, temporary } = await createDirectories();
     await writeFile(join(logs, 'tx5dr-server.log'), '[2026-08-21T00:30:00.000Z] server\n');
@@ -166,7 +173,47 @@ describe('DiagnosticLogUploadService', () => {
     });
 
     await expect(service.upload({ sourceId: 'server', fromMs, toMs }))
-      .rejects.toBeInstanceOf(DiagnosticUploadError);
+      .rejects.toMatchObject({
+        code: 'DIAGNOSTIC_SERVICE_UNAVAILABLE',
+        stage: 'gateway_authorization',
+        requestUrl: 'https://gateway.example.invalid/v1/diagnostics/authorize',
+      });
     expect(await readdir(temporary)).toEqual([]);
+  });
+
+  it('records the downstream URL and status when the gateway rejects a request', async () => {
+    const { logs, temporary } = await createDirectories();
+    await writeFile(join(logs, 'tx5dr-server.log'), '[2026-08-21T00:10:00.000Z] failure path\n');
+    const service = new DiagnosticLogUploadService({
+      getLogsDir: async () => logs,
+      getGatewayContext: async () => gatewayContext,
+      fetch: vi.fn(async () => new Response(null, { status: 503 })) as typeof fetch,
+      temporaryRoot: temporary,
+    });
+
+    await expect(service.upload({ sourceId: 'server', fromMs, toMs }))
+      .rejects.toMatchObject({
+        code: 'DIAGNOSTIC_SERVICE_UNAVAILABLE',
+        stage: 'gateway_authorization',
+        requestUrl: 'https://gateway.example.invalid/v1/diagnostics/authorize',
+        upstreamStatus: 503,
+      });
+  });
+
+  it('classifies an unavailable local gateway context instead of leaking a generic 500', async () => {
+    const { logs, temporary } = await createDirectories();
+    await writeFile(join(logs, 'tx5dr-server.log'), '[2026-08-21T00:10:00.000Z] failure path\n');
+    const service = new DiagnosticLogUploadService({
+      getLogsDir: async () => logs,
+      getGatewayContext: async () => { throw Object.assign(new Error('identity file missing'), { code: 'ENOENT' }); },
+      temporaryRoot: temporary,
+    });
+
+    await expect(service.upload({ sourceId: 'server', fromMs, toMs }))
+      .rejects.toMatchObject({
+        code: 'DIAGNOSTIC_SERVICE_UNAVAILABLE',
+        stage: 'gateway_authorization',
+        cause: expect.objectContaining({ code: 'ENOENT' }),
+      });
   });
 });

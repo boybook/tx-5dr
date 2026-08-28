@@ -24,6 +24,7 @@ describe('diagnostic routes authorization', () => {
   beforeEach(async () => {
     mocks.listSources.mockClear();
     mocks.upload.mockClear();
+    mocks.upload.mockImplementation(async () => ({ uploadId: '3ac3944d-f99e-47cb-a014-d70245639afc' }));
     const { diagnosticRoutes } = await import('../diagnostics.js');
     app = Fastify();
     app.decorateRequest('authUser', null);
@@ -66,5 +67,52 @@ describe('diagnostic routes authorization', () => {
     });
     expect(upload.statusCode).toBe(201);
     expect(mocks.upload).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 'server' }));
+  });
+
+  it('returns a traceable failure stage and sanitized request URLs', async () => {
+    const { DiagnosticUploadError } = await import('../../diagnostics/DiagnosticLogUploadService.js');
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    mocks.upload.mockRejectedValueOnce(new DiagnosticUploadError(
+      'DIAGNOSTIC_SERVICE_UNAVAILABLE',
+      'Diagnostic gateway rejected authorize with status 503',
+      503,
+      {
+        stage: 'gateway_authorization',
+        requestUrl: 'https://gateway.example.test/v1/diagnostics/authorize?signature=secret',
+        upstreamStatus: 503,
+        cause: Object.assign(new Error('socket closed'), { code: 'ECONNRESET' }),
+      },
+    ));
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/diagnostics/uploads?token=must-not-leak',
+      payload: {
+        sourceId: 'server',
+        fromMs: Date.parse('2026-08-21T00:00:00.000Z'),
+        toMs: Date.parse('2026-08-21T01:00:00.000Z'),
+      },
+    });
+
+    expect(response.statusCode).toBe(503);
+    const body = response.json();
+    expect(body.error.context).toMatchObject({
+      stage: 'gateway_authorization',
+      localRequestUrl: '/api/diagnostics/uploads',
+      downstreamRequestUrl: 'https://gateway.example.test/v1/diagnostics/authorize',
+      upstreamStatus: 503,
+      technicalMessage: 'Diagnostic gateway rejected authorize with status 503',
+    });
+    expect(body.error.context.errorId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(JSON.stringify(body)).not.toContain('must-not-leak');
+    expect(JSON.stringify(body)).not.toContain('signature=secret');
+    expect(consoleError).toHaveBeenCalledWith(
+      '[DiagnosticUpload] diagnostic upload request failed',
+      expect.objectContaining({
+        stage: 'gateway_authorization',
+        requestId: expect.any(String),
+        cause: expect.objectContaining({ code: 'ECONNRESET' }),
+      }),
+    );
   });
 });

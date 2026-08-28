@@ -225,6 +225,28 @@ export function handleApiError(errorData: unknown, httpStatus: number): ApiError
   );
 }
 
+function sanitizeRequestUrlForError(value: string): string {
+  try {
+    const base = typeof location !== 'undefined' ? location.href : undefined;
+    const parsed = base ? new URL(value, base) : new URL(value);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return `${parsed.origin}${parsed.pathname}`;
+    }
+    return parsed.pathname;
+  } catch {
+    return value.split(/[?#]/, 1)[0] || '<invalid-url>';
+  }
+}
+
+function attachRequestContext(error: ApiError, fullUrl: string, options?: globalThis.RequestInit): ApiError {
+  error.context = {
+    ...error.context,
+    clientRequestUrl: sanitizeRequestUrlForError(fullUrl),
+    requestMethod: (options?.method || 'GET').toUpperCase(),
+  };
+  return error;
+}
+
 // ========== API 配置 ==========
 
 /**
@@ -484,7 +506,7 @@ async function apiRequest<T = unknown>(
   } catch (error) {
     // 网络错误（fetch 失败）
     if (error instanceof TypeError && error.message.includes('fetch')) {
-      throw new ApiError(
+      throw attachRequestContext(new ApiError(
         'Network request failed',
         'Unable to connect to server, please check network connection',
         0,
@@ -493,16 +515,16 @@ async function apiRequest<T = unknown>(
           suggestions: ['Check network connection', 'Confirm server is running'],
           severity: 'error'
         }
-      );
+      ), fullUrl, options);
     }
 
     // 如果已经是 ApiError，直接抛出
     if (error instanceof ApiError) {
-      throw error;
+      throw attachRequestContext(error, fullUrl, options);
     }
 
     // 其他未知错误
-    throw new ApiError(
+    throw attachRequestContext(new ApiError(
       error instanceof Error ? error.message : String(error),
       'An unknown error occurred, please try again later',
       500,
@@ -510,7 +532,7 @@ async function apiRequest<T = unknown>(
         code: 'UNKNOWN_ERROR',
         severity: 'error'
       }
-    );
+    ), fullUrl, options);
   }
 }
 
