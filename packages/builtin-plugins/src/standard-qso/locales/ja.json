@@ -1,8 +1,8 @@
 {
   "pluginName": "標準交信",
-  "pluginDescription": "FT8/FT4標準交信ストラテジーを内蔵",
-  "strategyOverview": "戦略の説明",
-  "strategyOverviewDesc": "このポリシー プラグインは、他局の CQ への応答、自動選局、タイムアウトと再試行動作の制御など、標準の FT8/FT4 交信プロセスを担当します。",
+  "pluginDescription": "標準 FT8/FT4 交信モードを内蔵",
+  "strategyOverview": "モードの説明",
+  "strategyOverviewDesc": "この交信モードは、他局の CQ への応答、自動選局、タイムアウトと再試行を含む標準 FT8/FT4 交信手順を進めます。",
   "autoReplyToCQ": "他局の CQ に自動応答",
   "autoReplyToCQDesc": "受信中に条件に合う他局の CQ を見つけたら、自動で相手局を選んで呼び出します。この設定は自局から CQ を開始する意味ではありません。",
   "autoReplyToDirectCallWhenStopped": "停止待機中も直呼びに応答",

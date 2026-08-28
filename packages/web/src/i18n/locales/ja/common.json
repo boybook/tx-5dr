@@ -116,7 +116,7 @@
     "subtitle": "デジタル無線機リモコン"
   },
   "automation": {
-    "title": "交信プログラム"
+    "title": "交信モード"
   },
   "theme": {
     "toggle": "テーマを切り替える",
@@ -806,11 +806,11 @@
     "qsoTab": "交信"
   },
   "pluginPage": {
-    "title": "プラグインページ",
-    "invalidRoute": "プラグインページのアドレスが不完全です。",
-    "unavailable": "このプラグインページは現在利用できません。",
-    "operatorRequired": "このプラグインページを開く前にオペレーターを選択してください。",
-    "loadFailed": "プラグインページを読み込めませんでした。"
+    "title": "交信拡張ページ",
+    "invalidRoute": "交信拡張ページのアドレスが不完全です。",
+    "unavailable": "この交信拡張ページは現在利用できません。",
+    "operatorRequired": "交信拡張ページを開く前にオペレーターを選択してください。",
+    "loadFailed": "交信拡張ページを読み込めませんでした。"
   },
   "bootstrapStatus": {
     "chip": {
@@ -850,7 +850,7 @@
       },
       "plugin-bootstrap": {
         "label": "プラグイン",
-        "description": "プラグインと交信ストラテジーを読み込む"
+        "description": "プラグインと交信モードを読み込む"
       },
       "ntp-initial-check": {
         "label": "時間校正",

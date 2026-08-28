@@ -599,7 +599,7 @@ export const wwDigiStrategyPlugin = definePlugin({
   name: BUILTIN_WW_DIGI_PLUGIN_NAME,
   version: '1.0.0',
   type: 'strategy',
-  description: 'WW Digi FT8/FT4 contest strategy with manually authorized parallel QSOs',
+  description: 'WW Digi FT8/FT4 contest mode with operator-selected parallel QSOs',
   strategyFeatures: {
     targetQueue: 1,
     parallelTargetQueue: 1,

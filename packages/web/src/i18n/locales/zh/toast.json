@@ -52,8 +52,8 @@
       "description": "操作员 {{operatorId}} 第 {{attemptedCount}} 次尝试发送相同消息时已自动停发（上限 {{maxCount}} 次），避免重复占用频率：{{transmission}}"
     },
     "standardFrequencyMultiStreamFallback": {
-      "title": "多槽发射已退回单槽",
-      "description": "{{mode}} 标准通联频率 {{frequency}} MHz 每个操作员只允许一个通联槽；本次多槽发射已被拦截。"
+      "title": "标准频率下一次只呼叫一个电台",
+      "description": "{{mode}} 标准通联频率 {{frequency}} MHz 不允许同一操作员同时发送多条信号；本次发射已改为一次处理一个 QSO。"
     },
     "repeaterDuplexUnsupported": {
       "title": "中继频偏未生效",

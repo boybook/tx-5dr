@@ -397,7 +397,7 @@ export class RadioService {
   }
 
   /**
-   * 设置操作员策略运行时槽位内容
+   * 设置操作员通联模式的 Tx 消息内容
    */
   setOperatorRuntimeSlotContent(operatorId: string, slot: OperatorRuntimeSlot, content: string): void {
     if (this.isConnected) {

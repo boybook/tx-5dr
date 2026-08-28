@@ -293,6 +293,16 @@ Hook 应尽快返回。耗时 I/O 应显式 `await`、处理失败，并允许 i
 
 strategy 必须实现完整 v2 runtime：
 
+术语边界：
+
+- `slot` 表示 FT4/FT8 的物理收发时隙或 Host UI 扩展位置。
+- `TX1` 至 `TX6` 是可选择的 Tx 消息，不应在用户界面称为“槽”。
+- `stream` 表示同一操作员内独立推进的并行 QSO；协议实现内部可以使用 `lane`。
+- `frame` 表示 Host 一次原子提交的物理混音发射，可以包含多个 QSO stream。
+
+`StrategyRuntimeSlot` 和 `setSlotContent()` 是兼容既有插件保留的 API 名称；新插件的
+用户可见文案必须使用“Tx 消息”，不要继续扩散旧称。
+
 ```ts
 import {
   definePlugin,
