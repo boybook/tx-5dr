@@ -22,6 +22,7 @@ import {
   resolveRadioOperatorCyclePresentation,
   resolveSingleControllableStream,
   resolveRadioOperatorStreamPresentations,
+  shouldUseParallelQsoPresentation,
 } from './radioOperatorPresentation';
 import {
   OPERATOR_FORCE_STOP_REQUESTED_EVENT,
@@ -760,9 +761,11 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
   const usesStackedHeaderLayout = cyclePresentation.isTransmit && currentTransmissionLineCount > 1;
   const activeStrategyStatus = pluginStatuses.find((plugin) => plugin.name === operatorStatus.strategy.name);
   const transmitGate = operatorStatus.runtime?.transmitGate;
-  const usesStreamProjection = activeStrategyStatus?.strategyFeatures?.parallelTargetQueue === 1
-    || currentTransmissions.some((transmission) => transmission.streamId !== 'default')
-    || operatorStatus.runtime?.streams !== undefined;
+  const configuredStreamCount = operatorStatus.runtime?.queue?.maxActiveStreams;
+  const usesParallelQsoPresentation = shouldUseParallelQsoPresentation(
+    configuredStreamCount,
+    activeStrategyStatus?.strategyFeatures?.parallelTargetQueue === 1,
+  );
   const streamStateChoices = React.useCallback((stream: typeof streamPresentations[number]): OperatorStateChoice[] => (
     (stream.stateOptions ?? []).map((option) => ({
       id: option.id,
@@ -819,13 +822,81 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
       operatorId: operatorStatus.id,
     });
   }, [activeStrategyStatus?.ui?.pages, operatorStatus.id, operatorStatus.strategy.name]);
-  const configuredStreamCount = operatorStatus.runtime?.queue?.maxActiveStreams;
   const singleStateStream = resolveSingleControllableStream(streamPresentations, configuredStreamCount);
   const legacyStateChoices: OperatorStateChoice[] = operatorStatus.strategy.availableSlots.map((slot) => ({
     id: slot,
     label: slot,
     content: localSlotContents[slot as OperatorRuntimeSlot] ?? operatorStatus.slots?.[slot as OperatorRuntimeSlot],
   }));
+  const singleStreamDetailPanel = singleStateStream?.currentState
+      && singleStateStream.qsoLifecycleEpoch !== undefined ? (
+    <div className="overflow-hidden rounded-lg bg-content2 text-xs">
+      <OperatorStateList
+        choices={streamStateChoices(singleStateStream)}
+        currentState={singleStateStream.currentState}
+        onSelect={(stateId) => setOperatorStreamState(
+          singleStateStream.streamId,
+          stateId,
+          singleStateStream.qsoLifecycleEpoch!,
+        )}
+        disabled={!connection.state.isConnected}
+        selectLabel={(choice) => t('operator.switchToState', { state: choice.label })}
+      />
+      {(singleStateStream.attentions ?? []).map((attention) => (
+        <OperatorStrategyAttention
+          key={attention.id}
+          attention={attention}
+          actions={singleStateStream.actions ?? []}
+          resolveText={strategyText}
+          className="mx-2 mb-1"
+          onInvoke={(action, payload) => invokeStrategyAction({
+            kind: 'stream',
+            streamId: singleStateStream.streamId,
+            lifecycleEpoch: singleStateStream.qsoLifecycleEpoch!,
+          }, action, payload)}
+          onNavigate={navigateStrategyAction}
+          onRequestSpectrumPick={(action) => requestStrategyFrequencyPick({
+            operatorId: operatorStatus.id,
+            target: {
+              kind: 'stream',
+              streamId: singleStateStream.streamId,
+              lifecycleEpoch: singleStateStream.qsoLifecycleEpoch!,
+            },
+            actionId: action.id,
+          })}
+        />
+      ))}
+      {resolveStandaloneActions(
+        singleStateStream.attentions ?? [],
+        singleStateStream.actions ?? [],
+      ).length > 0 && (
+        <div className="border-t border-divider px-2 py-1.5">
+          <OperatorStrategyActions
+            actions={resolveStandaloneActions(
+              singleStateStream.attentions ?? [],
+              singleStateStream.actions ?? [],
+            )}
+            resolveLabel={strategyLabel}
+            onInvoke={(action, payload) => invokeStrategyAction({
+              kind: 'stream',
+              streamId: singleStateStream.streamId,
+              lifecycleEpoch: singleStateStream.qsoLifecycleEpoch!,
+            }, action, payload)}
+            onNavigate={navigateStrategyAction}
+            onRequestSpectrumPick={(action) => requestStrategyFrequencyPick({
+              operatorId: operatorStatus.id,
+              target: {
+                kind: 'stream',
+                streamId: singleStateStream.streamId,
+                lifecycleEpoch: singleStateStream.qsoLifecycleEpoch!,
+              },
+              actionId: action.id,
+            })}
+          />
+        </div>
+      )}
+    </div>
+  ) : null;
 
   React.useEffect(() => {
     if (singleStateStream || !expandedStreamId
@@ -1380,8 +1451,22 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
             </Button>
           </div>
           
-          {usesStreamProjection ? (
-            singleStateStream && singleStateStream.currentState && singleStateStream.qsoLifecycleEpoch !== undefined ? (
+          {usesParallelQsoPresentation ? (
+            <div
+              className="flex min-w-0 flex-1 items-center gap-2 px-2 text-sm"
+              aria-label={t('operator.transmitStreams')}
+            >
+              <span className="shrink-0 text-default-500">
+                {t('operator.transmitStreamsCount', { count: streamPresentations.length })}
+              </span>
+              <OperatorTransmissionStack
+                transmissions={currentTransmissions}
+                fallbackText={t('operator.noCurrentTransmission')}
+                variant="detail"
+              />
+            </div>
+          ) : singleStateStream && singleStateStream.currentState
+              && singleStateStream.qsoLifecycleEpoch !== undefined ? (
               <div className="flex min-w-0 flex-1 items-center px-2">
                 <OperatorStateSelect
                   choices={streamStateChoices(singleStateStream)}
@@ -1395,21 +1480,6 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
                   ariaLabel={t('operator.selectStreamState', { callsign: singleStateStream.targetCallsign ?? '' })}
                 />
               </div>
-            ) : (
-              <div
-                className="flex min-w-0 flex-1 items-center gap-2 px-2 text-sm"
-                aria-label={t('operator.transmitStreams')}
-              >
-                <span className="shrink-0 text-default-500">
-                  {t('operator.transmitStreamsCount', { count: streamPresentations.length })}
-                </span>
-                <OperatorTransmissionStack
-                  transmissions={currentTransmissions}
-                  fallbackText={t('operator.noCurrentTransmission')}
-                  variant="detail"
-                />
-              </div>
-            )
           ) : (
           <div className="flex items-center gap-0">
             <Select
@@ -1662,7 +1732,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
             transitionTimingFunction: 'cubic-bezier(0.23, 1, 0.32, 1)'
           }}
         >
-          {usesStreamProjection ? (
+          {usesParallelQsoPresentation ? (
             <div
               role="list"
               aria-label={t('operator.transmitStreams')}
@@ -1675,74 +1745,6 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
               {streamPresentations.length === 0 ? (
                 <div className="flex h-16 items-center justify-center px-3 text-center text-default-400">
                   {t('operator.noTransmitStreams')}
-                </div>
-              ) : singleStateStream && singleStateStream.currentState
-                  && singleStateStream.qsoLifecycleEpoch !== undefined ? (
-                <div>
-                  <OperatorStateList
-                    choices={streamStateChoices(singleStateStream)}
-                    currentState={singleStateStream.currentState}
-                    onSelect={(stateId) => setOperatorStreamState(
-                      singleStateStream.streamId,
-                      stateId,
-                      singleStateStream.qsoLifecycleEpoch!,
-                    )}
-                    disabled={!connection.state.isConnected}
-                    selectLabel={(choice) => t('operator.switchToState', { state: choice.label })}
-                  />
-                  {(singleStateStream.attentions ?? []).map((attention) => (
-                    <OperatorStrategyAttention
-                      key={attention.id}
-                      attention={attention}
-                      actions={singleStateStream.actions ?? []}
-                      resolveText={strategyText}
-                      className="mx-2 mb-1"
-                      onInvoke={(action, payload) => invokeStrategyAction({
-                        kind: 'stream',
-                        streamId: singleStateStream.streamId,
-                        lifecycleEpoch: singleStateStream.qsoLifecycleEpoch!,
-                      }, action, payload)}
-                      onNavigate={navigateStrategyAction}
-                      onRequestSpectrumPick={(action) => requestStrategyFrequencyPick({
-                        operatorId: operatorStatus.id,
-                        target: {
-                          kind: 'stream',
-                          streamId: singleStateStream.streamId,
-                          lifecycleEpoch: singleStateStream.qsoLifecycleEpoch!,
-                        },
-                        actionId: action.id,
-                      })}
-                    />
-                  ))}
-                  {resolveStandaloneActions(
-                    singleStateStream.attentions ?? [],
-                    singleStateStream.actions ?? [],
-                  ).length > 0 && (
-                    <div className="border-t border-divider px-2 py-1.5">
-                      <OperatorStrategyActions
-                        actions={resolveStandaloneActions(
-                          singleStateStream.attentions ?? [],
-                          singleStateStream.actions ?? [],
-                        )}
-                        resolveLabel={strategyLabel}
-                        onInvoke={(action, payload) => invokeStrategyAction({
-                          kind: 'stream',
-                          streamId: singleStateStream.streamId,
-                          lifecycleEpoch: singleStateStream.qsoLifecycleEpoch!,
-                        }, action, payload)}
-                        onNavigate={navigateStrategyAction}
-                        onRequestSpectrumPick={(action) => requestStrategyFrequencyPick({
-                          operatorId: operatorStatus.id,
-                          target: {
-                            kind: 'stream',
-                            streamId: singleStateStream.streamId,
-                            lifecycleEpoch: singleStateStream.qsoLifecycleEpoch!,
-                          },
-                          actionId: action.id,
-                        })}
-                      />
-                    </div>
-                  )}
                 </div>
               ) : streamPresentations.map((stream, streamIndex) => {
                 const metadata = [
@@ -1885,7 +1887,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
                 );
               })}
             </div>
-          ) : operatorStatus.slots ? (
+          ) : singleStreamDetailPanel ? singleStreamDetailPanel : operatorStatus.slots ? (
             <div className="overflow-hidden rounded-lg bg-content2 text-xs">
               <OperatorStateList
                 choices={legacyStateChoices}
