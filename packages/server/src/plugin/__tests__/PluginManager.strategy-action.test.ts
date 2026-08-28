@@ -17,6 +17,8 @@ function managerHarness(invokeAction: () => unknown | Promise<unknown>) {
   manager.orchestrator = {
     commitQSOCompletionEffectsFromAction: vi.fn(),
     invalidateDecisionMessageSet: vi.fn(),
+    revalidateQueueExecution: vi.fn(async () => null),
+    readCurrentTransmissionSignature: vi.fn(() => 'unchanged'),
   };
   manager.deps = {
     triggerReEncode: vi.fn(), notifyOperatorStatusChanged: vi.fn(), requestOperatorStrategyStart: vi.fn(),
@@ -61,13 +63,44 @@ describe('PluginManager strategy actions', () => {
     });
   });
 
-  it('commits declarative effects and requests a new decision', async () => {
+  it('commits declarative effects and revalidates without rebuilding an unchanged physical intent', async () => {
     const effect = { lifecycleEpoch: 1, record: { id: 'qso-1' } };
     const { manager } = managerHarness(() => ({ requestDecision: true, qsoCompletions: [effect] }));
     await manager.invokeOperatorStrategyAction('op-1', { target: { kind: 'runtime' }, actionId: 'do-work' });
     expect(manager.orchestrator.commitQSOCompletionEffectsFromAction).toHaveBeenCalledWith('op-1', [effect]);
     expect(manager.orchestrator.invalidateDecisionMessageSet).toHaveBeenCalledWith('op-1');
-    expect(manager.deps.triggerReEncode).toHaveBeenCalled();
+    expect(manager.orchestrator.revalidateQueueExecution).toHaveBeenCalledWith('op-1');
+    expect(manager.deps.triggerReEncode).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds the physical frame only when the strategy transmission set changes', async () => {
+    const { manager } = managerHarness(() => ({ requestDecision: true }));
+    manager.orchestrator.readCurrentTransmissionSignature
+      .mockReturnValueOnce('before')
+      .mockReturnValueOnce('after');
+
+    await manager.invokeOperatorStrategyAction(
+      'op-1', { target: { kind: 'runtime' }, actionId: 'do-work' },
+    );
+
+    expect(manager.deps.triggerReEncode).toHaveBeenCalledWith('op-1', {
+      source: 'operator-edit',
+      reason: 'strategy action do-work',
+    });
+  });
+
+  it('does not rebuild a physical frame after a stop decision', async () => {
+    const { manager } = managerHarness(() => ({ requestDecision: true }));
+    manager.orchestrator.readCurrentTransmissionSignature
+      .mockReturnValueOnce('before')
+      .mockReturnValueOnce('after');
+    manager.orchestrator.revalidateQueueExecution.mockResolvedValue({ stop: true });
+
+    await manager.invokeOperatorStrategyAction(
+      'op-1', { target: { kind: 'runtime' }, actionId: 'do-work' },
+    );
+
+    expect(manager.deps.triggerReEncode).not.toHaveBeenCalled();
   });
 
   it('starts the operator only when a direct strategy action requests it', async () => {

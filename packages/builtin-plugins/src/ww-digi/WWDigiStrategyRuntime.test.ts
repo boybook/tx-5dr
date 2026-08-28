@@ -321,6 +321,7 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
     runtime.observeDecodedMessages(callers, observation(BASE_TIME + MODES.FT8.slotMs));
     const selected = await runtime.decide(callers, decision(2));
 
+    expect(selected.requestedTransmitCycle).toBe(0);
     expect(selected.transmissions).toHaveLength(3);
     expect(runtime.getQueueSnapshot().rows.map((row) => row.displayState)).toEqual([
       'engaged', 'engaged', 'engaged', 'candidate', 'candidate',

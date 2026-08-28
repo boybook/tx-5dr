@@ -29,6 +29,7 @@ export interface FrameDisplayMessage {
   freq: number;
   message: string;
   operatorId?: string;
+  streamId?: string;
   emphasisCallsigns?: string[];
   country?: string;
   countryZh?: string;

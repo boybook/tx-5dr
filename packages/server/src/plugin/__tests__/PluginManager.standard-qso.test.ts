@@ -500,6 +500,38 @@ describe('PluginManager standard-qso late re-decision', () => {
   }
 
   describe('assisted QSO queue integration', () => {
+    it('observes the slot that produced decoded messages at the next slot boundary', async () => {
+      const { operator, pluginManager } = await createRuntimeHarness({
+        strategy: 'assisted-qso-queue',
+      });
+      const runtime = (pluginManager as unknown as {
+        getStrategyRuntime(operatorId: string): {
+          observeDecodedMessages: (...args: unknown[]) => boolean;
+        } | undefined;
+      }).getStrategyRuntime(operator.config.id);
+      expect(runtime).toBeDefined();
+      const observe = vi.spyOn(runtime!, 'observeDecodedMessages');
+      const sourceSlot = createSlotInfo(45_000);
+      const currentSlot = createSlotInfo(60_000);
+
+      await (pluginManager as any).handleSlotStart(
+        currentSlot,
+        createSlotPack(sourceSlot, []),
+      );
+
+      expect(observe).toHaveBeenCalledWith(
+        [],
+        expect.objectContaining({
+          source: 'slot-auto',
+          slotInfo: expect.objectContaining({
+            id: sourceSlot.id,
+            startMs: sourceSlot.startMs,
+            cycleNumber: Math.floor(sourceSlot.startMs / MODES.FT8.slotMs),
+          }),
+        }),
+      );
+    });
+
     it('routes a lifecycle-scoped state change to one active queue stream', async () => {
       const { operator, pluginManager, eventEmitter } = await createRuntimeHarness({
         strategy: 'assisted-qso-queue',

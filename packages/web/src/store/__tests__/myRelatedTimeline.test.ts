@@ -36,7 +36,7 @@ function createRxFrame(message: string, freq: number, snr = -10, dt = 0.1): Fram
   };
 }
 
-function createTxFrame(operatorId: string, message: string, freq: number): FrameMessage {
+function createTxFrame(operatorId: string, message: string, freq: number, streamId?: string): FrameMessage {
   return {
     snr: -999,
     dt: 0,
@@ -44,6 +44,7 @@ function createTxFrame(operatorId: string, message: string, freq: number): Frame
     message,
     confidence: 1,
     operatorId,
+    streamId,
   };
 }
 
@@ -504,6 +505,45 @@ describe('myRelatedTimelineReducer', () => {
     ]);
   });
 
+  it('keeps every same-operator stream visible in one live transmit cycle', () => {
+    const slotStartMs = Date.UTC(2026, 4, 6, 6, 28, 30);
+    const state = reduce([
+      {
+        type: 'syncLiveContext',
+        payload: {
+          currentMode: mode,
+          liveSlotStartMs: slotStartMs,
+          visibleOperatorCallsigns: ['BG0VRT'],
+          targetCallsign: '',
+        },
+      },
+      ...[
+        ['stream-1', 'ZP5VAF BG0VRT R NN00', 1772],
+        ['stream-2', 'BV2VAD BG0VRT R NN00', 1872],
+        ['stream-3', 'OA4VAC BG0VRT R NN00', 1972],
+      ].map(([streamId, message, frequency]) => ({
+        type: 'ingestTransmissionLog' as const,
+        payload: {
+          log: createTransmissionLog(slotStartMs, String(message), {
+            streamId: String(streamId),
+            myCallsign: 'BG0VRT',
+            frequency: Number(frequency),
+          }),
+          currentMode: mode,
+          liveSlotStartMs: slotStartMs,
+        },
+      })),
+    ]);
+
+    const txMessages = buildMyRelatedTimelineGroups(state)
+      .flatMap(group => group.messages.filter(message => message.db === 'TX'));
+    expect(txMessages.map(message => [message.streamId, message.message])).toEqual([
+      ['stream-1', 'ZP5VAF BG0VRT R NN00'],
+      ['stream-2', 'BV2VAD BG0VRT R NN00'],
+      ['stream-3', 'OA4VAC BG0VRT R NN00'],
+    ]);
+  });
+
   it('keeps a manual seed visible in the current cycle and then freezes it on the next cycle', () => {
     const firstStart = Date.UTC(2026, 4, 6, 6, 28, 30);
     const secondStart = firstStart + mode.slotMs;
@@ -638,6 +678,32 @@ describe('myRelatedTimelineReducer', () => {
       'BA7XYZ CQ PM01',
       'CQ JA1XXX PM95',
     ]);
+  });
+
+  it('restores every same-operator transmit stream from SlotPack history', () => {
+    const slotStartMs = Date.UTC(2026, 4, 6, 6, 28, 30);
+    const state = reduce([
+      { type: 'beginRestore' },
+      {
+        type: 'finalizeRestore',
+        payload: {
+          slotPacks: [createSlotPack(slotStartMs, [
+            createTxFrame('op-1', 'ZP5VAF BG0VRT R NN00', 1772, 'stream-1'),
+            createTxFrame('op-1', 'BV2VAD BG0VRT R NN00', 1872, 'stream-2'),
+            createTxFrame('op-1', 'OA4VAC BG0VRT R NN00', 1972, 'stream-3'),
+          ], createFrequencyContext())],
+          currentMode: mode,
+          liveSlotStartMs: slotStartMs,
+          visibleOperatorCallsigns: ['BG0VRT'],
+          targetCallsign: '',
+          operatorCallsignsById: { 'op-1': 'BG0VRT' },
+        },
+      },
+    ]);
+
+    const txMessages = buildMyRelatedTimelineGroups(state)
+      .flatMap(group => group.messages.filter(message => message.db === 'TX'));
+    expect(txMessages.map(message => message.streamId)).toEqual(['stream-1', 'stream-2', 'stream-3']);
   });
 
   it('clears frozen and live layers while preserving processed slot tracking', () => {
