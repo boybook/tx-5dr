@@ -41,7 +41,7 @@ function slotInfo(startMs = BASE_TIME): SlotInfo {
   };
 }
 
-function selected(rawMessage: string, startMs = BASE_TIME) {
+function selected(rawMessage: string, startMs = BASE_TIME + MODES.FT8.slotMs) {
   return {
     message: {
       message: rawMessage,
@@ -352,7 +352,7 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
     runtime.observeDecodedMessages(callers, observation(BASE_TIME + MODES.FT8.slotMs));
     const selected = await runtime.decide(callers, decision(2));
 
-    expect(selected.requestedTransmitCycle).toBe(0);
+    expect(selected.requestedTransmitCycle).toBeUndefined();
     expect(selected.transmissions).toHaveLength(3);
     expect(runtime.getQueueSnapshot().rows.map((row) => row.displayState)).toEqual([
       'engaged', 'engaged', 'engaged', 'candidate', 'candidate',
@@ -393,6 +393,85 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
       })).toMatchObject({ requestDecision: true, requestOperatorStart: false });
       expect((await runtime.decide([], decision(expectedCount + 1))).transmissions).toHaveLength(expectedCount);
     }
+  });
+
+  it('refreshes a waiting target cycle from its latest complete decode', async () => {
+    const { runtime, setTransmitting } = createRuntime();
+    runtime.enqueueTarget({
+      callsign: 'JA1AAA',
+      lastMessage: selected('CQ WW JA1AAA PM95', BASE_TIME),
+    });
+    expect(runtime.getQueueSnapshot().rows[0]).toMatchObject({ lastHeardCycle: 0 });
+
+    const moved = parsed('CQ WW JA1AAA PM95', BASE_TIME + MODES.FT8.slotMs);
+    const realSlotObservation = observation(moved.timestamp);
+    realSlotObservation.slotInfo.cycleNumber = Math.floor(moved.timestamp / MODES.FT8.slotMs);
+    expect(realSlotObservation.slotInfo.cycleNumber).toBeGreaterThan(1);
+    runtime.observeDecodedMessages([moved], realSlotObservation);
+    expect(runtime.getQueueSnapshot().rows[0]).toMatchObject({
+      lastHeardCycle: 1,
+      displayState: 'authorized',
+    });
+
+    setTransmitting(true);
+    const selectedTarget = await runtime.decide([], decision());
+    expect(selectedTarget.requestedTransmitCycle).toBe(0);
+    expect(selectedTarget.transmissions?.[0]?.text).toBe('JA1AAA BG5DRB OL32');
+  });
+
+  it('fills only targets covered by the selected cycle while TX is already enabled', async () => {
+    const { runtime } = createRuntime({ transmitting: true, parallelStreams: 3 });
+    runtime.enqueueTarget({
+      callsign: 'JA1AAA',
+      lastMessage: selected('CQ WW JA1AAA PM95', BASE_TIME + MODES.FT8.slotMs),
+    });
+    runtime.enqueueTarget({
+      callsign: 'JA2BBB',
+      lastMessage: selected('CQ WW JA2BBB PM96', BASE_TIME),
+    });
+
+    const selectedBatch = await runtime.decide([], decision());
+    expect(selectedBatch.requestedTransmitCycle).toBeUndefined();
+    expect(selectedBatch.transmissions?.map((item) => item.text)).toEqual(['JA1AAA BG5DRB OL32']);
+    expect(runtime.getQueueSnapshot().rows.find((row) => row.callsign === 'JA2BBB'))
+      .toMatchObject({ displayState: 'authorized', lastHeardCycle: 0 });
+  });
+
+  it('treats a manual cycle switch while TX is enabled as one batch authorization', async () => {
+    const { runtime, setTransmitting, config } = createRuntime({
+      parallelStreams: 1,
+      cqSelectionPolicy: 'FIRST',
+    });
+    setTransmitting(true);
+    confirmTransmissions(runtime, await runtime.decide([], decision()));
+    const callers = [
+      parsed('BG5DRB JA1AAA PM95', BASE_TIME + MODES.FT8.slotMs),
+      parsed('BG5DRB JA2BBB PM96', BASE_TIME + MODES.FT8.slotMs),
+    ];
+    runtime.observeDecodedMessages(callers, observation(BASE_TIME + MODES.FT8.slotMs));
+    await runtime.decide(callers, decision(2));
+
+    const active = runtime.getSnapshot().streams?.[0];
+    expect(active).toBeDefined();
+    await runtime.invokeAction({
+      target: { kind: 'stream', streamId: active!.streamId, lifecycleEpoch: active!.qsoLifecycleEpoch },
+      actionId: 'end-qso',
+    });
+    await runtime.decide([], decision(3));
+
+    const moved = parsed('BG5DRB JA2BBB PM96', BASE_TIME + MODES.FT8.slotMs * 2);
+    runtime.observeDecodedMessages([moved], observation(moved.timestamp));
+    config.transmitCycles = [1];
+    expect(runtime.onOperatorTransmitCyclesChanged({
+      previousTransmitCycles: [0],
+      transmitCycles: [1],
+      source: 'manual',
+    })).toBe(true);
+
+    const switched = await runtime.decide([], decision(4));
+    expect(switched.transmissions?.map((item) => item.text)).toEqual(['JA2BBB BG5DRB R OL32']);
+    expect(runtime.getQueueSnapshot().rows.find((row) => row.callsign === 'JA2BBB'))
+      .toMatchObject({ displayState: 'engaged', lastHeardCycle: 0 });
   });
 
   it('keeps dupes as candidates but excludes them from automatic CQ selection', async () => {

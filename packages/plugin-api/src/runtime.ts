@@ -303,6 +303,8 @@ export interface AssistedQueueRow {
   lastSnr?: number;
   /** Receive cycles elapsed since this target was last decoded. */
   lastHeardCyclesAgo?: number;
+  /** Cycle in which the target was most recently decoded transmitting. */
+  lastHeardCycle?: 0 | 1;
   streamId?: string;
   audioFrequencyHz?: number;
   authorizationId?: string;
@@ -415,6 +417,13 @@ export interface StrategyDecisionMetaV2 {
  */
 export type StrategyRuntimeCheckpoint = unknown;
 
+/** Operator transmit-cycle selection observed by an active strategy runtime. */
+export interface StrategyOperatorTransmitCyclesChanged {
+  previousTransmitCycles: number[];
+  transmitCycles: number[];
+  source?: 'manual' | 'plugin' | 'late-decode' | 'slot-auto';
+}
+
 /** Declarative request for the Host to durably commit one completed QSO. */
 export interface StrategyQSOCompletionEffect {
   /** Complete QSO record to validate and persist. */
@@ -472,6 +481,12 @@ export interface StrategyRuntime {
 
   /** Restores a previously captured checkpoint after a decision is discarded. */
   restore(checkpoint: StrategyRuntimeCheckpoint): void;
+
+  /**
+   * Observes an already-applied Host transmit-cycle selection. Returning true
+   * asks the Host to publish the resulting runtime projection.
+   */
+  onOperatorTransmitCyclesChanged?(change: StrategyOperatorTransmitCyclesChanged): boolean;
 
   /**
    * Optional acknowledgement for a declarative QSO effect. Implementations may

@@ -751,12 +751,20 @@ export class RadioOperatorManager {
     // 监听操作员发射周期变更事件
     const handleOperatorTransmitCyclesChanged = (data: {
       operatorId: string;
+      previousTransmitCycles?: number[];
       transmitCycles: number[];
       commandEpoch?: number;
       source?: 'manual' | 'plugin' | 'late-decode' | 'slot-auto';
       reason?: string;
     }) => {
       logger.debug(`Operator ${data.operatorId} transmit cycles changed: [${data.transmitCycles.join(', ')}]`);
+      if (typeof this._pluginManager?.notifyOperatorTransmitCyclesChanged === 'function') {
+        this._pluginManager.notifyOperatorTransmitCyclesChanged(data.operatorId, {
+          previousTransmitCycles: data.previousTransmitCycles ?? [],
+          transmitCycles: data.transmitCycles,
+          source: data.source,
+        });
+      }
       this._pluginManager?.invalidateDecisionMessageSet(data.operatorId);
       this.requestOperatorFrameMutation(data.operatorId, {
         kind: 'transmit-cycles',
@@ -1339,7 +1347,10 @@ export class RadioOperatorManager {
     }
 
     await this.persistTransmitCycles(operatorId, transmitCycles);
-    operator.setTransmitCycles(transmitCycles);
+    operator.setTransmitCycles(transmitCycles, {
+      source: 'manual',
+      reason: 'operator selected transmit cycle',
+    });
     this.emitOperatorStatusUpdate(operatorId);
   }
 

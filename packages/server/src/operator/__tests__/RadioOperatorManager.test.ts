@@ -144,6 +144,50 @@ function automaticQSO(id: string, callsign = 'N0CALL'): QSORecord {
   };
 }
 
+describe('operator transmit-cycle plugin projection', () => {
+  it('forwards the previous cycle and manual source before rebuilding the frame', async () => {
+    const { manager } = createManager({
+      logBook: {
+        id: 'log-1',
+        name: 'Test Log',
+        provider: { hasWorkedCallsign: vi.fn().mockResolvedValue(false) },
+      },
+      callsign: 'BG5DRB',
+    });
+    const notifyOperatorTransmitCyclesChanged = vi.fn();
+    manager.setPluginManager({
+      notifyOperatorTransmitCyclesChanged,
+      invalidateDecisionMessageSet: vi.fn(),
+      isQueueExecutionSuspended: vi.fn(() => false),
+      getCurrentTransmissions: vi.fn(() => []),
+      getOperatorRuntimeStatus: vi.fn(() => undefined),
+      isRunning: vi.fn(() => false),
+    } as any);
+
+    try {
+      await manager.addOperator({
+        id: 'op1',
+        myCallsign: 'BG5DRB',
+        myGrid: 'OL32',
+        frequency: 1_500,
+        transmitCycles: [0],
+        mode: MODES.FT8,
+      });
+      const operator = manager.getOperatorById('op1')!;
+      operator.start();
+      operator.setTransmitCycles([1], { source: 'manual', reason: 'test cycle switch' });
+
+      expect(notifyOperatorTransmitCyclesChanged).toHaveBeenCalledWith('op1', {
+        previousTransmitCycles: [0],
+        transmitCycles: [1],
+        source: 'manual',
+      });
+    } finally {
+      manager.stop();
+    }
+  });
+});
+
 function attachQSOHookSpy(manager: RadioOperatorManager) {
   const notifyQSOComplete = vi.fn().mockResolvedValue(undefined);
   const autoSync = vi.fn();

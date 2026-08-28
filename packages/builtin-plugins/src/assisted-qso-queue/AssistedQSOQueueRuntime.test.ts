@@ -333,6 +333,7 @@ describe('AssistedQSOQueueRuntime queue capability', () => {
     expect(runtime.getQueueSnapshot().rows[0]).toMatchObject({
       displayState: 'paused',
       pauseReason: 'target-busy',
+      lastHeardCycle: slotInfo(BASE_TIME + MODES.FT8.slotMs).cycleNumber,
     });
     expect((await runtime.decide([], decision())).transmission).toBe('CQ BG5DRB OL32');
   });
@@ -341,9 +342,14 @@ describe('AssistedQSOQueueRuntime queue capability', () => {
     const { runtime, setTransmitting } = createRuntime();
     runtime.enqueueTarget({ callsign: 'JA1AAA', lastMessage: selected('CQ JA1AAA PM95') });
     const report = parsed('BG5DRB JA1AAA -08', BASE_TIME + MODES.FT8.slotMs);
+    const reportObservation = observation(report.timestamp);
+    reportObservation.slotInfo.cycleNumber = Math.floor(report.timestamp / MODES.FT8.slotMs);
 
-    expect(runtime.observeDecodedMessages([report], observation(report.timestamp))).toBe(true);
-    expect(runtime.getQueueSnapshot().rows[0]?.displayState).toBe('TX3');
+    expect(runtime.observeDecodedMessages([report], reportObservation)).toBe(true);
+    expect(runtime.getQueueSnapshot().rows[0]).toMatchObject({
+      displayState: 'TX3',
+      lastHeardCycle: reportObservation.slotInfo.cycleNumber % 2,
+    });
     expect((await runtime.decide([report], decision())).transmission).toBeNull();
 
     setTransmitting(true);

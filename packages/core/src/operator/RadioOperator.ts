@@ -138,9 +138,11 @@ export class RadioOperator {
             reason?: string;
         },
     ): void {
+        const previousTransmitCycles = [...this._config.transmitCycles];
         this._config.transmitCycles = Array.isArray(transmitCycles) ? transmitCycles : [transmitCycles];
         this._eventEmitter.emit('operatorTransmitCyclesChanged', {
             operatorId: this._config.id,
+            previousTransmitCycles,
             transmitCycles: this._config.transmitCycles,
             ...mutation,
         });

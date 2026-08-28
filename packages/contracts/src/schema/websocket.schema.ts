@@ -557,6 +557,7 @@ export const AssistedQueueRowSchema = z.object({
   targetGrid: z.string().optional(),
   lastSnr: z.number().optional(),
   lastHeardCyclesAgo: z.number().int().nonnegative().optional(),
+  lastHeardCycle: z.union([z.literal(0), z.literal(1)]).optional(),
   streamId: z.string().optional(),
   audioFrequencyHz: z.number().optional(),
   authorizationId: z.string().optional(),
@@ -2221,6 +2222,7 @@ export interface DigitalRadioEngineEvents {
   operatorFrequencyChanged: (data: { operatorId: string; frequency: number }) => void;
   operatorTransmitCyclesChanged: (data: {
     operatorId: string;
+    previousTransmitCycles?: number[];
     transmitCycles: number[];
     commandEpoch?: number;
     source?: 'manual' | 'plugin' | 'late-decode' | 'slot-auto';

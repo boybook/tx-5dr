@@ -25,6 +25,7 @@ import type {
 import { FT8MessageType } from '@tx5dr/plugin-api';
 import {
   FT8MessageParser,
+  CycleUtils,
   isValidCallsign,
   isUndecodedCallsignPlaceholder,
 } from '@tx5dr/core';
@@ -193,6 +194,7 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
         const fingerprint = JSON.stringify(data);
         const recovers = data.state === 'paused' || data.state === 'no-response';
         data.lastHeardAt = message.timestamp;
+        data.lastHeardCycle = CycleUtils.isEvenCycle(meta.slotInfo.cycleNumber) ? 0 : 1;
         data.lastSnr = message.snr;
         data.targetGrid = gridOf(message) ?? data.targetGrid;
         data.pending.validUntil = message.timestamp + mode.slotMs * STALE_AFTER_MODE_SLOTS;
@@ -291,6 +293,7 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
         data.targetGrid = gridOf(parsed);
         data.lastSnr = request.lastMessage.message.snr;
         data.lastHeardAt = request.lastMessage.slotInfo.startMs;
+        data.lastHeardCycle = CycleUtils.isEvenCycle(request.lastMessage.slotInfo.cycleNumber) ? 0 : 1;
         this.latestSlotStartMs = Math.max(this.latestSlotStartMs, request.lastMessage.slotInfo.startMs);
         data.pending.nextLocalTxSlot = direct && parsed.message.type === FT8MessageType.CALL
           ? 'TX2'
@@ -398,6 +401,7 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
             : Math.max(0, Math.floor(
               (this.latestSlotStartMs - data.lastHeardAt) / this.operator.config.mode.slotMs,
             )),
+          lastHeardCycle: data.lastHeardCycle,
           streamId: row.streamId,
           audioFrequencyHz: row.audioFrequencyHz,
           actions: row.active ? [] : [
