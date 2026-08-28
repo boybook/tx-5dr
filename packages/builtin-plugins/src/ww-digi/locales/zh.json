@@ -35,7 +35,7 @@
   "cqSelectionPolicy": "CQ 回复者选择", "cqSelectionPolicyDesc": "回复者超过空闲槽时的自动选择方式。",
   "selectionFIRST": "最早解码", "selectionMAX_DISTANCE": "最远距离", "selectionMAX_SNR": "最高 SNR", "selectionMIN_SNR": "最低 SNR",
   "authorizedStaleReceiveCycles": "授权新鲜度", "authorizedStaleReceiveCyclesDesc": "已授权目标连续多少个接收周期未听到后失效。",
-  "cqOff": "不发 CQ", "cqRepeat": "重复 CQ", "final-retry": "完成后观察",
+  "final-retry": "完成后观察",
   "actionPause": "暂停", "actionResume": "恢复", "actionSetFrequency": "发射频率",
   "actionResetFrequency": "恢复自动频率", "actionAlternateMessage": "备用消息",
   "actionAlternateMessageDesc": "验证备用 FT8/FT4 消息后重新授权此目标。",

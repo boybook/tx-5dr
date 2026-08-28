@@ -712,24 +712,33 @@ export class PluginManager {
       async ({ beforeSnapshot, result, token, signal }) => {
         if (queueActivation !== 'immediate'
             || options?.startIfIdle !== true
-            || beforeSnapshot.rows.length !== 0
             || result.outcome !== 'accepted') {
           return;
         }
         const operator = this.deps.getOperatorById(operatorId);
-        if (!operator || operator.isTransmitting) return;
+        if (!operator) return;
 
-        operator.start();
+        if (!operator.isTransmitting
+            && beforeSnapshot.rows.length === 0
+            && !this.getOperatorTransmitGate(operatorId)) {
+          operator.start();
+        }
         if (!operator.isTransmitting) return;
+        const beforeTransmissionSignature = this.orchestrator.readCurrentTransmissionSignature(operatorId);
         const decision = await this.orchestrator.revalidateQueueExecutionInLane(
           operatorId,
           token,
           signal,
         );
-        if (!decision || request.lastMessage || signal.aborted || !this.intentCoordinator.isCurrent(token)) return;
+        const afterTransmissionSignature = this.orchestrator.readCurrentTransmissionSignature(operatorId);
+        if (decision?.stop
+            || beforeTransmissionSignature === afterTransmissionSignature
+            || decision?.requestedTransmitCycle !== undefined
+            || signal.aborted
+            || !this.intentCoordinator.isCurrent(token)) return;
         this.deps.triggerReEncode?.(operatorId, {
           source: 'operator-edit',
-          reason: 'manual first queue target started assisted operation',
+          reason: 'manual queue target became executable',
           decisionEpoch: token.epoch,
         });
       },
@@ -759,23 +768,20 @@ export class PluginManager {
         if (!runtime.retryTarget) throw new Error('strategy_queue_retry_unsupported');
         return runtime.retryTarget(entryId, expectedVersion);
       },
-      async ({ beforeSnapshot, result, token, signal }) => {
+      async ({ result, token, signal }) => {
         const operator = this.deps.getOperatorById(operatorId);
-        const activeEntryCount = this.getActiveQueueEntryIds(beforeSnapshot).length;
-        const maxActiveStreams = beforeSnapshot.maxActiveStreams ?? 1;
-        if (result.outcome !== 'accepted'
-            || activeEntryCount >= maxActiveStreams
-            || !operator?.isTransmitting) {
-          return;
-        }
+        if (result.outcome !== 'accepted' || !operator) return;
+        if (!operator.isTransmitting && !this.getOperatorTransmitGate(operatorId)) operator.start();
+        if (!operator.isTransmitting) return;
+        const beforeTransmissionSignature = this.orchestrator.readCurrentTransmissionSignature(operatorId);
         const decision = await this.orchestrator.revalidateQueueExecutionInLane(
           operatorId,
           token,
           signal,
         );
-        const hasTransmission = Boolean(decision?.transmission)
-          || (decision?.transmissions?.length ?? 0) > 0;
-        if (!hasTransmission
+        const afterTransmissionSignature = this.orchestrator.readCurrentTransmissionSignature(operatorId);
+        if (decision?.stop
+            || beforeTransmissionSignature === afterTransmissionSignature
             || decision?.requestedTransmitCycle !== undefined
             || signal.aborted
             || !this.intentCoordinator.isCurrent(token)) {

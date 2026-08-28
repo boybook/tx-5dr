@@ -128,6 +128,7 @@ describe('PluginManager standard-qso late re-decision', () => {
     autoResumeCQAfterSuccess?: boolean;
     maxQSOTimeoutCycles?: number;
     maxCallAttempts?: number;
+    maxConcurrentStreams?: number;
     replyToWorkedStations?: boolean;
     distinguishWorkedStationsByBand?: boolean;
     skipTx1?: boolean;
@@ -140,6 +141,7 @@ describe('PluginManager standard-qso late re-decision', () => {
       options?: { source?: 'late-decode' | 'operator-edit' | 'plugin'; reason?: string },
     ) => void;
     radioBand?: string;
+    radioFrequency?: number;
     recordQSOHandler?: (data: RecordQSORequest) => void;
     notifyOperatorStatusChanged?: (operatorId: string) => void;
     removeOperatorContribution?: (
@@ -170,6 +172,7 @@ describe('PluginManager standard-qso late re-decision', () => {
       myGrid: options?.myGrid ?? 'OM96',
       frequency: 1500,
       transmitCycles: [0],
+      maxConcurrentStreams: options?.maxConcurrentStreams,
       maxQSOTimeoutCycles: options?.maxQSOTimeoutCycles ?? 6,
       maxCallAttempts: options?.maxCallAttempts ?? 5,
       autoReplyToCQ: options?.autoReplyToCQ ?? false,
@@ -208,7 +211,7 @@ describe('PluginManager standard-qso late re-decision', () => {
         pluginManager.requestCall(operatorId, callsign, lastMessage);
       },
       notifyOperatorStatusChanged: options?.notifyOperatorStatusChanged,
-      getRadioFrequency: async () => 7_074_000,
+      getRadioFrequency: async () => options?.radioFrequency ?? 7_074_000,
       setRadioFrequency: () => {},
       getRadioBand: () => options?.radioBand ?? '40m',
       getRadioConnected: () => true,
@@ -333,6 +336,32 @@ describe('PluginManager standard-qso late re-decision', () => {
       noveltyRules: [{ fact: 'grid-field-2', classId: 'contest-new-field' }],
     });
     expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).messagePresentation?.tagRules).toBeUndefined();
+  });
+
+  it('keeps an empty-queue WW Digi double-click queued while its transmit gate is closed', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      strategy: 'ww-digi',
+      myCallsign: 'BG0VRT',
+      myGrid: 'NN00',
+      startOperator: false,
+      radioBand: '20m',
+      radioFrequency: 14_090_000,
+      maxConcurrentStreams: 3,
+      operatorPluginSettings: {
+        'ww-digi': { contestYear: 2026, parallelStreams: 3 },
+      },
+    });
+
+    const result = await pluginManager.enqueueQueueTarget(
+      operator.config.id,
+      { callsign: 'JA1AAA' },
+      { startIfIdle: true },
+    );
+
+    expect(result.outcome).toBe('accepted');
+    expect(operator.isTransmitting).toBe(false);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).queue?.rows)
+      .toEqual([expect.objectContaining({ callsign: 'JA1AAA', displayState: 'authorized' })]);
   });
 
   async function createMultiOperatorRuntimeHarness(options?: {
@@ -648,7 +677,66 @@ describe('PluginManager standard-qso late re-decision', () => {
       expect(operator.isTransmitting).toBe(false);
     });
 
-    it('retries a timed-out target without starting a stopped operator', async () => {
+    it('adds each subsequent double-click target to the active multistream frame', async () => {
+      const triggerReEncode = vi.fn();
+      const { operator, pluginManager } = await createRuntimeHarness({
+        strategy: 'assisted-qso-queue',
+        startOperator: false,
+        triggerReEncode,
+        radioFrequency: 7_090_000,
+        maxConcurrentStreams: 3,
+        operatorPluginSettings: {
+          'standard-qso': { parallelStreams: 3 },
+        },
+      });
+      const operatorId = operator.config.id;
+      const sourceSlot = createSlotInfo(Date.now());
+      const selectedFrame = (callsign: string) => ({
+        message: {
+          message: `BG4IAJ ${callsign} PM95`,
+          snr: -10,
+          dt: 0,
+          freq: 1_500,
+          confidence: 1,
+        },
+        slotInfo: sourceSlot,
+      });
+
+      await pluginManager.enqueueQueueTarget(
+        operatorId,
+        { callsign: 'JA1AAA', lastMessage: selectedFrame('JA1AAA') },
+        { startIfIdle: true },
+      );
+      expect(operator.isTransmitting).toBe(true);
+      expect(pluginManager.getCurrentTransmissions(operatorId)).toHaveLength(1);
+      expect(pluginManager.getOperatorRuntimeStatus(operatorId).queue).toMatchObject({
+        maxActiveStreams: 3,
+        requestedMaxActiveStreams: 3,
+      });
+
+      triggerReEncode.mockClear();
+      await pluginManager.enqueueQueueTarget(
+        operatorId,
+        { callsign: 'JA2BBB', lastMessage: selectedFrame('JA2BBB') },
+        { startIfIdle: true },
+      );
+      const secondQueue = pluginManager.getOperatorRuntimeStatus(operatorId).queue;
+      expect(secondQueue?.rows.map((row) => row.callsign)).toEqual(['JA1AAA', 'JA2BBB']);
+      expect(secondQueue?.activeEntryIds).toHaveLength(2);
+      expect(pluginManager.getCurrentTransmissions(operatorId)).toHaveLength(2);
+      expect(triggerReEncode).toHaveBeenCalledOnce();
+
+      triggerReEncode.mockClear();
+      await pluginManager.enqueueQueueTarget(
+        operatorId,
+        { callsign: 'JA3CCC', lastMessage: selectedFrame('JA3CCC') },
+        { startIfIdle: true },
+      );
+      expect(pluginManager.getCurrentTransmissions(operatorId)).toHaveLength(3);
+      expect(triggerReEncode).toHaveBeenCalledOnce();
+    });
+
+    it('retries a timed-out target and starts a stopped operator', async () => {
       const { operator, pluginManager } = await createRuntimeHarness({
         strategy: 'assisted-qso-queue',
         maxQSOTimeoutCycles: 1,
@@ -676,7 +764,8 @@ describe('PluginManager standard-qso late re-decision', () => {
         outcome: 'accepted',
         snapshot: { rows: [{ callsign: 'JA1AAA', displayState: 'TX1' }] },
       });
-      expect(operator.isTransmitting).toBe(false);
+      expect(operator.isTransmitting).toBe(true);
+      expect(pluginManager.getCurrentTransmissions(operatorId)).toHaveLength(1);
     });
 
     it('retries a target into a spare parallel lane while another lane remains active', async () => {

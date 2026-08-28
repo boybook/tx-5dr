@@ -68,7 +68,6 @@ type WWDigiSnapshotExtension = {
 
 interface RuntimeCheckpoint {
   coordinator: ReturnType<ParallelQSOCoordinator<WWDigiEntryData>['checkpoint']>;
-  cqPolicy: 'off' | 'repeat';
   callSession: ReturnType<BoundedCallSessionController['checkpoint']>;
   receiveEpoch: number;
   lastObservedSlotId?: string;
@@ -103,7 +102,6 @@ function selectedSender(raw: string): { callsign?: string; grid?: string } {
 
 export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   private readonly coordinator: ParallelQSOCoordinator<WWDigiEntryData>;
-  private cqPolicy: 'off' | 'repeat' = 'off';
   private readonly callSession = new BoundedCallSessionController();
   private receiveEpoch = 0;
   private lastObservedSlotId?: string;
@@ -126,6 +124,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       ? audioFrequenciesHz
       : () => audioFrequenciesHz;
     if (resolveFrequencies().length !== 3) throw new Error('WW Digi requires exactly three lane frequencies');
+    this.previousTransmitting = operator.isTransmitting;
     this.coordinator = new ParallelQSOCoordinator<WWDigiEntryData>({
       maxSupportedStreams: 3,
       initialMaxStreams: this.parallelStreams(),
@@ -148,7 +147,6 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   checkpoint(): StrategyRuntimeCheckpoint {
     return {
       coordinator: this.coordinator.checkpoint(),
-      cqPolicy: this.cqPolicy,
       callSession: this.callSession.checkpoint(),
       receiveEpoch: this.receiveEpoch,
       lastObservedSlotId: this.lastObservedSlotId,
@@ -163,7 +161,6 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     const state = checkpoint as RuntimeCheckpoint;
     if (!state?.coordinator) throw new Error('Invalid WW Digi runtime checkpoint');
     this.coordinator.restore(state.coordinator);
-    this.cqPolicy = state.cqPolicy ?? 'off';
     if (state.callSession) this.callSession.restore(state.callSession);
     this.receiveEpoch = state.receiveEpoch ?? 0;
     this.lastObservedSlotId = state.lastObservedSlotId;
@@ -397,10 +394,10 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     if (!this.previousTransmitting) {
       this.previousTransmitting = true;
       this.stopAttention = undefined;
-      if (this.startPurpose !== undefined || this.hasAuthorizedEntries()) {
+      if (this.startPurpose !== undefined || this.hasQueueEntries()) {
         this.startPurpose = undefined;
         this.callSession.reset();
-      } else if (this.cqPolicy === 'repeat') {
+      } else {
         this.armCallSession();
       }
     }
@@ -515,18 +512,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       qsoLifecycleEpoch: primary?.qsoLifecycleEpoch,
       streams,
       queue: this.getQueueSnapshot(),
-      actions: [
-        ...(['off', 'repeat'] as const).map((mode) => ({
-        id: `cq-${mode}`,
-        label: mode === 'off' ? 'cqOff' : 'cqRepeat',
-        icon: mode === 'off' ? 'ban' : 'repeat',
-        presentation: 'segmented' as const,
-        groupId: 'cq-mode',
-        selected: this.cqPolicy === mode,
-        tone: this.cqPolicy === mode ? 'primary' as const : 'default' as const,
-        })),
-        ...(extension.actions ?? []),
-      ],
+      actions: extension.actions,
       attentions: [
         ...(this.callSession.state === 'calling' ? [{
           id: 'cq-calling', tone: 'info' as const, title: 'attentionCqCalling',
@@ -552,14 +538,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   }
   async invokeAction(invocation: StrategyActionInvocation): Promise<StrategyActionResult | void> {
     if (invocation.target.kind === 'runtime') {
-      const mode = invocation.actionId.replace(/^cq-/, '');
-      if (mode !== 'off' && mode !== 'repeat') throw new Error('strategy_action_not_available');
-      this.cqPolicy = mode;
-      this.stopAttention = undefined;
-      if (this.operator.isTransmitting) this.previousTransmitting = true;
-      if (mode === 'off') this.callSession.reset();
-      else if (this.operator.isTransmitting && !this.hasAuthorizedEntries()) this.armCallSession();
-      return { requestDecision: true, outcome: { code: `cq_${mode}` } };
+      throw new Error('strategy_action_not_available');
     }
     if (invocation.target.kind === 'stream') {
       if (invocation.actionId === 'send-alternate') {
@@ -666,11 +645,10 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
 
   reset(reason?: string): void {
     this.coordinator.reset(reason);
-    this.cqPolicy = 'off';
     this.callSession.reset();
     this.receiveEpoch = 0;
     this.lastObservedSlotId = undefined;
-    this.previousTransmitting = false;
+    this.previousTransmitting = this.operator.isTransmitting;
     this.startPurpose = undefined;
     this.exhaustedAtReceiveEpoch = undefined;
     this.stopAttention = undefined;
@@ -727,8 +705,8 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     });
   }
 
-  private hasAuthorizedEntries(): boolean {
-    return this.coordinator.getQueueSnapshot().entries.some((row) => row.entry.data.status === 'authorized');
+  private hasQueueEntries(): boolean {
+    return this.coordinator.getQueueSnapshot().entries.length > 0;
   }
 
   private countCandidates(): number {

@@ -551,7 +551,7 @@ export const wwDigiStrategyPlugin = definePlugin({
   strategyFeatures: {
     targetQueue: 1,
     parallelTargetQueue: 1,
-    queueActivation: 'operator-toggle',
+    queueActivation: 'immediate',
     manualInitiation: 1,
     maxConcurrentStreams: 3,
   },
