@@ -114,6 +114,15 @@ export function resolveSingleControllableStream(
   return controllable.length === 1 ? controllable[0] : undefined;
 }
 
+export function shouldUseParallelQsoPresentation(
+  maxActiveStreams: number | undefined,
+  supportsParallelTargetQueue: boolean,
+): boolean {
+  return maxActiveStreams === undefined
+    ? supportsParallelTargetQueue
+    : maxActiveStreams > 1;
+}
+
 export interface RadioOperatorCyclePresentation {
   isTransmit: boolean;
   transmitContent: string;

@@ -11,6 +11,7 @@ import {
   resolveRadioOperatorCyclePresentation,
   resolveSingleControllableStream,
   resolveRadioOperatorStreamPresentations,
+  shouldUseParallelQsoPresentation,
   summarizeRadioOperatorTransmissions,
 } from '../radioOperatorPresentation';
 
@@ -333,6 +334,13 @@ describe('RadioOperator transmit content', () => {
     const streams = resolveRadioOperatorStreamPresentations(operator);
     expect(resolveSingleControllableStream(streams, 1)?.streamId).toBe('stream-1');
     expect(resolveSingleControllableStream(streams, 3)).toBeUndefined();
+  });
+
+  it('uses the original single-QSO presentation when a queue mode is limited to one QSO', () => {
+    expect(shouldUseParallelQsoPresentation(1, true)).toBe(false);
+    expect(shouldUseParallelQsoPresentation(3, true)).toBe(true);
+    expect(shouldUseParallelQsoPresentation(undefined, true)).toBe(true);
+    expect(shouldUseParallelQsoPresentation(undefined, false)).toBe(false);
   });
 
   it('keeps a closing stream visible after its transmission has cleared', () => {
