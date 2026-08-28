@@ -2,10 +2,10 @@ import type { ParsedFT8Message, FrameMessage, SlotInfo, QSORecord } from '@tx5dr
 import type { StrategyDecision } from './hooks.js';
 
 /**
- * Logical FT8 transmit slot identifiers used by the built-in automation model.
+ * Legacy identifiers for the six selectable FT8 transmit messages.
  *
- * These labels correspond to the six sequential transmit messages in a typical
- * FT8 QSO flow and are used for status snapshots and UI updates.
+ * These labels describe message choices, not T/R time slots or parallel QSO
+ * streams. User-facing interfaces should call them Tx messages.
  */
 export type StrategyRuntimeSlot = 'TX1' | 'TX2' | 'TX3' | 'TX4' | 'TX5' | 'TX6';
 
@@ -42,7 +42,7 @@ export interface StrategyRuntimeSnapshot {
   slots?: Partial<Record<StrategyRuntimeSlot, string>>;
   /** Current conversation metadata tracked by the runtime. */
   context?: StrategyRuntimeContext;
-  /** Optional list of user-visible next states, modes or branch hints. */
+  /** Optional legacy list of user-visible next Tx messages or branch hints. */
   availableSlots?: string[];
   /** Host correlation token for QSO persistence; it is not an RF decision epoch. */
   qsoLifecycleEpoch?: number;
@@ -195,7 +195,7 @@ export interface StrategyStateOption {
   transmitText?: string;
 }
 
-/** One independently progressing QSO lane inside an operator strategy. */
+/** One independently progressing parallel QSO inside an operator strategy. */
 export interface StrategyStreamSnapshot {
   /** Stable identity within the owning strategy runtime. */
   streamId: string;

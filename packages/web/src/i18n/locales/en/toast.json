@@ -52,8 +52,8 @@
       "description": "Operator {{operatorId}} was stopped before sending the same message again (attempt {{attemptedCount}}, limit {{maxCount}}) to avoid repeatedly occupying the frequency: {{transmission}}"
     },
     "standardFrequencyMultiStreamFallback": {
-      "title": "Multi-slot transmission reduced to one TX slot",
-      "description": "The standard {{mode}} calling frequency, {{frequency}} MHz, allows one TX slot per operator. This multi-slot transmission was blocked."
+      "title": "Work one station at a time on standard frequencies",
+      "description": "An operator cannot send multiple simultaneous signals on the standard {{mode}} calling frequency, {{frequency}} MHz. This transmission was reduced to one QSO."
     },
     "repeaterDuplexUnsupported": {
       "title": "Repeater DUP not applied",

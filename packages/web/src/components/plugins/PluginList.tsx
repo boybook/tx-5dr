@@ -342,7 +342,7 @@ export const PluginList = forwardRef<PluginListRef, PluginListProps>(({
       {strategyPlugins.length > 0 && (
         <>
           <PluginSectionTitle
-            label={t('plugins.strategyPlugins', 'Strategy Plugins')}
+            label={t('plugins.strategyPlugins', 'QSO Mode Plugins')}
             helpTitle={t('plugins.strategyPluginsHelpTitle', 'What is a strategy plugin?')}
             helpDescription={t(
               'plugins.strategyPluginsHelpDescription',

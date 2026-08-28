@@ -3,7 +3,7 @@
   "pluginDescription": "手选目标与直接来呼自动入队，使用标准 FT8/FT4 通联流程依次处理",
   "strategyOverview": "辅助队列说明",
   "strategyOverviewDesc": "双击消息列表中的目标可手动入队，可靠的直接来呼会自动入队；队列按当前交互进度依次使用标准 FT8/FT4 流程通联。",
-  "parallelStreams": "通联槽数",
-  "parallelStreamsDesc": "同时使用的标准 FT8/FT4 通联槽数量；默认 1 槽，最多 3 槽。",
+  "parallelStreams": "同时通联数",
+  "parallelStreamsDesc": "最多同时处理多少个标准 FT8/FT4 QSO；默认 1 个，最多 3 个。",
   "actionRetry": "重试", "actionRemove": "移除"
 }
