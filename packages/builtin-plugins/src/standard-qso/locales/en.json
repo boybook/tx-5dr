@@ -1,8 +1,8 @@
 {
   "pluginName": "Standard QSO",
-  "pluginDescription": "Built-in standard FT8/FT4 QSO mode",
-  "strategyOverview": "Mode overview",
-  "strategyOverviewDesc": "This QSO mode follows the standard FT8/FT4 flow, including answering others' CQ, automatic target selection, timeout handling, and retry behavior.",
+  "pluginDescription": "Built-in standard FT8/FT4 QSO workflow",
+  "strategyOverview": "Workflow overview",
+  "strategyOverviewDesc": "This QSO workflow follows the standard FT8/FT4 flow, including answering others' CQ, automatic target selection, timeout handling, and retry behavior.",
   "autoReplyToCQ": "Answer others' CQ",
   "autoReplyToCQDesc": "While listening, automatically choose and call eligible stations calling CQ. This setting does not mean starting your own CQ.",
   "autoReplyToDirectCallWhenStopped": "Answer direct calls while idle",

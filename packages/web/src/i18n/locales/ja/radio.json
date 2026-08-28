@@ -494,7 +494,7 @@
     "streamStateErrors": {
       "qsoChanged": "交信状態が更新されました。現在の行を確認してから再試行してください。",
       "stateUnavailable": "この交信では、その状態を選択できなくなりました。",
-      "unsupported": "この交信モードは手動状態変更に対応していません。"
+      "unsupported": "この交信方式は手動状態変更に対応していません。"
     }
   },
   "profile": {
@@ -569,13 +569,13 @@
     "gridPlaceholder": "例: FN31 または FN31AB",
     "gridDesc": "入力可能な 4/6/8 桁のグリッド。 FT8 は送信時に最初の 4 桁のみを自動的に送信します。",
     "maxConcurrentStreams": "同時QSO上限",
-    "maxConcurrentStreamsDesc": "このオペレーターが同時に進められるデジタルモード QSO の上限です。交信モードごとに少ない数を使用できます。",
+    "maxConcurrentStreamsDesc": "このオペレーターが同時に進められるデジタルモード QSO の上限です。交信方式ごとに少ない数を使用できます。",
     "maxConcurrentStreamsInvalid": "同時QSO上限は1から5の整数で指定してください。",
     "gridValue": "グリッド: {{grid}}",
     "notSet": "設定されていません",
     "logSync": "交信ログの同期",
     "logSyncDesc": "同期サービスを構成した後、通話記録を WaveLog、QRZ.com、または LoTW に自動的にアップロードできます。",
-    "automation": "交信モード設定",
+    "automation": "交信方式設定",
     "autoReplyToCQ": "他局の CQ に自動応答",
     "autoResumeCQAfterFail": "失敗後も CQ 継続",
     "autoResumeCQAfterSuccess": "QSO 完了後も CQ 継続",

@@ -116,7 +116,7 @@
     "subtitle": "デジタル無線機リモコン"
   },
   "automation": {
-    "title": "交信モード"
+    "title": "交信方式"
   },
   "theme": {
     "toggle": "テーマを切り替える",
@@ -850,7 +850,7 @@
       },
       "plugin-bootstrap": {
         "label": "プラグイン",
-        "description": "プラグインと交信モードを読み込む"
+        "description": "プラグインと交信方式を読み込む"
       },
       "ntp-initial-check": {
         "label": "時間校正",

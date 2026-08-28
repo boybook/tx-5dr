@@ -1,5 +1,5 @@
 {
-  "strategyOverview": "WW Digi 竞赛模式",
+  "strategyOverview": "WW Digi 竞赛机制",
   "strategyOverviewDesc": "待通联列表为空时打开 TX 即开始重复 CQ；收到回复后最多同时处理 3 个 QSO，其余电台保留在列表中，可逐项点击呼叫。",
   "contestYear": "比赛届次",
   "contestYearDesc": "选择对应年份的 WW Digi 比赛和提交时段。",
