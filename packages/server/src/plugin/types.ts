@@ -151,6 +151,7 @@ export interface DecisionOrchestratorDeps {
   markQueueExecutionValidated?: (operatorId: string) => void;
   getStrategyRuntime: (operatorId: string) => import('@tx5dr/plugin-api').StrategyRuntime | undefined;
   getStrategyRuntimeGeneration: (operatorId: string) => number | undefined;
+  getStrategyPluginName?: (operatorId: string) => string;
   getStrategyMaxConcurrentStreams?: (operatorId: string) => number | undefined;
   getEffectiveOperatorMaxConcurrentStreams?: (operatorId: string) => number;
   invokeStrategyRuntime: <T>(

@@ -41,7 +41,6 @@ import type { SlotPackManager } from '../slot/SlotPackManager.js';
 import type { CallsignContextTracker } from '../slot/CallsignContextTracker.js';
 import { MemoryLeakDetector } from '../utils/MemoryLeakDetector.js';
 import { createLogger } from '../utils/logger.js';
-import { normalizeCallsign } from '../utils/callsign.js';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { DigitalFrameCoordinator } from '../transmission/DigitalFrameCoordinator.js';
@@ -139,6 +138,8 @@ export interface UnsavedQsoAttempt {
   qsoRuntimeGeneration?: number;
   streamId?: string;
   persistencePolicy?: QSOPersistencePolicy;
+  destination?: { kind: 'plugin-session'; sessionId: string };
+  sourcePluginName?: string;
   createdAt: number;
 }
 
@@ -390,10 +391,27 @@ export class RadioOperatorManager {
       qsoRuntimeGeneration?: number;
       qsoRecord: QSORecord;
       persistencePolicy?: QSOPersistencePolicy;
+      destination?: { kind: 'plugin-session'; sessionId: string };
+      sourcePluginName?: string;
       retryAttemptId?: string;
       resolve?: (record: QSORecord) => void;
       reject?: (error: unknown) => void;
     }) => {
+      let retryAttempt = data.retryAttemptId
+        ? this.unsavedQsoAttempts.get(data.retryAttemptId)
+        : undefined;
+      if (!data.retryAttemptId && !retryAttempt && data.qsoLifecycleId) {
+        retryAttempt = this.getUnsavedQsosForOperator(data.operatorId).find((attempt) => (
+          attempt.qsoLifecycleId === data.qsoLifecycleId
+            && attempt.qsoRecord.id === data.qsoRecord.id
+        ));
+      }
+      const destination = retryAttempt?.destination ?? data.destination;
+      const sourcePluginName = retryAttempt?.sourcePluginName ?? data.sourcePluginName;
+      let targetLogBookId = retryAttempt?.logBookId
+        ?? destination?.sessionId
+        ?? this.logManager.getOperatorLogBookId(data.operatorId)
+        ?? `operator-${data.operatorId}`;
       const persistenceKey = data.qsoLifecycleId ?? `${data.operatorId}:legacy:${data.qsoRecord.id}`;
       const activePersistence = this.qsoPersistenceInFlight.get(data.operatorId);
       if (activePersistence) {
@@ -409,26 +427,23 @@ export class RadioOperatorManager {
       try {
         logger.debug(`Recording QSO: ${data.qsoRecord.callsign} (operator: ${data.operatorId})`);
 
-        const retryAttempt = data.retryAttemptId
-          ? this.unsavedQsoAttempts.get(data.retryAttemptId)
-          : undefined;
         const pendingAttempts = this.getUnsavedQsosForOperator(data.operatorId);
-        if (pendingAttempts.length > 0 && !data.retryAttemptId) {
+        if (pendingAttempts.length > 0 && !retryAttempt) {
           const error = new LogbookOperationError(
             'LOGBOOK_MAINTENANCE',
             'Resolve the existing unsaved QSO before recording another contact',
           );
-          const logBookId = this.logManager.getOperatorLogBookId(data.operatorId)
-            ?? `operator-${data.operatorId}`;
           const attemptId = this.rememberUnsavedQso(
             data.operatorId,
-            logBookId,
+            targetLogBookId,
             data.qsoRecord,
             data.qsoLifecycleId,
             data.qsoLifecycleEpoch,
             data.qsoRuntimeGeneration,
             data.persistencePolicy,
             data.streamId,
+            destination,
+            sourcePluginName,
           );
           if (this.isCurrentQsoLifecycle(
             data.operatorId,
@@ -439,7 +454,7 @@ export class RadioOperatorManager {
             this.pauseOperatorAfterLogbookFailure(data.operatorId);
           }
           this.eventEmitter.emit('logbookWriteFailed' as any, {
-            logBookId,
+            logBookId: targetLogBookId,
             operatorId: data.operatorId,
             attemptId,
             unsavedCount: this.getUnsavedQsosForOperator(data.operatorId).length,
@@ -462,26 +477,38 @@ export class RadioOperatorManager {
           return;
         }
 
-        // 获取操作员对应的日志本
-        const logBook = await this.logManager.getOperatorLogBook(data.operatorId);
+        const operatorCallsign = this.logManager.getOperatorCallsign(data.operatorId);
+        const logBook = destination
+          ? (sourcePluginName && operatorCallsign
+            ? this.logManager.getPluginSessionLogBook(
+                destination.sessionId,
+                sourcePluginName,
+                operatorCallsign,
+              )
+            : null)
+          : await this.logManager.getOperatorLogBook(data.operatorId);
         if (!logBook) {
-          const callsign = this.logManager.getOperatorCallsign(data.operatorId);
-          const message = !callsign
+          const callsign = operatorCallsign;
+          const message = destination
+            ? 'Cannot record QSO: plugin logbook session is unavailable or not owned by the active strategy'
+            : !callsign
             ? `Cannot record QSO: operator ${data.operatorId} has no registered callsign`
             : `Cannot record QSO: failed to create logbook for operator ${data.operatorId} (callsign: ${callsign})`;
           logger.error(message);
           this.eventEmitter.emit('logbookWriteFailed' as any, {
-            logBookId: callsign ? `logbook-${normalizeCallsign(callsign)}` : `operator-${data.operatorId}`,
+            logBookId: targetLogBookId,
             operatorId: data.operatorId,
             attemptId: this.rememberUnsavedQso(
               data.operatorId,
-              callsign ? `logbook-${normalizeCallsign(callsign)}` : `operator-${data.operatorId}`,
+              targetLogBookId,
               data.qsoRecord,
               data.qsoLifecycleId,
               data.qsoLifecycleEpoch,
               data.qsoRuntimeGeneration,
               data.persistencePolicy,
               data.streamId,
+              destination,
+              sourcePluginName,
             ),
             unsavedCount: 1,
             error: {
@@ -501,6 +528,16 @@ export class RadioOperatorManager {
             this.pauseOperatorAfterLogbookFailure(data.operatorId);
           }
           return;
+        }
+        targetLogBookId = logBook.id;
+        const logbookHealth = logBook.binding?.kind === 'plugin-session'
+          ? logBook.provider.getHealth()
+          : undefined;
+        if (logbookHealth && (!logbookHealth.readable || !logbookHealth.writable)) {
+          throw new LogbookOperationError(
+            logbookHealth.state === 'loading' ? 'LOGBOOK_LOADING' : 'LOGBOOK_UNAVAILABLE',
+            `Logbook ${logBook.name} is not writable (${logbookHealth.state})`,
+          );
         }
         
         // 兜底校正频率：防止误将音频偏移(Hz)写入为绝对频率
@@ -539,11 +576,13 @@ export class RadioOperatorManager {
           frequency: normalizedFreq
         };
 
-        const completedQSO = await this.completeAutomaticQSORecord(data.operatorId, normalizedQSO);
+        const completedQSO = retryAttempt
+          ? { ...retryAttempt.qsoRecord, messageHistory: [...retryAttempt.qsoRecord.messageHistory] }
+          : await this.completeAutomaticQSORecord(data.operatorId, normalizedQSO);
         // Retain the exact first candidate so an explicit retry cannot silently
         // rebuild a different history, report, or frequency later.
         this.preparedQsoCandidates.set(persistenceKey, completedQSO);
-        const persistencePolicy = data.persistencePolicy ?? 'merge-nearby';
+        const persistencePolicy = retryAttempt?.persistencePolicy ?? data.persistencePolicy ?? 'merge-nearby';
         const mergeCandidate = persistencePolicy === 'merge-nearby'
           ? await this.findMergeCandidate(logBook.provider, completedQSO)
           : null;
@@ -586,8 +625,8 @@ export class RadioOperatorManager {
           mode: persistedQSO.mode,
         });
 
-        if (data.retryAttemptId) {
-          this.unsavedQsoAttempts.delete(data.retryAttemptId);
+        if (retryAttempt) {
+          this.unsavedQsoAttempts.delete(retryAttempt.attemptId);
         } else {
           this.clearUnsavedQsoForLifecycle(data.operatorId, data.qsoLifecycleId, data.qsoRecord.id);
         }
@@ -620,7 +659,7 @@ export class RadioOperatorManager {
           logger.warn(`Failed to emit ${eventName} after QSO commit:`, eventError);
         }
 
-        if (shouldAutoSync) {
+        if (shouldAutoSync && logBook.binding?.kind !== 'plugin-session') {
           const operatorCallsign = this.logManager.getOperatorCallsign(data.operatorId);
           if (operatorCallsign) {
             try {
@@ -654,13 +693,15 @@ export class RadioOperatorManager {
         logger.error(`Failed to record QSO:`, error);
         const attemptId = this.rememberUnsavedQso(
           data.operatorId,
-          this.logManager.getOperatorLogBookId(data.operatorId) ?? `operator-${data.operatorId}`,
+          targetLogBookId,
           this.preparedQsoCandidates.get(persistenceKey) ?? data.qsoRecord,
           data.qsoLifecycleId,
           data.qsoLifecycleEpoch,
           data.qsoRuntimeGeneration,
           data.persistencePolicy,
           data.streamId,
+          destination,
+          sourcePluginName,
         );
         this.preparedQsoCandidates.delete(persistenceKey);
         if (this.isCurrentQsoLifecycle(
@@ -673,7 +714,7 @@ export class RadioOperatorManager {
         }
         const operationError = error instanceof LogbookOperationError ? error : undefined;
         this.eventEmitter.emit('logbookWriteFailed' as any, {
-          logBookId: this.logManager.getOperatorLogBookId(data.operatorId) ?? `operator-${data.operatorId}`,
+          logBookId: targetLogBookId,
           operatorId: data.operatorId,
           attemptId,
           unsavedCount: this.getUnsavedQsosForOperator(data.operatorId).length,
@@ -1115,6 +1156,20 @@ export class RadioOperatorManager {
       const slots = runtimeState?.slots;
       let targetGrid = String(runtimeState?.context?.targetGrid ?? '');
       const targetCall = String(runtimeState?.context?.targetCallsign ?? '');
+      const activeQueueEntryIds = new Set(
+        runtimeState?.queue?.activeEntryIds
+          ?? (runtimeState?.queue?.activeEntryId ? [runtimeState.queue.activeEntryId] : []),
+      );
+      const targetCalls = Array.from(new Set([
+        ...(runtimeState?.streams ?? []).map((stream) => stream.targetCallsign),
+        ...(runtimeState?.queue?.rows ?? [])
+          .filter((row) => activeQueueEntryIds.has(row.entryId))
+          .map((row) => row.callsign),
+        targetCall,
+      ].flatMap((callsign) => {
+        const normalized = callsign?.trim().toUpperCase();
+        return normalized ? [normalized] : [];
+      })));
       if (!targetGrid && targetCall && this.callsignTracker) {
         targetGrid = this.callsignTracker.getGrid(targetCall) ?? '';
       }
@@ -1145,6 +1200,7 @@ export class RadioOperatorManager {
         context: {
           myCall: operator.config.myCallsign,
           myGrid: operator.config.myGrid,
+          targetCalls,
           targetCall: targetContext.targetCall,
           targetGrid: targetContext.targetGrid,
           frequency: operator.config.frequency,
@@ -1436,6 +1492,8 @@ export class RadioOperatorManager {
         qsoRuntimeGeneration: attempt.qsoRuntimeGeneration,
         streamId: attempt.streamId,
         persistencePolicy: attempt.persistencePolicy,
+        destination: attempt.destination,
+        sourcePluginName: attempt.sourcePluginName,
       })
       .then((persisted) => {
         if (this.isCurrentQsoLifecycle(
@@ -1505,6 +1563,8 @@ export class RadioOperatorManager {
     qsoRuntimeGeneration?: number,
     persistencePolicy?: QSOPersistencePolicy,
     streamId?: string,
+    destination?: { kind: 'plugin-session'; sessionId: string },
+    sourcePluginName?: string,
   ): string {
     const existing = this.getUnsavedQsosForOperator(operatorId).find((attempt) => (
       qsoLifecycleId !== undefined
@@ -1523,6 +1583,8 @@ export class RadioOperatorManager {
       qsoRuntimeGeneration,
       streamId,
       persistencePolicy,
+      destination,
+      sourcePluginName,
       createdAt: Date.now(),
     });
     return attemptId;

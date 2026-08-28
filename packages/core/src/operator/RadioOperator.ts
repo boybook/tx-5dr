@@ -15,6 +15,7 @@ const logger = createLogger('RadioOperator');
 interface RadioOperatorEvents extends DigitalRadioEngineEvents {
     operatorTransmitCyclesChanged: (data: {
         operatorId: string;
+        previousTransmitCycles?: number[];
         transmitCycles: number[];
         commandEpoch?: number;
         source?: 'manual' | 'plugin' | 'late-decode' | 'slot-auto';
@@ -34,6 +35,8 @@ interface RadioOperatorEvents extends DigitalRadioEngineEvents {
         qsoRuntimeGeneration?: number;
         qsoRecord: QSORecord;
         persistencePolicy?: QSOPersistencePolicy;
+        destination?: { kind: 'plugin-session'; sessionId: string };
+        sourcePluginName?: string;
         retryAttemptId?: string;
         resolve?: (record: QSORecord) => void;
         reject?: (error: unknown) => void;
@@ -159,6 +162,8 @@ export class RadioOperator {
         qsoLifecycleEpoch?: number;
         qsoRuntimeGeneration?: number;
         persistencePolicy?: QSOPersistencePolicy;
+        destination?: { kind: 'plugin-session'; sessionId: string };
+        sourcePluginName?: string;
     }): Promise<QSORecord> {
         return new Promise<QSORecord>((resolve, reject) => {
             this._eventEmitter.emit('recordQSO', {
@@ -168,6 +173,8 @@ export class RadioOperator {
                 qsoLifecycleEpoch: options?.qsoLifecycleEpoch,
                 qsoRuntimeGeneration: options?.qsoRuntimeGeneration,
                 persistencePolicy: options?.persistencePolicy,
+                destination: options?.destination,
+                sourcePluginName: options?.sourcePluginName,
                 qsoRecord,
                 retryAttemptId: options?.retryAttemptId,
                 resolve,

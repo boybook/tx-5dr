@@ -139,6 +139,7 @@ describe('LogManager callsign logbook creation', () => {
       createdAt: Date.now(),
       lastUsed: Date.now(),
       isActive: true,
+      binding: { kind: 'primary', callsign: 'BG4IAJ' },
     };
     const createLogBook = vi.spyOn(manager, 'createLogBook').mockImplementation(async () => {
       await creationGate;
@@ -166,6 +167,7 @@ describe('LogManager callsign logbook creation', () => {
       createdAt: 1,
       lastUsed: 1,
       isActive: true,
+      binding: { kind: 'primary', callsign: 'BG4IAJ' },
     };
     const books = (manager as unknown as { logBooks: Map<string, LogBookInstance> }).logBooks;
     books.set(logBook.id, logBook);
@@ -188,6 +190,7 @@ describe('LogManager callsign logbook creation', () => {
       createdAt: 1,
       lastUsed: 1,
       isActive: true,
+      binding: { kind: 'primary', callsign: 'BG4IAJ' },
     };
     const books = (manager as unknown as { logBooks: Map<string, LogBookInstance> }).logBooks;
     const bindings = (manager as unknown as { callsignLogBookMap: Map<string, string> }).callsignLogBookMap;
@@ -201,6 +204,110 @@ describe('LogManager callsign logbook creation', () => {
     expect(manager.getOperatorCallsign('op1')).toBeNull();
     expect(manager.getOperatorIdsForLogBook(logBook.id)).toEqual(['op2']);
     expect(manager.resolveLogBookId('BG4IAJ')).toBe(logBook.id);
+  });
+
+  it('reuses and hides a deterministic plugin session without changing callsign resolution', async () => {
+    const manager = LogManager.getInstance();
+    let releaseCreation!: () => void;
+    const creationGate = new Promise<void>((resolve) => { releaseCreation = resolve; });
+    const books = (manager as unknown as { logBooks: Map<string, LogBookInstance> }).logBooks;
+    const createLogBook = vi.spyOn(manager, 'createLogBook').mockImplementation(async (config) => {
+      await creationGate;
+      const logBook: LogBookInstance = {
+        id: config.id,
+        name: config.name,
+        filePath: `/tmp/${config.id}.adi`,
+        storageKind: 'managed',
+        provider: { close: vi.fn().mockResolvedValue(undefined) } as any,
+        createdAt: 1,
+        lastUsed: 1,
+        isActive: true,
+        binding: config.binding!,
+      };
+      books.set(logBook.id, logBook);
+      return logBook;
+    });
+    const descriptor = {
+      pluginName: 'contest-plugin',
+      stationCallsign: 'BG4IAJ/P',
+      sessionKey: 'contest:2026',
+      title: 'Contest 2026',
+    };
+
+    const first = manager.getOrCreatePluginSessionLogBook(descriptor);
+    const second = manager.getOrCreatePluginSessionLogBook({ ...descriptor, stationCallsign: 'BG4IAJ' });
+    await Promise.resolve();
+    expect(createLogBook).toHaveBeenCalledOnce();
+    releaseCreation();
+    const [firstLogBook, secondLogBook] = await Promise.all([first, second]);
+
+    expect(secondLogBook).toBe(firstLogBook);
+    expect(firstLogBook.binding).toEqual({
+      kind: 'plugin-session',
+      pluginName: 'contest-plugin',
+      stationCallsign: 'BG4IAJ',
+      sessionKey: 'contest:2026',
+    });
+    expect(manager.getLogBooks()).toEqual([]);
+    expect(manager.resolveLogBookId(firstLogBook.id)).toBeNull();
+    expect(manager.getPluginSessionLogBook(firstLogBook.id, 'contest-plugin', 'BG4IAJ/P')).toBe(firstLogBook);
+    expect(manager.getPluginSessionLogBook(firstLogBook.id, 'other-plugin', 'BG4IAJ')).toBeNull();
+  });
+
+  it('rejects unsafe plugin session descriptors before creating files', async () => {
+    const manager = LogManager.getInstance();
+    const createLogBook = vi.spyOn(manager, 'createLogBook');
+    await expect(manager.getOrCreatePluginSessionLogBook({
+      pluginName: 'contest-plugin',
+      stationCallsign: 'BG4IAJ',
+      sessionKey: '../outside',
+      title: 'Contest',
+    })).rejects.toThrow('Invalid plugin logbook session key');
+    expect(createLogBook).not.toHaveBeenCalled();
+  });
+
+  it('reopens the same plugin session ADIF with its committed records after restart', async () => {
+    const manager = LogManager.getInstance();
+    const directory = await mkdtemp(path.join(tmpdir(), 'tx5dr-plugin-session-restart-'));
+    vi.spyOn(tx5drPaths, 'getDataFile').mockImplementation(async fileName => path.join(directory, fileName));
+    vi.spyOn(LegacyLogbookMaintenance.prototype, 'start').mockImplementation(() => undefined);
+    vi.spyOn(LegacyLogbookMaintenance.prototype, 'stop').mockResolvedValue(undefined);
+    const descriptor = {
+      pluginName: 'contest-plugin',
+      stationCallsign: 'BG4IAJ',
+      sessionKey: 'contest:2026',
+      title: 'Contest 2026',
+    };
+    const qso = {
+      id: 'session-qso-1',
+      callsign: 'JA1AAA',
+      frequency: 14_091_000,
+      mode: 'FT8',
+      startTime: Date.UTC(2026, 7, 29, 12),
+      messageHistory: [],
+      myCallsign: 'BG4IAJ',
+      contestId: 'TEST-CONTEST',
+    };
+
+    try {
+      await manager.initialize();
+      const first = await manager.getOrCreatePluginSessionLogBook(descriptor);
+      await vi.waitFor(() => expect(first.provider.getHealth().writable).toBe(true));
+      await first.provider.addQSO(qso, 'operator-1');
+      const firstId = first.id;
+      await manager.close();
+
+      await manager.initialize();
+      const reopened = await manager.getOrCreatePluginSessionLogBook(descriptor);
+      await vi.waitFor(() => expect(reopened.provider.getHealth().readable).toBe(true));
+      expect(reopened.id).toBe(firstId);
+      await expect(reopened.provider.queryQSOs({})).resolves.toEqual([
+        expect.objectContaining({ id: 'session-qso-1', callsign: 'JA1AAA' }),
+      ]);
+    } finally {
+      await manager.close();
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it('drains every registered logbook when one close fails', async () => {
@@ -217,6 +324,7 @@ describe('LogManager callsign logbook creation', () => {
       createdAt: 1,
       lastUsed: 1,
       isActive: true,
+      binding: { kind: 'custom' },
     });
     books.set('second', {
       id: 'second',
@@ -227,6 +335,7 @@ describe('LogManager callsign logbook creation', () => {
       createdAt: 1,
       lastUsed: 1,
       isActive: true,
+      binding: { kind: 'custom' },
     });
 
     await expect(manager.close()).resolves.toBeUndefined();
@@ -255,6 +364,7 @@ describe('LogManager callsign logbook creation', () => {
       createdAt: 1,
       lastUsed: 1,
       isActive: true,
+      binding: { kind: 'custom' },
     });
     books.set('healthy', {
       id: 'healthy',
@@ -265,6 +375,7 @@ describe('LogManager callsign logbook creation', () => {
       createdAt: 1,
       lastUsed: 1,
       isActive: true,
+      binding: { kind: 'custom' },
     });
     initializations.set('slow', slowInitialization);
 
@@ -297,6 +408,7 @@ describe('LogManager callsign logbook creation', () => {
       createdAt: 1,
       lastUsed: 1,
       isActive: true,
+      binding: { kind: 'custom' },
     });
     initializations.set('loading', initialization);
 

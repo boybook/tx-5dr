@@ -441,6 +441,14 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
       completion.emitted = true;
       return { qsoCompletions: [structuredClone(completion.effect)] };
     }
+    if (actionId === 'retry-log') {
+      if (!this.completion || this.completion.settled !== 'failed') {
+        throw new Error('log_retry_not_available');
+      }
+      this.completion.settled = undefined;
+      this.completion.emitted = true;
+      return { qsoCompletions: [structuredClone(this.completion.effect)] };
+    }
     if (actionId === 'end-qso') {
       this.releaseRequested = true;
       return { requestDecision: true };
@@ -597,6 +605,14 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
       ];
     }
     if (!this.active) return [];
+    if (this.completion?.settled === 'failed') {
+      return [{
+        id: 'retry-log', label: 'actionRetry', icon: 'rotate-right', tone: 'primary', presentation: 'primary',
+      }, {
+        id: 'end-qso', label: 'actionEndQso', icon: 'xmark', tone: 'danger', presentation: 'menu',
+        confirmation: { title: 'confirmEndQso', description: 'confirmEndQsoDesc', confirmLabel: 'actionEndQso' },
+      }];
+    }
     const actions: StrategyActionDescriptor[] = [
       this.paused
         ? { id: 'resume', label: 'actionResume', icon: 'play', tone: 'primary', presentation: 'primary' }

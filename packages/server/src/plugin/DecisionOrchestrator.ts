@@ -522,10 +522,16 @@ export class DecisionOrchestrator {
   commitQSOCompletionEffectsFromAction(
     operatorId: string,
     effects: import('@tx5dr/plugin-api').StrategyQSOCompletionEffect[],
+    sourcePluginName?: string,
   ): void {
     const runtimeGeneration = this.deps.getStrategyRuntimeGeneration(operatorId);
     if (runtimeGeneration === undefined || effects.length === 0) return;
-    this.commitQSOCompletionEffects(operatorId, runtimeGeneration, effects);
+    this.commitQSOCompletionEffects(
+      operatorId,
+      runtimeGeneration,
+      effects,
+      sourcePluginName ?? this.deps.getStrategyPluginName?.(operatorId),
+    );
   }
 
   hasActiveSilentDirectedCallGate(operatorId: string, slotPack?: SlotPack): boolean {
@@ -919,7 +925,12 @@ export class DecisionOrchestrator {
           ...(result.qsoCompletions ?? []),
         ];
         if (qsoCompletions.length > 0) {
-          this.commitQSOCompletionEffects(operatorId, runtimeGeneration, qsoCompletions);
+          this.commitQSOCompletionEffects(
+            operatorId,
+            runtimeGeneration,
+            qsoCompletions,
+            this.deps.getStrategyPluginName?.(operatorId),
+          );
         }
         return result;
       } catch (error) {
@@ -944,11 +955,17 @@ export class DecisionOrchestrator {
     operatorId: string,
     runtimeGeneration: number,
     effects: import('@tx5dr/plugin-api').StrategyQSOCompletionEffect[],
+    sourcePluginName?: string,
   ): void {
     const previous = this.qsoCompletionTails.get(operatorId) ?? Promise.resolve();
     let tail = previous;
     for (const effect of effects) {
-      tail = tail.then(() => this.commitQSOCompletionEffect(operatorId, runtimeGeneration, effect));
+      tail = tail.then(() => this.commitQSOCompletionEffect(
+        operatorId,
+        runtimeGeneration,
+        effect,
+        sourcePluginName,
+      ));
     }
     this.qsoCompletionTails.set(operatorId, tail);
     void tail.finally(() => {
@@ -960,6 +977,7 @@ export class DecisionOrchestrator {
     operatorId: string,
     runtimeGeneration: number,
     effect: import('@tx5dr/plugin-api').StrategyQSOCompletionEffect,
+    sourcePluginName?: string,
   ): Promise<void> {
     const { record: qsoRecord, lifecycleEpoch } = effect;
     const streamSegment = effect.streamId
@@ -975,6 +993,8 @@ export class DecisionOrchestrator {
         qsoRuntimeGeneration: runtimeGeneration,
         qsoRecord,
         persistencePolicy: effect.persistencePolicy,
+        destination: effect.destination,
+        sourcePluginName,
         resolve,
         reject,
       });

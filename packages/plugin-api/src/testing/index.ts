@@ -23,6 +23,7 @@ import type {
   RadioPowerView,
   RadioPowerCommandPort,
   LogbookAccess,
+  PluginLogbookSessions,
   BandAccess,
   UIBridge,
   PluginFileStore,
@@ -312,6 +313,7 @@ export function createMockRadioView(
     band: overrides?.band ?? '20m',
     get mode() { return cloneStructuredValue(mode); },
     isConnected: overrides?.isConnected ?? true,
+    isSimulation: overrides?.isSimulation ?? false,
   };
 }
 
@@ -392,6 +394,7 @@ export function createMockLogbookAccess(
   const callsignAccess = {
     callsign: 'N0CALL',
     getLogBookId: async () => 'logbook-N0CALL',
+    awaitReady: async () => {},
     queryQSOs: async () => [],
     readQsoSnapshot,
     countQSOs: async () => 0,
@@ -769,6 +772,8 @@ export interface MockPluginContextOptions<
   radioPowerCommands?: RadioPowerCommandPort;
   /** Logbook access overrides. */
   logbook?: Partial<LogbookAccess>;
+  /** Plugin-owned logbook session override. */
+  logbookSessions?: PluginLogbookSessions;
   /** Band access overrides. */
   band?: Partial<BandAccess>;
   /** Host settings control overrides. */
@@ -808,6 +813,16 @@ export function createMockContext<
 
   const radio = createMockRadioView(opts.radio);
   const logbook = createMockLogbookAccess(opts.logbook);
+  const logbookSessions: PluginLogbookSessions = opts.logbookSessions ?? {
+    async open(descriptor) {
+      const access = logbook.forCallsign(descriptor.stationCallsign);
+      return {
+        ...access,
+        id: `plugin-session-${descriptor.sessionKey}`,
+        title: descriptor.title,
+      };
+    },
+  };
   const readOnlyLogbook = {
     hasWorked: logbook.hasWorked,
     hasWorkedDXCC: logbook.hasWorkedDXCC,
@@ -820,6 +835,7 @@ export function createMockContext<
       return {
         callsign: access.callsign,
         getLogBookId: access.getLogBookId,
+        awaitReady: access.awaitReady,
         queryQSOs: access.queryQSOs,
         readQsoSnapshot: access.readQsoSnapshot,
         countQSOs: access.countQSOs,
@@ -861,8 +877,15 @@ export function createMockContext<
     band,
     ui,
     files,
-    ...((opts.permissions?.includes('logbook:read') || opts.permissions?.includes('logbook:write')) ? {
-      logbook: opts.permissions?.includes('logbook:write') ? logbook : readOnlyLogbook,
+    ...((opts.permissions?.includes('logbook:read')
+      || opts.permissions?.includes('logbook:write')
+      || opts.permissions?.includes('logbook:session')) ? {
+      logbook: {
+        ...(opts.permissions?.includes('logbook:write')
+          ? logbook
+          : opts.permissions?.includes('logbook:read') ? readOnlyLogbook : {}),
+        ...(opts.permissions?.includes('logbook:session') ? { sessions: logbookSessions } : {}),
+      },
     } : {}),
     ...(opts.permissions?.includes('logbook:sync') ? { logbookSync } : {}),
     ...((opts.permissions ?? []).some(permission => permission.startsWith('settings:')) ? {

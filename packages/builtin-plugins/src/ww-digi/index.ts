@@ -2,7 +2,9 @@ import { fileURLToPath } from 'node:url';
 import { wwDigiSimulationScenarios } from './simulation-scenarios.js';
 import {
   definePlugin,
+  generateADIFFile,
   type PluginContextFor,
+  type PluginLogbookSessionAccess,
   type QSORecord,
   type StrategyMessagePresentationProjection,
   type StrategyPluginContext,
@@ -31,7 +33,7 @@ import jaLocale from './locales/ja.json' with { type: 'json' };
 
 export const BUILTIN_WW_DIGI_PLUGIN_NAME = 'ww-digi';
 const DEFAULT_CONTEST_YEAR = new Date().getUTCFullYear();
-type WWDigiContext = PluginContextFor<readonly ['logbook:read', 'operator:transmit-control', 'plugin:event-bus']>;
+type WWDigiContext = PluginContextFor<readonly ['logbook:session', 'operator:transmit-control', 'plugin:event-bus']>;
 
 interface ContestQsoOverride {
   status?: ContestQso['status'];
@@ -53,6 +55,32 @@ interface WWDigiContestSession {
 }
 
 const SESSION_CHANGED_TOPIC = 'ww-digi.session.changed';
+const RUNTIME_LOGBOOK_ID_PREFIX = 'contest-logbook-id:';
+
+function contestLogbookSessionKey(contestYear: number): string {
+  return `ww-digi:${contestYear}`;
+}
+
+function runtimeLogbookIdKey(contestYear: number): string {
+  return `${RUNTIME_LOGBOOK_ID_PREFIX}${contestYear}`;
+}
+
+async function openContestLogbook(
+  ctx: WWDigiContext,
+  contestYear: number,
+): Promise<PluginLogbookSessionAccess> {
+  const logbook = await ctx.logbook.sessions.open({
+    sessionKey: contestLogbookSessionKey(contestYear),
+    stationCallsign: ctx.operator.callsign,
+    title: `WW Digi ${contestYear} - ${ctx.operator.callsign.trim().toUpperCase()}`,
+  });
+  await logbook.awaitReady();
+  const runtimeKey = runtimeLogbookIdKey(contestYear);
+  if (ctx.store.operator.get<string | undefined>(runtimeKey) !== logbook.id) {
+    ctx.store.operator.set(runtimeKey, logbook.id);
+  }
+  return logbook;
+}
 
 interface ContestLedgerHealth {
   state: 'healthy' | 'degraded' | 'unknown';
@@ -270,7 +298,7 @@ function readLedger(ctx: WWDigiContext, contestYear: number): ContestQso[] {
   const value = ctx.store.operator.get<unknown>(ledgerKey(contestYear), []);
   return Array.isArray(value)
     ? (value as ContestQso[]).filter((record) => (
-      isWithinWWDigiContestPeriod(record.startTime, contestYear)
+      ctx.radio.isSimulation || isWithinWWDigiContestPeriod(record.startTime, contestYear)
     ))
     : [];
 }
@@ -288,8 +316,9 @@ function toContestQso(
   record: QSORecord,
   contestYear: number,
   existing?: ContestQso,
+  includeOutsideContestPeriod = false,
 ): ContestQso | null {
-  if (!isWithinWWDigiContestPeriod(record.startTime, contestYear)) return null;
+  if (!includeOutsideContestPeriod && !isWithinWWDigiContestPeriod(record.startTime, contestYear)) return null;
   const band = resolveWWDigiBand(record.frequency);
   const mode = modeOf(record);
   const myCallsign = record.myCallsign?.trim().toUpperCase();
@@ -335,18 +364,20 @@ async function markLedgerDegraded(
 
 async function readContestRecords(ctx: WWDigiContext, contestYear: number): Promise<ContestQso[]> {
   const period = resolveWWDigiContestPeriod(contestYear);
-  const logbook = ctx.logbook.forCallsign(ctx.operator.callsign);
-  if (!await logbook.getLogBookId()) throw new Error(`WW Digi logbook is unavailable for ${ctx.operator.callsign}`);
+  const logbook = await openContestLogbook(ctx, contestYear);
   const session = sessionRepository(ctx, contestYear).read();
   const projected: ContestQso[] = [];
   const pageSize = 5_000;
   for (let offset = 0; ; offset += pageSize) {
     const records = await logbook.queryQSOs({
       orderDirection: 'asc', limit: pageSize, offset,
-      timeRange: { start: period.startTime, end: period.endTime - 1 },
+      ...(!ctx.radio.isSimulation ? {
+        timeRange: { start: period.startTime, end: period.endTime - 1 },
+      } : {}),
     });
     for (const record of records) {
-      const qso = toContestQso(record, contestYear);
+      if (record.contestId?.toUpperCase() !== 'WW-DIGI') continue;
+      const qso = toContestQso(record, contestYear, undefined, ctx.radio.isSimulation);
       if (!qso || qso.myCallsign !== ctx.operator.callsign.trim().toUpperCase()) continue;
       const override = session.overrides[qso.qsoId];
       const merged = { ...qso, ...override };
@@ -362,10 +393,28 @@ async function readContestRecords(ctx: WWDigiContext, contestYear: number): Prom
   return projected;
 }
 
-async function reconcileLedger(
+async function renderADIF(ctx: WWDigiContext, contestYear: number): Promise<string> {
+  const period = resolveWWDigiContestPeriod(contestYear);
+  const logbook = await openContestLogbook(ctx, contestYear);
+  const records = await logbook.queryQSOs({
+    orderDirection: 'asc',
+    ...(!ctx.radio.isSimulation ? {
+      timeRange: { start: period.startTime, end: period.endTime - 1 },
+    } : {}),
+  });
+  return generateADIFFile(records.filter((record) => (
+    record.contestId?.toUpperCase() === 'WW-DIGI'
+      && record.myCallsign?.trim().toUpperCase() === ctx.operator.callsign.trim().toUpperCase()
+  )), {
+    programId: 'TX5DR-WW-DIGI',
+    includeStationCallsign: true,
+  });
+}
+
+async function refreshContestProjection(
   ctx: WWDigiContext,
   contestYear: number,
-): Promise<{ imported: number; total: number }> {
+): Promise<{ total: number }> {
   const records = await readContestRecords(ctx, contestYear);
   const repository = sessionRepository(ctx, contestYear);
   repository.update((session) => ({
@@ -379,18 +428,15 @@ async function reconcileLedger(
     ),
   }));
   await repository.flush();
-  return {
-    imported: records.filter((record) => record.source !== 'ww-digi').length,
-    total: records.length,
-  };
+  return { total: records.length };
 }
 
-async function reconcileLedgerWithHealth(
+async function refreshContestProjectionWithHealth(
   ctx: WWDigiContext,
   contestYear: number,
-): Promise<{ imported: number; total: number }> {
+): Promise<{ total: number }> {
   try {
-    return await reconcileLedger(ctx, contestYear);
+    return await refreshContestProjection(ctx, contestYear);
   } catch (error) {
     await markLedgerDegraded(ctx, contestYear, error);
     throw error;
@@ -398,10 +444,16 @@ async function reconcileLedgerWithHealth(
 }
 
 async function renderCabrillo(ctx: WWDigiContext, contestYear: number): Promise<string> {
-  const session = sessionRepository(ctx, contestYear).read();
+  const repository = sessionRepository(ctx, contestYear);
+  if (repository.read().health.state !== 'healthy') {
+    await refreshContestProjectionWithHealth(ctx, contestYear);
+  }
+  const session = repository.read();
   const health = session.health;
   if (health.state !== 'healthy') {
-    throw new Error(`WW Digi ${contestYear} log is not reconciled; reconcile it before download`);
+    throw new Error(health.error
+      ? `WW Digi ${contestYear} log is unavailable: ${health.error}`
+      : `WW Digi ${contestYear} log is unavailable`);
   }
   if (!isSessionConfirmed(ctx, contestYear, session)) {
     throw new Error(`WW Digi ${contestYear} contest settings are not confirmed`);
@@ -556,7 +608,7 @@ export const wwDigiStrategyPlugin = definePlugin({
     maxConcurrentStreams: 3,
   },
   simulationScenarios: wwDigiSimulationScenarios,
-  permissions: ['logbook:read', 'operator:transmit-control', 'plugin:event-bus'],
+  permissions: ['logbook:session', 'operator:transmit-control', 'plugin:event-bus'],
   storage: { scopes: ['global', 'operator'] },
   settings: {
     strategyOverview: { type: 'info', default: '', label: 'strategyOverview', description: 'strategyOverviewDesc', scope: 'operator' },
@@ -645,33 +697,18 @@ export const wwDigiStrategyPlugin = definePlugin({
     return new WWDigiStrategyRuntime(operator, ctx.log, () => {
       const base = resolveBaseFrequency();
       return [base - 100, base, base + 100];
-    }, async (text, mode) => ctx.digitalMessagePreflight.check({ text, mode }), () => runtimePresentation(ctx));
+    }, async (text, mode) => ctx.digitalMessagePreflight.check({ text, mode }), () => runtimePresentation(ctx), () => {
+      const contestYear = configuredContestYear(ctx.config.contestYear);
+      const sessionId = ctx.store.operator.get<string | undefined>(runtimeLogbookIdKey(contestYear));
+      if (!sessionId) throw new Error('WW Digi logbook session is not ready');
+      return { kind: 'plugin-session', sessionId };
+    });
   },
   isTransmitControlEnabled: () => true,
   async onLoad(ctx) {
     const typed = ctx as WWDigiContext;
     const contestYear = configuredContestYear(typed.config.contestYear);
-    const repository = sessionRepository(typed, contestYear);
-    const legacy = readLedger(typed, contestYear);
-    repository.update((session) => {
-      if (session.migratedOperators[typed.operator.id]) return session;
-      const overrides = { ...session.overrides };
-      for (const record of legacy) {
-        overrides[record.qsoId] = {
-          ...overrides[record.qsoId],
-          status: record.status === 'x-qso' ? 'x-qso' : overrides[record.qsoId]?.status,
-          operatorId: record.operatorId ?? typed.operator.id,
-          transmitterId: record.transmitterId,
-          source: record.source ?? 'ww-digi',
-        };
-      }
-      return {
-        ...session,
-        overrides,
-        migratedOperators: { ...session.migratedOperators, [typed.operator.id]: true },
-      };
-    });
-    await repository.flush();
+    await openContestLogbook(typed, contestYear);
     const notifier = new ContestSessionNotifier<{ callsign: string; contestYear: number }>(typed.eventBus, SESSION_CHANGED_TOPIC);
     notifier.subscribe((event) => {
       if (event.callsign === typed.operator.callsign.trim().toUpperCase() && event.contestYear === contestYear) {
@@ -679,7 +716,8 @@ export const wwDigiStrategyPlugin = definePlugin({
         typed.ui.refreshOperatorProjection();
       }
     });
-    await reconcileLedgerWithHealth(typed, contestYear).catch((error) => {
+    await refreshContestProjection(typed, contestYear).catch(async (error) => {
+      await markLedgerDegraded(typed, contestYear, error);
       typed.log.warn('WW Digi ledger reconciliation failed', { error: error instanceof Error ? error.message : String(error) });
     });
     typed.ui.refreshOperatorProjection();
@@ -690,7 +728,11 @@ export const wwDigiStrategyPlugin = definePlugin({
         const selectedYear = configuredContestYear(typed.config.contestYear);
         if (action === 'getState') {
           const period = resolveWWDigiContestPeriod(selectedYear);
-          const session = sessionRepository(typed, selectedYear).read();
+          const repository = sessionRepository(typed, selectedYear);
+          if (repository.read().health.state !== 'healthy') {
+            await refreshContestProjectionWithHealth(typed, selectedYear);
+          }
+          const session = repository.read();
           return {
             config: session.config,
             contestYear: selectedYear,
@@ -712,10 +754,8 @@ export const wwDigiStrategyPlugin = definePlugin({
         if (action === 'renderCabrillo') {
           return { text: await renderCabrillo(typed, selectedYear) };
         }
-        if (action === 'reconcile') {
-          const result = await reconcileLedgerWithHealth(typed, selectedYear);
-          notifyContestLogChanged(typed, selectedYear);
-          return result;
+        if (action === 'renderADIF') {
+          return { text: await renderADIF(typed, selectedYear) };
         }
         if (action === 'setStatus') {
           const qsoId = typeof payload.qsoId === 'string' ? payload.qsoId : '';
@@ -732,7 +772,7 @@ export const wwDigiStrategyPlugin = definePlugin({
             },
           }));
           await repository.flush();
-          await reconcileLedgerWithHealth(typed, selectedYear);
+          await refreshContestProjectionWithHealth(typed, selectedYear);
           notifyContestLogChanged(typed, selectedYear);
           return { records: await readContestRecords(typed, selectedYear) };
         }
@@ -749,7 +789,7 @@ export const wwDigiStrategyPlugin = definePlugin({
             },
           }));
           await repository.flush();
-          await reconcileLedgerWithHealth(typed, selectedYear);
+          await refreshContestProjectionWithHealth(typed, selectedYear);
           notifyContestLogChanged(typed, selectedYear);
           return { records: await readContestRecords(typed, selectedYear) };
         }
@@ -791,10 +831,19 @@ export const wwDigiStrategyPlugin = definePlugin({
     });
   },
   hooks: {
+    async onConfigChange(changes, ctx) {
+      if (!Object.prototype.hasOwnProperty.call(changes, 'contestYear')) return;
+      const typed = ctx as WWDigiContext;
+      const contestYear = configuredContestYear(typed.config.contestYear);
+      await openContestLogbook(typed, contestYear);
+      await refreshContestProjectionWithHealth(typed, contestYear);
+      notifyContestLogChanged(typed, contestYear);
+    },
     async onQSOComplete(record, ctx) {
       const typed = ctx as WWDigiContext;
+      if (record.contestId?.toUpperCase() !== 'WW-DIGI') return;
       const contestYear = new Date(record.startTime).getUTCFullYear();
-      const contestQso = toContestQso(record, contestYear);
+      const contestQso = toContestQso(record, contestYear, undefined, typed.radio.isSimulation);
       if (!contestQso) return;
       try {
         const transmitterId = Number(typed.config.transmitterId) === 1 ? 1 : 0;
@@ -817,7 +866,7 @@ export const wwDigiStrategyPlugin = definePlugin({
           health: { state: 'healthy', updatedAt: Date.now() },
         }));
         await repository.flush();
-        await reconcileLedgerWithHealth(typed, contestYear);
+        await refreshContestProjectionWithHealth(typed, contestYear);
         notifyContestLogChanged(typed, contestYear);
       } catch (error) {
         await markLedgerDegraded(typed, contestYear, error);
@@ -843,10 +892,13 @@ export const wwDigiTestables = {
   validateSessionConfig,
   readLedger,
   readLedgerHealth,
-  reconcileLedger,
-  reconcileLedgerWithHealth,
+  refreshContestProjection,
+  refreshContestProjectionWithHealth,
   renderCabrillo,
+  renderADIF,
   readContestRecords,
+  openContestLogbook,
+  runtimeLogbookIdKey,
 };
 
 export const wwDigiLocales: Record<string, Record<string, string>> = {

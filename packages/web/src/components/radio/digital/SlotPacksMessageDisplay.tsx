@@ -8,6 +8,7 @@ import { useSplitLayoutActions } from '../../common/SplitLayout';
 import { useTranslation } from 'react-i18next';
 import { useCallsignFilterRules } from '../../../hooks/useCallsignFilterRules';
 import { usePluginSnapshot } from '../../../hooks/usePluginSnapshot';
+import { resolveOperatorTargetCallsigns } from '../../../utils/operatorTargets';
 import {
   buildQueueCallsignOrder,
   isQueueTargetAction,
@@ -77,12 +78,10 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
       .filter(call => call.trim() !== ''); // 过滤掉空呼号
   };
 
-  // 获取当前操作员的目标呼号
-  const getTargetCallsign = (): string => {
-    if (!currentOperatorId) return '';
-    const currentOperator = radio.state.operators.find(op => op.id === currentOperatorId);
-    return currentOperator?.context?.targetCall || '';
-  };
+  const targetCallsigns = useMemo(
+    () => resolveOperatorTargetCallsigns(selectedOperator),
+    [selectedOperator],
+  );
 
   // 处理SlotPack数据转换为FT8Group格式
   useEffect(() => {
@@ -260,7 +259,7 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
       groups={frameGroups}
       className={className}
       myCallsigns={getMyCallsigns()}
-      targetCallsign={getTargetCallsign()}
+      targetCallsigns={targetCallsigns}
       queueCallsignOrder={queueCallsignOrder}
       strategyName={selectedOperator?.strategy.name}
       strategyMessagePresentation={selectedOperator?.runtime?.messagePresentation}

@@ -13,6 +13,7 @@ import type {
   RadioPowerCommandPort,
   LogbookReadAccess,
   LogbookAccess,
+  PluginLogbookSessions,
   BandAccess,
   UIBridge,
   PluginFileStore,
@@ -150,14 +151,24 @@ type SettingsCapability<Permissions extends readonly PluginPermission[]> =
             & CapabilityProperty<Permissions, 'settings:ntp', Pick<HostSettingsControl, 'ntp'>>;
         };
 
+type MainLogbookCapability<Permissions extends readonly PluginPermission[]> =
+  'logbook:write' extends Permissions[number]
+    ? LogbookAccess
+    : 'logbook:read' extends Permissions[number]
+      ? LogbookReadAccess
+      : object;
+
+type SessionLogbookCapability<Permissions extends readonly PluginPermission[]> =
+  'logbook:session' extends Permissions[number]
+    ? { readonly sessions: PluginLogbookSessions }
+    : object;
+
 type LogbookCapability<Permissions extends readonly PluginPermission[]> =
   number extends Permissions['length']
     ? object
-    : 'logbook:write' extends Permissions[number]
-      ? { readonly logbook: LogbookAccess }
-      : 'logbook:read' extends Permissions[number]
-        ? { readonly logbook: LogbookReadAccess }
-        : object;
+    : Extract<Permissions[number], 'logbook:read' | 'logbook:write' | 'logbook:session'> extends never
+      ? object
+      : { readonly logbook: MainLogbookCapability<Permissions> & SessionLogbookCapability<Permissions> };
 
 /**
  * Plugin context whose privileged ports are derived from literal manifest
@@ -227,7 +238,7 @@ export type RuntimePluginContext = PluginContextBase & Partial<{
   radioTunerCommands: RadioTunerCommandPort;
   radioPower: RadioPowerView;
   radioPowerCommands: RadioPowerCommandPort;
-  logbook: LogbookReadAccess | LogbookAccess;
+  logbook: LogbookReadAccess | LogbookAccess | { readonly sessions: PluginLogbookSessions };
   logbookSync: LogbookSyncRegistrar;
   settings: Partial<HostSettingsControl>;
   network: PluginNetworkControl;

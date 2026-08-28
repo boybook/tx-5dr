@@ -25,6 +25,7 @@ describe('strategy transmission contracts', () => {
       context: {
         myCall: 'BG5DRB',
         myGrid: 'OL32',
+        targetCalls: ['JA1AAA', 'JA2BBB', 'JA3CCC'],
         targetCall: 'JA1AAA',
       },
       strategy: {
@@ -32,7 +33,10 @@ describe('strategy transmission contracts', () => {
         state: 'parallel',
         availableSlots: ['TX6'],
       },
-    }).currentTransmissions).toEqual(currentTransmissions);
+    })).toMatchObject({
+      currentTransmissions,
+      context: { targetCalls: ['JA1AAA', 'JA2BBB', 'JA3CCC'] },
+    });
   });
 
   it('rejects empty text and invalid audio frequencies', () => {

@@ -53,13 +53,16 @@ describe('DecisionOrchestrator QSO runtime identity', () => {
 
     (orchestrator as any).commitQSOCompletionEffect('op1', 10, {
       lifecycleEpoch: 1,
+      destination: { kind: 'plugin-session', sessionId: 'session-1' },
       record,
-    });
+    }, 'test-strategy');
 
     expect(request).toMatchObject({
       qsoLifecycleId: 'op1:runtime:10:qso:1:qso-1',
       qsoLifecycleEpoch: 1,
       qsoRuntimeGeneration: 10,
+      destination: { kind: 'plugin-session', sessionId: 'session-1' },
+      sourcePluginName: 'test-strategy',
     });
     runtimeGeneration = 11;
     request?.resolve?.(record);

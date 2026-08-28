@@ -73,12 +73,31 @@ function createManager(options: {
   const clockSource = {
     now: vi.fn(() => options.clockNow ?? 0),
   };
+  const sessionLogBook = {
+    ...options.logBook,
+    id: 'plugin-session-test',
+    binding: {
+      kind: 'plugin-session' as const,
+      pluginName: 'ww-digi',
+      stationCallsign: options.callsign ?? 'BG4IAJ',
+      sessionKey: `ww-digi:${new Date().getUTCFullYear()}`,
+    },
+    provider: {
+      ...options.logBook.provider,
+      getHealth: vi.fn(() => ({ state: 'healthy', readable: true, writable: true, issues: [], updatedAt: 0 })),
+      onHealthChanged: vi.fn(() => () => {}),
+      queryQSOs: options.logBook.provider.queryQSOs ?? vi.fn(async () => []),
+      getStatistics: options.logBook.provider.getStatistics ?? vi.fn(async () => ({ totalQSOs: 0, uniqueCallsigns: 0 })),
+    },
+  };
 
   const fakeLogManager = {
     initialize: vi.fn().mockResolvedValue(undefined),
     getOperatorLogBook: vi.fn().mockResolvedValue(options.logBook),
     getOperatorCallsign: vi.fn().mockReturnValue(options.callsign ?? null),
     getOrCreateLogBookByCallsign: vi.fn().mockResolvedValue(options.logBook),
+    getOrCreatePluginSessionLogBook: vi.fn().mockResolvedValue(sessionLogBook),
+    getPluginSessionLogBook: vi.fn().mockReturnValue(sessionLogBook),
     prewarmLogBookByCallsign: vi.fn(),
     registerOperatorCallsign: vi.fn(),
     unregisterOperatorCallsign: vi.fn(),
@@ -112,6 +131,7 @@ function createManager(options: {
     clockSource,
     encodeQueue,
     fakeLogManager,
+    sessionLogBook,
   };
 }
 
@@ -123,6 +143,8 @@ async function invokeRecordQSO(manager: RadioOperatorManager, payload: {
   qsoRuntimeGeneration?: number;
   qsoRecord: QSORecord;
   persistencePolicy?: QSOPersistencePolicy;
+  destination?: { kind: 'plugin-session'; sessionId: string };
+  sourcePluginName?: string;
   retryAttemptId?: string;
   resolve?: (record: QSORecord) => void;
   reject?: (error: unknown) => void;
@@ -819,6 +841,110 @@ describe('RadioOperatorManager decode AP context selection', () => {
 describe('RadioOperatorManager automatic QSO logging', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('writes a plugin-session completion only to its owned session and skips auto-sync', async () => {
+    const primaryAdd = vi.fn(async (record: QSORecord) => record);
+    const sessionAdd = vi.fn(async (record: QSORecord) => record);
+    const provider = {
+      addQSO: primaryAdd,
+      updateQSO: vi.fn(),
+      getLastQSOWithCallsign: vi.fn(async () => null),
+      getStatistics: vi.fn(async () => ({ totalQSOs: 0 })),
+    };
+    const {
+      manager, fakeLogManager, sessionLogBook,
+    } = createManager({
+      logBook: { id: 'primary-log', name: 'Primary', provider },
+      callsign: 'BG5DRB',
+    });
+    sessionLogBook.provider.addQSO = sessionAdd;
+    sessionLogBook.provider.getLastQSOWithCallsign = vi.fn(async () => null);
+    const { notifyQSOComplete, autoSync } = attachQSOHookSpy(manager);
+
+    await invokeRecordQSO(manager, {
+      operatorId: 'op1',
+      sourcePluginName: 'ww-digi',
+      destination: { kind: 'plugin-session', sessionId: sessionLogBook.id },
+      qsoRecord: automaticQSO('contest-qso'),
+    });
+
+    expect(fakeLogManager.getPluginSessionLogBook).toHaveBeenCalledWith(
+      sessionLogBook.id,
+      'ww-digi',
+      'BG5DRB',
+    );
+    expect(sessionAdd).toHaveBeenCalledOnce();
+    expect(primaryAdd).not.toHaveBeenCalled();
+    expect(autoSync).not.toHaveBeenCalled();
+    expect(notifyQSOComplete).toHaveBeenCalledOnce();
+  });
+
+  it('fails a missing plugin-session destination without falling back to the primary logbook', async () => {
+    const primaryAdd = vi.fn(async (record: QSORecord) => record);
+    const { manager, fakeLogManager } = createManager({
+      logBook: {
+        id: 'primary-log',
+        name: 'Primary',
+        provider: {
+          addQSO: primaryAdd,
+          getStatistics: vi.fn(async () => ({ totalQSOs: 0 })),
+        },
+      },
+      callsign: 'BG5DRB',
+    });
+    fakeLogManager.getPluginSessionLogBook.mockReturnValue(null);
+    const rejected = vi.fn();
+
+    await invokeRecordQSO(manager, {
+      operatorId: 'op1',
+      sourcePluginName: 'other-plugin',
+      destination: { kind: 'plugin-session', sessionId: 'missing-session' },
+      qsoRecord: automaticQSO('contest-qso'),
+      reject: rejected,
+    });
+
+    expect(primaryAdd).not.toHaveBeenCalled();
+    expect(rejected).toHaveBeenCalledWith(expect.objectContaining({ code: 'LOGBOOK_UNAVAILABLE' }));
+    expect(manager.listUnsavedQsos('missing-session')).toHaveLength(1);
+  });
+
+  it('retries an identical failed session effect from its retained QSO candidate', async () => {
+    const primaryAdd = vi.fn(async (record: QSORecord) => record);
+    const sessionAdd = vi.fn()
+      .mockRejectedValueOnce(new Error('disk full'))
+      .mockImplementation(async (record: QSORecord) => record);
+    const { manager, sessionLogBook } = createManager({
+      logBook: {
+        id: 'primary-log',
+        name: 'Primary',
+        provider: {
+          addQSO: primaryAdd,
+          getStatistics: vi.fn(async () => ({ totalQSOs: 0 })),
+        },
+      },
+      callsign: 'BG5DRB',
+    });
+    sessionLogBook.provider.addQSO = sessionAdd;
+    sessionLogBook.provider.getLastQSOWithCallsign = vi.fn(async () => null);
+    const payload = {
+      operatorId: 'op1',
+      qsoLifecycleId: 'op1:runtime:1:stream:lane-1:qso:2:contest-qso',
+      qsoLifecycleEpoch: 2,
+      qsoRuntimeGeneration: 1,
+      streamId: 'lane-1',
+      sourcePluginName: 'ww-digi',
+      destination: { kind: 'plugin-session' as const, sessionId: sessionLogBook.id },
+      qsoRecord: automaticQSO('contest-qso'),
+    };
+
+    await invokeRecordQSO(manager, payload);
+    expect(manager.listUnsavedQsos(sessionLogBook.id)).toHaveLength(1);
+    await invokeRecordQSO(manager, payload);
+
+    expect(sessionAdd).toHaveBeenCalledTimes(2);
+    expect(primaryAdd).not.toHaveBeenCalled();
+    expect(manager.listUnsavedQsos(sessionLogBook.id)).toEqual([]);
   });
 
   it('creates a new record when the latest QSO is outside the merge window', async () => {
@@ -2492,6 +2618,34 @@ describe('RadioOperatorManager has-worked checks', () => {
 describe('RadioOperatorManager operator status payloads', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('projects one canonical target array for single and multi-stream strategies', async () => {
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+    });
+    await addBasicOperator(manager, 'op1');
+    manager.setPluginManager({
+      getOperatorRuntimeStatus: vi.fn(() => ({
+        strategyName: 'test-strategy',
+        currentSlot: 'parallel',
+        context: { targetCallsign: 'VR2VAC' },
+        streams: [
+          { streamId: 'stream-1', currentState: 'active', targetCallsign: 'VR2VAC' },
+          { streamId: 'stream-2', currentState: 'active', targetCallsign: 'YV5VAB' },
+        ],
+        queue: {
+          version: 1,
+          activeEntryIds: ['queue-3'],
+          rows: [{ entryId: 'queue-3', callsign: 'PY2VAB', order: 2 }],
+        },
+      })),
+    } as any);
+
+    expect(manager.getOperatorsStatus()[0]?.context).toMatchObject({
+      targetCall: 'VR2VAC',
+      targetCalls: ['VR2VAC', 'YV5VAB', 'PY2VAB'],
+    });
   });
 
   it('does not include cycleInfo in operator status updates', async () => {

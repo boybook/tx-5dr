@@ -209,6 +209,7 @@ export class PluginManager {
       getOperatorById: deps.getOperatorById,
       getCurrentMode: deps.getCurrentMode,
       getOperatorAutomationSnapshot: deps.getOperatorAutomationSnapshot,
+      getStrategyPluginName: (operatorId) => this.getResolvedStrategyName(operatorId),
       interruptOperatorTransmission: deps.interruptOperatorTransmission,
       requestOperatorStrategyStop: deps.requestOperatorStrategyStop ?? (() => undefined),
       transitionTargetReservation: deps.transitionTargetReservation,

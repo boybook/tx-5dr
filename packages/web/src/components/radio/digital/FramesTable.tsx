@@ -81,7 +81,9 @@ interface FramesTableProps {
   className?: string;
   onRowDoubleClick?: (message: FrameDisplayMessage, group: FrameGroup) => void;
   myCallsigns?: string[]; // 自己的呼号列表
-  targetCallsign?: string; // 当前选中操作员的目标呼号
+  targetCallsigns?: string[]; // 当前选中操作员的全部活动目标呼号
+  /** Compatibility input for older callers. */
+  targetCallsign?: string;
   onMessageHover?: (freq: number | null) => void; // 消息hover回调
   showLogbookAnalysisVisuals?: boolean; // 是否显示日志本分析的视觉效果（划线、标签等）
   enableCallsignPopover?: boolean; // 是否启用呼号信息浮层（hover国旗区域弹出）
@@ -129,16 +131,16 @@ const containsMyCallsign = (message: string, myCallsigns: string[]): boolean => 
   });
 };
 
-const isTargetRelated = (messageObj: FrameDisplayMessage, targetCallsign: string): boolean => {
-  if (!targetCallsign || targetCallsign.trim() === '') return false;
-  const upperTarget = targetCallsign.toUpperCase().trim();
+export const isTargetRelated = (messageObj: FrameDisplayMessage, targetCallsigns: string[]): boolean => {
+  const normalizedTargets = new Set(targetCallsigns.map((callsign) => callsign.trim().toUpperCase()).filter(Boolean));
+  if (normalizedTargets.size === 0) return false;
   if (messageObj.db === 'TX') {
     const upperMessage = messageObj.message.toUpperCase();
     const words = upperMessage.split(/\s+/);
-    return words.some(word => cleanCallsignForMatching(word) === upperTarget);
+    return words.some(word => normalizedTargets.has(cleanCallsignForMatching(word)));
   }
   if (messageObj.logbookAnalysis?.callsign) {
-    return messageObj.logbookAnalysis.callsign.toUpperCase().trim() === upperTarget;
+    return normalizedTargets.has(messageObj.logbookAnalysis.callsign.toUpperCase().trim());
   }
   return false;
 };
@@ -241,7 +243,7 @@ interface MessageRowProps {
   gridCols: string;
   isNarrow: boolean;
   myCallsigns: string[];
-  targetCallsign: string;
+  targetCallsigns: string[];
   showLogbookAnalysisVisuals: boolean;
   enableCallsignPopover: boolean;
   queueCallsignOrder: Readonly<Record<string, number>>;
@@ -258,7 +260,7 @@ interface MessageRowProps {
 }
 
 const MessageRow = React.memo<MessageRowProps>(({
-  message, group, isFirstInGroup, isLastInGroup, gridCols, isNarrow, myCallsigns, targetCallsign,
+  message, group, isFirstInGroup, isLastInGroup, gridCols, isNarrow, myCallsigns, targetCallsigns,
   showLogbookAnalysisVisuals, enableCallsignPopover, queueCallsignOrder, strategyName, strategyMessagePresentation,
   cycleBackgrounds, isZh, highlightTypeLabels,
   getHighestPriorityHighlight, getHighlightColor,
@@ -296,7 +298,7 @@ const MessageRow = React.memo<MessageRowProps>(({
     strategyMessagePresentation,
   ]);
   const isWorkedCallsign = presentation.textDecoration === 'line-through';
-  const isTarget = isTargetRelated(message, targetCallsign);
+  const isTarget = isTargetRelated(message, targetCallsigns);
   const queuedOrder = useMemo(
     () => resolveQueuedFrameOrder(message, queueCallsignOrder),
     [message, queueCallsignOrder],
@@ -476,7 +478,7 @@ MessageRow.displayName = 'MessageRow';
 
 // ─── 主组件 ─────────────────────────────────
 
-export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [], targetCallsign = '', onMessageHover, showLogbookAnalysisVisuals = true, enableCallsignPopover = false, scrollToBottomTrigger, showGroupHeader = false, shouldShowGroupHeader: shouldShowGroupHeaderPredicate, groupHeaderBand = null, groupHeaderMode = null, queueCallsignOrder = EMPTY_QUEUE_CALLSIGN_ORDER, strategyName, strategyMessagePresentation }) => {
+export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [], targetCallsigns = [], targetCallsign = '', onMessageHover, showLogbookAnalysisVisuals = true, enableCallsignPopover = false, scrollToBottomTrigger, showGroupHeader = false, shouldShowGroupHeader: shouldShowGroupHeaderPredicate, groupHeaderBand = null, groupHeaderMode = null, queueCallsignOrder = EMPTY_QUEUE_CALLSIGN_ORDER, strategyName, strategyMessagePresentation }) => {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language === 'zh';
   const highlightTypeLabels = useMemo(() => getHighlightTypeLabels(t), [t]);
@@ -488,6 +490,10 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
   const [wasAtBottom, setWasAtBottom] = useState(true);
   const [isAtTop, setIsAtTop] = useState(true);
   const [isNarrow, setIsNarrow] = useState(false);
+  const activeTargetCallsigns = useMemo(
+    () => Array.from(new Set([...targetCallsigns, targetCallsign].map((callsign) => callsign.trim()).filter(Boolean))),
+    [targetCallsign, targetCallsigns],
+  );
   const [activeTheme, setActiveTheme] = useState<'light' | 'dark'>(() => (
     typeof document !== 'undefined' && document.documentElement.classList.contains('dark') ? 'dark' : 'light'
   ));
@@ -759,7 +765,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
                           gridCols={gridCols}
                           isNarrow={isNarrow}
                           myCallsigns={myCallsigns}
-                          targetCallsign={targetCallsign}
+                          targetCallsigns={activeTargetCallsigns}
                           showLogbookAnalysisVisuals={showLogbookAnalysisVisuals}
                           enableCallsignPopover={enableCallsignPopover}
                           queueCallsignOrder={queueCallsignOrder}

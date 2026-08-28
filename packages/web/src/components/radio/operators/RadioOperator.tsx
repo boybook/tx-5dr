@@ -47,6 +47,7 @@ import {
   type OperatorPluginPageActionEntry,
 } from './OperatorPluginPageActions';
 import { OperatorStrategyActions } from './OperatorStrategyActions';
+import { OperatorStrategyAttention, resolveStandaloneActions } from './OperatorStrategyAttention';
 import { requestStrategyFrequencyPick } from '../../../utils/strategyFrequencyPick';
 import { OperatorTransmissionStack } from './OperatorTransmissionStack';
 
@@ -752,6 +753,9 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
   );
   const currentTransmissions = resolveRadioOperatorCurrentTransmissions(operatorStatus);
   const streamPresentations = resolveRadioOperatorStreamPresentations(operatorStatus);
+  const runtimeActions = operatorStatus.runtime?.actions ?? [];
+  const runtimeAttentions = operatorStatus.runtime?.attentions ?? [];
+  const standaloneRuntimeActions = resolveStandaloneActions(runtimeAttentions, runtimeActions);
   const currentTransmissionLineCount = currentTransmissions.filter((transmission) => Boolean(transmission.text)).length;
   const usesStackedHeaderLayout = cyclePresentation.isTransmit && currentTransmissionLineCount > 1;
   const activeStrategyStatus = pluginStatuses.find((plugin) => plugin.name === operatorStatus.strategy.name);
@@ -1619,10 +1623,10 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
           </Button>
         </div>
 
-        {(operatorStatus.runtime?.actions?.length ?? 0) > 0 && (
+        {standaloneRuntimeActions.length > 0 && (
           <div className="rounded-md bg-default-100 px-2 py-1.5">
             <OperatorStrategyActions
-              actions={operatorStatus.runtime!.actions!}
+              actions={standaloneRuntimeActions}
               resolveLabel={strategyLabel}
               onInvoke={(action, payload) => invokeStrategyAction({ kind: 'runtime' }, action, payload)}
               onNavigate={navigateStrategyAction}
@@ -1630,24 +1634,17 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
           </div>
         )}
 
-        {(operatorStatus.runtime?.attentions?.length ?? 0) > 0 && (
+        {runtimeAttentions.length > 0 && (
           <div className="space-y-1">
-            {operatorStatus.runtime!.attentions!.map((attention) => (
-              <div
+            {runtimeAttentions.map((attention) => (
+              <OperatorStrategyAttention
                 key={attention.id}
-                role="alert"
-                className={`rounded-md px-2 py-1.5 text-[11px] ${
-                  attention.tone === 'danger' ? 'bg-danger-50 text-danger-700'
-                    : attention.tone === 'warning' ? 'bg-warning-50 text-warning-700'
-                      : attention.tone === 'success' ? 'bg-success-50 text-success-700'
-                        : 'bg-primary-50 text-primary-700'
-                }`}
-              >
-                <span className="font-medium">{strategyText(attention.title, attention.params)}</span>
-                {attention.description && (
-                  <span className="ml-1">{strategyText(attention.description, attention.params)}</span>
-                )}
-              </div>
+                attention={attention}
+                actions={runtimeActions}
+                resolveText={strategyText}
+                onInvoke={(action, payload) => invokeStrategyAction({ kind: 'runtime' }, action, payload)}
+                onNavigate={navigateStrategyAction}
+              />
             ))}
           </div>
         )}
@@ -1694,15 +1691,39 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
                     selectLabel={(choice) => t('operator.switchToState', { state: choice.label })}
                   />
                   {(singleStateStream.attentions ?? []).map((attention) => (
-                    <div key={attention.id} role="alert" className="mx-2 mb-1 rounded bg-warning-50 px-2 py-1 text-[11px] text-warning-700">
-                      <span className="font-medium">{strategyLabel(attention.title)}</span>
-                      {attention.description && <span className="ml-1">{strategyLabel(attention.description)}</span>}
-                    </div>
+                    <OperatorStrategyAttention
+                      key={attention.id}
+                      attention={attention}
+                      actions={singleStateStream.actions ?? []}
+                      resolveText={strategyText}
+                      className="mx-2 mb-1"
+                      onInvoke={(action, payload) => invokeStrategyAction({
+                        kind: 'stream',
+                        streamId: singleStateStream.streamId,
+                        lifecycleEpoch: singleStateStream.qsoLifecycleEpoch!,
+                      }, action, payload)}
+                      onNavigate={navigateStrategyAction}
+                      onRequestSpectrumPick={(action) => requestStrategyFrequencyPick({
+                        operatorId: operatorStatus.id,
+                        target: {
+                          kind: 'stream',
+                          streamId: singleStateStream.streamId,
+                          lifecycleEpoch: singleStateStream.qsoLifecycleEpoch!,
+                        },
+                        actionId: action.id,
+                      })}
+                    />
                   ))}
-                  {(singleStateStream.actions?.length ?? 0) > 0 && (
+                  {resolveStandaloneActions(
+                    singleStateStream.attentions ?? [],
+                    singleStateStream.actions ?? [],
+                  ).length > 0 && (
                     <div className="border-t border-divider px-2 py-1.5">
                       <OperatorStrategyActions
-                        actions={singleStateStream.actions!}
+                        actions={resolveStandaloneActions(
+                          singleStateStream.attentions ?? [],
+                          singleStateStream.actions ?? [],
+                        )}
                         resolveLabel={strategyLabel}
                         onInvoke={(action, payload) => invokeStrategyAction({
                           kind: 'stream',
@@ -1795,24 +1816,35 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
                         </div>
                       )}
                       {(stream.attentions ?? []).map((attention) => (
-                        <div
+                        <OperatorStrategyAttention
                           key={attention.id}
-                          role="alert"
-                          className={`mt-1 rounded px-2 py-1 text-[11px] ${
-                            attention.tone === 'danger' ? 'bg-danger-50 text-danger-700'
-                              : attention.tone === 'warning' ? 'bg-warning-50 text-warning-700'
-                                : 'bg-primary-50 text-primary-700'
-                          }`}
-                        >
-                          <span className="font-medium">{strategyLabel(attention.title)}</span>
-                          {attention.description && <span className="ml-1">{strategyLabel(attention.description)}</span>}
-                        </div>
+                          attention={attention}
+                          actions={stream.actions ?? []}
+                          resolveText={strategyText}
+                          className="mt-1"
+                          onInvoke={(action, payload) => invokeStrategyAction({
+                            kind: 'stream',
+                            streamId: stream.streamId,
+                            lifecycleEpoch: stream.qsoLifecycleEpoch!,
+                          }, action, payload)}
+                          onNavigate={navigateStrategyAction}
+                          onRequestSpectrumPick={(action) => requestStrategyFrequencyPick({
+                            operatorId: operatorStatus.id,
+                            target: {
+                              kind: 'stream',
+                              streamId: stream.streamId,
+                              lifecycleEpoch: stream.qsoLifecycleEpoch!,
+                            },
+                            actionId: action.id,
+                          })}
+                        />
                       ))}
-                      {(stream.actions?.length ?? 0) > 0 && stream.qsoLifecycleEpoch !== undefined && (
+                      {resolveStandaloneActions(stream.attentions ?? [], stream.actions ?? []).length > 0
+                          && stream.qsoLifecycleEpoch !== undefined && (
                         <div className="mt-1.5">
                           <OperatorStrategyActions
                             compact
-                            actions={stream.actions!}
+                            actions={resolveStandaloneActions(stream.attentions ?? [], stream.actions ?? [])}
                             resolveLabel={strategyLabel}
                             onInvoke={(action, payload) => invokeStrategyAction({
                               kind: 'stream',

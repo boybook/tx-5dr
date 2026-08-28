@@ -15,6 +15,7 @@ export const PLUGIN_CONTEXT_CAPABILITY_KEYS = {
   'radio:power': ['radioPowerCommands'],
   'logbook:read': ['logbook'],
   'logbook:write': ['logbook'],
+  'logbook:session': ['logbook'],
   'logbook:sync': ['logbookSync'],
   'settings:ft8': ['settings'],
   'settings:decode-windows': ['settings'],
@@ -41,6 +42,7 @@ export const PLUGIN_COMMAND_CAPABILITY_PERMISSIONS = [
   'radio:tuner-control',
   'radio:power',
   'logbook:write',
+  'logbook:session',
   'logbook:sync',
 ] as const satisfies readonly PluginPermission[];
 

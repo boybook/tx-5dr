@@ -1,6 +1,6 @@
 {
   "pluginName": "Standard QSO",
-  "pluginDescription": "Built-in FT8/FT4 standard QSO automation strategy",
+  "pluginDescription": "Built-in FT8/FT4 standard QSO strategy",
   "strategyOverview": "Strategy Overview",
   "strategyOverviewDesc": "This strategy plugin drives the standard FT8/FT4 QSO flow, including answering others' CQ, automatic target picking, timeout handling, and retry behavior.",
   "autoReplyToCQ": "Answer others' CQ",

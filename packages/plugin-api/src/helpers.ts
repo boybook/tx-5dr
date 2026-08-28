@@ -435,6 +435,8 @@ export interface RadioView {
   readonly mode: RadioOperatingMode;
   /** Whether the radio transport is currently connected. */
   readonly isConnected: boolean;
+  /** Whether the active radio is a Host-provided simulation rather than physical RF. */
+  readonly isSimulation: boolean;
 
 }
 
@@ -566,6 +568,9 @@ export interface CallsignLogbookReadAccess {
   /** Returns the resolved logbook id, or null when no logbook is registered. */
   getLogBookId(): Promise<string | null>;
 
+  /** Waits until the Host has finished opening this logbook and it is readable. */
+  awaitReady(options?: { timeoutMs?: number }): Promise<void>;
+
   /** Queries QSO records matching the given filter. */
   queryQSOs(filter: QSOQueryFilter): Promise<import('@tx5dr/contracts').QSORecord[]>;
   /** Reads records and their content revision from one consistent logbook snapshot. */
@@ -599,6 +604,30 @@ export interface CallsignLogbookCommandPort {
 /** Combined read/write callsign-bound logbook capability. */
 export interface CallsignLogbookAccess
   extends CallsignLogbookReadAccess, CallsignLogbookCommandPort {}
+
+/** Stable descriptor for one Host-managed, plugin-owned logbook session. */
+export interface PluginLogbookSessionDescriptor {
+  /** Stable key within the owning plugin and station callsign. */
+  sessionKey: string;
+  /** Station callsign whose QSOs belong to this session. */
+  stationCallsign: string;
+  /** User-facing session title. */
+  title: string;
+}
+
+/** Read/write access to one plugin-owned logbook session. */
+export interface PluginLogbookSessionAccess extends CallsignLogbookAccess {
+  /** Opaque Host-issued session logbook identifier. */
+  readonly id: string;
+  /** User-facing title supplied when the session was opened. */
+  readonly title: string;
+}
+
+/** Host-arbitrated access to logbook sessions owned by the current plugin. */
+export interface PluginLogbookSessions {
+  /** Opens or reuses a durable session without changing the station's primary logbook. */
+  open(descriptor: PluginLogbookSessionDescriptor): Promise<PluginLogbookSessionAccess>;
+}
 
 /** Read-only worked-status and QSO query capability for `logbook:read`. */
 export interface LogbookReadAccess {

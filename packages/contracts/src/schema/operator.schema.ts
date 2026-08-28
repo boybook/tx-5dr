@@ -69,6 +69,7 @@ export const RadioOperatorStatusResponseSchema = z.object({
     context: z.object({
       myCall: z.string(),
       myGrid: z.string(),
+      targetCalls: z.array(z.string()).optional(),
       targetCall: z.string(),
       targetGrid: z.string().optional(),
       frequency: z.number().optional(),

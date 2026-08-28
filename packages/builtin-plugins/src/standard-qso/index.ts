@@ -112,7 +112,7 @@ export const standardQSOStrategyPlugin = definePlugin({
   name: BUILTIN_STANDARD_QSO_PLUGIN_NAME,
   version: '1.0.0',
   type: 'strategy',
-  description: 'Built-in FT8/FT4 standard QSO automation strategy',
+  description: 'Built-in FT8/FT4 standard QSO strategy',
 
   settings: standardQSOSettings,
 

@@ -1,5 +1,6 @@
 import type { LogbookHealth } from '@tx5dr/contracts';
 import type { ILogProvider, LogbookWriteFailure } from '@tx5dr/core';
+import { createHash } from 'node:crypto';
 
 import { ADIFLogProvider } from './ADIFLogProvider.js';
 import { LegacyLogbookMaintenance } from './persistence/LegacyLogbookMaintenance.js';
@@ -23,6 +24,10 @@ export interface LogBookInstance {
   createdAt: number;
   lastUsed: number;
   isActive: boolean;
+  binding:
+    | { kind: 'primary'; callsign: string }
+    | { kind: 'plugin-session'; pluginName: string; stationCallsign: string; sessionKey: string }
+    | { kind: 'custom' };
 }
 
 /**
@@ -35,6 +40,7 @@ export interface LogBookConfig {
   filePath?: string;
   logFileName?: string;
   autoCreateFile?: boolean;
+  binding?: LogBookInstance['binding'];
 }
 
 /**
@@ -46,6 +52,8 @@ export class LogManager {
   private logBooks: Map<string, LogBookInstance> = new Map();
   private callsignLogBookMap: Map<string, string> = new Map(); // callsign -> logBookId
   private callsignLogBookInFlight: Map<string, Promise<LogBookInstance>> = new Map();
+  private pluginSessionLogBookMap: Map<string, string> = new Map();
+  private pluginSessionLogBookInFlight: Map<string, Promise<LogBookInstance>> = new Map();
   private initializationById: Map<string, Promise<LogbookHealth>> = new Map();
   private providerSubscriptions: Map<string, Array<() => void>> = new Map();
   private applicationEventSink: ((event: 'logbookHealthChanged' | 'logbookWriteFailed', data: unknown) => void) | null = null;
@@ -174,7 +182,8 @@ export class LogManager {
       provider,
       createdAt: Date.now(),
       lastUsed: Date.now(),
-      isActive: true
+      isActive: true,
+      binding: config.binding ?? { kind: 'custom' },
     };
 
     // Register first so callers can observe loading/unavailable health without
@@ -266,7 +275,8 @@ export class LogManager {
    * 获取所有日志本
    */
   getLogBooks(): LogBookInstance[] {
-    return Array.from(this.logBooks.values());
+    return Array.from(this.logBooks.values())
+      .filter(logBook => logBook.binding.kind !== 'plugin-session');
   }
   
   /**
@@ -324,7 +334,8 @@ export class LogManager {
           name: `${normalizedCallsign} QSO Log`,
           description: `QSO records for ${normalizedCallsign}`,
           logFileName: logFileName,
-          autoCreateFile: true
+          autoCreateFile: true,
+          binding: { kind: 'primary', callsign: normalizedCallsign },
         })
         .then((logBook) => {
           this.callsignLogBookMap.set(normalizedCallsign, logBookId!);
@@ -343,6 +354,78 @@ export class LogManager {
       throw new Error(`logbook ${logBookId} not found (callsign: ${normalizedCallsign})`);
     }
     
+    logBook.lastUsed = Date.now();
+    return logBook;
+  }
+
+  /** Opens one deterministic, plugin-owned session without changing the primary callsign mapping. */
+  async getOrCreatePluginSessionLogBook(input: {
+    pluginName: string;
+    stationCallsign: string;
+    sessionKey: string;
+    title: string;
+  }): Promise<LogBookInstance> {
+    const pluginName = input.pluginName.trim();
+    const stationCallsign = normalizeCallsign(input.stationCallsign);
+    const sessionKey = input.sessionKey.trim();
+    const title = input.title.trim();
+    if (!/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(pluginName)) {
+      throw new Error('Invalid plugin logbook session owner');
+    }
+    if (!stationCallsign || stationCallsign.length > 32) {
+      throw new Error('Invalid plugin logbook session callsign');
+    }
+    if (!/^[a-z0-9][a-z0-9._:-]{0,127}$/i.test(sessionKey)) {
+      throw new Error('Invalid plugin logbook session key');
+    }
+    const titleHasControlCharacters = Array.from(title).some((character) => {
+      const code = character.charCodeAt(0);
+      return code <= 0x1f || code === 0x7f;
+    });
+    if (!title || title.length > 128 || titleHasControlCharacters) {
+      throw new Error('Invalid plugin logbook session title');
+    }
+
+    const identity = `${pluginName}\0${stationCallsign}\0${sessionKey}`;
+    const existingId = this.pluginSessionLogBookMap.get(identity);
+    if (existingId) {
+      const existing = this.logBooks.get(existingId);
+      if (!existing) throw new Error(`plugin logbook session ${existingId} is unavailable`);
+      existing.lastUsed = Date.now();
+      return existing;
+    }
+    const inFlight = this.pluginSessionLogBookInFlight.get(identity);
+    if (inFlight) return inFlight;
+
+    const digest = createHash('sha256').update(identity).digest('hex');
+    const logBookId = `plugin-session-${digest.slice(0, 24)}`;
+    const creation = this.createLogBook({
+      id: logBookId,
+      name: title,
+      description: `Plugin logbook session for ${stationCallsign}`,
+      logFileName: `logbook/plugin-sessions/${pluginName}/${digest}.adi`,
+      autoCreateFile: true,
+      binding: { kind: 'plugin-session', pluginName, stationCallsign, sessionKey },
+    }).then((logBook) => {
+      this.pluginSessionLogBookMap.set(identity, logBook.id);
+      return logBook;
+    }).finally(() => {
+      this.pluginSessionLogBookInFlight.delete(identity);
+    });
+    this.pluginSessionLogBookInFlight.set(identity, creation);
+    return creation;
+  }
+
+  /** Resolves a session only when its owner and station identity both match. */
+  getPluginSessionLogBook(
+    sessionId: string,
+    pluginName: string,
+    stationCallsign: string,
+  ): LogBookInstance | null {
+    const logBook = this.logBooks.get(sessionId);
+    if (!logBook || logBook.binding.kind !== 'plugin-session') return null;
+    if (logBook.binding.pluginName !== pluginName) return null;
+    if (logBook.binding.stationCallsign !== normalizeCallsign(stationCallsign)) return null;
     logBook.lastUsed = Date.now();
     return logBook;
   }
@@ -469,6 +552,9 @@ export class LogManager {
     if (!logBook) {
       throw new Error(`logbook ${logBookId} not found`);
     }
+    if (logBook.binding.kind === 'plugin-session') {
+      throw new Error('plugin logbook sessions cannot become an operator primary logbook');
+    }
 
     // 获取操作员呼号并归一化
     const rawCallsign = this.operatorCallsignMap.get(operatorId);
@@ -529,7 +615,8 @@ export class LogManager {
    * 根据真实 ID 或呼号字符串解析 logBookId，仅查询不创建，找不到返回 null
    */
   resolveLogBookId(idOrCallsign: string): string | null {
-    if (this.logBooks.has(idOrCallsign)) return idOrCallsign;
+    const direct = this.logBooks.get(idOrCallsign);
+    if (direct && direct.binding.kind !== 'plugin-session') return idOrCallsign;
     const normalized = normalizeCallsign(idOrCallsign);
     return this.callsignLogBookMap.get(normalized) ?? null;
   }
@@ -631,6 +718,8 @@ export class LogManager {
     this.logBooks.clear();
     this.callsignLogBookMap.clear();
     this.callsignLogBookInFlight.clear();
+    this.pluginSessionLogBookMap.clear();
+    this.pluginSessionLogBookInFlight.clear();
     this.initializationById.clear();
     this.providerSubscriptions.clear();
     this.bootstrapPrewarmCallsigns.clear();

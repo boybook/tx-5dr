@@ -46,6 +46,7 @@ import { getRadioServiceBootstrapAction } from './bootstrap';
 import { createSpectrumNegotiator } from './spectrumNegotiation';
 import type { FrameDisplayMessage, FrameGroup } from '../../components/radio/digital/FramesTable';
 import type { RadioState } from './types';
+import { resolveOperatorTargetCallsigns } from '../../utils/operatorTargets';
 
 const logger = createLogger('RadioStore');
 const MAX_VALID_DATE_MS = 8_640_000_000_000_000;
@@ -100,13 +101,13 @@ function buildVisibleOperatorCallsigns(radioState: RadioState): string[] {
     .filter(callsign => callsign.length > 0);
 }
 
-function buildCurrentOperatorTargetCallsign(radioState: RadioState): string {
+function buildCurrentOperatorTargetCallsigns(radioState: RadioState): string[] {
   if (!radioState.currentOperatorId) {
-    return '';
+    return [];
   }
 
   const operator = radioState.operators.find(item => item.id === radioState.currentOperatorId);
-  return operator?.context?.targetCall?.trim() || '';
+  return resolveOperatorTargetCallsigns(operator);
 }
 
 function buildCurrentLiveSlotStartMs(radioState: RadioState): number | null {
@@ -520,7 +521,7 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
           currentMode,
           liveSlotStartMs: buildCurrentLiveSlotStartMs(radioState),
           visibleOperatorCallsigns: buildVisibleOperatorCallsigns(radioState),
-          targetCallsign: buildCurrentOperatorTargetCallsign(radioState),
+          targetCallsigns: buildCurrentOperatorTargetCallsigns(radioState),
           operatorCallsignsById: buildOperatorCallsignsById(radioState),
         },
       });
@@ -546,7 +547,7 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
           currentMode: radioState.currentMode,
           liveSlotStartMs: buildCurrentLiveSlotStartMs(radioStateRef.current),
           visibleOperatorCallsigns: buildVisibleOperatorCallsigns(radioStateRef.current),
-          targetCallsign: buildCurrentOperatorTargetCallsign(radioStateRef.current),
+          targetCallsigns: buildCurrentOperatorTargetCallsigns(radioStateRef.current),
         },
       });
     }
@@ -563,7 +564,7 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
         currentMode: radioState.currentMode,
         liveSlotStartMs: buildCurrentLiveSlotStartMs(radioState),
         visibleOperatorCallsigns: buildVisibleOperatorCallsigns(radioState),
-        targetCallsign: buildCurrentOperatorTargetCallsign(radioState),
+        targetCallsigns: buildCurrentOperatorTargetCallsigns(radioState),
       },
     });
   }, [

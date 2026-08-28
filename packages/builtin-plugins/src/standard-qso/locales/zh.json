@@ -1,6 +1,6 @@
 {
   "pluginName": "标准通联",
-  "pluginDescription": "内置 FT8/FT4 标准通联自动化策略",
+  "pluginDescription": "内置 FT8/FT4 标准通联策略",
   "strategyOverview": "策略说明",
   "strategyOverviewDesc": "该策略插件负责标准 FT8/FT4 通联流程，包括回应他人 CQ、自动选台以及控制超时与重试行为。",
   "autoReplyToCQ": "自动回应他人 CQ",

@@ -21,11 +21,24 @@ function installInMemoryLogManager(): void {
       queryQSOs: vi.fn(async () => []),
     },
   };
+  const sessionLogBook = {
+    id: 'plugin-session-test',
+    name: 'Plugin Session',
+    binding: { kind: 'plugin-session', pluginName: 'ww-digi', stationCallsign: 'BG5DRB', sessionKey: 'ww-digi:2026' },
+    provider: {
+      queryQSOs: vi.fn(async () => []),
+      getHealth: vi.fn(() => ({ state: 'healthy', readable: true, writable: true, issues: [], updatedAt: 0 })),
+      onHealthChanged: vi.fn(() => () => {}),
+      getStatistics: vi.fn(async () => ({ totalQSOs: 0, uniqueCallsigns: 0 })),
+    },
+  };
 
   vi.spyOn(LogManager, 'getInstance').mockReturnValue({
     resolveLogBookId: vi.fn(() => logBook.id),
     getLogBook: vi.fn(() => logBook),
     getOperatorIdsForLogBook: vi.fn(() => []),
+    getOrCreatePluginSessionLogBook: vi.fn(async () => sessionLogBook),
+    getPluginSessionLogBook: vi.fn(() => sessionLogBook),
   } as unknown as LogManager);
 }
 

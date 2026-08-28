@@ -313,7 +313,7 @@ export const RightLayout: React.FC = () => {
         <div></div>
         <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties & { WebkitAppRegion: string }}>
           <div className="flex items-center gap-1">
-            {/* 自动化程序（有操作员时才显示） */}
+            {/* 通联程序（有操作员时才显示） */}
             {operators.length > 0 && automationOperatorId && (
               <Popover placement="bottom-start">
                 <PopoverTrigger>

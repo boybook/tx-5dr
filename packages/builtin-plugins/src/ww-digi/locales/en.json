@@ -30,7 +30,7 @@
   "attentionContestSetupRequired": "Contest settings are not confirmed",
   "attentionContestSetupRequiredDesc": "Receive-only operation remains available. Confirm the callsign, grid and category before transmitting.",
   "attentionContestLedgerUnhealthy": "Contest ledger needs attention",
-  "attentionContestLedgerUnhealthyDesc": "Open contest settings and reconcile the ledger before transmitting.",
+  "attentionContestLedgerUnhealthyDesc": "The contest log is unavailable. Transmission remains blocked until it recovers.",
   "cqMaxAttempts": "CQ attempt limit", "cqMaxAttemptsDesc": "Physically completed unanswered CQs before TX stops.",
   "cqSelectionPolicy": "CQ caller selection", "cqSelectionPolicyDesc": "How callers are selected when replies exceed available TX slots.",
   "selectionFIRST": "First decoded", "selectionMAX_DISTANCE": "Maximum distance", "selectionMAX_SNR": "Highest SNR", "selectionMIN_SNR": "Lowest SNR",
