@@ -5,6 +5,15 @@ const SENSITIVE_KEYS = new Set([
   'access_token',
   'jwt',
   'authorization',
+  'signature',
+  'policy',
+  'credential',
+  'security_token',
+  'x-oss-signature',
+  'x-oss-security-token',
+  'accesskeyid',
+  'access_key_id',
+  'access_key_secret',
 ]);
 
 const sensitiveValues = new Set<string>();
@@ -15,9 +24,9 @@ export function registerSensitiveLogValue(value: string | null | undefined): voi
 
 export function redactSensitiveText(value: string): string {
   let redacted = value
-    .replace(/([?&#](?:auth_token|browser_login_code|token|access_token|jwt|authorization)=)[^&#\s]*/gi, '$1<redacted>')
+    .replace(/([?&#](?:auth_token|browser_login_code|token|access_token|jwt|authorization|signature|policy|credential|security_token|x-oss-signature|x-oss-security-token|accesskeyid|access_key_id|access_key_secret)=)[^&#\s]*/gi, '$1<redacted>')
     .replace(/(authorization\s*[:=]\s*bearer\s+)[^\s,;}]+/gi, '$1<redacted>')
-    .replace(/((?:"|')?(?:auth_token|browser_login_code|token|access_token|jwt|authorization)(?:"|')?\s*[:=]\s*(?:"|')?)[^"'&#\s,;}]+/gi, '$1<redacted>');
+    .replace(/((?:"|')?(?:auth_token|browser_login_code|token|access_token|jwt|authorization|signature|policy|credential|security_token|x-oss-signature|x-oss-security-token|accesskeyid|access_key_id|access_key_secret)(?:"|')?\s*[:=]\s*(?:"|')?)[^"'&#\s,;}]+/gi, '$1<redacted>');
 
   for (const secret of sensitiveValues) {
     redacted = redacted.split(secret).join('<redacted>');

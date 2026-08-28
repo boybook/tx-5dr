@@ -13,6 +13,8 @@ describe('server sensitive log redaction', () => {
     const source = [
       `url=/api/example?auth_token=${adminToken}`,
       '#browser_login_code=txdr_blc_secret',
+      '?x-oss-signature=oss-signature-secret&x-oss-security-token=oss-security-secret',
+      'policy=encoded-policy credential=temporary-credential',
       'Authorization: Bearer signed-jwt-secret',
       `ordinary=${adminToken}`,
     ].join(' ');
@@ -21,14 +23,20 @@ describe('server sensitive log redaction', () => {
     expect(result).not.toContain(adminToken);
     expect(result).not.toContain('txdr_blc_secret');
     expect(result).not.toContain('signed-jwt-secret');
+    expect(result).not.toContain('oss-signature-secret');
+    expect(result).not.toContain('oss-security-secret');
+    expect(result).not.toContain('encoded-policy');
+    expect(result).not.toContain('temporary-credential');
   });
 
   it('redacts structured sensitive keys before console or file output', () => {
     expect(redactSensitiveLogValue({
       request: { token: 'secret', access_token: 'access-secret' },
+      upload: { 'x-oss-signature': 'signature-secret', policy: 'policy-secret' },
       safe: 'visible',
     })).toEqual({
       request: { token: '<redacted>', access_token: '<redacted>' },
+      upload: { 'x-oss-signature': '<redacted>', policy: '<redacted>' },
       safe: 'visible',
     });
   });

@@ -87,18 +87,50 @@ export type DiagnosticUploadErrorCode =
   | 'DIAGNOSTIC_SERVICE_UNAVAILABLE'
   | 'DIAGNOSTIC_UPLOAD_FAILED';
 
+export type DiagnosticUploadStage =
+  | 'log_discovery'
+  | 'log_selection'
+  | 'compression'
+  | 'temporary_file'
+  | 'gateway_authorization'
+  | 'upload_authorization'
+  | 'oss_upload'
+  | 'gateway_completion';
+
+interface DiagnosticUploadErrorOptions {
+  cause?: unknown;
+  stage?: DiagnosticUploadStage;
+  requestUrl?: string;
+  upstreamStatus?: number;
+}
+
+export function sanitizeDiagnosticRequestUrl(value: string): string {
+  try {
+    const parsed = new URL(value);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return value.split(/[?#]/, 1)[0] || '<invalid-url>';
+  }
+}
+
 export class DiagnosticUploadError extends Error {
   public readonly cause?: unknown;
+  public readonly stage?: DiagnosticUploadStage;
+  public readonly requestUrl?: string;
+  public readonly upstreamStatus?: number;
 
   constructor(
     public readonly code: DiagnosticUploadErrorCode,
     message: string,
     public readonly statusCode: number,
-    options?: { cause?: unknown },
+    options?: DiagnosticUploadErrorOptions,
   ) {
     super(message);
     this.name = 'DiagnosticUploadError';
     this.cause = options?.cause;
+    this.stage = options?.stage;
+    this.requestUrl = options?.requestUrl ? sanitizeDiagnosticRequestUrl(options.requestUrl) : undefined;
+    this.upstreamStatus = options?.upstreamStatus;
   }
 }
 
@@ -180,6 +212,7 @@ async function selectLogRange(
           'DIAGNOSTIC_RANGE_TOO_LARGE',
           'Selected logs exceed the uncompressed upload limit',
           413,
+          { stage: 'log_selection' },
         );
       }
       selected.push({ timestampMs: currentTimestamp, fileOrder, blockOrder, lines: currentLines, bytes });
@@ -204,7 +237,9 @@ async function selectLogRange(
   }
 
   if (selected.length === 0) {
-    throw new DiagnosticUploadError('DIAGNOSTIC_NO_LOGS', 'No log entries were found in the selected range', 404);
+    throw new DiagnosticUploadError('DIAGNOSTIC_NO_LOGS', 'No log entries were found in the selected range', 404, {
+      stage: 'log_selection',
+    });
   }
 
   selected.sort((left, right) => (
@@ -288,29 +323,49 @@ export class DiagnosticLogUploadService {
   }
 
   async upload(request: CreateDiagnosticUploadRequest): Promise<DiagnosticUploadReceipt> {
-    const definition = SOURCE_DEFINITIONS.find((source) => source.id === request.sourceId);
-    if (!definition) throw new DiagnosticUploadError('DIAGNOSTIC_NO_LOGS', 'Unknown diagnostic source', 404);
-    const files = await this.descriptorsFor(definition);
-    if (files.length === 0) throw new DiagnosticUploadError('DIAGNOSTIC_NO_LOGS', 'The selected log source is unavailable', 404);
-
-    const selected = await selectLogRange(files, request.fromMs, request.toMs, this.options.maxUncompressedBytes);
-    const uncompressed = Buffer.from(selected.content, 'utf8');
-    if (uncompressed.length > this.options.maxUncompressedBytes) {
-      throw new DiagnosticUploadError('DIAGNOSTIC_RANGE_TOO_LARGE', 'Selected logs exceed the uncompressed upload limit', 413);
-    }
-    const compressed = await gzip(uncompressed);
-    if (compressed.length > this.options.maxCompressedBytes) {
-      throw new DiagnosticUploadError('DIAGNOSTIC_RANGE_TOO_LARGE', 'Selected logs exceed the compressed upload limit', 413);
-    }
-
-    const temporaryDir = await mkdtemp(join(this.options.temporaryRoot, 'tx5dr-diagnostic-'));
-    const temporaryFile = join(temporaryDir, `${randomUUID()}.log.gz`);
+    let stage: DiagnosticUploadStage = 'log_discovery';
     try {
-      await writeFile(temporaryFile, compressed, { mode: 0o600 });
-      const uploadBytes = await readFile(temporaryFile);
-      return await this.sendToGateway(request, selected, uncompressed.length, uploadBytes);
-    } finally {
-      await rm(temporaryDir, { recursive: true, force: true }).catch(() => undefined);
+      const definition = SOURCE_DEFINITIONS.find((source) => source.id === request.sourceId);
+      if (!definition) {
+        throw new DiagnosticUploadError('DIAGNOSTIC_NO_LOGS', 'Unknown diagnostic source', 404, { stage });
+      }
+      const files = await this.descriptorsFor(definition);
+      if (files.length === 0) {
+        throw new DiagnosticUploadError('DIAGNOSTIC_NO_LOGS', 'The selected log source is unavailable', 404, { stage });
+      }
+
+      stage = 'log_selection';
+      const selected = await selectLogRange(files, request.fromMs, request.toMs, this.options.maxUncompressedBytes);
+      const uncompressed = Buffer.from(selected.content, 'utf8');
+      if (uncompressed.length > this.options.maxUncompressedBytes) {
+        throw new DiagnosticUploadError('DIAGNOSTIC_RANGE_TOO_LARGE', 'Selected logs exceed the uncompressed upload limit', 413, { stage });
+      }
+
+      stage = 'compression';
+      const compressed = await gzip(uncompressed);
+      if (compressed.length > this.options.maxCompressedBytes) {
+        throw new DiagnosticUploadError('DIAGNOSTIC_RANGE_TOO_LARGE', 'Selected logs exceed the compressed upload limit', 413, { stage });
+      }
+
+      stage = 'temporary_file';
+      const temporaryDir = await mkdtemp(join(this.options.temporaryRoot, 'tx5dr-diagnostic-'));
+      const temporaryFile = join(temporaryDir, `${randomUUID()}.log.gz`);
+      try {
+        await writeFile(temporaryFile, compressed, { mode: 0o600 });
+        const uploadBytes = await readFile(temporaryFile);
+        stage = 'gateway_authorization';
+        return await this.sendToGateway(request, selected, uncompressed.length, uploadBytes);
+      } finally {
+        await rm(temporaryDir, { recursive: true, force: true }).catch(() => undefined);
+      }
+    } catch (error) {
+      if (error instanceof DiagnosticUploadError) throw error;
+      throw new DiagnosticUploadError(
+        'DIAGNOSTIC_UPLOAD_FAILED',
+        `Diagnostic upload failed during ${stage}`,
+        500,
+        { cause: error, stage },
+      );
     }
   }
 
@@ -320,7 +375,15 @@ export class DiagnosticLogUploadService {
     uncompressedBytes: number,
     compressed: Buffer,
   ): Promise<DiagnosticUploadReceipt> {
-    const context = await this.options.getGatewayContext();
+    let context: DiagnosticGatewayContext;
+    try {
+      context = await this.options.getGatewayContext();
+    } catch (error) {
+      throw new DiagnosticUploadError('DIAGNOSTIC_SERVICE_UNAVAILABLE', 'Diagnostic gateway context is unavailable', 503, {
+        cause: error,
+        stage: 'gateway_authorization',
+      });
+    }
     const authorization = await this.postJson<{
       diagnostics_token: string;
     }>(context, '/v1/diagnostics/authorize', {
@@ -328,9 +391,12 @@ export class DiagnosticLogUploadService {
       authorization_event_id: randomUUID(),
       installation_id: context.installationId,
       app: context.app,
-    });
+    }, undefined, 'gateway_authorization');
     if (typeof authorization.diagnostics_token !== 'string') {
-      throw new DiagnosticUploadError('DIAGNOSTIC_SERVICE_UNAVAILABLE', 'Diagnostic authorization response is invalid', 503);
+      throw new DiagnosticUploadError('DIAGNOSTIC_SERVICE_UNAVAILABLE', 'Diagnostic authorization response is invalid', 503, {
+        stage: 'gateway_authorization',
+        requestUrl: `${context.endpoint}/v1/diagnostics/authorize`,
+      });
     }
 
     const uploadId = randomUUID();
@@ -353,14 +419,26 @@ export class DiagnosticLogUploadService {
       compressed_bytes: compressed.length,
       sha256,
       is_test: false,
-    }, authorization.diagnostics_token);
+    }, authorization.diagnostics_token, 'upload_authorization');
     if (!grant.upload_url || !grant.upload_receipt || !grant.form_fields) {
-      throw new DiagnosticUploadError('DIAGNOSTIC_SERVICE_UNAVAILABLE', 'Diagnostic upload response is invalid', 503);
+      throw new DiagnosticUploadError('DIAGNOSTIC_SERVICE_UNAVAILABLE', 'Diagnostic upload response is invalid', 503, {
+        stage: 'upload_authorization',
+        requestUrl: `${context.endpoint}/v1/diagnostics/uploads`,
+      });
     }
 
-    const form = new FormData();
-    for (const [key, value] of Object.entries(grant.form_fields)) form.append(key, value);
-    form.append('file', new Blob([new Uint8Array(compressed)], { type: 'application/gzip' }), basename('diagnostic.log.gz'));
+    let form: FormData;
+    try {
+      form = new FormData();
+      for (const [key, value] of Object.entries(grant.form_fields)) form.append(key, value);
+      form.append('file', new Blob([new Uint8Array(compressed)], { type: 'application/gzip' }), basename('diagnostic.log.gz'));
+    } catch (error) {
+      throw new DiagnosticUploadError('DIAGNOSTIC_UPLOAD_FAILED', 'Unable to prepare the OSS upload form', 500, {
+        cause: error,
+        stage: 'oss_upload',
+        requestUrl: grant.upload_url,
+      });
+    }
     let uploadResponse: Response;
     try {
       uploadResponse = await this.options.fetch(grant.upload_url, {
@@ -369,10 +447,18 @@ export class DiagnosticLogUploadService {
         signal: AbortSignal.timeout(60_000),
       });
     } catch (error) {
-      throw new DiagnosticUploadError('DIAGNOSTIC_UPLOAD_FAILED', 'Unable to upload the diagnostic log', 502, { cause: error });
+      throw new DiagnosticUploadError('DIAGNOSTIC_UPLOAD_FAILED', 'Unable to upload the diagnostic log', 502, {
+        cause: error,
+        stage: 'oss_upload',
+        requestUrl: grant.upload_url,
+      });
     }
     if (uploadResponse.status !== 204) {
-      throw new DiagnosticUploadError('DIAGNOSTIC_UPLOAD_FAILED', `OSS upload failed with status ${uploadResponse.status}`, 502);
+      throw new DiagnosticUploadError('DIAGNOSTIC_UPLOAD_FAILED', `OSS upload failed with status ${uploadResponse.status}`, 502, {
+        stage: 'oss_upload',
+        requestUrl: grant.upload_url,
+        upstreamStatus: uploadResponse.status,
+      });
     }
 
     const completeBody = {
@@ -382,11 +468,11 @@ export class DiagnosticLogUploadService {
     };
     let complete: { accepted_at: string; retained_until: string };
     try {
-      complete = await this.postJson(context, `/v1/diagnostics/uploads/${uploadId}/complete`, completeBody, authorization.diagnostics_token);
+      complete = await this.postJson(context, `/v1/diagnostics/uploads/${uploadId}/complete`, completeBody, authorization.diagnostics_token, 'gateway_completion');
     } catch (error) {
       if (!(error instanceof DiagnosticUploadError) || error.code !== 'DIAGNOSTIC_SERVICE_UNAVAILABLE') throw error;
       await delay(250);
-      complete = await this.postJson(context, `/v1/diagnostics/uploads/${uploadId}/complete`, completeBody, authorization.diagnostics_token);
+      complete = await this.postJson(context, `/v1/diagnostics/uploads/${uploadId}/complete`, completeBody, authorization.diagnostics_token, 'gateway_completion');
     }
 
     return {
@@ -409,10 +495,12 @@ export class DiagnosticLogUploadService {
     path: string,
     body: unknown,
     token?: string,
+    stage?: DiagnosticUploadStage,
   ): Promise<T> {
+    const requestUrl = `${context.endpoint}${path}`;
     let response: Response;
     try {
-      response = await this.options.fetch(`${context.endpoint}${path}`, {
+      response = await this.options.fetch(requestUrl, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
@@ -422,7 +510,11 @@ export class DiagnosticLogUploadService {
         signal: AbortSignal.timeout(15_000),
       });
     } catch (error) {
-      throw new DiagnosticUploadError('DIAGNOSTIC_SERVICE_UNAVAILABLE', 'Diagnostic service is unreachable', 503, { cause: error });
+      throw new DiagnosticUploadError('DIAGNOSTIC_SERVICE_UNAVAILABLE', 'Diagnostic service is unreachable', 503, {
+        cause: error,
+        stage,
+        requestUrl,
+      });
     }
     if (!response.ok) {
       throw new DiagnosticUploadError(
@@ -431,12 +523,18 @@ export class DiagnosticLogUploadService {
           : 'DIAGNOSTIC_UPLOAD_FAILED',
         `Diagnostic gateway rejected ${path} with status ${response.status}`,
         response.status >= 500 || response.status === 429 ? 503 : 502,
+        { stage, requestUrl, upstreamStatus: response.status },
       );
     }
     try {
       return await response.json() as T;
     } catch (error) {
-      throw new DiagnosticUploadError('DIAGNOSTIC_SERVICE_UNAVAILABLE', 'Diagnostic service returned invalid JSON', 503, { cause: error });
+      throw new DiagnosticUploadError('DIAGNOSTIC_SERVICE_UNAVAILABLE', 'Diagnostic service returned invalid JSON', 503, {
+        cause: error,
+        stage,
+        requestUrl,
+        upstreamStatus: response.status,
+      });
     }
   }
 }

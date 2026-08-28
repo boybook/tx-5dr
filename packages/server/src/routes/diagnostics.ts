@@ -1,11 +1,17 @@
+import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { CreateDiagnosticUploadRequestSchema } from '@tx5dr/contracts';
 import { requireAbility } from '../auth/authPlugin.js';
 import {
   DiagnosticLogUploadService,
   DiagnosticUploadError,
+  sanitizeDiagnosticRequestUrl,
   type DiagnosticUploadErrorCode,
 } from '../diagnostics/DiagnosticLogUploadService.js';
+import { createLogger } from '../utils/logger.js';
+import { redactSensitiveLogValue, redactSensitiveText } from '../utils/sensitive-log.js';
+
+const logger = createLogger('DiagnosticUpload');
 
 const ERROR_COPY: Record<DiagnosticUploadErrorCode, { message: string; userMessageKey: string }> = {
   DIAGNOSTIC_NO_LOGS: {
@@ -26,8 +32,48 @@ const ERROR_COPY: Record<DiagnosticUploadErrorCode, { message: string; userMessa
   },
 };
 
-function sendDiagnosticError(reply: FastifyReply, error: DiagnosticUploadError) {
+function serializeError(error: unknown, depth = 0): unknown {
+  if (depth >= 4) return '<cause-depth-limit>';
+  if (!(error instanceof Error)) return redactSensitiveLogValue(error);
+  const withCode = error as Error & { code?: unknown; errno?: unknown; syscall?: unknown; cause?: unknown };
+  return redactSensitiveLogValue({
+    name: error.name,
+    message: error.message,
+    stack: error.stack,
+    ...(withCode.code !== undefined ? { code: withCode.code } : {}),
+    ...(withCode.errno !== undefined ? { errno: withCode.errno } : {}),
+    ...(withCode.syscall !== undefined ? { syscall: withCode.syscall } : {}),
+    ...(withCode.cause !== undefined ? { cause: serializeError(withCode.cause, depth + 1) } : {}),
+  });
+}
+
+function sendDiagnosticError(
+  request: { id: string; method: string; url: string },
+  reply: FastifyReply,
+  error: DiagnosticUploadError,
+) {
   const copy = ERROR_COPY[error.code];
+  const errorId = randomUUID();
+  const localRequestUrl = sanitizeDiagnosticRequestUrl(request.url);
+  const context = {
+    errorId,
+    stage: error.stage ?? 'unknown',
+    localRequestUrl,
+    ...(error.requestUrl ? { downstreamRequestUrl: error.requestUrl } : {}),
+    ...(error.upstreamStatus !== undefined ? { upstreamStatus: error.upstreamStatus } : {}),
+    technicalMessage: redactSensitiveText(error.message),
+  };
+
+  logger.error('diagnostic upload request failed', {
+    ...context,
+    requestId: request.id,
+    method: request.method,
+    code: error.code,
+    responseStatus: error.statusCode,
+    error: serializeError(error),
+    cause: serializeError(error.cause),
+  });
+
   return reply.code(error.statusCode).send({
     success: false,
     error: {
@@ -37,6 +83,7 @@ function sendDiagnosticError(reply: FastifyReply, error: DiagnosticUploadError) 
       userMessageKey: copy.userMessageKey,
       severity: error.code === 'DIAGNOSTIC_NO_LOGS' ? 'warning' : 'error',
       suggestions: [],
+      context,
     },
   });
 }
@@ -54,7 +101,7 @@ export async function diagnosticRoutes(fastify: FastifyInstance) {
     try {
       return reply.code(201).send(await service.upload(input));
     } catch (error) {
-      if (error instanceof DiagnosticUploadError) return sendDiagnosticError(reply, error);
+      if (error instanceof DiagnosticUploadError) return sendDiagnosticError(request, reply, error);
       throw error;
     }
   });
