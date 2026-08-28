@@ -998,6 +998,7 @@ export class PluginManager {
       'checkpoint:before-strategy-action',
       (runtime) => runtime.checkpoint(),
     );
+    const beforeTransmissionSignature = this.orchestrator.readCurrentTransmissionSignature(operatorId);
     try {
       const result = await this.invokeStrategyRuntime(
         operatorId,
@@ -1018,10 +1019,20 @@ export class PluginManager {
       }
       if (result?.requestDecision) {
         this.orchestrator.invalidateDecisionMessageSet(operatorId);
-        this.deps.triggerReEncode?.(operatorId, {
-          source: 'operator-edit',
-          reason: `strategy action ${invocation.actionId}`,
-        });
+        const decision = await this.orchestrator.revalidateQueueExecution(operatorId);
+        const afterTransmissionSignature = this.orchestrator.readCurrentTransmissionSignature(operatorId);
+        if (!decision?.stop && beforeTransmissionSignature !== afterTransmissionSignature) {
+          this.deps.triggerReEncode?.(operatorId, {
+            source: 'operator-edit',
+            reason: `strategy action ${invocation.actionId}`,
+          });
+        } else {
+          logger.debug('Strategy action left physical transmission intent unchanged', {
+            operatorId,
+            actionId: invocation.actionId,
+            decisionStopped: decision?.stop === true,
+          });
+        }
       }
       this.deps.notifyOperatorStatusChanged?.(operatorId);
       logger.info('PluginManager strategy action applied', {

@@ -109,10 +109,13 @@ export class DecisionOrchestrator {
       // 决策分水岭：部分解码消息仅供广播/监控观察，绝不进入任何自动决策路径
       const actionableMessages = parsedMessages.filter((message) => !message.isPartialDecode);
       const hasTargetQueue = this.deps.hasTargetQueue?.(operatorId) === true;
+      const observationSlotInfo = slotPack
+        ? this.buildSlotInfoFromSlotPack(slotPack)
+        : slotInfo;
       this.deps.observeStrategyMessages?.(
         operatorId,
         actionableMessages,
-        slotInfo,
+        observationSlotInfo,
         'slot-auto',
         token,
         signal,
@@ -285,7 +288,7 @@ export class DecisionOrchestrator {
     return outcome.status === 'completed' ? outcome.value : false;
   }
 
-  async revalidateQueueExecution(operatorId: string): Promise<void> {
+  async revalidateQueueExecution(operatorId: string): Promise<StrategyDecisionResult | null> {
     const outcome = await this.deps.intentCoordinator.submit(
       operatorId,
       'assisted-queue',
@@ -293,7 +296,9 @@ export class DecisionOrchestrator {
     );
     if (outcome.status === 'superseded') {
       logger.debug('Queue execution resume was superseded', { operatorId });
+      return null;
     }
+    return outcome.status === 'completed' ? outcome.value : null;
   }
 
   async revalidateQueueExecutionInLane(
@@ -474,6 +479,10 @@ export class DecisionOrchestrator {
       logger.error(`Failed to read current transmissions: operator=${operatorId}`, err);
       return [];
     }
+  }
+
+  readCurrentTransmissionSignature(operatorId: string): string | null {
+    return this.getTransmissionSetSignature(this.readCurrentTransmissions(operatorId));
   }
 
   private getTransmissionSetSignature(transmissions: StrategyTransmission[]): string | null {

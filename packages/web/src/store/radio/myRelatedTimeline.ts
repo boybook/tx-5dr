@@ -54,6 +54,7 @@ export interface MyRelatedTimelineState {
 
 export interface MyRelatedTransmissionLog {
   operatorId: string;
+  streamId?: string;
   frameId?: string;
   revision?: number;
   playbackGeneration?: number;
@@ -267,7 +268,7 @@ export function myRelatedTimelineReducer(
       }
 
       const liveTxLogs = new Map(nextState.liveTxLogs);
-      liveTxLogs.set(buildLiveTxKey(log.operatorId, log.slotStartMs), log);
+      liveTxLogs.set(buildLiveTxKey(log.operatorId, log.slotStartMs, log.streamId), log);
       return reprojectLiveGroups(
         {
           ...nextState,
@@ -328,6 +329,7 @@ export function myRelatedTimelineReducer(
           if (frame.snr === -999 && frame.operatorId) {
             const log: MyRelatedTransmissionLog = {
               operatorId: frame.operatorId,
+              streamId: frame.streamId,
               myCallsign: operatorCallsignsById[frame.operatorId] || undefined,
               headerContextKey: buildHeaderContextKey(slotPack.frequencyContext),
               time: new Date(slotPack.startMs).toISOString().slice(11, 19).replace(/:/g, ''),
@@ -339,7 +341,7 @@ export function myRelatedTimelineReducer(
             };
 
             if (isLiveSlot) {
-              nextState.liveTxLogs.set(buildLiveTxKey(log.operatorId, log.slotStartMs), log);
+              nextState.liveTxLogs.set(buildLiveTxKey(log.operatorId, log.slotStartMs, log.streamId), log);
             } else {
               nextState = appendFrozenTransmission(nextState, log, currentMode);
             }
@@ -488,7 +490,11 @@ function freezeLiveGroups(
       }
 
       if (message.db === 'TX') {
-        const log = state.liveTxLogs.get(buildLiveTxKey(message.operatorId ?? '', group.startMs));
+        const log = state.liveTxLogs.get(buildLiveTxKey(
+          message.operatorId ?? '',
+          group.startMs,
+          message.streamId,
+        ));
         if (log) {
           nextState = appendFrozenTransmission(nextState, log, currentMode);
         }
@@ -717,7 +723,7 @@ function mergeMessages(existing: FrameDisplayMessage[], incoming: FrameDisplayMe
 
 function buildInlineMessageKey(message: FrameDisplayMessage): string {
   if (message.db === 'TX') {
-    return `TX:${message.operatorId ?? message.message}`;
+    return `TX:${message.operatorId ?? ''}:${message.streamId ?? message.message}`;
   }
 
   return [
@@ -761,14 +767,14 @@ function buildRxDisplayMessageKey(slotStartMs: number, message: FrameDisplayMess
 
 function buildFrozenMessageKey(slotStartMs: number, message: FrameDisplayMessage): string {
   if (message.db === 'TX') {
-    return `TX:${slotStartMs}:${message.operatorId ?? message.message}`;
+    return `TX:${slotStartMs}:${message.operatorId ?? ''}:${message.streamId ?? message.message}`;
   }
 
   return buildRxDisplayMessageKey(slotStartMs, message);
 }
 
-function buildLiveTxKey(operatorId: string, slotStartMs: number): string {
-  return `${operatorId}:${slotStartMs}`;
+function buildLiveTxKey(operatorId: string, slotStartMs: number, streamId?: string): string {
+  return `${operatorId}:${slotStartMs}:${streamId ?? 'default'}`;
 }
 
 function getGroupIdentityKey(startMs: number, frequencyContext?: SlotPackFrequencyContext): string {
@@ -871,6 +877,7 @@ function transmissionLogToDisplayMessage(log: MyRelatedTransmissionLog): FrameDi
     freq: log.frequency,
     message: log.message,
     operatorId: log.operatorId,
+    streamId: log.streamId,
     ...(log.myCallsign ? { emphasisCallsigns: [log.myCallsign] } : {}),
   };
 }
