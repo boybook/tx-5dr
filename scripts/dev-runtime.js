@@ -98,6 +98,7 @@ async function startTurbo() {
     TX5DR_SERVER_READY_FILE: serverReadyFile,
     TX5DR_SERVER_PORT_AUTO: process.env.TX5DR_SERVER_PORT_AUTO || (hasExplicitServerPort ? '0' : '1'),
     TX5DR_SERVER_PORT_SCAN_STEPS: process.env.TX5DR_SERVER_PORT_SCAN_STEPS || '50',
+    TX5DR_DEV_NODE_PATH: process.env.TX5DR_DEV_NODE_PATH || process.execPath,
     WEB_PORT: String(selectedWebPort),
     TX5DR_WEB_DEV_PORT: String(selectedWebPort),
     RTC_DATA_AUDIO_UDP_PORT: process.env.RTC_DATA_AUDIO_UDP_PORT || '50110',
