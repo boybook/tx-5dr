@@ -35,7 +35,7 @@
   "cqSelectionPolicy": "CQ caller selection", "cqSelectionPolicyDesc": "How callers are selected when replies exceed available TX slots.",
   "selectionFIRST": "First decoded", "selectionMAX_DISTANCE": "Maximum distance", "selectionMAX_SNR": "Highest SNR", "selectionMIN_SNR": "Lowest SNR",
   "authorizedStaleReceiveCycles": "Authorization freshness", "authorizedStaleReceiveCyclesDesc": "Unheard receive cycles before an authorized target becomes stale.",
-  "cqOff": "CQ off", "cqRepeat": "Repeat CQ", "final-retry": "Post-completion watch",
+  "final-retry": "Post-completion watch",
   "actionPause": "Pause", "actionResume": "Resume", "actionSetFrequency": "TX frequency",
   "actionResetFrequency": "Use automatic frequency", "actionAlternateMessage": "Alternate message",
   "actionAlternateMessageDesc": "Validate an alternate FT8/FT4 message before authorizing this target.",

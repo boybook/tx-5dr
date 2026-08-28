@@ -72,6 +72,14 @@ function createContestContext(options: {
 }
 
 describe('WW Digi contest edition persistence', () => {
+  it('uses an empty-queue manual target as an immediate target-only start', () => {
+    expect(wwDigiStrategyPlugin.strategyFeatures).toMatchObject({
+      targetQueue: 1,
+      queueActivation: 'immediate',
+      manualInitiation: 1,
+    });
+  });
+
   it('reconciles all eligible FT4/FT8 records into a shared callsign/year session', async () => {
     const in2026 = qsoRecord('qso-2026', Date.UTC(2026, 7, 29, 12, 0));
     const in2025 = qsoRecord('qso-2025', Date.UTC(2025, 7, 30, 12, 0));

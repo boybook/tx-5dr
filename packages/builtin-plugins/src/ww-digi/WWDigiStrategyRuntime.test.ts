@@ -280,16 +280,38 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
     expect(runtime.getTransmissions()[0]).toMatchObject({ streamId: 'stream-1', audioFrequencyHz: 1_400 });
   });
 
-  it('does not automatically admit an inbound caller', async () => {
+  it('arms one bounded CQ session from an empty-queue TX rising edge', async () => {
+    const { runtime, setTransmitting } = createRuntime();
+    expect(runtime.getSnapshot().actions).toBeUndefined();
+    expect((await runtime.decide([], decision())).transmissions).toEqual([]);
+
+    setTransmitting(true);
+    const started = await runtime.decide([], decision(2));
+
+    expect(started.transmissions).toEqual([{
+      streamId: 'cq',
+      text: 'CQ WW BG5DRB OL32',
+      audioFrequencyHz: 1_500,
+    }]);
+  });
+
+  it('does not treat runtime creation during active TX as a new operator authorization', async () => {
     const { runtime } = createRuntime({ transmitting: true });
+    const decisionResult = await runtime.decide([], decision());
+
+    expect(decisionResult.transmissions).toEqual([]);
+    expect(decisionResult.stop).toBe(true);
+  });
+
+  it('does not automatically admit an inbound caller', async () => {
+    const { runtime, setTransmitting } = createRuntime();
     const caller = parsed('BG5DRB JA1AAA PM95');
 
     expect(runtime.observeDecodedMessages([caller], observation())).toBe(false);
+    setTransmitting(true);
     const result = await runtime.decide([caller], decision());
     expect(runtime.getQueueSnapshot().rows).toEqual([]);
-    expect(result.transmissions).toEqual([]);
-    await runtime.invokeAction({ target: { kind: 'runtime' }, actionId: 'cq-repeat' });
-    expect(runtime.getTransmissions()).toEqual([{
+    expect(result.transmissions).toEqual([{
       streamId: 'cq',
       text: 'CQ WW BG5DRB OL32',
       audioFrequencyHz: 1_500,
@@ -297,9 +319,9 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
   });
 
   it('does not turn an expired authorized target into a new CQ session', async () => {
-    const { runtime } = createRuntime({ transmitting: true, authorizedStaleReceiveCycles: 1 });
+    const { runtime, setTransmitting } = createRuntime({ authorizedStaleReceiveCycles: 1 });
     runtime.enqueueTarget({ callsign: 'JA1AAA' });
-    await runtime.invokeAction({ target: { kind: 'runtime' }, actionId: 'cq-repeat' });
+    setTransmitting(true);
 
     expect(runtime.getTransmissions()).toEqual([]);
 
@@ -307,11 +329,20 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
     expect(runtime.getQueueSnapshot().rows[0]).toMatchObject({ displayState: 'paused', pauseReason: 'stale' });
     expect(runtime.getTransmissions()).toEqual([]);
     expect((await runtime.decide([], decision())).stop).toBe(true);
+
+    setTransmitting(false);
+    const queue = runtime.getQueueSnapshot();
+    expect(await runtime.invokeAction({
+      target: { kind: 'queue-entry', entryId: queue.rows[0]!.entryId, queueVersion: queue.version },
+      actionId: 'reauthorize-target',
+    })).toMatchObject({ requestDecision: true, requestOperatorStart: true });
+    setTransmitting(true);
+    expect((await runtime.decide([], decision(2))).transmissions).toHaveLength(1);
   });
 
   it('collects a CQ pile-up, auto-authorizes three, and retains overflow candidates', async () => {
-    const { runtime, setTransmitting } = createRuntime({ transmitting: true, parallelStreams: 3, cqSelectionPolicy: 'FIRST' });
-    await runtime.invokeAction({ target: { kind: 'runtime' }, actionId: 'cq-repeat' });
+    const { runtime, setTransmitting } = createRuntime({ parallelStreams: 3, cqSelectionPolicy: 'FIRST' });
+    setTransmitting(true);
     const cq = await runtime.decide([], decision());
     confirmTransmissions(runtime, cq);
 
@@ -338,11 +369,37 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
       .toMatchObject({ displayState: 'authorized' });
   });
 
-  it('keeps dupes as candidates but excludes them from automatic CQ selection', async () => {
-    const { runtime } = createRuntime({
-      transmitting: true, parallelStreams: 2, cqSelectionPolicy: 'FIRST', workedCallsigns: ['JA1AAA'],
+  it('fills additional lanes as individual candidates are authorized', async () => {
+    const { runtime, setTransmitting, config } = createRuntime({
+      parallelStreams: 3,
+      streamLimit: 1,
+      cqSelectionPolicy: 'FIRST',
     });
-    await runtime.invokeAction({ target: { kind: 'runtime' }, actionId: 'cq-repeat' });
+    setTransmitting(true);
+    confirmTransmissions(runtime, await runtime.decide([], decision()));
+    const callers = ['JA1AAA', 'JA2BBB', 'JA3CCC'].map((callsign, index) => (
+      parsed(`BG5DRB ${callsign} PM9${index}`, BASE_TIME + MODES.FT8.slotMs)
+    ));
+    runtime.observeDecodedMessages(callers, observation(BASE_TIME + MODES.FT8.slotMs));
+    expect((await runtime.decide(callers, decision(2))).transmissions).toHaveLength(1);
+
+    config.maxConcurrentStreams = 3;
+    for (const expectedCount of [2, 3]) {
+      const queue = runtime.getQueueSnapshot();
+      const candidate = queue.rows.find((row) => row.displayState === 'candidate')!;
+      expect(await runtime.invokeAction({
+        target: { kind: 'queue-entry', entryId: candidate.entryId, queueVersion: queue.version },
+        actionId: 'authorize-target',
+      })).toMatchObject({ requestDecision: true, requestOperatorStart: false });
+      expect((await runtime.decide([], decision(expectedCount + 1))).transmissions).toHaveLength(expectedCount);
+    }
+  });
+
+  it('keeps dupes as candidates but excludes them from automatic CQ selection', async () => {
+    const { runtime, setTransmitting } = createRuntime({
+      parallelStreams: 2, cqSelectionPolicy: 'FIRST', workedCallsigns: ['JA1AAA'],
+    });
+    setTransmitting(true);
     confirmTransmissions(runtime, await runtime.decide([], decision()));
     const callers = [
       parsed('BG5DRB JA1AAA PM95', BASE_TIME + MODES.FT8.slotMs),
@@ -356,8 +413,8 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
   });
 
   it('uses the same CQ authorization to fill an empty slot from a late decode', async () => {
-    const { runtime } = createRuntime({ transmitting: true, parallelStreams: 3, cqSelectionPolicy: 'FIRST' });
-    await runtime.invokeAction({ target: { kind: 'runtime' }, actionId: 'cq-repeat' });
+    const { runtime, setTransmitting } = createRuntime({ parallelStreams: 3, cqSelectionPolicy: 'FIRST' });
+    setTransmitting(true);
     confirmTransmissions(runtime, await runtime.decide([], decision()));
     const first = parsed('BG5DRB JA1AAA PM95', BASE_TIME + MODES.FT8.slotMs);
     runtime.observeDecodedMessages([first], observation(BASE_TIME + MODES.FT8.slotMs));
@@ -370,8 +427,8 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
   });
 
   it('stops after the configured number of physically completed unanswered CQs', async () => {
-    const { runtime } = createRuntime({ transmitting: true, cqMaxAttempts: 2 });
-    await runtime.invokeAction({ target: { kind: 'runtime' }, actionId: 'cq-repeat' });
+    const { runtime, setTransmitting } = createRuntime({ cqMaxAttempts: 2 });
+    setTransmitting(true);
     const first = await runtime.decide([], decision());
     confirmTransmissions(runtime, first);
     const second = await runtime.decide([], decision(2));
@@ -577,7 +634,6 @@ describe('WWDigiStrategyRuntime protocol flows', () => {
     expect((await runtime.decide([], decision(3))).stop).toBe(true);
 
     setTransmitting(false);
-    await runtime.invokeAction({ target: { kind: 'runtime' }, actionId: 'cq-repeat' });
     setTransmitting(true);
     const restarted = await runtime.decide([], decision(4));
 
@@ -623,7 +679,7 @@ describe('WWDigiStrategyRuntime protocol flows', () => {
   });
 
   it('reports the actual timeout stage and keeps the target retryable', async () => {
-    const { runtime } = createRuntime({ transmitting: true, maxAttempts: 1 });
+    const { runtime, setTransmitting } = createRuntime({ transmitting: true, maxAttempts: 1 });
     runtime.enqueueTarget({ callsign: 'JA1AAA' });
     const call = await runtime.decide([], decision());
     confirmTransmissions(runtime, call);
@@ -641,6 +697,19 @@ describe('WWDigiStrategyRuntime protocol flows', () => {
       displayState: 'no-response',
     });
     expect(timedOut.transmissions).toEqual([]);
+
+    setTransmitting(false);
+    const queue = runtime.getQueueSnapshot();
+    const retry = await runtime.invokeAction({
+      target: { kind: 'queue-entry', entryId: queue.rows[0]!.entryId, queueVersion: queue.version },
+      actionId: 'retry-target',
+    });
+    expect(retry).toMatchObject({ requestDecision: true, requestOperatorStart: true });
+
+    setTransmitting(true);
+    expect((await runtime.decide([], decision(3))).transmissions).toEqual([{
+      streamId: 'stream-1', text: 'JA1AAA BG5DRB OL32', audioFrequencyHz: 1_200,
+    }]);
   });
 });
 

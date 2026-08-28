@@ -35,7 +35,7 @@
   "cqSelectionPolicy": "CQ応答局の選択", "cqSelectionPolicyDesc": "応答局が空きスロットを超えた場合の自動選択方法です。",
   "selectionFIRST": "最初のデコード", "selectionMAX_DISTANCE": "最長距離", "selectionMAX_SNR": "最高SNR", "selectionMIN_SNR": "最低SNR",
   "authorizedStaleReceiveCycles": "承認の鮮度", "authorizedStaleReceiveCyclesDesc": "承認済み局を受信しないまま失効する受信サイクル数です。",
-  "cqOff": "CQ なし", "cqRepeat": "CQ 繰り返し", "final-retry": "完了後の監視",
+  "final-retry": "完了後の監視",
   "actionPause": "一時停止", "actionResume": "再開", "actionSetFrequency": "送信周波数",
   "actionResetFrequency": "自動周波数に戻す", "actionAlternateMessage": "代替メッセージ",
   "actionAlternateMessageDesc": "代替 FT8/FT4 メッセージを検証してから再承認します。",
