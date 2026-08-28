@@ -55,8 +55,8 @@ export const PluginStrategySelector: React.FC<PluginStrategySelectorProps> = ({
   return (
     <Select
       size="sm"
-      label={compact ? undefined : t('plugins.automationStrategy', 'QSO Mode')}
-      aria-label={t('plugins.automationStrategy', 'QSO Mode')}
+      label={compact ? undefined : t('plugins.automationStrategy', 'QSO Workflow')}
+      aria-label={t('plugins.automationStrategy', 'QSO Workflow')}
       selectedKeys={[selected]}
       isDisabled={saving}
       onSelectionChange={(keys) => {

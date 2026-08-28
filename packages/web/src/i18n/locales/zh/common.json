@@ -116,7 +116,7 @@
     "subtitle": "数字电台远程控制"
   },
   "automation": {
-    "title": "通联模式"
+    "title": "通联机制"
   },
   "theme": {
     "toggle": "切换主题",
@@ -850,7 +850,7 @@
       },
       "plugin-bootstrap": {
         "label": "插件",
-        "description": "加载插件和通联模式"
+        "description": "加载插件和通联机制"
       },
       "ntp-initial-check": {
         "label": "时间校准",

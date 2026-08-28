@@ -506,7 +506,7 @@
     "streamStateErrors": {
       "qsoChanged": "该通联已发生变化，请重新确认当前行后再操作。",
       "stateUnavailable": "该通联当前已不能切换到这个状态。",
-      "unsupported": "当前通联模式不支持手动切换状态。"
+      "unsupported": "当前通联机制不支持手动切换状态。"
     }
   },
   "profile": {
@@ -581,13 +581,13 @@
     "gridPlaceholder": "例如: FN31 或 FN31AB",
     "gridDesc": "可填写 4/6/8 位网格；FT8 发射时会自动只发送前 4 位。",
     "maxConcurrentStreams": "同时通联上限",
-    "maxConcurrentStreamsDesc": "此操作员最多可以同时进行多少个数字模式 QSO；具体通联模式可以使用更少的数量。",
+    "maxConcurrentStreamsDesc": "此操作员最多可以同时进行多少个数字模式 QSO；具体通联机制可以使用更少的数量。",
     "maxConcurrentStreamsInvalid": "同时通联上限必须是 1 至 5 的整数。",
     "gridValue": "网格: {{grid}}",
     "notSet": "未设置",
     "logSync": "通联日志同步",
     "logSyncDesc": "配置同步服务后，通联记录可自动上传到 WaveLog、QRZ.com 或 LoTW",
-    "automation": "通联模式设置",
+    "automation": "通联机制设置",
     "autoReplyToCQ": "自动回应他人 CQ",
     "autoResumeCQAfterFail": "失败后继续 CQ",
     "autoResumeCQAfterSuccess": "完成 QSO 后继续 CQ",

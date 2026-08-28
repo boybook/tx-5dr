@@ -506,7 +506,7 @@
     "streamStateErrors": {
       "qsoChanged": "This QSO changed before the state could be applied. Review the current row and try again.",
       "stateUnavailable": "That state is no longer available for this QSO.",
-      "unsupported": "This QSO mode does not support manual state changes."
+      "unsupported": "This QSO workflow does not support manual state changes."
     }
   },
   "profile": {
@@ -581,13 +581,13 @@
     "gridPlaceholder": "e.g. FN31 or FN31AB",
     "gridDesc": "You can enter a 4/6/8-character grid, but FT8 transmissions always send only the first 4 characters.",
     "maxConcurrentStreams": "Maximum concurrent QSOs",
-    "maxConcurrentStreamsDesc": "Maximum digital-mode QSOs this operator can work at once. Individual QSO modes may use fewer.",
+    "maxConcurrentStreamsDesc": "Maximum digital-mode QSOs this operator can work at once. Individual QSO workflows may use fewer.",
     "maxConcurrentStreamsInvalid": "Maximum concurrent QSOs must be an integer from 1 to 5.",
     "gridValue": "Grid: {{grid}}",
     "notSet": "Not set",
     "logSync": "Log Sync",
     "logSyncDesc": "After configuring sync services, QSOs will be automatically uploaded to WaveLog, QRZ.com or LoTW",
-    "automation": "QSO Mode Settings",
+    "automation": "QSO Workflow Settings",
     "autoReplyToCQ": "Answer others' CQ",
     "autoResumeCQAfterFail": "Continue CQ after failure",
     "autoResumeCQAfterSuccess": "Continue CQ after QSO",

@@ -1,5 +1,5 @@
 {
-  "strategyOverview": "WW Digi コンテストモード",
+  "strategyOverview": "WW Digi 交信方式",
   "strategyOverviewDesc": "交信待ちがない状態で TX をオンにすると CQ を繰り返します。応答局は最大3局まで同時に交信でき、それ以外は一覧に残り、局ごとに呼び出せます。",
   "contestYear": "開催年",
   "contestYearDesc": "対象となる WW Digi の開催年と提出期間を選びます。",
