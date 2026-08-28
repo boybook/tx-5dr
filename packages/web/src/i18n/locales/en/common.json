@@ -116,7 +116,7 @@
     "subtitle": "Digital Radio Remote Control"
   },
   "automation": {
-    "title": "Automation"
+    "title": "QSO Program"
   },
   "theme": {
     "toggle": "Toggle Theme",
@@ -850,7 +850,7 @@
       },
       "plugin-bootstrap": {
         "label": "Plugins",
-        "description": "Load plugins and automation strategies"
+        "description": "Load plugins and QSO strategies"
       },
       "ntp-initial-check": {
         "label": "Clock calibration",

@@ -11,6 +11,7 @@ import type {
   QueuedStrategyTargetRequest,
   StrategyDecisionMetaV2,
   StrategyDecisionResult,
+  StrategyQSOCompletionEffect,
   StrategyQSOCompletionSettlement,
   StrategyRuntimeCheckpoint,
   StrategyRuntimeContext,
@@ -125,6 +126,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       mode: 'FT8' | 'FT4',
     ) => Promise<{ encodable: boolean; error?: string; reason?: string }> = async () => ({ encodable: true }),
     private readonly snapshotExtension: () => WWDigiSnapshotExtension = () => ({}),
+    private readonly completionDestination: () => StrategyQSOCompletionEffect['destination'] = () => undefined,
   ) {
     const resolveFrequencies = typeof audioFrequenciesHz === 'function'
       ? audioFrequenciesHz
@@ -721,11 +723,15 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     requestedTransmitCycle?: number;
     stop?: boolean;
   } = {}): StrategyDecisionResult {
+    const qsoCompletions = options.qsoCompletions?.map((effect) => {
+      const destination = this.completionDestination();
+      return { ...effect, ...(destination ? { destination } : {}) };
+    });
     return {
       transmission: null,
       transmissions: this.getTransmissions(),
       snapshot: this.getSnapshot(),
-      qsoCompletions: options.qsoCompletions,
+      qsoCompletions,
       qsoFailures: options.qsoFailures,
       requestedTransmitCycle: options.requestedTransmitCycle,
       stop: options.stop ?? false,

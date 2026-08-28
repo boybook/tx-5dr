@@ -30,7 +30,7 @@
   "attentionContestSetupRequired": "比赛设置尚未确认",
   "attentionContestSetupRequiredDesc": "当前保持只接收；确认参赛呼号、网格和类别后才能发射。",
   "attentionContestLedgerUnhealthy": "比赛日志账本需要处理",
-  "attentionContestLedgerUnhealthyDesc": "请打开比赛设置并重新对账；账本恢复前禁止发射。",
+  "attentionContestLedgerUnhealthyDesc": "比赛日志暂不可用；恢复前禁止发射。",
   "cqMaxAttempts": "CQ 次数上限", "cqMaxAttemptsDesc": "连续物理发射成功但无人回复多少次后关闭发射。",
   "cqSelectionPolicy": "CQ 回复者选择", "cqSelectionPolicyDesc": "回复者超过空闲槽时的自动选择方式。",
   "selectionFIRST": "最早解码", "selectionMAX_DISTANCE": "最远距离", "selectionMAX_SNR": "最高 SNR", "selectionMIN_SNR": "最低 SNR",

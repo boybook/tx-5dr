@@ -30,7 +30,7 @@
   "attentionContestSetupRequired": "大会設定が未確認です",
   "attentionContestSetupRequiredDesc": "受信のみ利用できます。送信前にコールサイン、グリッド、カテゴリを確認してください。",
   "attentionContestLedgerUnhealthy": "大会ログ台帳の確認が必要です",
-  "attentionContestLedgerUnhealthyDesc": "送信前に大会設定を開き、ログを照合してください。",
+  "attentionContestLedgerUnhealthyDesc": "コンテストログを利用できません。復旧するまで送信は停止されます。",
   "cqMaxAttempts": "CQ 回数上限", "cqMaxAttemptsDesc": "応答がない物理CQ送信の後にTXを停止する回数です。",
   "cqSelectionPolicy": "CQ応答局の選択", "cqSelectionPolicyDesc": "応答局が空きスロットを超えた場合の自動選択方法です。",
   "selectionFIRST": "最初のデコード", "selectionMAX_DISTANCE": "最長距離", "selectionMAX_SNR": "最高SNR", "selectionMIN_SNR": "最低SNR",

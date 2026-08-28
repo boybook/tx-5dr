@@ -346,7 +346,7 @@ export const PluginList = forwardRef<PluginListRef, PluginListProps>(({
             helpTitle={t('plugins.strategyPluginsHelpTitle', 'What is a strategy plugin?')}
             helpDescription={t(
               'plugins.strategyPluginsHelpDescription',
-              'Strategy plugins define one operator\'s core automation behavior. Each operator can use only one strategy plugin at a time.'
+              'Strategy plugins define one operator\'s core QSO flow and decision logic. Each operator can use only one strategy plugin at a time.'
             )}
           />
           {strategyPlugins.map((plugin) => {

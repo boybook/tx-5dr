@@ -56,6 +56,7 @@ export const PluginPermissionSchema = z.enum([
   'radio:power',
   'logbook:read',
   'logbook:write',
+  'logbook:session',
   'logbook:sync',
   'settings:ft8',
   'settings:decode-windows',

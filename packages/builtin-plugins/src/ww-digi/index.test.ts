@@ -41,31 +41,40 @@ function createContestContext(options: {
   contestYear?: number;
   logBookId?: string | null;
   records?: QSORecord[];
+  awaitReady?: () => Promise<void>;
+  simulation?: boolean;
 } = {}) {
-  const queryQSOs = vi.fn(async () => options.records ?? []);
+  const queryQSOs = vi.fn(async (_filter?: unknown) => options.records ?? []);
   const ctx = createMockContext({
-    permissions: ['logbook:read', 'operator:transmit-control', 'plugin:event-bus'] as const,
+    permissions: ['logbook:session', 'operator:transmit-control', 'plugin:event-bus'] as const,
     callsign: 'BG5DRB',
     grid: 'OL32',
+    radio: { isSimulation: options.simulation === true },
     config: {
       contestYear: options.contestYear ?? 2026,
       location: 'DX',
       categoryBand: 'ALL',
       categoryPower: 'LOW',
     },
-    logbook: {
-      forCallsign: () => ({
-        callsign: 'BG5DRB',
-        getLogBookId: async () => options.logBookId === undefined ? 'logbook-BG5DRB' : options.logBookId,
-        queryQSOs,
-        readQsoSnapshot: async () => ({ revision: 'revision-1', records: [] }),
-        countQSOs: async () => 0,
-        getStatistics: async () => null,
-        addQSO: async (record: QSORecord) => record,
-        updateQSO: async (_id: string, updates: Partial<QSORecord>) => qsoRecord('updated', 0, updates.contestId),
-        applyQsoBatch: async () => ({ revision: 'revision-1', outcomes: [] }),
-        notifyUpdated: async () => {},
-      }),
+    logbookSessions: {
+      open: async (descriptor) => {
+        if (options.logBookId === null) throw new Error('WW Digi logbook is unavailable');
+        return {
+          id: options.logBookId ?? 'plugin-session-ww-digi-2026',
+          title: descriptor.title,
+          callsign: 'BG5DRB',
+          getLogBookId: async () => options.logBookId ?? 'plugin-session-ww-digi-2026',
+          awaitReady: options.awaitReady ?? (async () => {}),
+          queryQSOs,
+          readQsoSnapshot: async () => ({ revision: 'revision-1', records: [] }),
+          countQSOs: async () => 0,
+          getStatistics: async () => null,
+          addQSO: async (record: QSORecord) => record,
+          updateQSO: async (_id: string, updates: Partial<QSORecord>) => qsoRecord('updated', 0, updates.contestId),
+          applyQsoBatch: async () => ({ revision: 'revision-1', outcomes: [] }),
+          notifyUpdated: async () => {},
+        };
+      },
     },
   });
   return { ctx, queryQSOs };
@@ -80,7 +89,27 @@ describe('WW Digi contest edition persistence', () => {
     });
   });
 
-  it('reconciles all eligible FT4/FT8 records into a shared callsign/year session', async () => {
+  it('waits for the host logbook readiness signal before startup reconciliation', async () => {
+    let releaseReady!: () => void;
+    const awaitReady = vi.fn()
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { releaseReady = resolve; }))
+      .mockResolvedValue(undefined);
+    const { ctx, queryQSOs } = createContestContext({ awaitReady });
+    const loading = wwDigiStrategyPlugin.onLoad!(ctx as never);
+
+    await vi.waitFor(() => expect(awaitReady).toHaveBeenCalledOnce());
+    expect(queryQSOs).not.toHaveBeenCalled();
+
+    releaseReady();
+    await loading;
+    expect(queryQSOs).toHaveBeenCalledOnce();
+    expect(ctx.store.operator.get(wwDigiTestables.runtimeLogbookIdKey(2026)))
+      .toBe('plugin-session-ww-digi-2026');
+    expect(ctx.store.global.get<{ health?: { state?: string } }>(wwDigiTestables.sessionKey('BG5DRB', 2026))?.health)
+      .toMatchObject({ state: 'healthy' });
+  });
+
+  it('refreshes the contest projection only from its independent session', async () => {
     const in2026 = qsoRecord('qso-2026', Date.UTC(2026, 7, 29, 12, 0));
     const in2025 = qsoRecord('qso-2025', Date.UTC(2025, 7, 30, 12, 0));
     const nonContest = qsoRecord('not-ww-digi', Date.UTC(2026, 7, 29, 12, 1), 'OTHER');
@@ -90,7 +119,7 @@ describe('WW Digi contest edition persistence', () => {
       [contestQso('retained-2025', Date.UTC(2025, 7, 30, 12))],
     );
 
-    await expect(wwDigiTestables.reconcileLedger(ctx, 2026)).resolves.toEqual({ imported: 1, total: 2 });
+    await expect(wwDigiTestables.refreshContestProjection(ctx, 2026)).resolves.toEqual({ total: 1 });
 
     expect(queryQSOs).toHaveBeenCalledWith(expect.objectContaining({
       orderDirection: 'asc',
@@ -104,7 +133,6 @@ describe('WW Digi contest edition persistence', () => {
     expect(await wwDigiTestables.readContestRecords(ctx, 2026))
       .toEqual(expect.arrayContaining([
         expect.objectContaining({ qsoId: 'qso-2026', source: 'ww-digi' }),
-        expect.objectContaining({ qsoId: 'not-ww-digi', source: 'reconciled' }),
       ]));
     expect(ctx.store.operator.get<ContestQso[]>(wwDigiTestables.ledgerKey(2025)))
       .toEqual([expect.objectContaining({ qsoId: 'retained-2025' })]);
@@ -112,15 +140,45 @@ describe('WW Digi contest edition persistence', () => {
       .toEqual(expect.objectContaining({ state: 'healthy' }));
   });
 
+  it('includes out-of-period FT4/FT8 records only for a virtual radio', async () => {
+    const outsidePeriod = qsoRecord('virtual-qso', Date.UTC(2026, 7, 28, 9, 20, 15));
+    const physical = createContestContext({ records: [outsidePeriod] });
+    const virtual = createContestContext({ records: [outsidePeriod], simulation: true });
+
+    await expect(wwDigiTestables.refreshContestProjection(physical.ctx, 2026))
+      .resolves.toEqual({ total: 0 });
+    expect(physical.queryQSOs).toHaveBeenCalledWith(expect.objectContaining({
+      timeRange: expect.any(Object),
+    }));
+
+    await expect(wwDigiTestables.refreshContestProjection(virtual.ctx, 2026))
+      .resolves.toEqual({ total: 1 });
+    expect(virtual.queryQSOs.mock.calls[0]?.[0]).not.toHaveProperty('timeRange');
+    await expect(wwDigiTestables.readContestRecords(virtual.ctx, 2026))
+      .resolves.toEqual([expect.objectContaining({ qsoId: 'virtual-qso' })]);
+  });
+
   it('marks an unavailable logbook degraded and refuses Cabrillo rendering', async () => {
     const { ctx } = createContestContext({ logBookId: null });
 
-    await expect(wwDigiTestables.reconcileLedgerWithHealth(ctx, 2026))
+    await expect(wwDigiTestables.refreshContestProjectionWithHealth(ctx, 2026))
       .rejects.toThrow(/logbook is unavailable/);
     expect(ctx.store.global.get<{ health?: { state?: string } }>(wwDigiTestables.sessionKey('BG5DRB', 2026))?.health)
       .toEqual(expect.objectContaining({ state: 'degraded' }));
     await expect(wwDigiTestables.renderCabrillo(ctx, 2026))
-      .rejects.toThrow(/reconcile it before download/);
+      .rejects.toThrow(/logbook is unavailable/);
+  });
+
+  it('exports only independent WW Digi session records as standard ADIF', async () => {
+    const contest = qsoRecord('contest', Date.UTC(2026, 7, 29, 12, 0));
+    const unrelated = { ...qsoRecord('other', Date.UTC(2026, 7, 29, 12, 1), 'OTHER'), callsign: 'K1OTHER' };
+    const { ctx } = createContestContext({ records: [contest, unrelated] });
+
+    const adif = await wwDigiTestables.renderADIF(ctx, 2026);
+    expect(adif).toContain('<programid:13>TX5DR-WW-DIGI');
+    expect(adif).toContain('<call:6>JA1AAA');
+    expect(adif).toContain('<station_callsign:6>BG5DRB');
+    expect(adif).not.toContain('K1OTHER');
   });
 
   it('migrates a schema v1 session to an unconfirmed v2 session without losing overrides', async () => {
@@ -138,7 +196,7 @@ describe('WW Digi contest edition persistence', () => {
       operatorTransmitters: {}, migratedOperators: {}, health: { state: 'healthy' },
     });
 
-    await wwDigiTestables.reconcileLedger(ctx, 2026);
+    await wwDigiTestables.refreshContestProjection(ctx, 2026);
     expect(ctx.store.global.get<Record<string, unknown>>(key)).toMatchObject({
       schemaVersion: 2,
       setup: { status: 'unconfirmed' },
@@ -159,6 +217,25 @@ describe('WW Digi contest edition persistence', () => {
     await hook!(qsoRecord('qso-2026', Date.UTC(2026, 7, 29, 12)), ctx);
     expect(ctx.store.global.get<{ overrides?: Record<string, unknown> }>(wwDigiTestables.sessionKey('BG5DRB', 2026))?.overrides)
       .toEqual(expect.objectContaining({ 'qso-2026': expect.objectContaining({ operatorId: 'operator-0', transmitterId: 0 }) }));
+  });
+
+  it('records an out-of-period completion only when the active radio is virtual', async () => {
+    const record = qsoRecord('local-simulation-qso', Date.UTC(2026, 7, 28, 9, 20, 15));
+    const physical = createContestContext({ records: [record] });
+    const virtual = createContestContext({ records: [record], simulation: true });
+    const hook = wwDigiStrategyPlugin.hooks?.onQSOComplete;
+
+    await hook!(record, physical.ctx);
+    expect(physical.ctx.store.global.get<{ overrides?: Record<string, unknown> }>(
+      wwDigiTestables.sessionKey('BG5DRB', 2026),
+    )?.overrides).toBeUndefined();
+
+    await hook!(record, virtual.ctx);
+    expect(virtual.ctx.store.global.get<{ overrides?: Record<string, unknown> }>(
+      wwDigiTestables.sessionKey('BG5DRB', 2026),
+    )?.overrides).toEqual(expect.objectContaining({
+      'local-simulation-qso': expect.objectContaining({ operatorId: 'operator-0' }),
+    }));
   });
 
   it('defaults the setting to the current UTC year with bounded input', () => {

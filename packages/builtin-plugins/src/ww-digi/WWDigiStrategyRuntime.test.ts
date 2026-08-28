@@ -94,6 +94,7 @@ function createRuntime(options: {
   workedCallsigns?: string[];
   busyCallsigns?: string[];
   transmitBlocked?: boolean;
+  sessionId?: string;
 } = {}) {
   let transmitting = options.transmitting ?? false;
   const busy = new Set((options.busyCallsigns ?? []).map((callsign) => callsign.toUpperCase()));
@@ -125,7 +126,9 @@ function createRuntime(options: {
       config.frequency + 300,
     ], undefined, () => options.transmitBlocked
       ? { transmitGate: { allowed: false, reason: 'confirmSettings' } }
-      : {}),
+      : {}, () => options.sessionId
+      ? { kind: 'plugin-session', sessionId: options.sessionId }
+      : undefined),
     setTransmitting(value: boolean) { transmitting = value; },
     config,
   };
@@ -533,7 +536,7 @@ describe('WWDigiStrategyRuntime protocol flows', () => {
   });
 
   it('completes the outbound grid, R-grid, RR73 sequence after physical TX', async () => {
-    const { runtime } = createRuntime({ transmitting: true });
+    const { runtime } = createRuntime({ transmitting: true, sessionId: 'ww-digi-session' });
     runtime.enqueueTarget({ callsign: 'JA1AAA', lastMessage: selected('CQ WW JA1AAA PM95') });
 
     const grid = await runtime.decide([], decision());
@@ -552,6 +555,7 @@ describe('WWDigiStrategyRuntime protocol flows', () => {
     expect(completion.qsoCompletions?.[0]).toMatchObject({
       streamId: 'stream-1',
       persistencePolicy: 'preserve-distinct',
+      destination: { kind: 'plugin-session', sessionId: 'ww-digi-session' },
       record: {
         callsign: 'JA1AAA',
         grid: 'PM95',
@@ -841,7 +845,7 @@ describe('WWDigiStrategyRuntime settlement and refill', () => {
     });
   });
 
-  it('projects a failed settlement as review without re-emitting completion', async () => {
+  it('keeps a failed settlement in review until the operator retries the same completion', async () => {
     const { runtime } = createRuntime({ transmitting: true });
     const started = await activateInbound(runtime, 'JA1AAA', 'PM95');
     confirmTransmissions(runtime, started);
@@ -867,5 +871,18 @@ describe('WWDigiStrategyRuntime settlement and refill', () => {
       tone: 'danger',
     });
     expect(reviewed.transmissions).toEqual([]);
+
+    const stream = runtime.getSnapshot().streams![0]!;
+    expect(stream.actions?.map((action) => action.id)).toContain('retry-log');
+    const retry = await runtime.invokeAction({
+      target: { kind: 'stream', streamId: stream.streamId, lifecycleEpoch: stream.qsoLifecycleEpoch },
+      actionId: 'retry-log',
+    });
+    expect(retry?.qsoCompletions).toEqual([
+      expect.objectContaining({
+        lifecycleEpoch: effect!.lifecycleEpoch,
+        record: expect.objectContaining({ id: effect!.record.id }),
+      }),
+    ]);
   });
 });

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { summarizeWWDigiScore } from '../../score.js';
 
 interface ContestQso {
   qsoId: string;
@@ -30,13 +31,16 @@ interface PageState {
 
 const text = {
   zh: {
-    reconcile: '重新对账', download: '下载 Cabrillo', empty: '暂无比赛通联', time: 'UTC', call: '对方呼号',
+    download: '下载 Cabrillo', downloadAdif: '下载 ADIF', empty: '暂无比赛通联', time: 'UTC', call: '对方呼号',
     exchange: '交换', mode: '模式', band: '波段', source: '来源', status: '状态', included: '计入', excluded: 'X-QSO', review: '待审核',
     dupe: '重复', save: '保存并确认比赛设置', setupRequired: '请确认本届比赛设置；确认前仅接收，发射已禁用。',
     contestTitle: 'WW Digi {{year}}', station: '参赛电台', grid: '网格', deadline: '日志提交截止',
     settingsTitle: '参赛与日志设置', settingsDesc: '这些信息将写入 Cabrillo 日志头部，并决定最终参赛类别。',
     expandSettings: '展开设置', collapseSettings: '收起设置', unsaved: '未保存',
-    setupStatus: '比赛设置', confirmed: '已确认', unconfirmed: '未确认', ledgerStatus: '日志状态',
+    ledgerStatus: '日志状态',
+    scoreTitle: '实时计分', claimedScore: '预估总分', scoredQsos: '计分 QSO', qsoPoints: 'QSO 分', gridFields: 'Grid Field', reviewCount: '需处理',
+    bandQso: 'QSO', points: '分值', multiplier: '系数', newMultiplier: '新系数', actionsLabel: '操作', moreActions: '更多操作',
+    markExcluded: '切换为 X-QSO', restoreIncluded: '恢复为计入',
     operatorLabel: '操作员类别', operatorHelp: '选择由一人完成全部操作与日志，或由多人共同参赛。',
     transmitterLabel: '发射机类别', bandLabel: '参赛波段', powerLabel: '功率类别',
     locationLabel: 'Cabrillo 位置', locationSectionHelp: '美国和加拿大电台必须填写 ARRL/RAC 分区，例如 OH、EMA 或 ON。',
@@ -59,13 +63,16 @@ const text = {
     health: { healthy: '正常', degraded: '需处理', unknown: '检查中' },
   },
   ja: {
-    reconcile: '照合', download: 'Cabrillo を保存', empty: 'QSO はありません', time: 'UTC', call: '相手局',
+    download: 'Cabrillo を保存', downloadAdif: 'ADIF を保存', empty: 'QSO はありません', time: 'UTC', call: '相手局',
     exchange: '交換', mode: 'モード', band: 'バンド', source: '出所', status: '状態', included: '有効', excluded: 'X-QSO', review: '要確認',
     dupe: '重複', save: '保存して競技設定を確認', setupRequired: 'この大会の設定を確認してください。確認するまで受信のみで、送信は無効です。',
     contestTitle: 'WW Digi {{year}}', station: '参加局', grid: 'グリッド', deadline: 'ログ提出期限',
     settingsTitle: '参加カテゴリとログ設定', settingsDesc: 'この情報は Cabrillo ヘッダーに記録され、参加カテゴリを決定します。',
     expandSettings: '設定を開く', collapseSettings: '設定を閉じる', unsaved: '未保存',
-    setupStatus: '大会設定', confirmed: '確認済み', unconfirmed: '未確認', ledgerStatus: 'ログ状態',
+    ledgerStatus: 'ログ状態',
+    scoreTitle: 'リアルタイム得点', claimedScore: '暫定スコア', scoredQsos: '得点 QSO', qsoPoints: 'QSO 点', gridFields: 'Grid Field', reviewCount: '要確認',
+    bandQso: 'QSO', points: '点', multiplier: 'マルチ', newMultiplier: '新マルチ', actionsLabel: '操作', moreActions: 'その他の操作',
+    markExcluded: 'X-QSO に変更', restoreIncluded: '有効に戻す',
     operatorLabel: 'オペレーター区分', operatorHelp: '全操作と記録を一人で行うか、複数人で参加するかを選択します。',
     transmitterLabel: '送信機区分', bandLabel: '参加バンド', powerLabel: '出力区分',
     locationLabel: 'Cabrillo ロケーション', locationSectionHelp: '米国・カナダ局は OH、EMA、ON などの ARRL/RAC セクションが必要です。',
@@ -88,13 +95,16 @@ const text = {
     health: { healthy: '正常', degraded: '要確認', unknown: '確認中' },
   },
   en: {
-    reconcile: 'Reconcile', download: 'Download Cabrillo', empty: 'No contest QSOs', time: 'UTC', call: 'Callsign',
+    download: 'Download Cabrillo', downloadAdif: 'Download ADIF', empty: 'No contest QSOs', time: 'UTC', call: 'Callsign',
     exchange: 'Exchange', mode: 'Mode', band: 'Band', source: 'Source', status: 'Status', included: 'Included', excluded: 'X-QSO', review: 'Review',
     dupe: 'Dupe', save: 'Save and confirm contest settings', setupRequired: 'Confirm this contest edition before transmitting. Receive-only operation remains available.',
     contestTitle: 'WW Digi {{year}}', station: 'Entrant station', grid: 'Grid', deadline: 'Log submission deadline',
     settingsTitle: 'Entry and log settings', settingsDesc: 'These values are written to the Cabrillo header and determine the entry category.',
     expandSettings: 'Expand settings', collapseSettings: 'Collapse settings', unsaved: 'Unsaved',
-    setupStatus: 'Contest settings', confirmed: 'Confirmed', unconfirmed: 'Not confirmed', ledgerStatus: 'Log status',
+    ledgerStatus: 'Log status',
+    scoreTitle: 'Live score', claimedScore: 'Claimed score', scoredQsos: 'Scored QSOs', qsoPoints: 'QSO points', gridFields: 'Grid Fields', reviewCount: 'Needs review',
+    bandQso: 'QSO', points: 'Points', multiplier: 'Multiplier', newMultiplier: 'New multiplier', actionsLabel: 'Actions', moreActions: 'More actions',
+    markExcluded: 'Change to X-QSO', restoreIncluded: 'Restore as included',
     operatorLabel: 'Operator category', operatorHelp: 'Choose whether one person performs all operating and logging, or multiple operators participate.',
     transmitterLabel: 'Transmitter category', bandLabel: 'Entry band', powerLabel: 'Power category',
     locationLabel: 'Cabrillo location', locationSectionHelp: 'US and Canadian stations must enter an ARRL/RAC section such as OH, EMA, or ON.',
@@ -238,16 +248,12 @@ export function App() {
     };
   }, [load]);
 
-  const rows = useMemo(() => {
-    const worked = new Set<string>();
-    return [...(state?.records ?? [])].sort((a, b) => a.startTime - b.startTime).map((record) => {
-      const key = `${record.callsign.toUpperCase()}:${record.band}`;
-      const countsAsWorked = record.status === 'included' || record.status === 'review';
-      const dupe = countsAsWorked && worked.has(key);
-      if (countsAsWorked) worked.add(key);
-      return { ...record, dupe };
-    });
-  }, [state?.records]);
+  const score = useMemo(() => summarizeWWDigiScore(
+    state?.records ?? [],
+    state?.config.categoryBand ?? 'ALL',
+  ), [state?.config.categoryBand, state?.records]);
+  const rows = useMemo(() => score.rows.map((row) => ({ ...row.record, ...row })), [score.rows]);
+  const numberFormatter = useMemo(() => new Intl.NumberFormat(locale), [locale]);
 
   const updateDraft = (patch: Partial<ContestConfig>) => {
     setDraft((current) => current ? normalizeCategoryDraft({ ...current, ...patch }) : current);
@@ -285,7 +291,6 @@ export function App() {
     finally { setBusy(false); }
   };
 
-  const reconcile = () => run(async () => { await tx5dr.invoke('reconcile', {}); await load(); });
   const download = () => run(async () => {
     const result = await tx5dr.invoke('renderCabrillo', {}) as { text: string };
     const blob = new Blob([result.text], { type: 'text/plain;charset=utf-8' });
@@ -296,8 +301,18 @@ export function App() {
     anchor.click();
     URL.revokeObjectURL(url);
   });
-  const toggle = (record: ContestQso) => run(async () => {
-    await tx5dr.invoke('setStatus', { qsoId: record.qsoId, status: record.status === 'included' ? 'x-qso' : 'included' });
+  const downloadAdif = () => run(async () => {
+    const result = await tx5dr.invoke('renderADIF', {}) as { text: string };
+    const blob = new Blob([result.text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${state?.config.callsign || 'ww-digi'}-ww-digi-${state?.contestYear || 'log'}.adi`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  });
+  const setStatus = (record: ContestQso, status: ContestQso['status']) => run(async () => {
+    await tx5dr.invoke('setStatus', { qsoId: record.qsoId, status });
     await load();
   });
   const saveSession = () => run(async () => {
@@ -325,18 +340,18 @@ export function App() {
           {state?.deadline && <p><strong>{t.deadline}</strong> {formatDeadline(state.deadline)}</p>}
         </div>
         <div className="actions">
-          <span className={`health ${state?.setup.status === 'confirmed' ? 'health-healthy' : 'health-unconfirmed'}`}>
-            {t.setupStatus}: {state?.setup.status === 'confirmed' ? t.confirmed : t.unconfirmed}
-          </span>
           <span
             className={`health health-${healthState}`}
             title={state?.health.error}
           >
             {t.ledgerStatus}: {t.health[healthState]}
           </span>
-          <button className="button button-sm button-flat" type="button" disabled={busy} onClick={() => void reconcile()}>
-            {t.reconcile}
-          </button>
+          <button
+            type="button"
+            className="button button-sm button-flat"
+            disabled={busy || !state || state.health.state !== 'healthy'}
+            onClick={() => void downloadAdif()}
+          >{t.downloadAdif}</button>
           <button
             type="button"
             className="button button-sm button-solid button-primary"
@@ -455,18 +470,62 @@ export function App() {
           </>}
         </section>
       )}
+      <section className="score-section" aria-labelledby="score-title">
+        <div className="score-heading">
+          <h2 id="score-title">{t.scoreTitle}</h2>
+          <span className="score-entry-band">{state?.config.categoryBand ?? 'ALL'}</span>
+        </div>
+        <div className="score-totals">
+          <div className="score-total score-total-primary">
+            <span>{t.claimedScore}</span>
+            <strong>{numberFormatter.format(score.claimedScore)}</strong>
+          </div>
+          <div className="score-total"><span>{t.scoredQsos}</span><strong>{score.scoredQsos}</strong></div>
+          <div className="score-total"><span>{t.qsoPoints}</span><strong>{score.qsoPoints}</strong></div>
+          <div className="score-total"><span>{t.gridFields}</span><strong>{score.gridFields}</strong></div>
+          <div className={`score-total ${score.reviewCount > 0 ? 'score-total-warning' : ''}`}>
+            <span>{t.reviewCount}</span><strong>{score.reviewCount}</strong>
+          </div>
+        </div>
+        <div className="band-breakdown">
+          {score.bands.map((band) => (
+            <div
+              key={band.band}
+              className={`band-score ${band.qsos > 0 ? 'has-qsos' : ''} ${state?.config.categoryBand === band.band ? 'is-entry-band' : ''}`}
+            >
+              <strong className="band-name">{band.band}</strong>
+              <span><b>{band.qsos}</b> {t.bandQso}</span>
+              <span><b>{band.qsoPoints}</b> {t.points}</span>
+              <span><b>{band.gridFields}</b> {t.gridFields}</span>
+            </div>
+          ))}
+        </div>
+      </section>
       <div className="table-shell">
         <table>
-          <thead><tr><th>{t.time}</th><th>{t.call}</th><th>{t.exchange}</th><th>{t.mode}</th><th>{t.band}</th><th>{t.source}</th><th>{t.status}</th></tr></thead>
+          <thead><tr>
+            <th>{t.time}</th><th>{t.call}</th><th>{t.exchange}</th><th>{t.mode}</th><th>{t.band}</th>
+            <th className="numeric">{t.points}</th><th>{t.multiplier}</th>
+            {state?.config.categoryTransmitter === 'TWO' && <th>TX</th>}
+            <th>{t.status}</th><th className="actions-column"><span className="sr-only">{t.actionsLabel}</span></th>
+          </tr></thead>
           <tbody>
-            {rows.map((record) => (
+            {rows.map((record, rowIndex) => (
               <tr key={record.qsoId} className={record.status === 'x-qso' ? 'excluded' : ''}>
                 <td>{new Date(record.startTime).toISOString().slice(5, 16).replace('T', ' ')}</td>
                 <td className="call">{record.callsign}</td>
                 <td>{record.sentGrid} / {record.receivedGrid || 'ZZ00'}</td>
-                <td>{record.mode}</td><td>{record.band}</td><td>{record.source ?? 'reconciled'}</td>
-                <td>
-                  {state?.config.categoryTransmitter === 'TWO' && (
+                <td>{record.mode}</td><td>{record.band}</td>
+                <td className="numeric score-points">{record.qsoPoints === null ? '-' : record.creditedPoints}</td>
+                <td className="status-cell">
+                  {record.gridField ? (
+                    <span className={record.newMultiplier ? 'multiplier-new' : 'multiplier-field'}>
+                      {record.gridField}{record.newMultiplier ? ' +1' : ''}
+                    </span>
+                  ) : '-'}
+                </td>
+                {state?.config.categoryTransmitter === 'TWO' && (
+                  <td>
                     <select
                       className="tx-select"
                       value={record.transmitterId ?? ''}
@@ -475,19 +534,41 @@ export function App() {
                     >
                       <option value="" disabled>TX</option><option value="0">0</option><option value="1">1</option>
                     </select>
-                  )}
-                  <button
-                    type="button"
-                    className={`button button-xs button-flat status status-${record.status === 'x-qso' ? 'excluded' : record.status === 'review' ? 'dupe' : record.dupe ? 'dupe' : 'included'}`}
-                    disabled={busy}
-                    onClick={() => void toggle(record)}
-                  >
+                  </td>
+                )}
+                <td>
+                  <span className={`status status-${record.status === 'x-qso' ? 'excluded' : record.status === 'review' ? 'review' : record.dupe ? 'dupe' : 'included'}`}>
                     {record.status === 'x-qso' ? t.excluded : record.status === 'review' ? t.review : record.dupe ? t.dupe : t.included}
-                  </button>
+                  </span>
+                </td>
+                <td className="row-actions-cell">
+                  <details
+                    className={`row-actions ${rowIndex < 2 ? 'open-down' : ''} ${busy ? 'is-disabled' : ''}`}
+                    onBlur={(event) => {
+                      if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.removeAttribute('open');
+                    }}
+                  >
+                    <summary
+                      aria-label={t.moreActions}
+                      title={t.moreActions}
+                      onClick={(event) => { if (busy) event.preventDefault(); }}
+                    >...</summary>
+                    <div className="row-actions-menu" role="menu">
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className={record.status === 'x-qso' ? '' : 'danger'}
+                        onClick={(event) => {
+                          event.currentTarget.closest('details')?.removeAttribute('open');
+                          void setStatus(record, record.status === 'x-qso' ? 'included' : 'x-qso');
+                        }}
+                      >{record.status === 'x-qso' ? t.restoreIncluded : t.markExcluded}</button>
+                    </div>
+                  </details>
                 </td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><td colSpan={7} className="empty">{t.empty}</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={state?.config.categoryTransmitter === 'TWO' ? 10 : 9} className="empty">{t.empty}</td></tr>}
           </tbody>
         </table>
       </div>

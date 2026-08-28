@@ -3,10 +3,10 @@ import { EventEmitter } from 'eventemitter3';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { DigitalRadioEngineEvents, QSORecord } from '@tx5dr/contracts';
+import type { DigitalRadioEngineEvents, LogbookHealth, QSORecord } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import type { LoadedPlugin, PluginManagerDeps } from '../types.js';
-import type { LogbookAccess, LogbookBatchMutation } from '@tx5dr/plugin-api';
+import type { LogbookAccess, LogbookBatchMutation, PluginLogbookSessions } from '@tx5dr/plugin-api';
 import { PluginContextFactory } from '../PluginContextFactory.js';
 import { LogManager } from '../../log/LogManager.js';
 
@@ -100,6 +100,75 @@ describe('PluginContextFactory logbook access', () => {
     expect('updateQSO' in readOnly.logbook!).toBe(false);
     expect('applyQsoBatch' in readOnly.logbook!).toBe(false);
     expect('notifyUpdated' in readOnly.logbook!).toBe(false);
+  });
+
+  it('opens a plugin-owned session without exposing primary logbook commands', async () => {
+    const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
+    const addQSO = vi.fn(async (record: QSORecord) => record);
+    const sessionLogBook = {
+      id: 'plugin-session-test',
+      name: 'Test Session',
+      provider: {
+        getHealth: vi.fn(() => ({ state: 'healthy', readable: true, writable: true, issues: [], updatedAt: 0 })),
+        onHealthChanged: vi.fn(() => () => {}),
+        queryQSOs: vi.fn(async () => []),
+        readQsoSnapshot: vi.fn(async () => ({ revision: 'r1', records: [] })),
+        addQSO,
+        updateQSO: vi.fn(),
+        applyQsoBatch: vi.fn(async () => ({ revision: 'r2', outcomes: [] })),
+        getStatistics: vi.fn(async () => ({ totalQSOs: 0, uniqueCallsigns: 0 })),
+      },
+    };
+    const getOrCreatePluginSessionLogBook = vi.fn(async () => sessionLogBook);
+    const getPluginSessionLogBook = vi.fn(() => sessionLogBook);
+    vi.spyOn(LogManager, 'getInstance').mockReturnValue({
+      getOrCreatePluginSessionLogBook,
+      getPluginSessionLogBook,
+      getOperatorIdsForLogBook: vi.fn(() => []),
+    } as any);
+
+    const factory = new PluginContextFactory(createDeps(eventEmitter));
+    const storageDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-ctx-session-'));
+    tempDirs.push(storageDir);
+    const ctx = await factory.create(
+      createPlugin(['logbook:session']),
+      'operator-1',
+      'operator',
+      storageDir,
+      () => {},
+      () => ({}),
+    );
+    expect('queryQSOs' in ctx.logbook!).toBe(false);
+    const sessions = (ctx.logbook as { sessions: PluginLogbookSessions }).sessions;
+    const session = await sessions.open({
+      sessionKey: 'contest:2026',
+      stationCallsign: 'BG4IAJ',
+      title: 'Contest 2026',
+    });
+    await session.awaitReady();
+    const record: QSORecord = {
+      id: 'qso-1', callsign: 'JA1AAA', frequency: 14_091_000,
+      mode: 'FT8', startTime: 1, messageHistory: [], myCallsign: 'BG4IAJ',
+    };
+    await session.addQSO(record);
+
+    expect(getOrCreatePluginSessionLogBook).toHaveBeenCalledWith({
+      pluginName: 'test-plugin',
+      stationCallsign: 'BG4IAJ',
+      sessionKey: 'contest:2026',
+      title: 'Contest 2026',
+    });
+    expect(getPluginSessionLogBook).toHaveBeenCalledWith(
+      'plugin-session-test',
+      'test-plugin',
+      'BG4IAJ',
+    );
+    expect(addQSO).toHaveBeenCalledWith(record, 'operator-1');
+    await expect(sessions.open({
+      sessionKey: 'contest:2026',
+      stationCallsign: 'N0CALL',
+      title: 'Wrong station',
+    })).rejects.toMatchObject({ code: 'LOGBOOK_UNAVAILABLE' });
   });
 
   it('returns the provider committed record for operator-bound add and update', async () => {
@@ -348,6 +417,7 @@ describe('PluginContextFactory logbook access', () => {
     };
 
     await expect(logbook.getLogBookId()).resolves.toBeNull();
+    await expect(logbook.awaitReady()).rejects.toMatchObject({ code: 'LOGBOOK_UNAVAILABLE' });
     await expect(logbook.queryQSOs({})).resolves.toEqual([]);
     await expect(logbook.readQsoSnapshot()).rejects.toMatchObject({ code: 'LOGBOOK_UNAVAILABLE' });
     await expect(logbook.countQSOs()).resolves.toBe(0);
@@ -359,5 +429,54 @@ describe('PluginContextFactory logbook access', () => {
       .rejects.toMatchObject({ code: 'LOGBOOK_UNAVAILABLE' });
     await expect(logbook.notifyUpdated()).resolves.toBeUndefined();
     expect(getOrCreateLogBookByCallsign).not.toHaveBeenCalled();
+  });
+
+  it('waits on the registered provider health event without polling or creating a logbook', async () => {
+    const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
+    let health: LogbookHealth = {
+      state: 'loading' as const,
+      readable: false,
+      writable: false,
+      issues: [],
+      updatedAt: 0,
+    };
+    let healthListener: ((next: LogbookHealth) => void) | undefined;
+    const unsubscribe = vi.fn();
+    const getOrCreateLogBookByCallsign = vi.fn();
+    const provider = {
+      getHealth: vi.fn(() => health),
+      onHealthChanged: vi.fn((listener: (next: LogbookHealth) => void) => {
+        healthListener = listener;
+        return unsubscribe;
+      }),
+    };
+    vi.spyOn(LogManager, 'getInstance').mockReturnValue({
+      resolveLogBookId: vi.fn(() => 'logbook-BG5DRB'),
+      getLogBook: vi.fn(() => ({ id: 'logbook-BG5DRB', provider })),
+      getOrCreateLogBookByCallsign,
+      getOperatorIdsForLogBook: vi.fn(() => []),
+    } as any);
+
+    const factory = new PluginContextFactory(createDeps(eventEmitter));
+    const storageDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-ctx-ready-'));
+    tempDirs.push(storageDir);
+    const ctx = await factory.create(
+      createPlugin(['logbook:read']),
+      undefined,
+      'global',
+      storageDir,
+      () => {},
+      () => ({}),
+    );
+
+    const ready = (ctx.logbook as LogbookAccess).forCallsign('bg5drb').awaitReady({ timeoutMs: 1_000 });
+    await Promise.resolve();
+    expect(provider.onHealthChanged).toHaveBeenCalledOnce();
+    expect(getOrCreateLogBookByCallsign).not.toHaveBeenCalled();
+
+    health = { state: 'healthy', readable: true, writable: true, issues: [], updatedAt: 1 };
+    healthListener?.(health);
+    await expect(ready).resolves.toBeUndefined();
+    expect(unsubscribe).toHaveBeenCalledOnce();
   });
 });

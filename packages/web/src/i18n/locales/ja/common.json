@@ -116,7 +116,7 @@
     "subtitle": "デジタル無線機リモコン"
   },
   "automation": {
-    "title": "自動化された手順"
+    "title": "交信プログラム"
   },
   "theme": {
     "toggle": "テーマを切り替える",
@@ -850,7 +850,7 @@
       },
       "plugin-bootstrap": {
         "label": "プラグイン",
-        "description": "プラグインと自動化戦略をロードする"
+        "description": "プラグインと交信ストラテジーを読み込む"
       },
       "ntp-initial-check": {
         "label": "時間校正",

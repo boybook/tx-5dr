@@ -434,6 +434,11 @@ export interface StrategyQSOCompletionEffect {
   streamId?: string;
   /** Host persistence behavior requested by the strategy. */
   persistencePolicy?: 'merge-nearby' | 'preserve-distinct';
+  /** Optional Host-issued destination. Omitted effects use the operator's primary logbook. */
+  destination?: {
+    kind: 'plugin-session';
+    sessionId: string;
+  };
   /** Structured-cloneable source metadata returned with post-commit delivery. */
   metadata?: Record<string, unknown>;
 }

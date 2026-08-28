@@ -978,6 +978,8 @@ export const OperatorStatusSchema = z.object({
   context: z.object({
     myCall: z.string(),
     myGrid: z.string(),
+    /** Canonical active target set; `targetCall` remains the primary compatibility field. */
+    targetCalls: z.array(z.string()).optional(),
     targetCall: z.string(),
     targetGrid: z.string().optional(),
     frequency: z.number().optional(),
@@ -2242,6 +2244,11 @@ export interface DigitalRadioEngineEvents {
     qsoRuntimeGeneration?: number;
     qsoRecord: z.infer<typeof QSORecordSchema>;
     persistencePolicy?: z.infer<typeof QSOPersistencePolicySchema>;
+    destination?: {
+      kind: 'plugin-session';
+      sessionId: string;
+    };
+    sourcePluginName?: string;
     retryAttemptId?: string;
     resolve?: (record: z.infer<typeof QSORecordSchema>) => void;
     reject?: (error: unknown) => void;

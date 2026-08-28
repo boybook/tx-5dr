@@ -479,7 +479,7 @@ export const AutomationSettingsPanel: React.FC<AutomationSettingsPanelProps> = (
       {showStrategySelector && (
         <section className="space-y-1.5">
           <div className="px-1 text-[10px] uppercase tracking-[0.12em] text-default-400">
-            {t('plugins.automationStrategy', 'Automation Strategy')}
+            {t('plugins.automationStrategy', 'QSO Strategy')}
           </div>
           <PluginStrategySelector
             operatorId={operatorId}

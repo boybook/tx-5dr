@@ -176,6 +176,39 @@ describe('myRelatedTimelineReducer', () => {
     expect(rxMessages.map(message => message.message)).toEqual(['CQ JA1XXX PM95']);
   });
 
+  it('keeps unmatched RX for every target in the canonical multi-slot context', () => {
+    const slotStartMs = Date.UTC(2026, 4, 6, 6, 28, 30);
+    const targetCallsigns = ['VR2VAC', 'YV5VAB'];
+    const state = reduce([
+      {
+        type: 'syncLiveContext',
+        payload: {
+          currentMode: mode,
+          liveSlotStartMs: slotStartMs,
+          visibleOperatorCallsigns: ['BG0VRT'],
+          targetCallsigns,
+        },
+      },
+      {
+        type: 'ingestSlotPack',
+        payload: {
+          slotPack: createSlotPack(slotStartMs, [
+            createRxFrame('CQ WW VR2VAC OL74', 1_840),
+            createRxFrame('CQ WW YV5VAB FK62', 2_280),
+            createRxFrame('CQ WW JA1AAA PM95', 1_000),
+          ], createFrequencyContext()),
+          currentMode: mode,
+          liveSlotStartMs: slotStartMs,
+          visibleOperatorCallsigns: ['BG0VRT'],
+          targetCallsigns,
+        },
+      },
+    ]);
+
+    expect(buildMyRelatedTimelineGroups(state).flatMap((group) => group.messages.map((message) => message.message)))
+      .toEqual(['CQ WW VR2VAC OL74', 'CQ WW YV5VAB FK62']);
+  });
+
   it('keeps partial-message location identity display-only', () => {
     const slotStartMs = Date.UTC(2026, 4, 6, 6, 28, 30);
     const state = reduce([

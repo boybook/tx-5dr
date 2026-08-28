@@ -8,7 +8,7 @@ import {
   LogbookOperationError,
   toAdifMode,
 } from '@tx5dr/core';
-import { getPluginContextCapabilityKeys } from '@tx5dr/plugin-api';
+import { getPluginContextCapabilityKeys, normalizeCallsign } from '@tx5dr/plugin-api';
 import type {
   HostSettingsControl,
   HamlibHostDependency,
@@ -169,7 +169,7 @@ export class PluginContextFactory {
       () => contextRef.current,
     );
     const radioContext = this.createRadioContext(plugin);
-    const logbookAccess = this.createLogbookAccess(operatorId, instanceScope);
+    const logbookAccess = this.createLogbookAccess(plugin, operatorId, instanceScope);
     const bandAccess = this.createBandAccess(operatorId);
     const settingsControl = this.createSettingsControl(plugin);
     const fileStore = new PluginFileStoreProvider(
@@ -227,9 +227,14 @@ export class PluginContextFactory {
         fetch: (url: string, init?: RequestInit) => globalThis.fetch(url, init),
       } : {}),
       ...(eventBusControl ? { eventBus: eventBusControl } : {}),
-      logbook: plugin.definition.permissions?.includes('logbook:write')
-        ? logbookAccess.full
-        : logbookAccess.read,
+      logbook: {
+        ...(plugin.definition.permissions?.includes('logbook:write')
+          ? logbookAccess.full
+          : plugin.definition.permissions?.includes('logbook:read') ? logbookAccess.read : {}),
+        ...(plugin.definition.permissions?.includes('logbook:session')
+          ? { sessions: logbookAccess.sessions }
+          : {}),
+      } as NonNullable<RuntimePluginContext['logbook']>,
       settings: settingsControl,
       logbookSync: {
         register: (provider: LogbookSyncProvider) => {
@@ -936,6 +941,9 @@ export class PluginContextFactory {
       get isConnected() {
         return deps.getRadioConnected();
       },
+      get isSimulation() {
+        return configManager.getActiveVirtualRadioProfile() !== null;
+      },
     };
 
     const capabilities: Omit<RuntimePluginContext, keyof PluginContextBase> = {};
@@ -1002,19 +1010,19 @@ export class PluginContextFactory {
   }
 
   private createLogbookAccess(
+    plugin: LoadedPlugin,
     operatorId: string | undefined,
     instanceScope: 'operator' | 'global',
   ) {
     const deps = this.deps;
     const logManager = LogManager.getInstance();
 
-    const createCallsignAccess = (callsign: string) => {
+    const createResolvedAccess = (
+      callsign: string,
+      resolveLogBook: () => LogBookInstance | null,
+    ) => {
       const normalizedCallsign = callsign.trim().toUpperCase();
-
-      const getExistingLogBook = () => {
-        const logBookId = logManager.resolveLogBookId(normalizedCallsign);
-        return logBookId ? logManager.getLogBook(logBookId) : null;
-      };
+      const getExistingLogBook = resolveLogBook;
 
       const getRequiredLogBook = (): LogBookInstance => {
         const logBook = getExistingLogBook();
@@ -1056,6 +1064,63 @@ export class PluginContextFactory {
         };
       };
 
+      const awaitLogBookReady = async (options?: { timeoutMs?: number }): Promise<void> => {
+        const logBook = getRequiredLogBook();
+        const requestedTimeoutMs = options?.timeoutMs;
+        const timeoutMs = typeof requestedTimeoutMs === 'number'
+            && Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0
+          ? Math.trunc(requestedTimeoutMs)
+          : 30_000;
+        const assertReadable = (health: ReturnType<typeof logBook.provider.getHealth>) => {
+          if (health.readable) return;
+          if (health.state === 'loading') {
+            throw new LogbookOperationError('LOGBOOK_LOADING', 'The logbook is still loading');
+          }
+          throw new LogbookOperationError(
+            'LOGBOOK_UNAVAILABLE',
+            `Logbook for ${normalizedCallsign} is not readable (${health.state})`,
+          );
+        };
+        const initial = logBook.provider.getHealth();
+        if (initial.state !== 'loading') {
+          assertReadable(initial);
+          return;
+        }
+
+        await new Promise<void>((resolve, reject) => {
+          let settled = false;
+          let unsubscribe = () => {};
+          const finish = (error?: unknown) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeoutHandle);
+            unsubscribe();
+            if (error) reject(error);
+            else resolve();
+          };
+          const observe = (health: ReturnType<typeof logBook.provider.getHealth>) => {
+            if (health.state === 'loading') return;
+            try {
+              assertReadable(health);
+              finish();
+            } catch (error) {
+              finish(error);
+            }
+          };
+          const timeoutHandle = setTimeout(() => finish(new LogbookOperationError(
+            'LOGBOOK_LOADING',
+            `Logbook for ${normalizedCallsign} did not become ready within ${timeoutMs}ms`,
+          )), timeoutMs);
+          const registeredUnsubscribe = logBook.provider.onHealthChanged(observe);
+          unsubscribe = registeredUnsubscribe;
+          if (settled) {
+            registeredUnsubscribe();
+            return;
+          }
+          observe(logBook.provider.getHealth());
+        });
+      };
+
       return {
         get callsign() {
           return normalizedCallsign;
@@ -1063,6 +1128,7 @@ export class PluginContextFactory {
         async getLogBookId() {
           return getExistingLogBook()?.id ?? null;
         },
+        awaitReady: awaitLogBookReady,
         async queryQSOs(filter: QSOQueryFilter) {
           const logBook = getExistingLogBook();
           if (!logBook) return [];
@@ -1119,6 +1185,14 @@ export class PluginContextFactory {
           });
         },
       };
+    };
+
+    const createCallsignAccess = (callsign: string) => {
+      const normalizedCallsign = callsign.trim().toUpperCase();
+      return createResolvedAccess(normalizedCallsign, () => {
+        const logBookId = logManager.resolveLogBookId(normalizedCallsign);
+        return logBookId ? logManager.getLogBook(logBookId) : null;
+      });
     };
 
     const getBoundCallsign = () => {
@@ -1211,8 +1285,61 @@ export class PluginContextFactory {
       },
     };
 
+    const sessions = {
+      async open(descriptor: import('@tx5dr/plugin-api').PluginLogbookSessionDescriptor) {
+        if (instanceScope !== 'operator' || !operatorId) {
+          throw new LogbookOperationError(
+            'LOGBOOK_UNAVAILABLE',
+            'Plugin logbook sessions require an operator-scoped plugin instance',
+          );
+        }
+        const boundCallsign = getBoundCallsign();
+        const requestedCallsign = descriptor.stationCallsign.trim().toUpperCase();
+        if (!boundCallsign || normalizeCallsign(boundCallsign) !== normalizeCallsign(requestedCallsign)) {
+          throw new LogbookOperationError(
+            'LOGBOOK_UNAVAILABLE',
+            'Plugin logbook session callsign must match the current operator',
+          );
+        }
+        const logBook = await logManager.getOrCreatePluginSessionLogBook({
+          pluginName: plugin.definition.name,
+          stationCallsign: requestedCallsign,
+          sessionKey: descriptor.sessionKey,
+          title: descriptor.title,
+        });
+        const access = createResolvedAccess(requestedCallsign, () => (
+          logManager.getPluginSessionLogBook(
+            logBook.id,
+            plugin.definition.name,
+            requestedCallsign,
+          )
+        ));
+        return {
+          ...access,
+          async awaitReady(options?: { timeoutMs?: number }) {
+            await access.awaitReady(options);
+            const current = logManager.getPluginSessionLogBook(
+              logBook.id,
+              plugin.definition.name,
+              requestedCallsign,
+            );
+            const health = current?.provider.getHealth();
+            if (!health?.writable) {
+              throw new LogbookOperationError(
+                'LOGBOOK_UNAVAILABLE',
+                `Plugin logbook session is not writable (${health?.state ?? 'unavailable'})`,
+              );
+            }
+          },
+          id: logBook.id,
+          title: logBook.name,
+        };
+      },
+    };
+
     return {
       full: fullAccess,
+      sessions,
       read: {
         hasWorked: fullAccess.hasWorked,
         hasWorkedDXCC: fullAccess.hasWorkedDXCC,
@@ -1225,6 +1352,7 @@ export class PluginContextFactory {
           return {
             callsign: access.callsign,
             getLogBookId: access.getLogBookId,
+            awaitReady: access.awaitReady,
             queryQSOs: access.queryQSOs,
             readQsoSnapshot: access.readQsoSnapshot,
             countQSOs: access.countQSOs,
