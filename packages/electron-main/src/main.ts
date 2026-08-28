@@ -1670,6 +1670,9 @@ function resourcesRoot() {
 }
 
 function nodePath() {
+  if (isDevelopmentRuntime() && process.env.TX5DR_DEV_NODE_PATH) {
+    return process.env.TX5DR_DEV_NODE_PATH;
+  }
   const res = resourcesRoot();
   const exe = process.platform === 'win32' ? 'node.exe' : 'node';
   return path.join(res, 'bin', triplet(), exe);
