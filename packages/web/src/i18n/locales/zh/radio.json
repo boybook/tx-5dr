@@ -487,7 +487,11 @@
       "stale": "已消失"
     },
     "queueMeta": {
-      "cyclesAgo": "{{count}} 回合前"
+      "cyclesAgo": "{{count}} 回合前",
+      "lastHeardCycle": "上次听到：{{cycle}}",
+      "currentCycleUnavailable": "上次听到：{{cycle}} · 当前周期无法覆盖",
+      "currentTransmitCycle": "当前发射：{{cycle}}",
+      "unknownCycle": "上次听到周期未知"
     },
     "queueErrors": {
       "queueFull": "队列已满",

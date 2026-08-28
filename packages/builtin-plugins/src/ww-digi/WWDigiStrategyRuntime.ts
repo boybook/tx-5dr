@@ -22,12 +22,14 @@ import type {
   StrategyActionResult,
   StrategyAttention,
   StrategyMessagePresentationProjection,
+  StrategyOperatorTransmitCyclesChanged,
   StrategyTransmitGate,
   StreamPhysicalReceipt,
 } from '@tx5dr/plugin-api';
 import { normalizeCallsign } from '@tx5dr/plugin-api';
 import {
   FT8MessageParser,
+  CycleUtils,
   calculateGridDistance,
   isValidCallsign,
   isUndecodedCallsignPlaceholder,
@@ -75,6 +77,8 @@ interface RuntimeCheckpoint {
   startPurpose?: 'authorized-work' | 'recovery-work';
   exhaustedAtReceiveEpoch?: number;
   stopAttention?: StrategyAttention;
+  pendingManualCycleAuthorization?: { transmitCycle: 0 | 1; authorizationId: string };
+  allowQueuedCycleSelection: boolean;
 }
 
 function targetKey(callsign: string): string {
@@ -109,6 +113,8 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   private startPurpose?: 'authorized-work' | 'recovery-work';
   private exhaustedAtReceiveEpoch?: number;
   private stopAttention?: StrategyAttention;
+  private pendingManualCycleAuthorization?: { transmitCycle: 0 | 1; authorizationId: string };
+  private allowQueuedCycleSelection = false;
 
   constructor(
     private readonly operator: WWDigiRuntimeOperator,
@@ -154,6 +160,8 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       startPurpose: this.startPurpose,
       exhaustedAtReceiveEpoch: this.exhaustedAtReceiveEpoch,
       stopAttention: this.stopAttention,
+      pendingManualCycleAuthorization: this.pendingManualCycleAuthorization,
+      allowQueuedCycleSelection: this.allowQueuedCycleSelection,
     } satisfies RuntimeCheckpoint;
   }
 
@@ -168,6 +176,8 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     this.startPurpose = state.startPurpose;
     this.exhaustedAtReceiveEpoch = state.exhaustedAtReceiveEpoch;
     this.stopAttention = state.stopAttention;
+    this.pendingManualCycleAuthorization = state.pendingManualCycleAuthorization;
+    this.allowQueuedCycleSelection = state.allowQueuedCycleSelection === true;
   }
 
   observeDecodedMessages(messages: ParsedFT8Message[], meta: QueuedStrategyObservationMeta): boolean {
@@ -185,6 +195,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       const callsign = sender.callsign.trim().toUpperCase();
       const parsed = parseWWDigiMessage(message.rawMessage);
       let entry = this.coordinator.findEntryByTargetKey(targetKey(callsign));
+      const lastHeardCycle = CycleUtils.isEvenCycle(meta.slotInfo.cycleNumber) ? 0 : 1;
       const isDirectedGridReply = parsed.type === 'grid'
         && targetKey(parsed.targetCallsign) === targetKey(this.operator.config.myCallsign)
         && targetKey(parsed.senderCallsign) === targetKey(callsign);
@@ -195,7 +206,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
         const result = this.coordinator.enqueue({
           targetKey: targetKey(callsign),
           callsign,
-          requestedTransmitCycle: ((meta.slotInfo.cycleNumber + 1) % 2) as 0 | 1,
+          requestedTransmitCycle: (1 - lastHeardCycle) as 0 | 1,
           data: {
             status: 'candidate',
             source: 'cq',
@@ -205,6 +216,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
             firstHeardAt: message.timestamp,
             firstAudioFrequencyHz: message.df,
             lastHeardReceiveEpoch: this.receiveEpoch,
+            lastHeardCycle,
             evidenceRevision: 1,
           },
         });
@@ -216,6 +228,10 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       if (!entry) continue;
       const targetCallsign = 'targetCallsign' in parsed ? parsed.targetCallsign : undefined;
       const activeEntryIds = this.coordinator.getQueueSnapshot().activeEntryIds;
+      const isActive = activeEntryIds.includes(entry.entryId);
+      if (!isActive) {
+        this.coordinator.setRequestedTransmitCycle(entry.entryId, (1 - lastHeardCycle) as 0 | 1);
+      }
       if (!activeEntryIds.includes(entry.entryId)
           && entry.data.status === 'authorized' && targetCallsign
           && targetKey(targetCallsign) !== targetKey(this.operator.config.myCallsign)) {
@@ -226,7 +242,6 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
           data.authorizedReceiveEpoch = undefined;
           return true;
         })) changed = true;
-        continue;
       }
       if (this.coordinator.updateEntry(entry.entryId, (data) => {
         let updated = false;
@@ -245,6 +260,10 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
         }
         if (data.lastHeardReceiveEpoch !== this.receiveEpoch) {
           data.lastHeardReceiveEpoch = this.receiveEpoch;
+          updated = true;
+        }
+        if (data.lastHeardCycle !== lastHeardCycle) {
+          data.lastHeardCycle = lastHeardCycle;
           updated = true;
         }
         return updated;
@@ -273,7 +292,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       }
     }
     const requiresAlternate = !isValidCallsign(callsign) || callsign.includes('/');
-    return this.mutationResult(this.coordinator.enqueue({
+    const result = this.coordinator.enqueue({
       targetKey: targetKey(callsign),
       callsign,
       requestedTransmitCycle,
@@ -282,6 +301,9 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
         authorizedAt: Date.now(),
         authorizedReceiveEpoch: this.receiveEpoch,
         lastHeardReceiveEpoch: this.receiveEpoch,
+        lastHeardCycle: request.lastMessage
+          ? (CycleUtils.isEvenCycle(request.lastMessage.slotInfo.cycleNumber) ? 0 : 1)
+          : undefined,
         source: 'manual',
         evidenceRevision: 1,
         lastMessageRaw,
@@ -290,7 +312,11 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
         status: requiresAlternate ? 'review' : 'authorized',
         encodingError: requiresAlternate ? 'special_callsign_requires_preflight' : undefined,
       },
-    }));
+    });
+    if (result.outcome === 'accepted' && !this.operator.isTransmitting) {
+      this.allowQueuedCycleSelection = true;
+    }
+    return this.mutationResult(result);
   }
 
   reorderTarget(entryId: string, beforeEntryId: string | null, expectedVersion: number): QueuedStrategyMutationResult {
@@ -315,15 +341,22 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       data.noResponseCycles = undefined;
       return true;
     });
+    if (!this.operator.isTransmitting) this.allowQueuedCycleSelection = true;
     return { outcome: 'accepted', snapshot: this.getQueueSnapshot() };
   }
 
   removeTarget(entryId: string, expectedVersion: number): QueuedStrategyMutationResult {
-    return this.mutationResult(this.coordinator.remove(entryId, expectedVersion));
+    const result = this.coordinator.remove(entryId, expectedVersion);
+    if (result.outcome === 'accepted' && this.coordinator.getQueueSnapshot().entries.length === 0) {
+      this.allowQueuedCycleSelection = false;
+    }
+    return this.mutationResult(result);
   }
 
   clearTargets(expectedVersion: number): QueuedStrategyMutationResult {
-    return this.mutationResult(this.coordinator.clear(expectedVersion));
+    const result = this.coordinator.clear(expectedVersion);
+    if (result.outcome === 'accepted') this.allowQueuedCycleSelection = false;
+    return this.mutationResult(result);
   }
 
   getQueueSnapshot(): AssistedQueueSnapshot {
@@ -370,6 +403,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
           lastHeardCyclesAgo: row.entry.data.lastHeardReceiveEpoch === undefined
             ? undefined
             : Math.max(0, this.receiveEpoch - row.entry.data.lastHeardReceiveEpoch),
+          lastHeardCycle: row.entry.data.lastHeardCycle,
           streamId: row.streamId,
           audioFrequencyHz: row.audioFrequencyHz,
           authorizationId: row.entry.data.authorizationId,
@@ -418,6 +452,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     if (this.callSession.state === 'collecting' || this.callSession.state === 'batch-active') {
       await this.authorizeCollectedBatch();
     }
+    await this.authorizePendingManualCycleBatch();
 
     if (this.callSession.state === 'calling'
         && this.exhaustedAtReceiveEpoch !== undefined
@@ -433,15 +468,20 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       return this.result({ stop: true });
     }
     const configuredCycle = this.operator.config.transmitCycles[0] === 1 ? 1 : 0;
+    const allowCycleSelection = this.allowQueuedCycleSelection;
     const fill = await this.coordinator.fillAvailableLanes({
       currentTransmitCycle: configuredCycle,
       isEligible: (entry) => entry.data.status === 'authorized'
+        && (allowCycleSelection
+          || entry.requestedTransmitCycle === undefined
+          || entry.requestedTransmitCycle === configuredCycle)
         && !this.operator.isTargetBeingWorkedByOthers(entry.callsign),
     });
+    if (fill.activatedEntryIds.length > 0) this.allowQueuedCycleSelection = false;
     const projected = this.result({
       qsoCompletions: decision.qsoCompletions,
       qsoFailures: decision.qsoFailures,
-      requestedTransmitCycle: fill.requestedTransmitCycle,
+      requestedTransmitCycle: allowCycleSelection ? fill.requestedTransmitCycle : undefined,
     });
     if ((projected.transmissions?.length ?? 0) === 0 && this.shouldStopForIdle()) {
       const candidates = this.countCandidates();
@@ -574,6 +614,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       const requestOperatorStart = !this.operator.isTransmitting;
       if (requestOperatorStart) {
         this.startPurpose = 'authorized-work';
+        this.allowQueuedCycleSelection = true;
         this.previousTransmitting = false;
       }
       return { requestDecision: true, requestOperatorStart };
@@ -598,6 +639,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       const requestOperatorStart = !this.operator.isTransmitting;
       if (requestOperatorStart) {
         this.startPurpose = 'authorized-work';
+        this.allowQueuedCycleSelection = true;
         this.previousTransmitting = false;
       }
       return { requestDecision: true, requestOperatorStart };
@@ -607,6 +649,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       const requestOperatorStart = !this.operator.isTransmitting;
       if (requestOperatorStart) {
         this.startPurpose = 'authorized-work';
+        this.allowQueuedCycleSelection = true;
         this.previousTransmitting = false;
       }
       return { requestDecision: true, requestOperatorStart };
@@ -618,6 +661,22 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     throw new Error('strategy_action_not_available');
   }
   setSlotContent(_update: StrategyRuntimeSlotContentUpdate): void {}
+
+  onOperatorTransmitCyclesChanged(change: StrategyOperatorTransmitCyclesChanged): boolean {
+    if (change.source !== 'manual' || !this.operator.isTransmitting) return false;
+    const previous = change.previousTransmitCycles.length === 1
+      ? change.previousTransmitCycles[0]
+      : undefined;
+    const selected = change.transmitCycles.length === 1 ? change.transmitCycles[0] : undefined;
+    if ((selected !== 0 && selected !== 1) || selected === previous) return false;
+    this.pendingManualCycleAuthorization = {
+      transmitCycle: selected,
+      authorizationId: randomUUID(),
+    };
+    this.allowQueuedCycleSelection = false;
+    this.stopAttention = undefined;
+    return true;
+  }
 
   settleQSOCompletion(settlement: StrategyQSOCompletionSettlement): void {
     this.coordinator.settleQSOCompletion(settlement);
@@ -652,6 +711,8 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     this.startPurpose = undefined;
     this.exhaustedAtReceiveEpoch = undefined;
     this.stopAttention = undefined;
+    this.pendingManualCycleAuthorization = undefined;
+    this.allowQueuedCycleSelection = false;
   }
 
   private result(options: {
@@ -697,6 +758,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   }
 
   private armCallSession(): void {
+    this.allowQueuedCycleSelection = false;
     this.exhaustedAtReceiveEpoch = undefined;
     this.callSession.arm({
       authorizationId: randomUUID(),
@@ -783,6 +845,46 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       this.callSession.extendBatch(selected.map((row) => row.entry.targetKey));
     }
     this.exhaustedAtReceiveEpoch = undefined;
+  }
+
+  private async authorizePendingManualCycleBatch(): Promise<void> {
+    const pending = this.pendingManualCycleAuthorization;
+    if (!pending) return;
+    this.pendingManualCycleAuthorization = undefined;
+    const snapshot = this.coordinator.getQueueSnapshot();
+    const authorizationCapacity = this.parallelStreams();
+    const candidates = snapshot.entries
+      .filter((row) => !row.active
+        && row.entry.data.status === 'candidate'
+        && row.entry.data.dupe !== true
+        && row.entry.requestedTransmitCycle === pending.transmitCycle)
+      .sort((left, right) => this.compareCandidates(left.entry, right.entry));
+    let authorized = 0;
+    for (const row of candidates) {
+      if (authorized >= authorizationCapacity) break;
+      const text = buildWWDigiRogerGrid(
+        row.entry.callsign,
+        this.operator.config.myCallsign,
+        this.operator.config.myGrid,
+      );
+      const checked = await this.preflightMessage(text, this.operator.config.modeName);
+      if (!checked.encodable) {
+        this.coordinator.updateEntry(row.entry.entryId, (data) => {
+          data.status = 'review';
+          data.encodingError = checked.error || checked.reason || 'message_not_encodable';
+          return true;
+        });
+        continue;
+      }
+      this.coordinator.updateEntry(row.entry.entryId, (data) => {
+        data.status = 'authorized';
+        data.authorizationId = pending.authorizationId;
+        data.authorizedAt = Date.now();
+        data.authorizedReceiveEpoch = this.receiveEpoch;
+        return true;
+      });
+      authorized += 1;
+    }
   }
 
   private compareCandidates(left: import('@tx5dr/plugin-api/toolkit').ParallelQSOQueueEntry<WWDigiEntryData>, right: import('@tx5dr/plugin-api/toolkit').ParallelQSOQueueEntry<WWDigiEntryData>): number {

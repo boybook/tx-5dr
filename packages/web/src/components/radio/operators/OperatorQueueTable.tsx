@@ -33,6 +33,41 @@ interface OperatorQueueTableProps {
   queue: AssistedQueueSnapshot;
 }
 
+function CycleDot({
+  cycle,
+  incompatible = false,
+  label,
+}: {
+  cycle?: 0 | 1;
+  incompatible?: boolean;
+  label: string;
+}) {
+  const color = cycle === 0 ? 'var(--ft8-cycle-even)'
+    : cycle === 1 ? 'var(--ft8-cycle-odd)' : undefined;
+  return (
+    <Tooltip content={label} placement="top" offset={4}>
+      <span
+        role="img"
+        aria-label={label}
+        data-cycle={cycle ?? 'unknown'}
+        data-cycle-compatibility={cycle === undefined ? 'unknown' : incompatible ? 'incompatible' : 'compatible'}
+        className="relative flex h-3 w-3 shrink-0 items-center justify-center"
+      >
+        <span
+          className={`h-2 w-2 rounded-full ${cycle === undefined ? 'border border-default-400 bg-transparent' : ''}`}
+          style={color ? { backgroundColor: color } : undefined}
+        />
+        {incompatible && (
+          <span
+            aria-hidden="true"
+            className="absolute h-px w-3 rotate-45 bg-default-500 shadow-[0_0_0_1px_var(--heroui-background)]"
+          />
+        )}
+      </span>
+    </Tooltip>
+  );
+}
+
 const TONE_CLASS: Record<AssistedQueueRow['tone'], string> = {
   neutral: 'text-default-500',
   active: 'text-primary-600 dark:text-primary-400',
@@ -60,6 +95,8 @@ function QueueRow({
   isNew = false,
   onEntryAnimationEnd,
   strategyName,
+  currentTransmitCycle,
+  active,
   onAction,
 }: {
   row: AssistedQueueRow;
@@ -70,6 +107,8 @@ function QueueRow({
   isNew?: boolean;
   onEntryAnimationEnd?: () => void;
   strategyName: string;
+  currentTransmitCycle?: 0 | 1;
+  active: boolean;
   onAction: (action: NonNullable<AssistedQueueRow['actions']>[number], payload?: unknown) => void;
 }) {
   const { t, i18n } = useTranslation('radio');
@@ -112,13 +151,24 @@ function QueueRow({
     ? t('operator.queue.remove')
     : t('operator.queue.interruptAndRemove');
   const retryLabel = t('operator.queue.retry');
+  const cycleLabel = row.lastHeardCycle === 0
+    ? t('operator.evenCycle')
+    : row.lastHeardCycle === 1 ? t('operator.oddCycle') : undefined;
+  const incompatible = row.lastHeardCycle !== undefined
+    && currentTransmitCycle !== undefined
+    && row.lastHeardCycle === currentTransmitCycle;
+  const cycleTooltip = cycleLabel
+    ? t(incompatible ? 'operator.queueMeta.currentCycleUnavailable' : 'operator.queueMeta.lastHeardCycle', {
+      cycle: cycleLabel,
+    })
+    : t('operator.queueMeta.unknownCycle');
 
   const rowContent = (
     <div
       role="listitem"
-      className={`relative flex h-7 items-center bg-transparent pl-1.5 pr-2 text-xs transition-colors hover:bg-default-200/60 sm:pl-2 sm:pr-3 ${
+      className={`relative flex h-7 items-center bg-transparent pl-1.5 pr-2 text-xs transition-[background-color,opacity] hover:bg-default-200/60 sm:pl-2 sm:pr-3 ${
         isNew ? 'operator-queue-row-new' : ''
-      }`}
+      } ${incompatible && !active ? 'opacity-60' : ''}`}
       onAnimationEnd={(event) => {
         if (event.currentTarget === event.target) onEntryAnimationEnd?.();
       }}
@@ -132,6 +182,7 @@ function QueueRow({
         >
           <FontAwesomeIcon icon={faGripVertical} className="text-[9px]" />
         </span>
+        <CycleDot cycle={row.lastHeardCycle} incompatible={incompatible} label={cycleTooltip} />
         <CallsignInfoPopover
           callsign={row.callsign}
           logbookAnalysis={{ grid: row.targetGrid, dxccEntity: callsignInfo?.country }}
@@ -222,6 +273,14 @@ export function OperatorQueueTable({ operatorId, queue }: OperatorQueueTableProp
   const myGrid = operators
     .find((operator) => operator.id === operatorId)?.context.myGrid;
   const strategyName = operators.find((operator) => operator.id === operatorId)?.strategy?.name ?? '';
+  const selectedTransmitCycles = operators.find((operator) => operator.id === operatorId)?.transmitCycles ?? [];
+  const currentTransmitCycle = selectedTransmitCycles.length === 1
+    && (selectedTransmitCycles[0] === 0 || selectedTransmitCycles[0] === 1)
+    ? selectedTransmitCycles[0] as 0 | 1
+    : undefined;
+  const currentCycleLabel = currentTransmitCycle === 0
+    ? t('operator.evenCycle')
+    : currentTransmitCycle === 1 ? t('operator.oddCycle') : undefined;
   const activeEntryIds = React.useMemo(() => new Set(
     queue.activeEntryIds ?? (queue.activeEntryId ? [queue.activeEntryId] : []),
   ), [queue.activeEntryId, queue.activeEntryIds]);
@@ -285,7 +344,15 @@ export function OperatorQueueTable({ operatorId, queue }: OperatorQueueTableProp
   return (
     <div role="group" aria-label={t('operator.queue.title')} className="overflow-hidden rounded-md bg-default-100 text-foreground">
       <div className="flex h-6 items-center justify-between bg-default-200/70 pl-2 pr-1 text-[10px] font-medium text-default-500 sm:pl-3 sm:pr-2">
-        <span>{t('operator.queue.title')}</span>
+        <span className="flex items-center gap-1">
+          {t('operator.queue.title')}
+          {currentCycleLabel && (
+            <CycleDot
+              cycle={currentTransmitCycle}
+              label={t('operator.queueMeta.currentTransmitCycle', { cycle: currentCycleLabel })}
+            />
+          )}
+        </span>
         <Tooltip content={t('operator.queue.clear')} placement="top" offset={4}>
           <Button
             isIconOnly
@@ -319,6 +386,8 @@ export function OperatorQueueTable({ operatorId, queue }: OperatorQueueTableProp
             isNew={newEntryIds.has(row.entryId)}
             onEntryAnimationEnd={() => finishEntryAnimation(row.entryId)}
             strategyName={strategyName}
+            currentTransmitCycle={currentTransmitCycle}
+            active
             onAction={(action, payload) => connection.state.radioService?.invokeOperatorStrategyAction(
               operatorId,
               { kind: 'queue-entry', entryId: row.entryId, queueVersion: queue.version },
@@ -350,6 +419,8 @@ export function OperatorQueueTable({ operatorId, queue }: OperatorQueueTableProp
               isNew={newEntryIds.has(row.entryId)}
               onEntryAnimationEnd={() => finishEntryAnimation(row.entryId)}
               strategyName={strategyName}
+              currentTransmitCycle={currentTransmitCycle}
+              active={false}
               onAction={(action, payload) => connection.state.radioService?.invokeOperatorStrategyAction(
                 operatorId,
                 { kind: 'queue-entry', entryId: row.entryId, queueVersion: queue.version },

@@ -37,6 +37,7 @@ export interface WWDigiEntryData {
   status?: 'candidate' | 'authorized' | 'paused' | 'stale' | 'no-response' | 'review' | 'dupe';
   authorizedReceiveEpoch?: number;
   lastHeardReceiveEpoch?: number;
+  lastHeardCycle?: 0 | 1;
   firstHeardAt?: number;
   firstAudioFrequencyHz?: number;
   evidenceRevision?: number;

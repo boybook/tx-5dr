@@ -487,7 +487,11 @@
       "stale": "Not heard"
     },
     "queueMeta": {
-      "cyclesAgo": "{{count}} cycles ago"
+      "cyclesAgo": "{{count}} cycles ago",
+      "lastHeardCycle": "Last heard: {{cycle}}",
+      "currentCycleUnavailable": "Last heard: {{cycle}} · not covered by the current cycle",
+      "currentTransmitCycle": "Current TX: {{cycle}}",
+      "unknownCycle": "Last-heard cycle unknown"
     },
     "queueErrors": {
       "queueFull": "The queue is full",

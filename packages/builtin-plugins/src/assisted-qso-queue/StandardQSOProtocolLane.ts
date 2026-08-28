@@ -51,6 +51,7 @@ export interface AssistedQueueEntryData {
   targetGrid?: string;
   lastSnr?: number;
   lastHeardAt?: number;
+  lastHeardCycle?: 0 | 1;
 }
 
 interface Final73Lease {

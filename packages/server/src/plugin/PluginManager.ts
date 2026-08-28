@@ -3134,6 +3134,21 @@ export class PluginManager {
     this.orchestrator.invalidateDecisionMessageSet(operatorId);
   }
 
+  notifyOperatorTransmitCyclesChanged(
+    operatorId: string,
+    change: import('@tx5dr/plugin-api').StrategyOperatorTransmitCyclesChanged,
+  ): boolean {
+    const changed = this.invokeStrategyRuntimeSync(
+      operatorId,
+      'operator-transmit-cycles-changed',
+      (runtime) => runtime.onOperatorTransmitCyclesChanged?.(
+        snapshotPluginData(change, 'structured'),
+      ) === true,
+    ) ?? false;
+    if (changed) this.deps.notifyOperatorStatusChanged?.(operatorId);
+    return changed;
+  }
+
   private emitPluginRuntimeLog(event: PluginLoaderRuntimeLogEvent): void {
     const entry: PluginRuntimeLogEntry = {
       source: 'system',

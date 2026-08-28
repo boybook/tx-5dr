@@ -106,6 +106,7 @@ export type {
   StrategyRuntimeSlot,
   StrategyRuntimeSlotContentUpdate,
   StrategyRuntimeCheckpoint,
+  StrategyOperatorTransmitCyclesChanged,
   StrategyDecisionMetaV2,
   StrategyDecisionResult,
   StrategyDecisionSource,

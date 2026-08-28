@@ -475,7 +475,11 @@
       "stale": "受信なし"
     },
     "queueMeta": {
-      "cyclesAgo": "{{count}} 周期前"
+      "cyclesAgo": "{{count}} 周期前",
+      "lastHeardCycle": "最終受信：{{cycle}}",
+      "currentCycleUnavailable": "最終受信：{{cycle}} · 現在の周期では交信不可",
+      "currentTransmitCycle": "現在の送信：{{cycle}}",
+      "unknownCycle": "最終受信周期は不明"
     },
     "queueErrors": {
       "queueFull": "キューがいっぱいです",
