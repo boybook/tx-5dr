@@ -144,6 +144,9 @@
     "freq": "频率",
     "message": "信息",
     "location": "位置",
+    "sortDbDescending": "按 dB 倒序排列",
+    "sortDistanceDescending": "按距离倒序排列",
+    "sortReset": "取消{{field}}排序",
     "scrollToBottom": "点击滚动到底部",
     "startedAt": "开始于 {{context}}"
   },
