@@ -34,7 +34,7 @@ export interface WWDigiEntryData {
   lastMessageRaw?: string;
   targetGrid?: string;
   lastSnr?: number;
-  status?: 'candidate' | 'authorized' | 'paused' | 'cycle-paused' | 'stale' | 'no-response' | 'review' | 'dupe';
+  status?: 'candidate' | 'authorized' | 'paused' | 'cycle-paused' | 'stale' | 'no-response' | 'log-pending' | 'review' | 'dupe';
   authorizedReceiveEpoch?: number;
   lastHeardReceiveEpoch?: number;
   lastHeardCycle?: 0 | 1;
@@ -81,6 +81,8 @@ interface CompletionState {
 
 interface FinalRetryLease {
   callsign: string;
+  completionRecordId: string;
+  completionState: 'committing' | 'committed' | 'failed';
   rr73Text: string;
   seventyThreeText: string;
   expiresAt: number;
@@ -288,7 +290,12 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
     }
     if (this.completion && !this.completion.emitted) {
       this.completion.emitted = true;
-      return { qsoCompletion: structuredClone(this.completion.effect), queueChanged };
+      return {
+        qsoCompletion: structuredClone(this.completion.effect),
+        entryData: { ...structuredClone(this.active.data), status: 'log-pending' },
+        release: { disposition: 'retain-entry', reason: 'WW Digi RF exchange complete' },
+        queueChanged: true,
+      };
     }
     if (!this.completion && this.attempts >= Math.max(1, config.maxAttempts)) {
       const callsign = this.active.callsign;
@@ -319,7 +326,7 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
 
   getSnapshot(): ProtocolLaneSnapshot | null {
     if (!this.active && !this.finalRetry) return null;
-    const completionState = !this.active && this.finalRetry ? 'committed'
+    const completionState = !this.active && this.finalRetry ? this.finalRetry.completionState
       : this.completion?.settled === 'failed' ? 'failed'
       : this.completion?.settled === 'committed' ? 'committed'
         : this.completion ? 'committing'
@@ -573,10 +580,17 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
         || settlement.lifecycleEpoch !== this.qsoLifecycleEpoch
         || settlement.recordId !== this.completion.effect.record.id) return false;
     this.completion.settled = settlement.status;
+    this.settleDetachedCompletion(settlement.recordId, settlement.status);
     if (settlement.status === 'failed') {
       this.phase = 'review';
       this.outgoing = null;
     }
+    return true;
+  }
+
+  settleDetachedCompletion(recordId: string, status: 'committed' | 'failed'): boolean {
+    if (!this.finalRetry || this.finalRetry.completionRecordId !== recordId) return false;
+    this.finalRetry.completionState = status;
     return true;
   }
 
@@ -785,6 +799,8 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
     this.outgoing = null;
     this.finalRetry = {
       callsign: this.active.callsign,
+      completionRecordId: recordId,
+      completionState: 'committing',
       rr73Text: buildWWDigiRR73(this.active.callsign, config.myCallsign),
       seventyThreeText: buildWWDigi73(this.active.callsign, config.myCallsign),
       expiresAt: now + config.slotMs * 4,

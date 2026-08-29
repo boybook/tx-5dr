@@ -810,6 +810,7 @@ describe('WWDigiStrategyRuntime protocol flows', () => {
 
     const completion = await runtime.decide([], decision(3));
     expect(completion.qsoCompletions).toHaveLength(1);
+    expect(completion.stop).toBe(true);
     expect(completion.qsoCompletions?.[0]).toMatchObject({
       streamId: 'stream-1',
       persistencePolicy: 'preserve-distinct',
@@ -894,7 +895,6 @@ describe('WWDigiStrategyRuntime protocol flows', () => {
       recordId: effect.record.id,
       status: 'committed',
     });
-    expect((await runtime.decide([], decision(4))).stop).toBe(true);
     setTransmitting(false);
 
     const repeated = parsed('BG5DRB JA1AAA R PM95', BASE_TIME + MODES.FT8.slotMs * 2);
@@ -920,6 +920,7 @@ describe('WWDigiStrategyRuntime protocol flows', () => {
     confirmTransmissions(runtime, started);
     const final = parsed('BG5DRB JA1AAA RR73', BASE_TIME + MODES.FT8.slotMs);
     const completed = await runtime.decide([final], decision(2));
+    expect(completed.stop).toBe(true);
     const effect = completed.qsoCompletions![0]!;
     runtime.settleQSOCompletion({
       streamId: effect.streamId,
@@ -927,14 +928,13 @@ describe('WWDigiStrategyRuntime protocol flows', () => {
       recordId: effect.record.id,
       status: 'committed',
     });
-    const stopped = await runtime.decide([], decision(3));
-    expect(stopped.stop).toBe(true);
-    expect(stopped.transmissions).toEqual([]);
-    expect(stopped.snapshot.streams?.[0]).toMatchObject({
+    expect(completed.transmissions).toEqual([]);
+    expect(completed.snapshot.streams?.[0]).toMatchObject({
       currentState: 'final-retry',
       attentions: [{ id: 'completion-recovery-observing' }],
-      completion: { state: 'committed' },
+      completion: { state: 'committing' },
     });
+    expect(runtime.getSnapshot().streams?.[0]?.completion).toMatchObject({ state: 'committed' });
     setTransmitting(false);
 
     const repeated = parsed('BG5DRB JA1AAA RR73', BASE_TIME + MODES.FT8.slotMs * 2);
@@ -965,6 +965,7 @@ describe('WWDigiStrategyRuntime protocol flows', () => {
     confirmTransmissions(runtime, started);
     const final = parsed('BG5DRB JA1AAA RR73', BASE_TIME + MODES.FT8.slotMs);
     const completed = await runtime.decide([final], decision(2));
+    expect(completed.stop).toBe(true);
     const effect = completed.qsoCompletions![0]!;
     runtime.settleQSOCompletion({
       streamId: effect.streamId,
@@ -972,11 +973,9 @@ describe('WWDigiStrategyRuntime protocol flows', () => {
       recordId: effect.record.id,
       status: 'committed',
     });
-    expect((await runtime.decide([], decision(3))).stop).toBe(true);
-
     setTransmitting(false);
     setTransmitting(true);
-    const restarted = await runtime.decide([], decision(4));
+    const restarted = await runtime.decide([], decision(3));
 
     expect(restarted.transmissions).toEqual([{
       streamId: 'cq', text: 'CQ WW BG5DRB OL32', audioFrequencyHz: 1_500,
@@ -1055,6 +1054,65 @@ describe('WWDigiStrategyRuntime protocol flows', () => {
       streamId: 'stream-1', text: 'JA1AAA BG5DRB OL32', audioFrequencyHz: 1_200,
     }]);
   });
+
+  it('logs a late final acknowledgement after its lane has moved to another target', async () => {
+    const { runtime } = createRuntime({ transmitting: true, maxAttempts: 1 });
+    const first = await activateInbound(runtime, 'JA1AAA', 'PM95');
+    confirmTransmissions(runtime, first);
+    expect((await runtime.decide([], decision(2))).qsoFailures).toHaveLength(1);
+
+    runtime.enqueueTarget({ callsign: 'JA2BBB' });
+    const second = await runtime.decide([], decision(3));
+    expect(second.transmissions).toEqual([{
+      streamId: 'stream-1', text: 'JA2BBB BG5DRB OL32', audioFrequencyHz: 1_200,
+    }]);
+
+    const lateFinal = parsed('BG5DRB JA1AAA RR73', BASE_TIME + MODES.FT8.slotMs);
+    runtime.observeDecodedMessages([lateFinal], observation(lateFinal.timestamp));
+    const recovered = await runtime.decide([lateFinal], decision(4));
+
+    expect(recovered.qsoCompletions).toHaveLength(1);
+    const effect = recovered.qsoCompletions![0]!;
+    expect(effect).toMatchObject({
+      persistencePolicy: 'preserve-distinct',
+      metadata: { recoveredFinalAcknowledgement: true },
+      record: {
+        callsign: 'JA1AAA',
+        grid: 'PM95',
+        messageHistory: [
+          'BG5DRB JA1AAA PM95',
+          'JA1AAA BG5DRB R OL32',
+          'BG5DRB JA1AAA RR73',
+        ],
+      },
+    });
+    expect(recovered.transmissions).toEqual([{
+      streamId: 'stream-1', text: 'JA2BBB BG5DRB OL32', audioFrequencyHz: 1_200,
+    }]);
+
+    runtime.settleQSOCompletion({
+      lifecycleEpoch: effect.lifecycleEpoch,
+      recordId: effect.record.id,
+      streamId: effect.streamId,
+      status: 'committed',
+    });
+    expect(runtime.getQueueSnapshot().rows.map((row) => row.callsign)).toEqual(['JA2BBB']);
+  });
+
+  it('can submit a recovered final acknowledgement while TX is off', async () => {
+    const { runtime, setTransmitting } = createRuntime({ transmitting: true, maxAttempts: 1 });
+    const first = await activateInbound(runtime, 'JA1AAA', 'PM95');
+    confirmTransmissions(runtime, first);
+    await runtime.decide([], decision(2));
+    setTransmitting(false);
+
+    const lateFinal = parsed('BG5DRB JA1AAA RR73', BASE_TIME + MODES.FT8.slotMs);
+    expect(runtime.observeDecodedMessages([lateFinal], observation(lateFinal.timestamp))).toBe(true);
+    const recovered = await runtime.decide([], decision(3));
+
+    expect(recovered.transmissions).toEqual([]);
+    expect(recovered.qsoCompletions?.[0]?.record.callsign).toBe('JA1AAA');
+  });
 });
 
 describe('WWDigiStrategyRuntime settlement and refill', () => {
@@ -1068,7 +1126,24 @@ describe('WWDigiStrategyRuntime settlement and refill', () => {
     vi.useRealTimers();
   });
 
-  it('settles one inbound QSO and continuously refills its released lane', async () => {
+  it('uses the next TX cycle for an already authorized caller after RR73', async () => {
+    const { runtime } = createRuntime({ transmitting: true, parallelStreams: 1 });
+    runtime.enqueueTarget({ callsign: 'JA1AAA', lastMessage: selected('BG5DRB JA1AAA PM95') });
+    runtime.enqueueTarget({ callsign: 'JA2BBB', lastMessage: selected('BG5DRB JA2BBB PM96') });
+    const started = await runtime.decide([], decision());
+    confirmTransmissions(runtime, started);
+
+    const final = parsed('BG5DRB JA1AAA RR73', BASE_TIME + MODES.FT8.slotMs);
+    const continued = await runtime.decide([final], decision(2));
+
+    expect(continued.qsoCompletions).toHaveLength(1);
+    expect(continued.transmissions).toEqual([{
+      streamId: 'stream-1', text: 'JA2BBB BG5DRB R OL32', audioFrequencyHz: 1_200,
+    }]);
+    expect(runtime.getQueueSnapshot().activeEntryIds).toEqual(['ww-digi-2']);
+  });
+
+  it('refills a completed lane in the same decision without waiting for log settlement', async () => {
     const { runtime } = createRuntime({ transmitting: true, parallelStreams: 3 });
     for (const [callsign, grid] of [
       ['JA1AAA', 'PM95'],
@@ -1085,6 +1160,14 @@ describe('WWDigiStrategyRuntime settlement and refill', () => {
     const final = parsed('BG5DRB JA1AAA RR73', BASE_TIME + MODES.FT8.slotMs);
     const completed = await runtime.decide([final], decision(2));
     const effect = completed.qsoCompletions?.[0];
+    expect(runtime.getQueueSnapshot().activeEntryIds).toHaveLength(3);
+    expect(completed.transmissions?.find((item) => item.streamId === 'stream-1')).toMatchObject({
+      text: 'JA4DDD BG5DRB R OL32',
+    });
+    expect(runtime.getQueueSnapshot().rows.find((row) => row.callsign === 'JA1AAA')).toMatchObject({
+      displayState: 'closing',
+    });
+
     expect(effect).toBeDefined();
     runtime.settleQSOCompletion({
       streamId: effect!.streamId,
@@ -1093,17 +1176,12 @@ describe('WWDigiStrategyRuntime settlement and refill', () => {
       status: 'committed',
     });
 
-    const refilled = await runtime.decide([], decision(3));
     expect(runtime.getQueueSnapshot().activeEntryIds).toHaveLength(3);
-    expect(refilled.snapshot.streams?.some((stream) => stream.currentState === 'final-retry')).toBe(false);
     expect(runtime.getQueueSnapshot().rows.map((row) => row.callsign)).toEqual([
       'JA4DDD',
       'JA2BBB',
       'JA3CCC',
     ]);
-    expect(refilled.transmissions?.find((item) => item.streamId === 'stream-1')).toMatchObject({
-      text: 'JA4DDD BG5DRB R OL32',
-    });
   });
 
   it('keeps a failed settlement in review until the operator retries the same completion', async () => {
@@ -1133,11 +1211,11 @@ describe('WWDigiStrategyRuntime settlement and refill', () => {
     });
     expect(reviewed.transmissions).toEqual([]);
 
-    const stream = runtime.getSnapshot().streams![0]!;
-    expect(stream.actions?.map((action) => action.id)).toContain('retry-log');
+    const queue = runtime.getQueueSnapshot();
+    expect(queue.rows[0]?.actions?.map((action) => action.id)).toContain('retry-detached-log');
     const retry = await runtime.invokeAction({
-      target: { kind: 'stream', streamId: stream.streamId, lifecycleEpoch: stream.qsoLifecycleEpoch },
-      actionId: 'retry-log',
+      target: { kind: 'queue-entry', entryId: queue.rows[0]!.entryId, queueVersion: queue.version },
+      actionId: 'retry-detached-log',
     });
     expect(retry?.qsoCompletions).toEqual([
       expect.objectContaining({

@@ -16,6 +16,29 @@ function qsoRecord(id = 'qso-1', callsign = 'JA1AAA'): QSORecord {
 }
 
 describe('DecisionOrchestrator QSO runtime identity', () => {
+  it('allows a changed queue observation to commit passive effects while TX is off', async () => {
+    const token = { operatorId: 'op1', epoch: 3, source: 'late-decode', priority: 10 };
+    const signal = new AbortController().signal;
+    const orchestrator = new DecisionOrchestrator({
+      getOperatorById: () => ({ isTransmitting: false }),
+      getCurrentMode: () => ({ name: 'FT8', slotMs: 15_000 }),
+      hasTargetQueue: () => true,
+      observeStrategyMessages: () => true,
+      intentCoordinator: { isCurrent: () => true },
+    } as any);
+    vi.spyOn(orchestrator as any, 'parseSlotPackMessages').mockResolvedValue([]);
+    const decide = vi.spyOn(orchestrator as any, 'invokeStrategyDecision').mockResolvedValue(null);
+
+    await (orchestrator as any).reDecideOperatorInLane(
+      'op1',
+      { slotId: 'slot-1', startMs: 1_000, endMs: 16_000, frames: [], stats: {}, decodeHistory: [] },
+      token,
+      signal,
+    );
+
+    expect(decide).toHaveBeenCalledWith('op1', [], { isReDecision: true }, token, signal);
+  });
+
   it('enforces the strategy stream cap in addition to the operator cap', () => {
     const runtime = {
       getTransmissions: () => [
