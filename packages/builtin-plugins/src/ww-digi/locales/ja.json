@@ -60,6 +60,7 @@
   "attentionRepeatedRr73": "RR73 が再送されました", "attentionRepeatedRr73Desc": "相手局は 73 を待っている可能性があります。",
   "attentionRepeatedExchange": "交換情報が再送されました", "attentionRepeatedExchangeDesc": "相手局が RR73 を受信していない可能性があります。明示的に操作を選択するまで自動再送しません。",
   "attentionRecoveryObserving": "相手局の確認待ち", "attentionRecoveryObservingDesc": "この QSO は受信を続けますが、自動送信はしません。相手局が再送を求めた場合は対応する操作を選んでください。",
+  "attentionQsoLogged": "QSOを記録しました", "attentionQsoLoggedDesc": "{{callsign}} · {{grid}} · 暫定スコア {{score}}",
   "attentionCqCalling": "CQ送信中", "attentionCqCallingDesc": "CQ {{current}}/{{total}} 回を完了しました。",
   "attentionCqCollecting": "応答を収集中", "attentionCqCollectingDesc": "この受信周期で {{count}} 局を検出しました。",
   "attentionCqNoResponse": "CQ応答なし", "attentionCqNoResponseDesc": "{{count}} 回のCQに応答がなく、TXを停止しました。",

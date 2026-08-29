@@ -60,6 +60,7 @@
   "attentionRepeatedRr73": "RR73 repeated", "attentionRepeatedRr73Desc": "The other station may be waiting for your 73.",
   "attentionRepeatedExchange": "Exchange repeated", "attentionRepeatedExchangeDesc": "The other station may not have received your RR73. It will not be resent until you explicitly choose that action.",
   "attentionRecoveryObserving": "Waiting for the other station", "attentionRecoveryObservingDesc": "This QSO continues listening without transmitting automatically. Choose the appropriate action if the other station requests another message.",
+  "attentionQsoLogged": "QSO logged", "attentionQsoLoggedDesc": "{{callsign}} · {{grid}} · Claimed score {{score}}",
   "attentionCqCalling": "Calling CQ", "attentionCqCallingDesc": "Completed CQ {{current}} of {{total}}.",
   "attentionCqCollecting": "Collecting replies", "attentionCqCollectingDesc": "{{count}} caller(s) detected in this receive slot.",
   "attentionCqNoResponse": "No CQ reply", "attentionCqNoResponseDesc": "TX stopped after {{count}} unanswered CQs.",

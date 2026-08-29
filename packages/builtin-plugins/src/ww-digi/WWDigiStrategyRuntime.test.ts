@@ -669,13 +669,13 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
     const completed = await runtime.decide([], decision(3));
     const effect = completed.qsoCompletions?.[0];
     expect(effect).toBeDefined();
+    expect(completed).toMatchObject({ stop: true, transmissions: [] });
     runtime.settleQSOCompletion({
       streamId: effect!.streamId,
       lifecycleEpoch: effect!.lifecycleEpoch,
       recordId: effect!.record.id,
       status: 'committed',
     });
-    expect((await runtime.decide([], decision(4))).stop).toBe(true);
   });
 
   it('applies a late physical receipt to a parked protocol checkpoint', async () => {
@@ -705,7 +705,7 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
     expect((await runtime.decide([], decision(4))).stop).toBe(true);
   });
 
-  it('rejects manual replacement while a parked completion is unsettled', async () => {
+  it('allows manual replacement after a parked final is detached for settlement', async () => {
     const { runtime, config } = createRuntime({
       transmitting: true,
       replaceQueueOnManualTarget: true,
@@ -722,10 +722,10 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
     expect(parkedCompletion).toBeDefined();
 
     expect(runtime.enqueueTarget({ callsign: 'JA2BBB' })).toMatchObject({
-      outcome: 'rejected',
-      reason: 'active_entry',
+      outcome: 'accepted',
+      requestOperatorStart: true,
     });
-    expect(runtime.getQueueSnapshot().rows.map((row) => row.callsign)).toEqual(['JA1AAA']);
+    expect(runtime.getQueueSnapshot().rows.map((row) => row.callsign)).toEqual(['JA1AAA', 'JA2BBB']);
 
     runtime.settleQSOCompletion({
       streamId: parkedCompletion!.streamId,
@@ -749,8 +749,10 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
       parsed('BG5DRB JA2BBB RR73', BASE_TIME + MODES.FT8.slotMs),
     ];
     runtime.observeDecodedMessages(finals, observation(finals[0]!.timestamp));
-    const completions = (await runtime.decide([], decision(2))).qsoCompletions ?? [];
+    const completed = await runtime.decide([], decision(2));
+    const completions = completed.qsoCompletions ?? [];
     expect(completions).toHaveLength(2);
+    expect(completed).toMatchObject({ stop: true, transmissions: [] });
 
     config.parallelStreams = 1;
     runtime.getQueueSnapshot();
@@ -762,8 +764,6 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
         status: 'committed',
       });
     }
-    const stopped = await runtime.decide([], decision(3));
-    expect(stopped).toMatchObject({ stop: true, transmissions: [] });
   });
 
   it('keeps a failed parked completion retryable without restoring its RF lane', async () => {
@@ -789,11 +789,11 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
     const row = runtime.getQueueSnapshot().rows[0]!;
     expect(row).toMatchObject({
       displayState: 'review',
-      actions: [expect.objectContaining({ id: 'retry-parked-log' }), expect.anything()],
+      actions: [expect.objectContaining({ id: 'retry-detached-log' }), expect.anything()],
     });
     const retried = await runtime.invokeAction({
       target: { kind: 'queue-entry', entryId: row.entryId, queueVersion: runtime.getQueueSnapshot().version },
-      actionId: 'retry-parked-log',
+      actionId: 'retry-detached-log',
     });
     expect(retried?.qsoCompletions?.[0]).toMatchObject({
       streamId: effect!.streamId,
@@ -865,6 +865,24 @@ describe('WWDigiStrategyRuntime protocol flows', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('projects a temporary logged-QSO toast with the latest claimed score', () => {
+    const { runtime } = createRuntime();
+    runtime.notifyQsoLogged('qso-1', 'JA1AAA', 'PM95', 1234);
+
+    expect(runtime.getSnapshot().attentions).toContainEqual(expect.objectContaining({
+      id: 'qso-logged-qso-1',
+      tone: 'success',
+      title: 'attentionQsoLogged',
+      description: 'attentionQsoLoggedDesc',
+      params: { callsign: 'JA1AAA', grid: 'PM95', score: 1234 },
+      notify: true,
+    }));
+
+    vi.advanceTimersByTime(8_000);
+    expect(runtime.getSnapshot().attentions?.some((attention) => attention.id === 'qso-logged-qso-1'))
+      .toBe(false);
   });
 
   it('completes the outbound grid, R-grid, RR73 sequence after physical TX', async () => {
@@ -1066,7 +1084,7 @@ describe('WWDigiStrategyRuntime protocol flows', () => {
     expect(completed.qsoCompletions).toHaveLength(1);
   });
 
-  it('does not log a manually selected RR73 without a directed reply', async () => {
+  it('logs a manually selected RR73 after physical success', async () => {
     const { runtime } = createRuntime({ transmitting: true });
     runtime.enqueueTarget({ callsign: 'JA1AAA' });
     const started = await runtime.decide([], decision());
@@ -1078,7 +1096,27 @@ describe('WWDigiStrategyRuntime protocol flows', () => {
       expectedLifecycleEpoch: stream.qsoLifecycleEpoch,
     });
     confirmTransmissions(runtime, { ...started, transmissions: runtime.getTransmissions() });
-    expect((await runtime.decide([], decision(2))).qsoCompletions).toEqual([]);
+    expect((await runtime.decide([], decision(2))).qsoCompletions).toHaveLength(1);
+  });
+
+  it('accepts the first directed RR73 even before the prior response receipt is applied', async () => {
+    const { runtime } = createRuntime({ transmitting: true });
+    runtime.enqueueTarget({
+      callsign: 'JA1AAA',
+      lastMessage: selected('BG5DRB JA1AAA PM95'),
+    });
+    const response = await runtime.decide([], decision());
+    expect(response.transmissions?.[0]?.text).toBe('JA1AAA BG5DRB R OL32');
+
+    const final = parsed('BG5DRB JA1AAA RR73', BASE_TIME + MODES.FT8.slotMs);
+    runtime.observeDecodedMessages([final], observation(final.timestamp));
+    const completed = await runtime.decide([final], decision(2));
+
+    expect(completed.qsoCompletions).toHaveLength(1);
+    expect(completed.qsoCompletions?.[0]?.record).toMatchObject({
+      callsign: 'JA1AAA',
+      grid: 'PM95',
+    });
   });
 
   it('allows an explicit log action after a directed exchange', async () => {

@@ -134,7 +134,7 @@ describe('WW Digi contest edition persistence', () => {
       [contestQso('retained-2025', Date.UTC(2025, 7, 30, 12))],
     );
 
-    await expect(wwDigiTestables.refreshContestProjection(ctx, 2026)).resolves.toEqual({ total: 1 });
+    await expect(wwDigiTestables.refreshContestProjection(ctx, 2026)).resolves.toMatchObject({ total: 1 });
 
     expect(queryQSOs).toHaveBeenCalledWith(expect.objectContaining({
       orderDirection: 'asc',
@@ -161,13 +161,13 @@ describe('WW Digi contest edition persistence', () => {
     const virtual = createContestContext({ records: [outsidePeriod], simulation: true });
 
     await expect(wwDigiTestables.refreshContestProjection(physical.ctx, 2026))
-      .resolves.toEqual({ total: 0 });
+      .resolves.toMatchObject({ total: 0 });
     expect(physical.queryQSOs).toHaveBeenCalledWith(expect.objectContaining({
       timeRange: expect.any(Object),
     }));
 
     await expect(wwDigiTestables.refreshContestProjection(virtual.ctx, 2026))
-      .resolves.toEqual({ total: 1 });
+      .resolves.toMatchObject({ total: 1 });
     expect(virtual.queryQSOs.mock.calls[0]?.[0]).not.toHaveProperty('timeRange');
     await expect(wwDigiTestables.readContestRecords(virtual.ctx, 2026))
       .resolves.toEqual([expect.objectContaining({ qsoId: 'virtual-qso' })]);

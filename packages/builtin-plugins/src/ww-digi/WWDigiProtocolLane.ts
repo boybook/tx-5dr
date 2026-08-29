@@ -168,6 +168,9 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
           alternateText: entry.data.alternateText,
         }, this.getConfig());
     this.protocolContext.audioFrequencyHz = this.audioFrequencyHz;
+    if (this.protocolContext.completedAt !== undefined) {
+      this.prepareCompletion(this.protocolContext.completedAt);
+    }
     return { accepted: true };
   }
 
@@ -486,7 +489,7 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
     );
     this.protocolContext = reduced.context;
     this.attempts += 1;
-    if (reduced.completed) this.prepareCompletion();
+    if (reduced.completed) this.prepareCompletion(reduced.context.completedAt ?? Date.now());
     return true;
   }
 
