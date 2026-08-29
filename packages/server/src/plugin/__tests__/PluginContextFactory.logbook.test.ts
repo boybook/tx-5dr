@@ -56,6 +56,14 @@ function createDeps(eventEmitter: EventEmitter<DigitalRadioEngineEvents>): Plugi
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 function createPlugin(permissions: LoadedPlugin['definition']['permissions'] = ['logbook:write']): LoadedPlugin {
   return {
     definition: {
@@ -69,6 +77,98 @@ function createPlugin(permissions: LoadedPlugin['definition']['permissions'] = [
 }
 
 describe('PluginContextFactory logbook access', () => {
+  it('waits for physical TX idle before updating existing QSOs', async () => {
+    const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
+    const idle = deferred<void>();
+    const updateQSO = vi.fn(async () => ({
+      id: 'provider-update-id',
+      callsign: 'BG2CM',
+      frequency: 14_074_000,
+      mode: 'FT8',
+      startTime: 1,
+      messageHistory: [],
+    }));
+    const logBook = {
+      id: 'logbook-BG4IAJ',
+      provider: { updateQSO },
+    };
+    vi.spyOn(LogManager, 'getInstance').mockReturnValue({
+      resolveLogBookId: vi.fn(() => logBook.id),
+      getLogBook: vi.fn(() => logBook),
+      getOperatorIdsForLogBook: vi.fn(() => ['operator-1']),
+    } as any);
+
+    const deps = {
+      ...createDeps(eventEmitter),
+      runWhenPhysicalTxIdle: vi.fn((operation) => idle.promise.then(operation)),
+    } as PluginManagerDeps;
+    const factory = new PluginContextFactory(deps);
+    const storageDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-ctx-tx-idle-'));
+    tempDirs.push(storageDir);
+    const ctx = await factory.create(
+      createPlugin(),
+      'operator-1',
+      'operator',
+      storageDir,
+      () => {},
+      () => ({}),
+    );
+
+    const update = (ctx.logbook as LogbookAccess).updateQSO('qso-1', { lotwQslSent: 'Y' });
+    await Promise.resolve();
+    expect(deps.runWhenPhysicalTxIdle).toHaveBeenCalledOnce();
+    expect(updateQSO).not.toHaveBeenCalled();
+
+    idle.resolve();
+    await update;
+    expect(updateQSO).toHaveBeenCalledWith('qso-1', { lotwQslSent: 'Y' });
+  });
+
+  it('waits for physical TX idle before applying a logbook batch', async () => {
+    const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
+    const idle = deferred<void>();
+    const applyQsoBatch = vi.fn(async () => ({ revision: 'revision-2', outcomes: [] }));
+    const logBook = {
+      id: 'logbook-BG4IAJ',
+      provider: { applyQsoBatch },
+    };
+    vi.spyOn(LogManager, 'getInstance').mockReturnValue({
+      resolveLogBookId: vi.fn(() => logBook.id),
+      getLogBook: vi.fn(() => logBook),
+      getOperatorIdsForLogBook: vi.fn(() => ['operator-1']),
+    } as any);
+
+    const deps = {
+      ...createDeps(eventEmitter),
+      runWhenPhysicalTxIdle: vi.fn((operation) => idle.promise.then(operation)),
+    } as PluginManagerDeps;
+    const factory = new PluginContextFactory(deps);
+    const storageDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-ctx-batch-tx-idle-'));
+    tempDirs.push(storageDir);
+    const ctx = await factory.create(
+      createPlugin(),
+      'operator-1',
+      'operator',
+      storageDir,
+      () => {},
+      () => ({}),
+    );
+
+    const mutations: LogbookBatchMutation[] = [{
+      type: 'update',
+      qsoId: 'qso-1',
+      updates: { lotwQslSent: 'Y' },
+    }];
+    const batch = (ctx.logbook as LogbookAccess).applyQsoBatch(mutations, { expectedRevision: 'revision-1' });
+    await Promise.resolve();
+    expect(deps.runWhenPhysicalTxIdle).toHaveBeenCalledOnce();
+    expect(applyQsoBatch).not.toHaveBeenCalled();
+
+    idle.resolve();
+    await batch;
+    expect(applyQsoBatch).toHaveBeenCalledWith(mutations, { expectedRevision: 'revision-1' }, 'operator-1');
+  });
+
   it('only exposes the declared logbook projection', async () => {
     const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
     const factory = new PluginContextFactory(createDeps(eventEmitter));

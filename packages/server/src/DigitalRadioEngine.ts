@@ -449,6 +449,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       getKnownRadioFrequency: () => this.radioManager.getKnownFrequency(),
       getEngineMode: () => this.engineMode,
       getCurrentRadioMode: () => this.getCurrentRadioMode(),
+      runWhenPhysicalTxIdle: (operation) => this.physicalTxCoordinator.runWhenIdle(
+        'plugin logbook status update',
+        operation,
+      ),
       setRadioFrequency: async (freq) => {
         try {
           const success = await this.radioManager.setFrequency(freq);

@@ -278,6 +278,8 @@ export interface PluginManagerDeps {
   triggerReEncode?: (operatorId: string, options?: TransmissionRefreshOptions) => void;
   intentCoordinator?: import('../transmission/OperatorIntentCoordinator.js').OperatorIntentCoordinator;
   dataDir: string;
+  /** Runs plugin-owned existing-QSO writes behind the physical TX idle fence. */
+  runWhenPhysicalTxIdle?: <T>(operation: () => T | Promise<T>) => Promise<T>;
   /** Optional callback for logbook sync provider registration. */
   registerLogbookSyncProvider?: (
     pluginName: string,

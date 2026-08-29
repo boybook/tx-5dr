@@ -144,6 +144,23 @@ function preparedReplacement(
 }
 
 describe('PhysicalTxCoordinator', () => {
+  it('runs an operation after the physical lease becomes idle and fences a new lease', async () => {
+    const harness = createHarness();
+    const leaseId = await harness.coordinator.acquireLease({ source: 'digital', reason: 'FT8 frame' });
+    let operationStarted = false;
+    const operation = harness.coordinator.runWhenIdle('logbook status update', async () => {
+      operationStarted = true;
+      await expect(harness.coordinator.acquireLease({ source: 'voice', reason: 'next frame' }))
+        .rejects.toThrow('maintenance is active');
+    });
+
+    await Promise.resolve();
+    expect(operationStarted).toBe(false);
+    await harness.coordinator.releaseLease(leaseId, 'frame complete');
+    await operation;
+    expect(operationStarted).toBe(true);
+  });
+
   it('fences every physical source while idle maintenance is running', async () => {
     const operation = deferred<void>();
     const harness = createHarness();
