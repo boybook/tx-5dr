@@ -38,6 +38,7 @@ import {
   summarizeWWDigiAdifImport,
   type WWDigiParsedImport,
 } from './adif-import.js';
+import { summarizeWWDigiScore } from './score.js';
 
 export const BUILTIN_WW_DIGI_PLUGIN_NAME = 'ww-digi';
 const DEFAULT_CONTEST_YEAR = new Date().getUTCFullYear();
@@ -510,9 +511,10 @@ async function commitAdifImport(
 async function refreshContestProjection(
   ctx: WWDigiContext,
   contestYear: number,
-): Promise<{ total: number }> {
+): Promise<{ total: number; claimedScore: number }> {
   const records = await readContestRecords(ctx, contestYear);
   const repository = sessionRepository(ctx, contestYear);
+  const claimedScore = summarizeWWDigiScore(records, repository.read().config.categoryBand).claimedScore;
   repository.update((session) => ({
     ...session,
     health: { state: 'healthy', updatedAt: Date.now() },
@@ -524,13 +526,13 @@ async function refreshContestProjection(
     ),
   }));
   await repository.flush();
-  return { total: records.length };
+  return { total: records.length, claimedScore };
 }
 
 async function refreshContestProjectionWithHealth(
   ctx: WWDigiContext,
   contestYear: number,
-): Promise<{ total: number }> {
+): Promise<{ total: number; claimedScore: number }> {
   try {
     return await refreshContestProjection(ctx, contestYear);
   } catch (error) {
@@ -1147,6 +1149,12 @@ export const wwDigiStrategyPlugin = definePlugin({
           projected,
           previous.revision + 1,
         ));
+        runtime.notifyQsoLogged(
+          record.id,
+          record.callsign,
+          record.grid,
+          summarizeWWDigiScore(projected, String(typed.config.categoryBand ?? 'ALL')).claimedScore,
+        );
         typed.ui.refreshOperatorProjection();
         return;
       }
@@ -1174,7 +1182,8 @@ export const wwDigiStrategyPlugin = definePlugin({
           health: { state: 'healthy', updatedAt: Date.now() },
         }));
         await repository.flush();
-        await refreshContestProjectionWithHealth(typed, contestYear);
+        const projection = await refreshContestProjectionWithHealth(typed, contestYear);
+        runtime?.notifyQsoLogged(record.id, record.callsign, record.grid, projection.claimedScore);
         notifyContestLogChanged(typed, contestYear);
       } catch (error) {
         await markLedgerDegraded(typed, contestYear, error);

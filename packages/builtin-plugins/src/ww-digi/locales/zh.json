@@ -60,6 +60,7 @@
   "attentionRepeatedRr73": "对方重复 RR73", "attentionRepeatedRr73Desc": "对方可能正在等待你的 73。",
   "attentionRepeatedExchange": "对方重复交换", "attentionRepeatedExchangeDesc": "对方可能没有收到你的 RR73；系统不会自动补发，请确认后选择重发。",
   "attentionRecoveryObserving": "正在等待对方确认", "attentionRecoveryObservingDesc": "此路通联仅继续监听，不会自动发射；若对方请求补发，请选择对应动作。",
+  "attentionQsoLogged": "通联已记录", "attentionQsoLoggedDesc": "{{callsign}} · {{grid}} · 当前总分 {{score}}",
   "attentionCqCalling": "正在呼叫 CQ", "attentionCqCallingDesc": "已完成第 {{current}}/{{total}} 次 CQ。",
   "attentionCqCollecting": "正在收集回复", "attentionCqCollectingDesc": "本接收周期已发现 {{count}} 个回复者。",
   "attentionCqNoResponse": "CQ 无人回复", "attentionCqNoResponseDesc": "连续 {{count}} 次 CQ 无人回复，发射已关闭。",

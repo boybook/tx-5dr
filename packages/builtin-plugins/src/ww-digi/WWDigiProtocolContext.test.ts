@@ -6,6 +6,7 @@ import {
   initializeWWDigiProtocolContext,
   reduceWWDigiInbound,
   reduceWWDigiPhysicalSuccess,
+  setWWDigiProtocolPhase,
 } from './WWDigiProtocolContext.js';
 
 const config = { myCallsign: 'BH5HIE', myGrid: 'PM00', modeName: 'FT8' as const };
@@ -52,6 +53,27 @@ describe('WW Digi protocol context', () => {
     expect(reduced.context.phase).toBe('send-rr73');
     expect(reduced.context.targetGrid).toBe('KN34');
     expect(deriveWWDigiTransmission(reduced.context, config)).toBe('LZ2INP BH5HIE RR73');
+  });
+
+  it.each(['RR73', 'RRR', '73'])('accepts a directed %s without requiring prior phase evidence', (suffix) => {
+    const context = initializeWWDigiProtocolContext({
+      callsign: 'LZ2INP', audioFrequencyHz: 1_022, now: 1_000,
+    }, config);
+
+    const reduced = reduceWWDigiInbound(context, parsed(`BH5HIE LZ2INP ${suffix}`, 3_000), config);
+
+    expect(reduced.completed).toBe(true);
+    expect(reduced.context.completedAt).toBe(3_000);
+  });
+
+  it('completes only when a locally selected final acknowledgement reaches physical success', () => {
+    const context = initializeWWDigiProtocolContext({
+      callsign: 'LZ2INP', audioFrequencyHz: 1_022, now: 1_000,
+    }, config);
+
+    expect(reduceWWDigiPhysicalSuccess(context, 'LZ2INP BH5HIE PM00', 2_000).completed).toBe(false);
+    const finalContext = setWWDigiProtocolPhase(context, 'send-rr73');
+    expect(reduceWWDigiPhysicalSuccess(finalContext, 'LZ2INP BH5HIE RR73', 3_000).completed).toBe(true);
   });
 
   it('ignores messages from the target to another station', () => {

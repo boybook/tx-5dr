@@ -36,8 +36,7 @@ export interface WWDigiProtocolContext {
   reportSnr?: number;
   hasDirectedReply: boolean;
   lastReceivedText?: string;
-  lastPhysicalText?: string;
-  lastPhysicalPhase?: WWDigiProtocolPhase;
+  completedAt?: number;
   outgoingOverride?: string;
   messageHistory: string[];
 }
@@ -76,8 +75,12 @@ function appendInbound(context: WWDigiProtocolContext, rawMessage: string): void
   context.outgoingOverride = undefined;
 }
 
-function hasPhysicalResponseForCurrentPhase(context: WWDigiProtocolContext): boolean {
-  return context.lastPhysicalPhase === context.phase;
+function isFinalAcknowledgement(rawMessage: string): boolean {
+  const parsed = parseWWDigiMessage(rawMessage);
+  const standard = FT8MessageParser.parseMessage(rawMessage);
+  return parsed.type === 'rr73'
+    || standard.type === FT8MessageType.RRR
+    || standard.type === FT8MessageType.SEVENTY_THREE;
 }
 
 export function isWWDigiProtocolContext(value: unknown): value is WWDigiProtocolContext {
@@ -117,6 +120,20 @@ export function initializeWWDigiProtocolContext(
   if (!input.lastMessageRaw || input.alternateText) return context;
   const parsed = parseWWDigiMessage(input.lastMessageRaw);
   const standard = FT8MessageParser.parseMessage(input.lastMessageRaw);
+  const sender = 'senderCallsign' in parsed
+    ? parsed.senderCallsign
+    : 'senderCallsign' in standard ? standard.senderCallsign : undefined;
+  const target = 'targetCallsign' in parsed
+    ? parsed.targetCallsign
+    : 'targetCallsign' in standard ? standard.targetCallsign : undefined;
+  if (isFinalAcknowledgement(input.lastMessageRaw)
+      && callsignMatches(sender, callsign)
+      && callsignMatches(target, config.myCallsign)) {
+    context.hasDirectedReply = true;
+    context.lastReceivedText = input.lastMessageRaw;
+    context.completedAt = messageAt;
+    return context;
+  }
   if (standard.type === FT8MessageType.SIGNAL_REPORT
       && callsignMatches(standard.targetCallsign, config.myCallsign)
       && callsignMatches(standard.senderCallsign, callsign)) {
@@ -191,6 +208,13 @@ export function reduceWWDigiInbound(
     return { context, changed: false, completed: false };
   }
 
+  if (isFinalAcknowledgement(message.rawMessage)) {
+    appendInbound(context, message.rawMessage);
+    context.lastActivityAt = message.timestamp;
+    context.completedAt = message.timestamp;
+    return { context, changed: true, completed: true };
+  }
+
   const previousPhase = context.phase;
   if (parsed.type === 'roger-grid') {
     appendInbound(context, message.rawMessage);
@@ -204,19 +228,7 @@ export function reduceWWDigiInbound(
     appendInbound(context, message.rawMessage);
     context.phase = 'wait-standard-final';
     context.reportSnr = message.snr;
-  } else {
-    const isFinal = parsed.type === 'rr73'
-      || standard.type === FT8MessageType.RRR
-      || standard.type === FT8MessageType.SEVENTY_THREE;
-    if (!isFinal
-        || (context.phase !== 'wait-rr73' && context.phase !== 'wait-standard-final')
-        || !hasPhysicalResponseForCurrentPhase(context)) {
-      return { context, changed: false, completed: false };
-    }
-    appendInbound(context, message.rawMessage);
-    context.lastActivityAt = message.timestamp;
-    return { context, changed: true, completed: true };
-  }
+  } else return { context, changed: false, completed: false };
 
   context.lastActivityAt = message.timestamp;
   return {
@@ -238,14 +250,14 @@ export function reduceWWDigiPhysicalSuccess(
 ): WWDigiContextReduction {
   const context = cloneContext(source);
   context.messageHistory.push(text);
-  context.lastPhysicalText = text;
-  context.lastPhysicalPhase = context.phase;
   context.audioFrequencyHz = audioFrequencyHz;
   context.lastActivityAt = timestamp;
+  const completed = isFinalAcknowledgement(text);
+  if (completed) context.completedAt = timestamp;
   return {
     context,
     changed: true,
-    completed: context.phase === 'send-rr73' && context.hasDirectedReply,
+    completed,
   };
 }
 

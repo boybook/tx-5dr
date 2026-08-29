@@ -46,6 +46,7 @@ import {
 } from './WWDigiProtocolLane.js';
 import {
   buildWWDigiCompletionEffect,
+  initializeWWDigiProtocolContext,
   isWWDigiProtocolContext,
   reduceWWDigiInbound,
   type WWDigiProtocolContext,
@@ -87,6 +88,7 @@ interface RuntimeCheckpoint {
   startPurpose?: 'authorized-work' | 'recovery-work';
   exhaustedAtReceiveEpoch?: number;
   stopAttention?: StrategyAttention;
+  completionAttention?: StrategyAttention;
   pendingManualCycleAuthorization?: { transmitCycle: 0 | 1; authorizationId: string };
   allowQueuedCycleSelection: boolean;
   practiceEnabled?: boolean;
@@ -142,6 +144,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   private startPurpose?: 'authorized-work' | 'recovery-work';
   private exhaustedAtReceiveEpoch?: number;
   private stopAttention?: StrategyAttention;
+  private completionAttention?: StrategyAttention;
   private pendingManualCycleAuthorization?: { transmitCycle: 0 | 1; authorizationId: string };
   private allowQueuedCycleSelection = false;
   private practiceEnabled = false;
@@ -207,6 +210,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       startPurpose: this.startPurpose,
       exhaustedAtReceiveEpoch: this.exhaustedAtReceiveEpoch,
       stopAttention: this.stopAttention,
+      completionAttention: this.completionAttention,
       pendingManualCycleAuthorization: this.pendingManualCycleAuthorization,
       allowQueuedCycleSelection: this.allowQueuedCycleSelection,
       practiceEnabled: this.practiceEnabled,
@@ -228,6 +232,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     this.startPurpose = state.startPurpose;
     this.exhaustedAtReceiveEpoch = state.exhaustedAtReceiveEpoch;
     this.stopAttention = state.stopAttention;
+    this.completionAttention = state.completionAttention;
     this.pendingManualCycleAuthorization = state.pendingManualCycleAuthorization;
     this.allowQueuedCycleSelection = state.allowQueuedCycleSelection === true;
     this.practiceEnabled = state.practiceEnabled === true;
@@ -287,6 +292,15 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
             lastHeardReceiveEpoch: this.receiveEpoch,
             lastHeardCycle,
             evidenceRevision: 1,
+            protocolContext: initializeWWDigiProtocolContext({
+              callsign,
+              audioFrequencyHz: message.df,
+              now: message.timestamp,
+              lastMessageRaw: message.rawMessage,
+              lastMessageAt: message.timestamp,
+              targetGrid: sender.grid,
+              lastSnr: message.snr,
+            }, this.operator.config),
           },
         });
         if (result.outcome !== 'rejected') {
@@ -323,7 +337,8 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
           this.operator.config,
         );
         if (reduced.changed) {
-          if (reduced.completed) {
+          const canComplete = entry.data.status !== 'candidate' && entry.data.status !== 'dupe';
+          if (reduced.completed && canComplete) {
             const streamId = `recovered-${entry.targetKey}`;
             const effect = buildWWDigiCompletionEffect(reduced.context, {
               streamId,
@@ -454,6 +469,15 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
         targetGrid,
         status: requiresAlternate ? 'review' : 'authorized',
         encodingError: requiresAlternate ? 'special_callsign_requires_preflight' : undefined,
+        protocolContext: requiresAlternate ? undefined : initializeWWDigiProtocolContext({
+          callsign,
+          audioFrequencyHz: request.lastMessage?.message.freq ?? this.operator.config.frequency,
+          now: request.lastMessage?.slotInfo.startMs ?? Date.now(),
+          lastMessageRaw,
+          lastMessageAt: request.lastMessage?.slotInfo.startMs,
+          targetGrid,
+          lastSnr: request.lastMessage?.message.snr,
+        }, this.operator.config),
       },
     };
     if (this.operator.config.replaceQueueOnManualTarget !== true) {
@@ -754,6 +778,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
 
   getSnapshot(): StrategyRuntimeSnapshot {
     this.syncParallelStreams();
+    this.expireCompletionAttention();
     const streams = this.coordinator.getStreams();
     const primary = streams[0];
     const extension = this.snapshotExtension();
@@ -784,6 +809,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
           description: 'attentionOtherCyclePausedDesc', params: { count: this.countCyclePaused() },
         }] : []),
         ...(this.stopAttention ? [this.stopAttention] : []),
+        ...(this.completionAttention ? [this.completionAttention] : []),
         ...(extension.attentions ?? []),
       ],
       messagePresentation: extension.messagePresentation,
@@ -1066,6 +1092,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     this.startPurpose = undefined;
     this.exhaustedAtReceiveEpoch = undefined;
     this.stopAttention = undefined;
+    this.completionAttention = undefined;
     this.pendingManualCycleAuthorization = undefined;
     this.allowQueuedCycleSelection = false;
     this.revokePractice();
@@ -1537,6 +1564,26 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     return Array.from(this.detachedCompletions.values()).some((completion) => (
       completion.entryId === entryId && completion.settled === 'failed'
     ));
+  }
+
+  notifyQsoLogged(recordId: string, callsign: string, grid: string | undefined, claimedScore: number): void {
+    if (!callsign) return;
+    this.completionAttention = {
+      id: `qso-logged-${recordId}`,
+      tone: 'success',
+      title: 'attentionQsoLogged',
+      description: 'attentionQsoLoggedDesc',
+      params: { callsign, grid: grid || 'ZZ00', score: claimedScore },
+      notify: true,
+      expiresAt: Date.now() + 8_000,
+    };
+  }
+
+  private expireCompletionAttention(): void {
+    if (this.completionAttention?.expiresAt !== undefined
+        && Date.now() >= this.completionAttention.expiresAt) {
+      this.completionAttention = undefined;
+    }
   }
 
   private hasUnsettledCompletionWork(): boolean {
