@@ -28,7 +28,7 @@ function finalScenario(id: string, finalReply?: 'RRR' | 'RR73' | '73'): Simulati
   };
 }
 
-export const wwDigiSimulationScenarios: SimulationScenarioDescriptor[] = [
+const WW_DIGI_SIMULATION_SCENARIOS = [
   finalScenario('standard'),
   finalScenario('final-rrr', 'RRR'),
   finalScenario('final-rr73', 'RR73'),
@@ -78,7 +78,7 @@ export const wwDigiSimulationScenarios: SimulationScenarioDescriptor[] = [
     states: {
       idle: {
         rules: [{
-          pattern: 'CQ WW (?<contactCallsign>[A-Z0-9/]+) (?<contactGrid>[A-R]{2}[0-9]{2})',
+          pattern: 'CQ(?: WW)? (?<contactCallsign>[A-Z0-9/]+) (?<contactGrid>[A-R]{2}[0-9]{2})',
           choices: [
             {
               weight: 3,
@@ -215,4 +215,13 @@ export const wwDigiSimulationScenarios: SimulationScenarioDescriptor[] = [
       done: {},
     },
   },
-];
+] satisfies SimulationScenarioDescriptor[];
+
+export const wwDigiSimulationScenarios: SimulationScenarioDescriptor[] = WW_DIGI_SIMULATION_SCENARIOS
+  .map((scenario) => ({
+    ...scenario,
+    addressedRestart: {
+      reclaimableStates: [scenario.initialState, ...('done' in scenario.states ? ['done'] : [])],
+      restartCompleted: true,
+    },
+  }));

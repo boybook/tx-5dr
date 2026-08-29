@@ -157,7 +157,11 @@ export function OperatorStrategyActions({
                 {t('operator.strategyActions.pickSpectrum')}
               </Button>
             )}
-            <Button variant="light" onPress={() => setPending(null)}>{t('operator.strategyActions.cancel')}</Button>
+            <Button variant="light" onPress={() => setPending(null)}>
+              {pending?.confirmation?.cancelLabel
+                ? resolveLabel(pending.confirmation.cancelLabel)
+                : t('operator.strategyActions.cancel')}
+            </Button>
             <Button color={COLOR_BY_TONE[pending?.tone ?? 'primary']} onPress={submitPending}>
               {pending ? resolveLabel(pending.confirmation?.confirmLabel ?? pending.label) : ''}
             </Button>

@@ -49,6 +49,7 @@ import { DecisionOrchestrator } from './DecisionOrchestrator.js';
 import { PluginContextFactory } from './PluginContextFactory.js';
 import { PluginEventBusHost } from './PluginEventBusHost.js';
 import { LogbookSyncHost } from './LogbookSyncHost.js';
+import { LogManager } from '../log/LogManager.js';
 import { PluginPageSessionStore, type PluginPageSession } from './PluginPageSessionStore.js';
 import {
   buildStandardQSODefaultTx6Message,
@@ -1050,6 +1051,11 @@ export class PluginManager {
       );
       this.assertIntentTransactionCurrent(token, signal, 'strategy_action_superseded');
 
+      if (result?.logbookSessionEffects?.length) {
+        await this.applyStrategyLogbookSessionEffects(operatorId, result.logbookSessionEffects);
+        this.assertIntentTransactionCurrent(token, signal, 'strategy_action_superseded');
+      }
+
       if (result?.requestOperatorStart) {
         if (!this.deps.prepareOperatorStrategyStart || !this.deps.cancelPreparedOperatorStrategyStart) {
           throw new Error('operator_strategy_start_unavailable');
@@ -1141,6 +1147,18 @@ export class PluginManager {
     const error = new Error(message);
     error.name = 'AbortError';
     throw error;
+  }
+
+  private async applyStrategyLogbookSessionEffects(
+    operatorId: string,
+    effects: NonNullable<import('@tx5dr/plugin-api').StrategyActionResult['logbookSessionEffects']>,
+  ): Promise<void> {
+    const instance = this.getStrategyInstance(operatorId);
+    const operator = this.deps.getOperatorById(operatorId);
+    if (!instance || !operator) throw new Error('strategy_logbook_session_unavailable');
+    const pluginName = instance.plugin.definition.name;
+    const stationCallsign = operator.config.myCallsign.trim().toUpperCase();
+    await LogManager.getInstance().applyPluginSessionEffects(pluginName, stationCallsign, effects);
   }
 
   private restoreUncommittedRuntime(

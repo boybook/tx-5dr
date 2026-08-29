@@ -1306,6 +1306,7 @@ export class PluginContextFactory {
           stationCallsign: requestedCallsign,
           sessionKey: descriptor.sessionKey,
           title: descriptor.title,
+          retention: descriptor.retention,
         });
         const access = createResolvedAccess(requestedCallsign, () => (
           logManager.getPluginSessionLogBook(
@@ -1333,7 +1334,29 @@ export class PluginContextFactory {
           },
           id: logBook.id,
           title: logBook.name,
+          async destroy() {
+            await logManager.destroyRuntimePluginSessionLogBook(
+              logBook.id,
+              plugin.definition.name,
+              requestedCallsign,
+            );
+          },
         };
+      },
+      async destroy(sessionKey: string) {
+        if (instanceScope !== 'operator' || !operatorId) {
+          throw new LogbookOperationError(
+            'LOGBOOK_UNAVAILABLE',
+            'Plugin logbook sessions require an operator-scoped plugin instance',
+          );
+        }
+        const boundCallsign = getBoundCallsign();
+        if (!boundCallsign) throw new LogbookOperationError('LOGBOOK_UNAVAILABLE', 'Operator logbook is unavailable');
+        await logManager.destroyRuntimePluginSessionLogBookByKey(
+          plugin.definition.name,
+          boundCallsign,
+          sessionKey,
+        );
       },
     };
 

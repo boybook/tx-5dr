@@ -63,6 +63,7 @@ function createContestContext(options: {
       categoryPower: 'LOW',
     },
     logbookSessions: {
+      destroy: async () => {},
       open: async (descriptor) => {
         if (options.logBookId === null) throw new Error('WW Digi logbook is unavailable');
         return {
@@ -79,6 +80,7 @@ function createContestContext(options: {
           updateQSO: async (_id: string, updates: Partial<QSORecord>) => qsoRecord('updated', 0, updates.contestId),
           applyQsoBatch: async () => ({ revision: 'revision-1', outcomes: [] }),
           notifyUpdated: async () => {},
+          destroy: async () => {},
         };
       },
     },

@@ -613,6 +613,8 @@ export interface PluginLogbookSessionDescriptor {
   stationCallsign: string;
   /** User-facing session title. */
   title: string;
+  /** Durable by default; runtime sessions are deleted when explicitly destroyed or the Host exits. */
+  retention?: 'durable' | 'runtime';
 }
 
 /** Read/write access to one plugin-owned logbook session. */
@@ -621,12 +623,16 @@ export interface PluginLogbookSessionAccess extends CallsignLogbookAccess {
   readonly id: string;
   /** User-facing title supplied when the session was opened. */
   readonly title: string;
+  /** Destroys a runtime-retained session. Durable sessions reject this operation. */
+  destroy(): Promise<void>;
 }
 
 /** Host-arbitrated access to logbook sessions owned by the current plugin. */
 export interface PluginLogbookSessions {
   /** Opens or reuses a durable session without changing the station's primary logbook. */
   open(descriptor: PluginLogbookSessionDescriptor): Promise<PluginLogbookSessionAccess>;
+  /** Destroys an existing runtime-retained session owned by this plugin and operator. */
+  destroy(sessionKey: string): Promise<void>;
 }
 
 /** Read-only worked-status and QSO query capability for `logbook:read`. */

@@ -34,6 +34,20 @@ describe('PluginLoader simulation scenarios', () => {
     const invalidGlobal = definition();
     invalidGlobal.simulationScenarios![0]!.globalRules![0]!.choices[0] = { silence: true, nextState: 'missing' };
     expect(() => validatePluginDefinition(invalidGlobal)).toThrow('missing state');
+    const invalidRestart = definition();
+    invalidRestart.simulationScenarios![0]!.addressedRestart = { reclaimableStates: ['missing'] };
+    expect(() => validatePluginDefinition(invalidRestart)).toThrow('invalid reclaimable states');
+    const nonStringState = definition();
+    nonStringState.simulationScenarios![0]!.states['1'] = {};
+    (nonStringState.simulationScenarios![0] as unknown as {
+      addressedRestart: { reclaimableStates: unknown[] };
+    }).addressedRestart = { reclaimableStates: [1] };
+    expect(() => validatePluginDefinition(nonStringState)).toThrow('invalid reclaimable states');
+    const invalidCompleted = definition();
+    (invalidCompleted.simulationScenarios![0] as unknown as {
+      addressedRestart: { reclaimableStates: string[]; restartCompleted: unknown };
+    }).addressedRestart = { reclaimableStates: ['idle'], restartCompleted: 'yes' };
+    expect(() => validatePluginDefinition(invalidCompleted)).toThrow('restartCompleted must be a boolean');
   });
 
   it('validates scenario identity pools', () => {

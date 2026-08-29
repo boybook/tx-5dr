@@ -219,6 +219,20 @@ function validateSimulationScenarios(def: AnyPluginDefinition): void {
     if (!scenario.states[scenario.initialState]) {
       throw new Error(`Simulation scenario "${scenario.id}" references missing initial state "${scenario.initialState}"`);
     }
+    const restart = scenario.addressedRestart;
+    if (restart) {
+      if (!Array.isArray(restart.reclaimableStates)
+          || restart.reclaimableStates.length === 0
+          || new Set(restart.reclaimableStates).size !== restart.reclaimableStates.length
+          || restart.reclaimableStates.some((stateId) => (
+            typeof stateId !== 'string' || !scenario.states[stateId]
+          ))) {
+        throw new Error(`Simulation scenario "${scenario.id}" addressedRestart has invalid reclaimable states`);
+      }
+      if (restart.restartCompleted !== undefined && typeof restart.restartCompleted !== 'boolean') {
+        throw new Error(`Simulation scenario "${scenario.id}" addressedRestart.restartCompleted must be a boolean`);
+      }
+    }
     if (scenario.identityPool && scenario.identityPool.length === 0) {
       throw new Error(`Simulation scenario "${scenario.id}" identity pool must not be empty`);
     }

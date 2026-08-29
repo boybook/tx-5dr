@@ -35,7 +35,7 @@ import {
 } from '@tx5dr/core';
 import { ConfigManager } from '../config/config-manager.js';
 import { LogManager } from '../log/LogManager.js';
-import { resolveQsoComment } from '@tx5dr/plugin-api';
+import { resolveQsoComment, type StrategyQSOCompletionEffect } from '@tx5dr/plugin-api';
 import type { WSJTXEncodeWorkQueue } from '../decode/WSJTXEncodeWorkQueue.js';
 import type { SlotPackManager } from '../slot/SlotPackManager.js';
 import type { CallsignContextTracker } from '../slot/CallsignContextTracker.js';
@@ -62,6 +62,7 @@ const AP_DECODE_QSO_PROGRESS: Record<string, number | undefined> = {
   TX3: 3,
   TX4: 4,
 };
+type PluginLogbookDestination = StrategyQSOCompletionEffect['destination'];
 
 function normalizeApCallsign(value: string | undefined): string | undefined {
   const normalized = value?.trim().toUpperCase();
@@ -138,7 +139,7 @@ export interface UnsavedQsoAttempt {
   qsoRuntimeGeneration?: number;
   streamId?: string;
   persistencePolicy?: QSOPersistencePolicy;
-  destination?: { kind: 'plugin-session'; sessionId: string };
+  destination?: PluginLogbookDestination;
   sourcePluginName?: string;
   createdAt: number;
 }
@@ -394,7 +395,7 @@ export class RadioOperatorManager {
       qsoRuntimeGeneration?: number;
       qsoRecord: QSORecord;
       persistencePolicy?: QSOPersistencePolicy;
-      destination?: { kind: 'plugin-session'; sessionId: string };
+      destination?: PluginLogbookDestination;
       sourcePluginName?: string;
       retryAttemptId?: string;
       resolve?: (record: QSORecord) => void;
@@ -412,7 +413,7 @@ export class RadioOperatorManager {
       const destination = retryAttempt?.destination ?? data.destination;
       const sourcePluginName = retryAttempt?.sourcePluginName ?? data.sourcePluginName;
       let targetLogBookId = retryAttempt?.logBookId
-        ?? destination?.sessionId
+        ?? (destination?.kind === 'plugin-session' ? destination.sessionId : undefined)
         ?? this.logManager.getOperatorLogBookId(data.operatorId)
         ?? `operator-${data.operatorId}`;
       const persistenceKey = data.qsoLifecycleId ?? `${data.operatorId}:legacy:${data.qsoRecord.id}`;
@@ -483,11 +484,17 @@ export class RadioOperatorManager {
         const operatorCallsign = this.logManager.getOperatorCallsign(data.operatorId);
         const logBook = destination
           ? (sourcePluginName && operatorCallsign
-            ? this.logManager.getPluginSessionLogBook(
-                destination.sessionId,
-                sourcePluginName,
-                operatorCallsign,
-              )
+            ? destination.kind === 'plugin-session'
+              ? this.logManager.getPluginSessionLogBook(
+                  destination.sessionId,
+                  sourcePluginName,
+                  operatorCallsign,
+                )
+              : this.logManager.getPluginSessionLogBookByKey(
+                  sourcePluginName,
+                  operatorCallsign,
+                  destination.sessionKey,
+                )
             : null)
           : await this.logManager.getOperatorLogBook(data.operatorId);
         if (!logBook) {
@@ -1088,7 +1095,7 @@ export class RadioOperatorManager {
         name: logBook.name,
         description: logBook.description,
         fileName: path.basename(logBook.filePath),
-        storageKind: logBook.storageKind,
+        storageKind: logBook.storageKind === 'ephemeral' ? 'managed' : logBook.storageKind,
         createdAt: logBook.createdAt,
         lastUsed: logBook.lastUsed,
         isActive: logBook.isActive,
@@ -1628,7 +1635,7 @@ export class RadioOperatorManager {
     qsoRuntimeGeneration?: number,
     persistencePolicy?: QSOPersistencePolicy,
     streamId?: string,
-    destination?: { kind: 'plugin-session'; sessionId: string },
+    destination?: PluginLogbookDestination,
     sourcePluginName?: string,
   ): string {
     const existing = this.getUnsavedQsosForOperator(operatorId).find((attempt) => (

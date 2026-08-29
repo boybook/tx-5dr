@@ -484,6 +484,7 @@ export const StrategyActionDescriptorSchema = z.object({
     title: z.string().min(1),
     description: z.string().optional(),
     confirmLabel: z.string().optional(),
+    cancelLabel: z.string().optional(),
   }).optional(),
   input: StrategyActionInputSchema.optional(),
   navigation: z.object({
@@ -2250,10 +2251,9 @@ export interface DigitalRadioEngineEvents {
     qsoRuntimeGeneration?: number;
     qsoRecord: z.infer<typeof QSORecordSchema>;
     persistencePolicy?: z.infer<typeof QSOPersistencePolicySchema>;
-    destination?: {
-      kind: 'plugin-session';
-      sessionId: string;
-    };
+    destination?:
+      | { kind: 'plugin-session'; sessionId: string }
+      | { kind: 'plugin-session-key'; sessionKey: string };
     sourcePluginName?: string;
     retryAttemptId?: string;
     resolve?: (record: z.infer<typeof QSORecordSchema>) => void;

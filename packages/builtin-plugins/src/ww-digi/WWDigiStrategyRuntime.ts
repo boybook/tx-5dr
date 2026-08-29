@@ -80,6 +80,8 @@ interface RuntimeCheckpoint {
   stopAttention?: StrategyAttention;
   pendingManualCycleAuthorization?: { transmitCycle: 0 | 1; authorizationId: string };
   allowQueuedCycleSelection: boolean;
+  practiceEnabled?: boolean;
+  practiceSessionDestroyPending?: boolean;
 }
 
 function targetKey(callsign: string): string {
@@ -117,6 +119,8 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   private stopAttention?: StrategyAttention;
   private pendingManualCycleAuthorization?: { transmitCycle: 0 | 1; authorizationId: string };
   private allowQueuedCycleSelection = false;
+  private practiceEnabled = false;
+  private practiceSessionDestroyPending = false;
 
   constructor(
     private readonly operator: WWDigiRuntimeOperator,
@@ -128,6 +132,14 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     ) => Promise<{ encodable: boolean; error?: string; reason?: string }> = async () => ({ encodable: true }),
     private readonly snapshotExtension: () => WWDigiSnapshotExtension = () => ({}),
     private readonly completionDestination: () => StrategyQSOCompletionEffect['destination'] = () => undefined,
+    private readonly practice?: {
+      canStart: () => boolean;
+      sessionKey: string;
+      title: string;
+      onStarted?: () => void;
+      onStopped?: () => void;
+      onCompletion?: (recordId: string) => void;
+    },
   ) {
     const resolveFrequencies = typeof audioFrequenciesHz === 'function'
       ? audioFrequenciesHz
@@ -169,6 +181,8 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       stopAttention: this.stopAttention,
       pendingManualCycleAuthorization: this.pendingManualCycleAuthorization,
       allowQueuedCycleSelection: this.allowQueuedCycleSelection,
+      practiceEnabled: this.practiceEnabled,
+      practiceSessionDestroyPending: this.practiceSessionDestroyPending,
     } satisfies RuntimeCheckpoint;
   }
 
@@ -185,6 +199,8 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     this.stopAttention = state.stopAttention;
     this.pendingManualCycleAuthorization = state.pendingManualCycleAuthorization;
     this.allowQueuedCycleSelection = state.allowQueuedCycleSelection === true;
+    this.practiceEnabled = state.practiceEnabled === true;
+    this.practiceSessionDestroyPending = state.practiceSessionDestroyPending === true;
   }
 
   observeDecodedMessages(messages: ParsedFT8Message[], meta: QueuedStrategyObservationMeta): boolean {
@@ -617,11 +633,46 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
 
   patchContext(_patch: Partial<StrategyRuntimeContext>): void {}
   setState(_state: StrategyRuntimeSlot): void {}
+  isPracticeEnabled(): boolean {
+    if (this.practiceEnabled && this.practice?.canStart() !== true) this.revokePractice();
+    return this.practiceEnabled;
+  }
+  revokePractice(): boolean {
+    const changed = this.practiceEnabled;
+    this.practiceEnabled = false;
+    if (changed) {
+      this.practiceSessionDestroyPending = true;
+      this.practice?.onStopped?.();
+    }
+    return changed;
+  }
   setStreamState(update: StrategyStreamStateUpdate): void {
     this.coordinator.setStreamState(update.streamId, update.stateId, update.expectedLifecycleEpoch);
   }
   async invokeAction(invocation: StrategyActionInvocation): Promise<StrategyActionResult | void> {
     if (invocation.target.kind === 'runtime') {
+      if (invocation.actionId === 'start-practice' && this.practice) {
+        if (!this.practice.canStart()) throw new Error('practice_not_available');
+        this.practiceEnabled = true;
+        this.practiceSessionDestroyPending = false;
+        this.practice.onStarted?.();
+        return {
+          requestDecision: true,
+          logbookSessionEffects: [{
+            operation: 'open', sessionKey: this.practice.sessionKey,
+            title: this.practice.title, retention: 'runtime',
+          }],
+        };
+      }
+      if (invocation.actionId === 'stop-practice' && this.practice) {
+        this.practiceEnabled = false;
+        this.practiceSessionDestroyPending = false;
+        this.practice.onStopped?.();
+        return {
+          requestDecision: true,
+          logbookSessionEffects: [{ operation: 'destroy', sessionKey: this.practice.sessionKey }],
+        };
+      }
       throw new Error('strategy_action_not_available');
     }
     if (invocation.target.kind === 'stream') {
@@ -816,6 +867,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     this.stopAttention = undefined;
     this.pendingManualCycleAuthorization = undefined;
     this.allowQueuedCycleSelection = false;
+    this.revokePractice();
   }
 
   private result(options: {
@@ -827,11 +879,16 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     const qsoCompletions = this.withCompletionDestination({
       qsoCompletions: options.qsoCompletions,
     })?.qsoCompletions;
+    const logbookSessionEffects = this.practiceSessionDestroyPending && this.practice
+      ? [{ operation: 'destroy' as const, sessionKey: this.practice.sessionKey }]
+      : undefined;
+    this.practiceSessionDestroyPending = false;
     return {
       transmission: null,
       transmissions: this.getTransmissions(),
       snapshot: this.getSnapshot(),
       qsoCompletions,
+      logbookSessionEffects,
       qsoFailures: options.qsoFailures,
       requestedTransmitCycle: options.requestedTransmitCycle,
       stop: options.stop ?? false,
@@ -1017,6 +1074,9 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     if (!result?.qsoCompletions?.length) return result;
     const destination = this.completionDestination();
     if (!destination) return result;
+    if (this.practiceEnabled) {
+      for (const effect of result.qsoCompletions) this.practice?.onCompletion?.(effect.record.id);
+    }
     return {
       ...result,
       qsoCompletions: result.qsoCompletions.map((effect) => ({ ...effect, destination })),

@@ -11,7 +11,7 @@ import {
   type StrategyRuntimeSnapshot,
 } from '@tx5dr/plugin-api';
 import type { PluginQuickSetting } from '@tx5dr/plugin-api';
-import { getCallsignInfo } from '@tx5dr/core';
+import { getCallsignInfo, getStandardDigitalFrequencyMatch } from '@tx5dr/core';
 import { ContestSessionNotifier, ContestSessionRepository } from '@tx5dr/plugin-api/toolkit';
 import { WWDigiStrategyRuntime, type WWDigiRuntimeConfig } from './WWDigiStrategyRuntime.js';
 import {
@@ -56,6 +56,14 @@ interface WWDigiContestSession {
 
 const SESSION_CHANGED_TOPIC = 'ww-digi.session.changed';
 const RUNTIME_LOGBOOK_ID_PREFIX = 'contest-logbook-id:';
+
+const practiceRuntimes = new Map<string, WWDigiStrategyRuntime>();
+const practiceOperatingIndexes = new Map<string, ContestOperatingIndex>();
+const practiceQsoIds = new Map<string, Set<string>>();
+
+function practiceLogbookSessionKey(operatorId: string): string {
+  return `practice:${operatorId}`;
+}
 
 function contestLogbookSessionKey(contestYear: number): string {
   return `ww-digi:${contestYear}`;
@@ -507,18 +515,33 @@ function runtimeSession(ctx: StrategyPluginContext, contestYear: number): WWDigi
   return normalizeSession(ctx, contestYear, stored);
 }
 
-function runtimePresentation(ctx: StrategyPluginContext): Pick<
+function practiceModeName(ctx: StrategyPluginContext): 'FT8' | 'FT4' {
+  return ctx.operator.mode.name.trim().toUpperCase() === 'FT4' ? 'FT4' : 'FT8';
+}
+
+function canStartPractice(ctx: StrategyPluginContext, contestYear: number): boolean {
+  return !ctx.radio.isSimulation
+    && Boolean(resolveWWDigiBand(ctx.radio.frequency))
+    && !isWithinWWDigiContestPeriod(Date.now(), contestYear)
+    && !getStandardDigitalFrequencyMatch(practiceModeName(ctx), ctx.radio.frequency);
+}
+
+function runtimePresentation(ctx: StrategyPluginContext, practiceEnabled = false): Pick<
   StrategyRuntimeSnapshot,
   'actions' | 'attentions' | 'messagePresentation' | 'transmitGate'
 > {
   const contestYear = configuredContestYear(ctx.config.contestYear);
   const session = runtimeSession(ctx, contestYear);
+  const operatingIndex = practiceEnabled
+    ? practiceOperatingIndexes.get(ctx.operator.id)
+      ?? buildOperatingIndex(ctx.operator.callsign, contestYear, [], 0)
+    : session.operatingIndex;
   const callableMessageMatchers = [
     { firstTokenIn: ['CQ'] },
     { anyTokenIn: ['RR73', 'RRR', '73'] },
   ];
   const messagePresentation: StrategyMessagePresentationProjection = {
-    revision: session.operatingIndex.revision,
+    revision: operatingIndex.revision,
     mode: 'replace-logbook',
     subject: 'sender-callsign',
     partitionBy: 'band',
@@ -537,12 +560,12 @@ function runtimePresentation(ctx: StrategyPluginContext): Pick<
       },
       'contest-worked': { textDecoration: 'line-through', opacity: 'muted' },
     },
-    assignments: Object.entries(session.operatingIndex.workedByBand).flatMap(([band, callsigns]) => (
+    assignments: Object.entries(operatingIndex.workedByBand).flatMap(([band, callsigns]) => (
       callsigns.map((subject) => ({ subject, partition: band, classId: 'contest-worked' }))
     )),
     noveltyRules: [{
       fact: 'grid-field-2',
-      knownValuesByPartition: session.operatingIndex.workedFieldsByBand,
+      knownValuesByPartition: operatingIndex.workedFieldsByBand,
       classId: 'contest-new-field',
     }],
   };
@@ -580,31 +603,60 @@ function runtimePresentation(ctx: StrategyPluginContext): Pick<
         title: 'attentionContestBandUnavailable',
         description: 'attentionContestBandUnavailableDesc',
       }
-    : !ctx.radio.isSimulation && !isWithinWWDigiContestPeriod(Date.now(), contestYear)
+    : !ctx.radio.isSimulation && !practiceEnabled && !isWithinWWDigiContestPeriod(Date.now(), contestYear)
       ? {
           reason: 'transmitBlockedOutsidePeriod',
           title: 'attentionContestOutsidePeriod',
           description: 'attentionContestOutsidePeriodDesc',
         }
       : undefined;
-  if (!operatingGate) return { messagePresentation };
+  if (!operatingGate) {
+    return practiceEnabled ? {
+      messagePresentation,
+      actions: [{
+        id: 'stop-practice', label: 'actionStopPractice', icon: 'xmark',
+        tone: 'warning', presentation: 'secondary',
+      }],
+      attentions: [{
+        id: `contest-practice:${contestYear}`,
+        tone: 'warning', title: 'attentionContestOutsidePeriod',
+        description: 'attentionContestOutsidePeriodDesc', actionIds: ['stop-practice'],
+      }],
+    } : { messagePresentation };
+  }
+  const practiceAvailable = operatingGate.reason === 'transmitBlockedOutsidePeriod'
+    && canStartPractice(ctx, contestYear);
   return {
     messagePresentation,
     transmitGate: { allowed: false, reason: operatingGate.reason },
+    actions: practiceAvailable ? [{
+      id: 'start-practice', label: 'actionStartPractice', icon: 'flask-conical',
+      tone: 'warning', presentation: 'secondary',
+      confirmation: {
+        title: 'practiceConfirmTitle',
+        description: 'practiceConfirmDescription',
+        confirmLabel: 'practiceConfirmAction',
+        cancelLabel: 'practiceConfirmCancel',
+      },
+    }] : undefined,
     attentions: [{
       id: `contest-operating-gate:${contestYear}:${operatingGate.reason}`,
       tone: 'warning',
       title: operatingGate.title,
       description: operatingGate.description,
+      actionIds: practiceAvailable ? ['start-practice'] : undefined,
     }],
   };
 }
 
-function hasWorkedInRuntimeSession(ctx: StrategyPluginContext, callsign: string): boolean {
+function hasWorkedInRuntimeSession(ctx: StrategyPluginContext, callsign: string, practiceEnabled = false): boolean {
   const contestYear = configuredContestYear(ctx.config.contestYear);
-  const session = runtimeSession(ctx, contestYear);
+  const session = practiceEnabled
+    ? practiceOperatingIndexes.get(ctx.operator.id)
+      ?? buildOperatingIndex(ctx.operator.callsign, contestYear, [], 0)
+    : runtimeSession(ctx, contestYear).operatingIndex;
   const band = ctx.radio.band.trim().toUpperCase();
-  return (session.operatingIndex.workedByBand[band] ?? []).includes(callsign.trim().toUpperCase());
+  return (session.workedByBand[band] ?? []).includes(callsign.trim().toUpperCase());
 }
 
 function parallelStreams(value: unknown, fallback = 1): number {
@@ -692,6 +744,7 @@ export const wwDigiStrategyPlugin = definePlugin({
       300,
       Math.min(4700, Math.round(ctx.operator.frequency || 1500)),
     );
+    const runtimeRef: { current?: WWDigiStrategyRuntime } = {};
     const operator = {
       get config(): WWDigiRuntimeConfig {
         const modeName = ctx.operator.mode.name.toUpperCase() === 'FT4' ? 'FT4' : 'FT8';
@@ -717,18 +770,43 @@ export const wwDigiStrategyPlugin = definePlugin({
         return ctx.operator.isTargetBeingWorkedByOthers(callsign);
       },
       hasWorkedCallsign(callsign: string) {
-        return Promise.resolve(hasWorkedInRuntimeSession(ctx, callsign));
+        return Promise.resolve(hasWorkedInRuntimeSession(ctx, callsign, runtimeRef.current?.isPracticeEnabled() === true));
       },
     };
-    return new WWDigiStrategyRuntime(operator, ctx.log, () => {
+    const runtime = new WWDigiStrategyRuntime(operator, ctx.log, () => {
       const base = resolveBaseFrequency();
       return [base - 100, base, base + 100];
-    }, async (text, mode) => ctx.digitalMessagePreflight.check({ text, mode }), () => runtimePresentation(ctx), () => {
+    }, async (text, mode) => ctx.digitalMessagePreflight.check({ text, mode }), () => (
+      runtimePresentation(ctx, runtimeRef.current?.isPracticeEnabled() === true)
+    ), () => {
       const contestYear = configuredContestYear(ctx.config.contestYear);
+      if (runtimeRef.current?.isPracticeEnabled()) {
+        return { kind: 'plugin-session-key', sessionKey: practiceLogbookSessionKey(ctx.operator.id) };
+      }
       const sessionId = ctx.store.operator.get<string | undefined>(runtimeLogbookIdKey(contestYear));
       if (!sessionId) throw new Error('WW Digi logbook session is not ready');
       return { kind: 'plugin-session', sessionId };
+    }, {
+      canStart: () => canStartPractice(ctx, configuredContestYear(ctx.config.contestYear)),
+      sessionKey: practiceLogbookSessionKey(ctx.operator.id),
+      title: `WW Digi Practice - ${ctx.operator.callsign.trim().toUpperCase()}`,
+      onStarted: () => {
+        const contestYear = configuredContestYear(ctx.config.contestYear);
+        practiceOperatingIndexes.set(
+          ctx.operator.id,
+          buildOperatingIndex(ctx.operator.callsign, contestYear, [], 0),
+        );
+      },
+      onStopped: () => practiceOperatingIndexes.delete(ctx.operator.id),
+      onCompletion: (recordId) => {
+        const ids = practiceQsoIds.get(ctx.operator.id) ?? new Set<string>();
+        ids.add(recordId);
+        practiceQsoIds.set(ctx.operator.id, ids);
+      },
     });
+    runtimeRef.current = runtime;
+    practiceRuntimes.set(ctx.operator.id, runtime);
+    return runtime;
   },
   isTransmitControlEnabled: () => true,
   async onLoad(ctx) {
@@ -856,10 +934,20 @@ export const wwDigiStrategyPlugin = definePlugin({
       },
     });
   },
+  async onUnload(ctx) {
+    const typed = ctx as WWDigiContext;
+    practiceRuntimes.delete(typed.operator.id);
+    practiceOperatingIndexes.delete(typed.operator.id);
+    practiceQsoIds.delete(typed.operator.id);
+    await typed.logbook.sessions.destroy(practiceLogbookSessionKey(typed.operator.id));
+  },
   hooks: {
     async onConfigChange(changes, ctx) {
       if (!Object.prototype.hasOwnProperty.call(changes, 'contestYear')) return;
       const typed = ctx as WWDigiContext;
+      practiceRuntimes.get(typed.operator.id)?.revokePractice();
+      practiceOperatingIndexes.delete(typed.operator.id);
+      await typed.logbook.sessions.destroy(practiceLogbookSessionKey(typed.operator.id));
       const contestYear = configuredContestYear(typed.config.contestYear);
       await openContestLogbook(typed, contestYear);
       await refreshContestProjectionWithHealth(typed, contestYear);
@@ -868,6 +956,36 @@ export const wwDigiStrategyPlugin = definePlugin({
     async onQSOComplete(record, ctx) {
       const typed = ctx as WWDigiContext;
       if (record.contestId?.toUpperCase() !== 'WW-DIGI') return;
+      const selectedYear = configuredContestYear(typed.config.contestYear);
+      const runtime = practiceRuntimes.get(typed.operator.id);
+      const practiceIds = practiceQsoIds.get(typed.operator.id);
+      const isPracticeQso = practiceIds?.delete(record.id) === true;
+      if (practiceIds?.size === 0) practiceQsoIds.delete(typed.operator.id);
+      if (isPracticeQso) {
+        if (!runtime?.isPracticeEnabled()) return;
+        const logbook = await typed.logbook.sessions.open({
+          sessionKey: practiceLogbookSessionKey(typed.operator.id),
+          stationCallsign: typed.operator.callsign,
+          title: `WW Digi Practice - ${typed.operator.callsign.trim().toUpperCase()}`,
+          retention: 'runtime',
+        });
+        const records = await logbook.queryQSOs({ orderDirection: 'asc' });
+        const projected = records.flatMap((practiceRecord) => {
+          if (practiceRecord.contestId?.toUpperCase() !== 'WW-DIGI') return [];
+          const qso = toContestQso(practiceRecord, selectedYear, undefined, true);
+          return qso ? [qso] : [];
+        });
+        const previous = practiceOperatingIndexes.get(typed.operator.id)
+          ?? buildOperatingIndex(typed.operator.callsign, selectedYear, [], 0);
+        practiceOperatingIndexes.set(typed.operator.id, buildOperatingIndex(
+          typed.operator.callsign,
+          selectedYear,
+          projected,
+          previous.revision + 1,
+        ));
+        typed.ui.refreshOperatorProjection();
+        return;
+      }
       const contestYear = new Date(record.startTime).getUTCFullYear();
       const contestQso = toContestQso(record, contestYear, undefined, typed.radio.isSimulation);
       if (!contestQso) return;

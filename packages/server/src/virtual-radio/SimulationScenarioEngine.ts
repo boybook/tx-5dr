@@ -55,6 +55,12 @@ interface PeerRuntime {
   random: () => number;
 }
 
+interface PeerIdentityCandidate {
+  peer: PeerRuntime;
+  identity: SimulationPeerIdentity;
+  identityIndex: number;
+}
+
 function hashSeed(value: string): number {
   let hash = 2166136261;
   for (let index = 0; index < value.length; index += 1) {
@@ -93,6 +99,9 @@ function compileRule(rule: SimulationScenarioRule, identity: SimulationPeerIdent
 export class SimulationScenarioEngine {
   private readonly peers: PeerRuntime[];
   private readonly identityOwners = new Map<string, string>();
+  private readonly peersById = new Map<string, PeerRuntime>();
+  private readonly identityCandidates = new Map<string, PeerIdentityCandidate[]>();
+  private readonly identityAffinity = new Map<string, string>();
 
   constructor(
     sessionSeed: string | number,
@@ -128,6 +137,15 @@ export class SimulationScenarioEngine {
         random: seededRandom(hashSeed(`${String(sessionSeed)}\u0000${definition.id}`)),
       };
     });
+    for (const peer of this.peers) {
+      this.peersById.set(peer.definition.id, peer);
+      this.identityAffinity.set(peer.identity.callsign, peer.definition.id);
+      peer.identities.forEach((identity, identityIndex) => {
+        const candidates = this.identityCandidates.get(identity.callsign) ?? [];
+        candidates.push({ peer, identity, identityIndex });
+        this.identityCandidates.set(identity.callsign, candidates);
+      });
+    }
   }
 
   observe(
@@ -138,6 +156,7 @@ export class SimulationScenarioEngine {
     const ordered = [...messages].sort((left, right) => (
       left.audioFrequencyHz - right.audioFrequencyHz || left.text.localeCompare(right.text)
     ));
+    this.reactivateAddressedPeers(ordered);
     const replies: SimulationReplyDecision[] = [];
     for (const peer of this.peers) {
       if (peer.complete) continue;
@@ -287,10 +306,137 @@ export class SimulationScenarioEngine {
     return startIndex;
   }
 
+  private reactivateAddressedPeers(messages: SimulationDecodedMessage[]): void {
+    const addressed = new Map<string, SimulationDecodedMessage>();
+    for (const message of messages) {
+      for (const token of this.messageIdentityTokens(message.text)) {
+        const candidates = this.identityCandidates.get(token);
+        if (!candidates || addressed.has(token)) continue;
+        if (candidates.some((candidate) => (
+          message.sourcePeerId !== candidate.peer.definition.id
+          && this.matchesRestartRule(candidate.peer, candidate.identity, message.text)
+        ))) {
+          addressed.set(token, message);
+        }
+      }
+    }
+    if (addressed.size === 0) return;
+
+    const reservedPeerIds = new Set<string>();
+    for (const callsign of addressed.keys()) {
+      const owner = this.identityOwners.get(callsign);
+      if (owner) reservedPeerIds.add(owner);
+    }
+    const claimedPeerIds = new Set<string>();
+
+    for (const [callsign, message] of addressed) {
+      const ownerId = this.identityOwners.get(callsign);
+      if (ownerId) {
+        const owner = this.peersById.get(ownerId);
+        if (owner
+            && message.sourcePeerId !== owner.definition.id
+            && this.canRestartCurrentIdentity(owner, message.text)
+            && this.matchesRestartRule(owner, owner.identity, message.text)) {
+          this.assignIdentity(owner, owner.identity, owner.identityIndex, 'addressed-restart');
+          claimedPeerIds.add(owner.definition.id);
+        }
+        continue;
+      }
+
+      const eligible = (this.identityCandidates.get(callsign) ?? []).filter((candidate) => (
+        message.sourcePeerId !== candidate.peer.definition.id
+        && !reservedPeerIds.has(candidate.peer.definition.id)
+        && !claimedPeerIds.has(candidate.peer.definition.id)
+        && this.canLoadDormantIdentity(candidate.peer)
+        && this.matchesRestartRule(candidate.peer, candidate.identity, message.text)
+      ));
+      if (eligible.length === 0) continue;
+      const preferredPeerId = this.identityAffinity.get(callsign);
+      const selected = eligible.find((candidate) => candidate.peer.definition.id === preferredPeerId)
+        ?? eligible[0]!;
+      this.assignIdentity(selected.peer, selected.identity, selected.identityIndex, 'addressed-reactivation');
+      claimedPeerIds.add(selected.peer.definition.id);
+    }
+  }
+
+  private messageIdentityTokens(message: string): string[] {
+    return normalizeMessage(message)
+      .split(' ')
+      .map((token) => token.replace(/^<|>$/g, ''))
+      .filter((token, index, tokens) => this.identityCandidates.has(token) && tokens.indexOf(token) === index);
+  }
+
+  private matchesRestartRule(
+    peer: PeerRuntime,
+    identity: SimulationPeerIdentity,
+    message: string,
+  ): boolean {
+    if (!peer.definition.scenario.addressedRestart) return false;
+    const initial = peer.definition.scenario.states[peer.definition.scenario.initialState]!;
+    const rules = [
+      ...(peer.definition.scenario.globalRules ?? []),
+      ...(initial.rules ?? []),
+    ].filter((rule) => rule.pattern.includes('{{peerCallsign}}'));
+    const normalized = normalizeMessage(message);
+    return rules.some((rule) => compileRule(rule, identity).test(normalized));
+  }
+
+  private canRestartCurrentIdentity(peer: PeerRuntime, message: string): boolean {
+    const restart = peer.definition.scenario.addressedRestart;
+    if (!restart) return false;
+    if (peer.complete) return restart.restartCompleted === true;
+    if (this.matchesCurrentRule(peer, message)) return false;
+    return restart.reclaimableStates.includes(peer.state);
+  }
+
+  private canLoadDormantIdentity(peer: PeerRuntime): boolean {
+    const restart = peer.definition.scenario.addressedRestart;
+    if (!restart) return false;
+    return (peer.complete && restart.restartCompleted === true)
+      || restart.reclaimableStates.includes(peer.state);
+  }
+
+  private matchesCurrentRule(peer: PeerRuntime, message: string): boolean {
+    const state = peer.definition.scenario.states[peer.state]!;
+    const rules = [...(peer.definition.scenario.globalRules ?? []), ...(state.rules ?? [])];
+    const normalized = normalizeMessage(message);
+    return rules.some((rule) => compileRule(rule, peer.identity).test(normalized));
+  }
+
+  private assignIdentity(
+    peer: PeerRuntime,
+    identity: SimulationPeerIdentity,
+    identityIndex: number,
+    reason: 'addressed-restart' | 'addressed-reactivation',
+  ): void {
+    const previous = peer.identity;
+    if (this.identityOwners.get(previous.callsign) === peer.definition.id) {
+      this.identityOwners.delete(previous.callsign);
+    }
+    this.identityAffinity.set(previous.callsign, peer.definition.id);
+    peer.identity = identity;
+    peer.identityIndex = identityIndex;
+    peer.state = peer.definition.scenario.initialState;
+    peer.quietReceiveCycles = 0;
+    peer.lastReceived = undefined;
+    peer.lastReceivedFrequencyHz = undefined;
+    peer.lastSent = undefined;
+    peer.lastCaptures = {};
+    peer.complete = false;
+    this.identityOwners.set(identity.callsign, peer.definition.id);
+    this.identityAffinity.set(identity.callsign, peer.definition.id);
+    this.emitTrace(peer, 'identity', {
+      reason,
+      previousCallsign: previous.callsign,
+      previousGrid: previous.grid,
+    });
+  }
+
   private advanceIdentity(peer: PeerRuntime): void {
     if (peer.identities.length < 2) return;
     const previous = peer.identity;
     this.identityOwners.delete(previous.callsign);
+    this.identityAffinity.set(previous.callsign, peer.definition.id);
     const nextIndex = this.findAvailableIdentityIndex(
       peer.identities,
       (peer.identityIndex + 1) % peer.identities.length,
@@ -308,6 +454,7 @@ export class SimulationScenarioEngine {
     peer.lastCaptures = {};
     peer.quietReceiveCycles = 0;
     this.identityOwners.set(next.callsign, peer.definition.id);
+    this.identityAffinity.set(next.callsign, peer.definition.id);
     this.emitTrace(peer, 'identity', {
       previousCallsign: previous.callsign,
       previousGrid: previous.grid,
