@@ -18,6 +18,7 @@ StandardOutput=journal
 StandardError=journal
 
 ProtectSystem=strict
+PrivateTmp=true
 ReadWritePaths=/var/lib/tx5dr
 
 [Install]

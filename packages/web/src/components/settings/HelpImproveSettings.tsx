@@ -34,6 +34,9 @@ type UploadState =
         stage?: string;
         httpStatus?: number;
         upstreamStatus?: number;
+        localErrorCode?: string;
+        localErrno?: number;
+        localErrorOperation?: string;
         clientRequestUrl?: string;
         localRequestUrl?: string;
         downstreamRequestUrl?: string;
@@ -231,6 +234,9 @@ export const HelpImproveSettings = forwardRef<HelpImproveSettingsRef, HelpImprov
               stage: contextString(context, 'stage'),
               httpStatus: error.httpStatus,
               upstreamStatus: contextNumber(context, 'upstreamStatus'),
+              localErrorCode: contextString(context, 'localErrorCode'),
+              localErrno: contextNumber(context, 'localErrno'),
+              localErrorOperation: contextString(context, 'localErrorOperation'),
               clientRequestUrl: contextString(context, 'clientRequestUrl'),
               localRequestUrl: contextString(context, 'localRequestUrl'),
               downstreamRequestUrl: contextString(context, 'downstreamRequestUrl'),
@@ -455,6 +461,9 @@ export const HelpImproveSettings = forwardRef<HelpImproveSettingsRef, HelpImprov
                         {uploadState.details.stage && <><dt>{t('helpImprove.status.errorStage')}</dt><dd className="font-mono break-all">{uploadState.details.stage}</dd></>}
                         {uploadState.details.httpStatus !== undefined && <><dt>{t('helpImprove.status.httpStatus')}</dt><dd className="font-mono">{uploadState.details.httpStatus}</dd></>}
                         {uploadState.details.upstreamStatus !== undefined && <><dt>{t('helpImprove.status.upstreamStatus')}</dt><dd className="font-mono">{uploadState.details.upstreamStatus}</dd></>}
+                        {uploadState.details.localErrorCode && <><dt>{t('helpImprove.status.localErrorCode')}</dt><dd className="font-mono break-all">{uploadState.details.localErrorCode}</dd></>}
+                        {uploadState.details.localErrno !== undefined && <><dt>{t('helpImprove.status.localErrno')}</dt><dd className="font-mono">{uploadState.details.localErrno}</dd></>}
+                        {uploadState.details.localErrorOperation && <><dt>{t('helpImprove.status.localErrorOperation')}</dt><dd className="font-mono break-all">{uploadState.details.localErrorOperation}</dd></>}
                         {uploadState.details.clientRequestUrl && <><dt>{t('helpImprove.status.clientRequestUrl')}</dt><dd className="font-mono break-all">{uploadState.details.clientRequestUrl}</dd></>}
                         {uploadState.details.localRequestUrl && <><dt>{t('helpImprove.status.localRequestUrl')}</dt><dd className="font-mono break-all">{uploadState.details.localRequestUrl}</dd></>}
                         {uploadState.details.downstreamRequestUrl && <><dt>{t('helpImprove.status.downstreamRequestUrl')}</dt><dd className="font-mono break-all">{uploadState.details.downstreamRequestUrl}</dd></>}

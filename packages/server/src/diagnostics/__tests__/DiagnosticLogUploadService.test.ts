@@ -8,6 +8,7 @@ import {
   DiagnosticLogUploadService,
   sanitizeDiagnosticRequestUrl,
 } from '../DiagnosticLogUploadService.js';
+import { tx5drPaths } from '../../utils/app-paths.js';
 
 const roots: string[] = [];
 const fromMs = Date.parse('2026-08-21T00:00:00.000Z');
@@ -61,7 +62,7 @@ describe('DiagnosticLogUploadService', () => {
     const service = new DiagnosticLogUploadService({
       getLogsDir: async () => logs,
       getGatewayContext: async () => gatewayContext,
-      temporaryRoot: temporary,
+      getTemporaryRoot: async () => temporary,
     });
     const result = await service.listSources();
 
@@ -123,7 +124,7 @@ describe('DiagnosticLogUploadService', () => {
       getLogsDir: async () => logs,
       getGatewayContext: async () => gatewayContext,
       fetch: fetchMock as typeof fetch,
-      temporaryRoot: temporary,
+      getTemporaryRoot: async () => temporary,
     });
     const result = await service.upload({ sourceId: 'server', fromMs, toMs, feedback: '  radio stopped  ' });
 
@@ -139,6 +140,46 @@ describe('DiagnosticLogUploadService', () => {
     expect(await readdir(temporary)).toEqual([]);
   });
 
+  it('uses the application cache instead of the system temp directory by default', async () => {
+    const { root, logs } = await createDirectories();
+    const cache = join(root, 'cache');
+    await writeFile(join(logs, 'tx5dr-server.log'), '[2026-08-21T00:10:00.000Z] cache path\n');
+    const getCacheDir = vi.spyOn(tx5drPaths, 'getCacheDir').mockResolvedValue(cache);
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      const value = String(url);
+      if (value.endsWith('/v1/diagnostics/authorize')) {
+        return Response.json({ diagnostics_token: 'diagnostic-token' }, { status: 201 });
+      }
+      if (value.endsWith('/v1/diagnostics/uploads')) {
+        return Response.json({
+          upload_url: 'https://private-oss.example.invalid/',
+          form_fields: { key: 'diagnostics/v1/test.log.gz', policy: 'policy' },
+          upload_receipt: 'signed-receipt',
+        }, { status: 201 });
+      }
+      if (value === 'https://private-oss.example.invalid/') return new Response(null, { status: 204 });
+      if (value.includes('/complete')) {
+        return Response.json({
+          accepted_at: '2026-08-21T01:00:01.000Z',
+          retained_until: '2026-09-20T01:00:01.000Z',
+        }, { status: 202 });
+      }
+      throw new Error(`Unexpected URL ${value}`);
+    });
+
+    const service = new DiagnosticLogUploadService({
+      getLogsDir: async () => logs,
+      getGatewayContext: async () => gatewayContext,
+      fetch: fetchMock as typeof fetch,
+    });
+    await service.upload({ sourceId: 'server', fromMs, toMs });
+
+    expect(getCacheDir).toHaveBeenCalledOnce();
+    const uploadRoot = join(cache, 'diagnostic-uploads');
+    expect((await stat(uploadRoot)).mode & 0o777).toBe(0o700);
+    expect(await readdir(uploadRoot)).toEqual([]);
+  });
+
   it('enforces configurable raw and gzip limits', async () => {
     const { logs, temporary } = await createDirectories();
     await writeFile(join(logs, 'tx5dr-server.log'), `[2026-08-21T00:10:00.000Z] ${'x'.repeat(300)}\n`);
@@ -146,7 +187,7 @@ describe('DiagnosticLogUploadService', () => {
     const rawLimited = new DiagnosticLogUploadService({
       getLogsDir: async () => logs,
       getGatewayContext: async () => gatewayContext,
-      temporaryRoot: temporary,
+      getTemporaryRoot: async () => temporary,
       maxUncompressedBytes: 100,
     });
     await expect(rawLimited.upload({ sourceId: 'server', fromMs, toMs }))
@@ -155,7 +196,7 @@ describe('DiagnosticLogUploadService', () => {
     const gzipLimited = new DiagnosticLogUploadService({
       getLogsDir: async () => logs,
       getGatewayContext: async () => gatewayContext,
-      temporaryRoot: temporary,
+      getTemporaryRoot: async () => temporary,
       maxCompressedBytes: 10,
     });
     await expect(gzipLimited.upload({ sourceId: 'server', fromMs, toMs }))
@@ -169,7 +210,7 @@ describe('DiagnosticLogUploadService', () => {
       getLogsDir: async () => logs,
       getGatewayContext: async () => gatewayContext,
       fetch: vi.fn(async () => { throw new Error('offline'); }) as typeof fetch,
-      temporaryRoot: temporary,
+      getTemporaryRoot: async () => temporary,
     });
 
     await expect(service.upload({ sourceId: 'server', fromMs, toMs }))
@@ -188,7 +229,7 @@ describe('DiagnosticLogUploadService', () => {
       getLogsDir: async () => logs,
       getGatewayContext: async () => gatewayContext,
       fetch: vi.fn(async () => new Response(null, { status: 503 })) as typeof fetch,
-      temporaryRoot: temporary,
+      getTemporaryRoot: async () => temporary,
     });
 
     await expect(service.upload({ sourceId: 'server', fromMs, toMs }))
@@ -206,7 +247,7 @@ describe('DiagnosticLogUploadService', () => {
     const service = new DiagnosticLogUploadService({
       getLogsDir: async () => logs,
       getGatewayContext: async () => { throw Object.assign(new Error('identity file missing'), { code: 'ENOENT' }); },
-      temporaryRoot: temporary,
+      getTemporaryRoot: async () => temporary,
     });
 
     await expect(service.upload({ sourceId: 'server', fromMs, toMs }))
