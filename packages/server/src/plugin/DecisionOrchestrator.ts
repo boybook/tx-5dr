@@ -359,7 +359,7 @@ export class DecisionOrchestrator {
       const parsedMessages = await this.parseSlotPackMessages(slotPack, operatorId);
       if (!this.isCommandCurrent(token, signal)) return false;
       const actionableMessages = parsedMessages.filter((message) => !message.isPartialDecode);
-      this.deps.observeStrategyMessages?.(
+      const observationChanged = this.deps.observeStrategyMessages?.(
         operatorId,
         actionableMessages,
         slotInfo,
@@ -368,7 +368,18 @@ export class DecisionOrchestrator {
         signal,
       );
       if (!this.isCommandCurrent(token, signal)) return false;
-      if (this.deps.hasTargetQueue?.(operatorId) === true) return false;
+      if (this.deps.hasTargetQueue?.(operatorId) === true) {
+        if (observationChanged === true) {
+          await this.invokeStrategyDecision(
+            operatorId,
+            [],
+            { isReDecision: true },
+            token,
+            signal,
+          );
+        }
+        return false;
+      }
       if (await this.tryWakeFromSilentDirectedCallGate(
         operatorId,
         actionableMessages,
