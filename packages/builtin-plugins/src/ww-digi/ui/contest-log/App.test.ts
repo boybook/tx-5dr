@@ -38,4 +38,11 @@ describe('WW Digi contest settings form rules', () => {
     expect(wwDigiContestLogUiTestables.formatDeadline(Date.UTC(2026, 8, 1, 12)))
       .toBe('2026-09-01 12:00 UTC');
   });
+
+  it('formats import confirmations without exposing template markers', () => {
+    expect(wwDigiContestLogUiTestables.interpolate(
+      'Import {{count}} for {{callsign}}',
+      { count: 12, callsign: 'BG5DRB' },
+    )).toBe('Import 12 for BG5DRB');
+  });
 });
