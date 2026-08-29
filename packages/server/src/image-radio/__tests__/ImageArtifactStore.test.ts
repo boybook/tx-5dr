@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -29,6 +29,35 @@ describe('ImageArtifactStore', () => {
     const restored = new ImageArtifactStore(dir);
     await restored.initialize();
     expect(restored.get(artifact.id)?.contentHash).toBe(artifact.contentHash);
+  });
+
+  it('migrates persisted deadSector fax calibration sources', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'tx5dr-image-store-'));
+    dirs.push(dir);
+    const indexPath = path.join(dir, 'index.json');
+    await writeFile(indexPath, JSON.stringify({
+      artifacts: [{
+        id: 'legacy-fax', family: 'fax', direction: 'rx', codecMode: 'ioc576/120/fm', pixelFormat: 'gray8',
+        width: 2, height: 2, frequency: 9_108_100, complete: true, pinned: false,
+        contentHash: 'legacy', createdAt: 1, imageUrl: '/api/image-radio/artifacts/legacy-fax/image',
+        faxCalibration: {
+          boundaryId: 'boundary-1', revision: 1, autoEnabled: true,
+          autoPoints: [{
+            revision: 1, referenceLine: 0, phasePixels: 0, clockPpm: 0,
+            confidence: 0.9, source: 'deadSector', status: 'locked',
+          }],
+          manualPhasePixels: 0, manualClockPpm: 0, updatedAt: 1,
+        },
+      }],
+    }));
+
+    const store = new ImageArtifactStore(dir);
+    await store.initialize();
+
+    expect(store.get('legacy-fax')?.faxCalibration?.autoPoints[0].source).toBe('imageContent');
+    const persisted = await readFile(indexPath, 'utf8');
+    expect(persisted).toContain('"source": "imageContent"');
+    expect(persisted).not.toContain('deadSector');
   });
 
   it('rejects mismatched normalized SSTV dimensions', async () => {
