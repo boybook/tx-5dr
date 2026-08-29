@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { QSORecord } from '@tx5dr/contracts';
+import type { LogbookBatchMutation, LogbookBatchResult } from '@tx5dr/plugin-api';
 import { createMockContext } from '@tx5dr/plugin-api/testing';
 import {
   wwDigiStrategyPlugin,
   wwDigiTestables,
 } from './index.js';
 import type { ContestQso } from './contest-log.js';
+import { parseWWDigiAdifImport } from './adif-import.js';
 
 function qsoRecord(id: string, startTime: number, contestId = 'WW-DIGI'): QSORecord {
   return {
@@ -45,6 +47,11 @@ function createContestContext(options: {
   simulation?: boolean;
   frequency?: number;
   band?: string;
+  readQsoSnapshot?: () => Promise<{ revision: string; records: QSORecord[] }>;
+  applyQsoBatch?: (
+    mutations: readonly LogbookBatchMutation[],
+    options: { expectedRevision: string },
+  ) => Promise<LogbookBatchResult>;
 } = {}) {
   const queryQSOs = vi.fn(async (_filter?: unknown) => options.records ?? []);
   const ctx = createMockContext({
@@ -73,12 +80,12 @@ function createContestContext(options: {
           getLogBookId: async () => options.logBookId ?? 'plugin-session-ww-digi-2026',
           awaitReady: options.awaitReady ?? (async () => {}),
           queryQSOs,
-          readQsoSnapshot: async () => ({ revision: 'revision-1', records: [] }),
+          readQsoSnapshot: options.readQsoSnapshot ?? (async () => ({ revision: 'revision-1', records: [] })),
           countQSOs: async () => 0,
           getStatistics: async () => null,
           addQSO: async (record: QSORecord) => record,
           updateQSO: async (_id: string, updates: Partial<QSORecord>) => qsoRecord('updated', 0, updates.contestId),
-          applyQsoBatch: async () => ({ revision: 'revision-1', outcomes: [] }),
+          applyQsoBatch: options.applyQsoBatch ?? (async () => ({ revision: 'revision-1', outcomes: [] })),
           notifyUpdated: async () => {},
           destroy: async () => {},
         };
@@ -187,6 +194,62 @@ describe('WW Digi contest edition persistence', () => {
     expect(adif).toContain('<call:6>JA1AAA');
     expect(adif).toContain('<station_callsign:6>BG5DRB');
     expect(adif).not.toContain('K1OTHER');
+  });
+
+  it('replans an ADIF import after a session revision conflict and records imported ownership', async () => {
+    const records: QSORecord[] = [];
+    let snapshotRevision = 0;
+    let applyAttempt = 0;
+    const applyQsoBatch = vi.fn(async (
+      mutations: readonly LogbookBatchMutation[],
+    ): Promise<LogbookBatchResult> => {
+      applyAttempt += 1;
+      if (applyAttempt === 1) {
+        throw Object.assign(new Error('revision conflict'), { code: 'LOGBOOK_REVISION_CONFLICT' });
+      }
+      const outcomes = mutations.map((mutation, inputIndex) => {
+        if (mutation.type !== 'add') throw new Error('unexpected update');
+        records.push(structuredClone(mutation.record));
+        return { inputIndex, status: 'added' as const, record: structuredClone(mutation.record) };
+      });
+      return { revision: `revision-${snapshotRevision}`, outcomes };
+    });
+    const { ctx } = createContestContext({
+      records,
+      readQsoSnapshot: async () => ({
+        revision: `revision-${++snapshotRevision}`,
+        records: structuredClone(records),
+      }),
+      applyQsoBatch,
+    });
+    const adif = [
+      '<CALL:6>JA1AAA', '<QSO_DATE:8>20260829', '<TIME_ON:6>120100',
+      '<MODE:3>FT8', '<FREQ:9>14.090000', '<STATION_CALLSIGN:6>BG5DRB',
+      '<MY_GRIDSQUARE:4>OL32', '<GRIDSQUARE:4>PM95', '<EOR>',
+    ].join('');
+    const parsed = parseWWDigiAdifImport(adif, {
+      contestYear: 2026,
+      stationCallsign: 'BG5DRB',
+      stationGrid: 'OL32',
+    });
+
+    const result = await wwDigiTestables.commitAdifImport(ctx, 2026, {
+      operatorId: 'operator-0',
+      pageSessionId: 'page-1',
+      contestYear: 2026,
+      createdAt: Date.now(),
+      fileName: 'wsjtx_log.adi',
+      parsed,
+    }, { stationCallsign: true, stationGrid: true });
+
+    expect(applyQsoBatch).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ imported: 1, merged: 0, duplicates: 0 });
+    const importedId = records[0]!.id;
+    expect(ctx.store.global.get<{ overrides?: Record<string, unknown> }>(
+      wwDigiTestables.sessionKey('BG5DRB', 2026),
+    )?.overrides).toEqual(expect.objectContaining({
+      [importedId]: expect.objectContaining({ source: 'imported', status: 'included' }),
+    }));
   });
 
   it('migrates a schema v1 session to an unconfirmed v2 session without losing overrides', async () => {

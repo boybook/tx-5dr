@@ -36,7 +36,7 @@ export interface ContestQso {
   authorizationId?: string;
   operatorId?: string;
   transmitterId?: 0 | 1;
-  source?: 'ww-digi' | 'standard' | 'manual' | 'reconciled';
+  source?: 'ww-digi' | 'standard' | 'manual' | 'reconciled' | 'imported';
 }
 
 export interface ContestConfig {

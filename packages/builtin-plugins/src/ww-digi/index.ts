@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
 import { wwDigiSimulationScenarios } from './simulation-scenarios.js';
 import {
   definePlugin,
@@ -30,6 +31,13 @@ import {
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
 import jaLocale from './locales/ja.json' with { type: 'json' };
+import {
+  WW_DIGI_ADIF_IMPORT_MAX_BYTES,
+  parseWWDigiAdifImport,
+  planWWDigiAdifImport,
+  summarizeWWDigiAdifImport,
+  type WWDigiParsedImport,
+} from './adif-import.js';
 
 export const BUILTIN_WW_DIGI_PLUGIN_NAME = 'ww-digi';
 const DEFAULT_CONTEST_YEAR = new Date().getUTCFullYear();
@@ -60,6 +68,24 @@ const RUNTIME_LOGBOOK_ID_PREFIX = 'contest-logbook-id:';
 const practiceRuntimes = new Map<string, WWDigiStrategyRuntime>();
 const practiceOperatingIndexes = new Map<string, ContestOperatingIndex>();
 const practiceQsoIds = new Map<string, Set<string>>();
+const ADIF_IMPORT_PREVIEW_TTL_MS = 15 * 60_000;
+
+interface PendingAdifImport {
+  operatorId: string;
+  pageSessionId: string;
+  contestYear: number;
+  createdAt: number;
+  fileName: string;
+  parsed: WWDigiParsedImport;
+}
+
+const pendingAdifImports = new Map<string, PendingAdifImport>();
+
+function prunePendingAdifImports(now = Date.now()): void {
+  for (const [token, pending] of pendingAdifImports) {
+    if (now - pending.createdAt > ADIF_IMPORT_PREVIEW_TTL_MS) pendingAdifImports.delete(token);
+  }
+}
 
 function practiceLogbookSessionKey(operatorId: string): string {
   return `practice:${operatorId}`;
@@ -417,6 +443,68 @@ async function renderADIF(ctx: WWDigiContext, contestYear: number): Promise<stri
     programId: 'TX5DR-WW-DIGI',
     includeStationCallsign: true,
   });
+}
+
+async function commitAdifImport(
+  ctx: WWDigiContext,
+  contestYear: number,
+  pending: PendingAdifImport,
+  confirmations: { stationCallsign: boolean; stationGrid: boolean },
+): Promise<{
+  imported: number;
+  merged: number;
+  duplicates: number;
+  rejected: number;
+  review: number;
+}> {
+  const logbook = await openContestLogbook(ctx, contestYear);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const snapshot = await logbook.readQsoSnapshot();
+    const plan = planWWDigiAdifImport(pending.parsed.candidates, snapshot.records, confirmations);
+    if (plan.withheld > 0) throw new Error('adif_import_confirmation_required');
+    try {
+      const batch = await logbook.applyQsoBatch(
+        plan.items.map((item) => item.mutation),
+        { expectedRevision: snapshot.revision },
+      );
+      const repository = sessionRepository(ctx, contestYear);
+      repository.update((session) => {
+        const overrides = { ...session.overrides };
+        for (const outcome of batch.outcomes) {
+          const item = plan.items[outcome.inputIndex];
+          if (!item) continue;
+          const existing = overrides[outcome.record.id];
+          overrides[outcome.record.id] = {
+            ...existing,
+            status: item.candidate.reviewIssues.length > 0
+              ? 'review'
+              : existing?.status ?? 'included',
+            ...(existing?.source
+              ? { source: existing.source }
+              : item.existingRecordId ? {} : { source: 'imported' as const }),
+          };
+        }
+        return { ...session, overrides, health: { state: 'healthy', updatedAt: Date.now() } };
+      });
+      await repository.flush();
+      await refreshContestProjectionWithHealth(ctx, contestYear);
+      notifyContestLogChanged(ctx, contestYear);
+      return {
+        imported: batch.outcomes.filter((outcome) => outcome.status === 'added').length,
+        merged: batch.outcomes.filter((outcome) => outcome.status === 'updated').length,
+        duplicates: plan.duplicates,
+        rejected: pending.parsed.rejected.length,
+        review: plan.items.filter((item) => item.candidate.reviewIssues.length > 0).length,
+      };
+    } catch (error) {
+      if ((error as { code?: unknown })?.code === 'LOGBOOK_REVISION_CONFLICT') {
+        if (attempt < 2) continue;
+        throw new Error('adif_import_revision_conflict');
+      }
+      throw error;
+    }
+  }
+  throw new Error('adif_import_revision_conflict');
 }
 
 async function refreshContestProjection(
@@ -832,10 +920,77 @@ export const wwDigiStrategyPlugin = definePlugin({
     });
     typed.ui.refreshOperatorProjection();
     typed.ui.registerPageHandler({
-      async onMessage(pageId, action, data) {
+      async onMessage(pageId, action, data, requestContext) {
         if (pageId !== 'contest-log') throw new Error(`Unknown page: ${pageId}`);
         const payload = data && typeof data === 'object' ? data as Record<string, unknown> : {};
         const selectedYear = configuredContestYear(typed.config.contestYear);
+        if (action === 'previewADIFImport') {
+          prunePendingAdifImports();
+          const uploadPath = typeof payload.path === 'string' ? payload.path : '';
+          if (!uploadPath.startsWith('imports/')) throw new Error('adif_import_path_invalid');
+          const uploaded = await requestContext.files.read(uploadPath);
+          await requestContext.files.delete(uploadPath).catch(() => false);
+          if (!uploaded) throw new Error('adif_import_file_missing');
+          if (uploaded.byteLength > WW_DIGI_ADIF_IMPORT_MAX_BYTES) throw new Error('adif_import_file_too_large');
+          if (!/^[A-R]{2}\d{2}$/.test(typed.operator.grid.trim().toUpperCase().slice(0, 4))) {
+            throw new Error('adif_import_station_grid_invalid');
+          }
+          const parsed = parseWWDigiAdifImport(uploaded.toString('utf8'), {
+            contestYear: selectedYear,
+            stationCallsign: typed.operator.callsign,
+            stationGrid: typed.operator.grid,
+            requireTransmitterId: sessionRepository(typed, selectedYear).read().config.categoryTransmitter === 'TWO',
+          });
+          const logbook = await openContestLogbook(typed, selectedYear);
+          const snapshot = await logbook.readQsoSnapshot();
+          const token = randomUUID();
+          pendingAdifImports.set(token, {
+            operatorId: typed.operator.id,
+            pageSessionId: requestContext.pageSessionId,
+            contestYear: selectedYear,
+            createdAt: Date.now(),
+            fileName: typeof payload.fileName === 'string' ? payload.fileName.slice(0, 128) : 'log.adi',
+            parsed,
+          });
+          return {
+            token,
+            fileName: pendingAdifImports.get(token)!.fileName,
+            summary: summarizeWWDigiAdifImport(parsed, snapshot.records),
+          };
+        }
+        if (action === 'cancelADIFImport') {
+          const token = typeof payload.token === 'string' ? payload.token : '';
+          const pending = pendingAdifImports.get(token);
+          if (pending?.operatorId === typed.operator.id
+              && pending.pageSessionId === requestContext.pageSessionId) {
+            pendingAdifImports.delete(token);
+          }
+          return { cancelled: true };
+        }
+        if (action === 'commitADIFImport') {
+          prunePendingAdifImports();
+          const token = typeof payload.token === 'string' ? payload.token : '';
+          const pending = pendingAdifImports.get(token);
+          if (!pending
+              || pending.operatorId !== typed.operator.id
+              || pending.pageSessionId !== requestContext.pageSessionId
+              || pending.contestYear !== selectedYear) {
+            throw new Error('adif_import_preview_expired');
+          }
+          try {
+            const result = await commitAdifImport(typed, selectedYear, pending, {
+              stationCallsign: payload.confirmStationCallsign === true,
+              stationGrid: payload.confirmStationGrid === true,
+            });
+            pendingAdifImports.delete(token);
+            return result;
+          } catch (error) {
+            if ((error as Error).message.startsWith('adif_import_')) throw error;
+            await markLedgerDegraded(typed, selectedYear, error);
+            notifyContestLogChanged(typed, selectedYear);
+            throw error;
+          }
+        }
         if (action === 'getState') {
           const period = resolveWWDigiContestPeriod(selectedYear);
           const repository = sessionRepository(typed, selectedYear);
@@ -942,6 +1097,9 @@ export const wwDigiStrategyPlugin = definePlugin({
   },
   async onUnload(ctx) {
     const typed = ctx as WWDigiContext;
+    for (const [token, pending] of pendingAdifImports) {
+      if (pending.operatorId === typed.operator.id) pendingAdifImports.delete(token);
+    }
     practiceRuntimes.delete(typed.operator.id);
     practiceOperatingIndexes.delete(typed.operator.id);
     practiceQsoIds.delete(typed.operator.id);
@@ -1046,6 +1204,7 @@ export const wwDigiTestables = {
   refreshContestProjectionWithHealth,
   renderCabrillo,
   renderADIF,
+  commitAdifImport,
   readContestRecords,
   openContestLogbook,
   runtimeLogbookIdKey,
