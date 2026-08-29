@@ -504,6 +504,29 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
     return this.updateCheckpoint(checkpoint, () => this.onPhysicalSuccess(receipt));
   }
 
+  readProtocolContext(checkpoint?: unknown): WWDigiProtocolContext | undefined {
+    if (checkpoint === undefined) {
+      return this.protocolContext ? structuredClone(this.protocolContext) : undefined;
+    }
+    const live = this.checkpoint();
+    try {
+      this.restore(checkpoint);
+      return this.protocolContext ? structuredClone(this.protocolContext) : undefined;
+    } finally {
+      this.restore(live);
+    }
+  }
+
+  hasUnsettledCompletionInCheckpoint(checkpoint: unknown): boolean {
+    const live = this.checkpoint();
+    try {
+      this.restore(checkpoint);
+      return this.completion !== undefined;
+    } finally {
+      this.restore(live);
+    }
+  }
+
   takePendingCompletionFromCheckpoint(checkpoint: unknown): {
     checkpoint: unknown;
     effect: StrategyQSOCompletionEffect;

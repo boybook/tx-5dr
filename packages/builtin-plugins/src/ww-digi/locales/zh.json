@@ -5,6 +5,8 @@
   "contestYearDesc": "选择对应年份的 WW Digi 比赛和提交时段。",
   "parallelStreams": "同时通联数",
   "parallelStreamsDesc": "最多同时处理多少个 WW Digi QSO；默认 1 个，最多 3 个。",
+  "replaceQueueOnManualTarget": "双击时替换队列",
+  "replaceQueueOnManualTargetDesc": "开启后，双击一个电台会结束当前排队和通联，并只呼叫新选择的电台。",
   "stateWaitRGrid": "发送网格",
   "stateWaitRr73": "发送 R + 网格",
   "stateWaitStandardFinal": "发送 R 信号报告",

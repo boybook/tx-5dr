@@ -377,6 +377,37 @@ describe('PluginManager standard-qso late re-decision', () => {
       .toEqual([expect.objectContaining({ callsign: 'JA1AAA', displayState: 'authorized' })]);
   });
 
+  it('applies the opt-in WW Digi manual replacement setting through the normal queue command', async () => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      strategy: 'ww-digi',
+      myCallsign: 'BG0VRT',
+      myGrid: 'NN00',
+      startOperator: false,
+      radioBand: '20m',
+      radioFrequency: 14_090_000,
+      maxConcurrentStreams: 3,
+      operatorPluginSettings: {
+        'ww-digi': {
+          contestYear: 2026,
+          parallelStreams: 3,
+          replaceQueueOnManualTarget: true,
+        },
+      },
+    });
+    const operatorId = operator.config.id;
+
+    await pluginManager.enqueueQueueTarget(operatorId, { callsign: 'JA1AAA' }, { startIfIdle: true });
+    const replaced = await pluginManager.enqueueQueueTarget(
+      operatorId,
+      { callsign: 'JA2BBB' },
+      { startIfIdle: true },
+    );
+
+    expect(replaced.requestOperatorStart).toBe(true);
+    expect(replaced.snapshot.rows.map((row) => row.callsign)).toEqual(['JA2BBB']);
+    expect(operator.isTransmitting).toBe(false);
+  });
+
   async function createMultiOperatorRuntimeHarness(options?: {
     strategy?: 'standard-qso' | 'assisted-qso-queue';
     operatorCount?: number;
@@ -692,6 +723,37 @@ describe('PluginManager standard-qso late re-decision', () => {
         { startIfIdle: true },
       );
       expect(second.outcome).toBe('accepted');
+      expect(operator.isTransmitting).toBe(false);
+    });
+
+    it('honors an explicit queue mutation start request without changing other queue defaults', async () => {
+      const { operator, pluginManager } = await createRuntimeHarness({
+        strategy: 'assisted-qso-queue',
+        startOperator: false,
+      });
+      const operatorId = operator.config.id;
+      await pluginManager.enqueueQueueTarget(operatorId, { callsign: 'JA1AAA' }, { startIfIdle: true });
+      operator.stop();
+
+      const runtime = (pluginManager as any).getStrategyRuntime(operatorId);
+      const originalEnqueue = runtime.enqueueTarget.bind(runtime);
+      runtime.enqueueTarget = (request: unknown) => ({
+        ...originalEnqueue(request),
+        requestOperatorStart: true,
+      });
+
+      await pluginManager.enqueueQueueTarget(operatorId, { callsign: 'JA2BBB' }, { startIfIdle: true });
+      expect(operator.isTransmitting).toBe(true);
+
+      operator.stop();
+      await pluginManager.enqueueQueueTarget(operatorId, { callsign: 'JA3CCC' }, { startIfIdle: false });
+      expect(operator.isTransmitting).toBe(false);
+
+      vi.spyOn(pluginManager, 'getOperatorTransmitGate').mockReturnValue({
+        allowed: false,
+        reason: 'blocked_for_test',
+      });
+      await pluginManager.enqueueQueueTarget(operatorId, { callsign: 'JA4DDD' }, { startIfIdle: true });
       expect(operator.isTransmitting).toBe(false);
     });
 

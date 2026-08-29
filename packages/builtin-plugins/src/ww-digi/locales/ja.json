@@ -5,6 +5,8 @@
   "contestYearDesc": "対象となる WW Digi の開催年と提出期間を選びます。",
   "parallelStreams": "同時QSO数",
   "parallelStreamsDesc": "同時に進める WW Digi QSO の上限です。既定値は1、最大3です。",
+  "replaceQueueOnManualTarget": "ダブルクリックで待機局を置換",
+  "replaceQueueOnManualTargetDesc": "有効にすると、局をダブルクリックした際に現在の待機局と交信を終了し、新しく選んだ局だけを呼び出します。",
   "stateWaitRGrid": "グリッドを送信",
   "stateWaitRr73": "R + グリッドを送信",
   "stateWaitStandardFinal": "R レポートを送信",

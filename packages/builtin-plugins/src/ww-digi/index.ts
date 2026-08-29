@@ -666,6 +666,7 @@ function parallelStreams(value: unknown, fallback = 1): number {
 
 export const wwDigiQuickSettings: PluginQuickSetting[] = [
   { settingKey: 'parallelStreams' },
+  { settingKey: 'replaceQueueOnManualTarget' },
   { settingKey: 'maxAttempts' },
   { settingKey: 'cqMaxAttempts' },
   { settingKey: 'cqSelectionPolicy' },
@@ -695,6 +696,10 @@ export const wwDigiStrategyPlugin = definePlugin({
       min: WW_DIGI_MIN_CONTEST_YEAR, max: WW_DIGI_MAX_CONTEST_YEAR,
     },
     parallelStreams: { type: 'number', default: 1, label: 'parallelStreams', description: 'parallelStreamsDesc', scope: 'operator', min: 1, max: 3 },
+    replaceQueueOnManualTarget: {
+      type: 'boolean', default: false, label: 'replaceQueueOnManualTarget',
+      description: 'replaceQueueOnManualTargetDesc', scope: 'operator',
+    },
     maxAttempts: { type: 'number', default: 5, label: 'maxAttempts', description: 'maxAttemptsDesc', scope: 'operator', min: 1, max: 20 },
     cqMaxAttempts: {
       type: 'number', default: 6, label: 'cqMaxAttempts', description: 'cqMaxAttemptsDesc', scope: 'operator', min: 1, max: 20,
@@ -757,6 +762,7 @@ export const wwDigiStrategyPlugin = definePlugin({
           slotMs: ctx.operator.mode.slotMs,
           transmitCycles: [...ctx.operator.transmitCycles],
           parallelStreams: parallelStreams(ctx.config.parallelStreams),
+          replaceQueueOnManualTarget: ctx.config.replaceQueueOnManualTarget === true,
           maxConcurrentStreams: ctx.operator.maxConcurrentStreams,
           maxAttempts: Math.max(1, Math.min(20, Math.trunc(Number(ctx.config.maxAttempts) || 5))),
           cqMaxAttempts: Math.max(1, Math.min(20, Math.trunc(Number(ctx.config.cqMaxAttempts) || 6))),

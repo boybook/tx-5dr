@@ -265,6 +265,17 @@ describe('WW Digi contest edition persistence', () => {
     });
   });
 
+  it('keeps manual queue replacement opt-in and exposes it as a quick setting', () => {
+    expect(wwDigiStrategyPlugin.settings?.replaceQueueOnManualTarget).toMatchObject({
+      type: 'boolean',
+      default: false,
+      scope: 'operator',
+    });
+    expect(wwDigiStrategyPlugin.quickSettings).toContainEqual({
+      settingKey: 'replaceQueueOnManualTarget',
+    });
+  });
+
   it('opens the contest log through an operator-bound standalone page entry', () => {
     expect(wwDigiStrategyPlugin.panels).toContainEqual(expect.objectContaining({
       id: 'contest-log',
