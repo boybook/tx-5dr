@@ -10,6 +10,11 @@ const { state, mockConfigManager, mockEngine, mockReloadAudioConfig } = vi.hoist
   const configManager = {
     getActiveProfileId: vi.fn(() => testState.activeProfileId),
     getPublicActiveProfileId: vi.fn(() => testState.activeProfileId),
+    getActiveVirtualRadioProfile: vi.fn(() => (
+      testState.profiles.find((profile) => profile.id === testState.activeProfileId)?.isVirtual
+        ? { id: testState.activeProfileId }
+        : null
+    )),
     hasConfiguredProfiles: vi.fn(() => testState.profiles.length > 0),
     getProfile: vi.fn((id: string) => testState.profiles.find((profile) => profile.id === id) ?? null),
     updateProfile: vi.fn(async (id: string, updates: Partial<RadioProfile>) => {
@@ -59,7 +64,7 @@ const { state, mockConfigManager, mockEngine, mockReloadAudioConfig } = vi.hoist
 
   const reloadAudioConfig = vi.fn();
   const engine = {
-    getStatus: vi.fn(() => ({ isRunning: false })),
+    getStatus: vi.fn(() => ({ isRunning: false, engineState: 'idle' })),
     stop: vi.fn(async () => {}),
     start: vi.fn(async () => {}),
     emit: vi.fn(),
@@ -143,12 +148,12 @@ describe('ProfileManager audio runtime config application', () => {
     state.profiles = [makeProfile()];
     state.activeProfileId = 'profile-1';
     vi.clearAllMocks();
-    mockEngine.getStatus.mockReturnValue({ isRunning: false });
+    mockEngine.getStatus.mockReturnValue({ isRunning: false, engineState: 'idle' });
     (ProfileManager as unknown as { instance?: ProfileManager }).instance = undefined;
   });
 
   it('saves active Profile audio changes without applying them immediately', async () => {
-    mockEngine.getStatus.mockReturnValue({ isRunning: true });
+    mockEngine.getStatus.mockReturnValue({ isRunning: true, engineState: 'running' });
     const manager = ProfileManager.getInstance();
 
     await manager.updateProfile('profile-1', {
@@ -170,7 +175,7 @@ describe('ProfileManager audio runtime config application', () => {
   });
 
   it('does not apply active Profile changes while saving unchanged audio', async () => {
-    mockEngine.getStatus.mockReturnValue({ isRunning: true });
+    mockEngine.getStatus.mockReturnValue({ isRunning: true, engineState: 'running' });
     const manager = ProfileManager.getInstance();
 
     await manager.updateProfile('profile-1', {
@@ -376,5 +381,66 @@ describe('ProfileManager audio runtime config application', () => {
     await manager.activateProfile('profile-7610');
 
     expect(mockConfigManager.switchActiveProfile).toHaveBeenCalledWith('profile-7610');
+  });
+
+  it('does not cross the physical/virtual boundary while the old engine is still stopping', async () => {
+    vi.useFakeTimers();
+    state.profiles = [
+      makeProfile({ id: 'physical', name: 'IC-705' }),
+      makeProfile({ id: 'virtual', name: 'Virtual FT8', isVirtual: true }),
+    ];
+    state.activeProfileId = 'physical';
+    mockEngine.getStatus.mockReturnValue({ isRunning: true, engineState: 'running' });
+    mockEngine.stop.mockImplementationOnce(() => new Promise<void>(() => undefined));
+    const manager = ProfileManager.getInstance();
+
+    try {
+      const activation = manager.activateProfile('virtual');
+      const rejection = expect(activation).rejects.toThrow('Engine stop timeout');
+      await vi.advanceTimersByTimeAsync(10_000);
+      await rejection;
+
+      expect(state.activeProfileId).toBe('physical');
+      expect(mockConfigManager.switchActiveProfile).not.toHaveBeenCalled();
+      expect(mockReloadAudioConfig).not.toHaveBeenCalled();
+      expect(mockEngine.start).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not replace one virtual session while its engine is still stopping', async () => {
+    state.profiles = [
+      makeProfile({ id: 'virtual-a', name: 'Virtual FT8 A', isVirtual: true }),
+      makeProfile({ id: 'virtual-b', name: 'Virtual FT8 B', isVirtual: true }),
+    ];
+    state.activeProfileId = 'virtual-a';
+    mockEngine.getStatus.mockReturnValue({ isRunning: true, engineState: 'running' });
+    mockEngine.stop.mockRejectedValueOnce(new Error('stop failed'));
+    const manager = ProfileManager.getInstance();
+
+    await expect(manager.activateProfile('virtual-b')).rejects.toThrow('stop failed');
+    expect(state.activeProfileId).toBe('virtual-a');
+    expect(mockConfigManager.switchActiveProfile).not.toHaveBeenCalled();
+    expect(mockEngine.start).not.toHaveBeenCalled();
+  });
+
+  it('preserves best-effort switching after a same-backend stop failure', async () => {
+    state.profiles = [
+      makeProfile({ id: 'physical-a', name: 'IC-705' }),
+      makeProfile({ id: 'physical-b', name: 'IC-7610' }),
+    ];
+    state.activeProfileId = 'physical-a';
+    mockEngine.getStatus.mockReturnValue({ isRunning: true, engineState: 'running' });
+    mockEngine.stop.mockRejectedValueOnce(new Error('stop failed'));
+    const manager = ProfileManager.getInstance();
+
+    await expect(manager.activateProfile('physical-b')).resolves.toMatchObject({
+      success: true,
+      profile: { id: 'physical-b' },
+    });
+
+    expect(mockConfigManager.switchActiveProfile).toHaveBeenCalledWith('physical-b');
+    expect(mockEngine.start).toHaveBeenCalledOnce();
   });
 });

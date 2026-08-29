@@ -684,7 +684,7 @@ export class PluginManager {
         : false
     )) ?? false;
     if (signal.aborted || !this.intentCoordinator.isCurrent(token)) {
-      if (checkpoint !== undefined) {
+      if (checkpoint !== undefined && this.intentCoordinator.ownsExecution(token)) {
         this.invokeStrategyRuntimeSync(
           operatorId,
           'restore:superseded-queue-observation',
@@ -969,32 +969,62 @@ export class PluginManager {
     this.eventEmitter.emit('operatorSlotChanged', { operatorId, slot: state });
   }
 
-  setOperatorStreamState(operatorId: string, update: StrategyStreamStateUpdate): void {
-    const before = this.getOperatorAutomationSnapshot(operatorId)?.streams
-      ?.find((stream) => stream.streamId === update.streamId);
-    this.invokeStrategyRuntimeSync(operatorId, 'setStreamState', (runtime) => {
-      if (!runtime.setStreamState) throw new Error('stream_state_control_not_supported');
-      runtime.setStreamState(update);
+  async setOperatorStreamState(operatorId: string, update: StrategyStreamStateUpdate): Promise<void> {
+    const outcome = await this.intentCoordinator.submit(operatorId, 'manual', (token, signal) => {
+      this.assertIntentTransactionCurrent(token, signal, 'stream_state_command_superseded');
+      const before = this.getOperatorAutomationSnapshot(operatorId)?.streams
+        ?.find((stream) => stream.streamId === update.streamId);
+      const checkpoint = this.invokeStrategyRuntimeSync(
+        operatorId,
+        'checkpoint:before-set-stream-state',
+        (runtime) => runtime.checkpoint(),
+      );
+      try {
+        this.invokeStrategyRuntimeSync(operatorId, 'setStreamState', (runtime) => {
+          if (!runtime.setStreamState) throw new Error('stream_state_control_not_supported');
+          runtime.setStreamState(update);
+        });
+      } catch (error) {
+        this.restoreUncommittedRuntime(operatorId, checkpoint, token, 'failed-set-stream-state');
+        throw error;
+      }
+      this.orchestrator.invalidateDecisionMessageSet(operatorId);
+      logger.info('PluginManager.setOperatorStreamState applied', {
+        operatorId,
+        streamId: update.streamId,
+        before: before?.currentState ?? null,
+        after: update.stateId,
+        lifecycleEpoch: update.expectedLifecycleEpoch,
+      });
+      this.eventEmitter.emit('operatorStreamStateChanged', {
+        operatorId,
+        streamId: update.streamId,
+        state: update.stateId,
+        commandEpoch: token.epoch,
+        source: 'manual',
+      });
     });
-    this.orchestrator.invalidateDecisionMessageSet(operatorId);
-    logger.info('PluginManager.setOperatorStreamState applied', {
-      operatorId,
-      streamId: update.streamId,
-      before: before?.currentState ?? null,
-      after: update.stateId,
-      lifecycleEpoch: update.expectedLifecycleEpoch,
-    });
-    this.eventEmitter.emit('operatorStreamStateChanged', {
-      operatorId,
-      streamId: update.streamId,
-      state: update.stateId,
-    });
+    if (outcome.status !== 'completed') throw new Error('stream_state_command_superseded');
   }
 
   async invokeOperatorStrategyAction(
     operatorId: string,
     invocation: StrategyActionInvocation,
   ): Promise<import('@tx5dr/plugin-api').StrategyActionResult | void> {
+    const outcome = await this.intentCoordinator.submit(operatorId, 'manual', (token, signal) => (
+      this.invokeOperatorStrategyActionInLane(operatorId, invocation, token, signal)
+    ));
+    if (outcome.status === 'completed') return outcome.value;
+    throw new Error('strategy_action_superseded');
+  }
+
+  private async invokeOperatorStrategyActionInLane(
+    operatorId: string,
+    invocation: StrategyActionInvocation,
+    token: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken,
+    signal: AbortSignal,
+  ): Promise<import('@tx5dr/plugin-api').StrategyActionResult | void> {
+    this.assertIntentTransactionCurrent(token, signal, 'strategy_action_superseded');
     const snapshot = this.getOperatorAutomationSnapshot(operatorId);
     const action = this.findStrategyAction(snapshot, invocation);
     if (!action) throw new Error('strategy_action_not_available');
@@ -1006,6 +1036,8 @@ export class PluginManager {
       (runtime) => runtime.checkpoint(),
     );
     const beforeTransmissionSignature = this.orchestrator.readCurrentTransmissionSignature(operatorId);
+    let preparedStart = false;
+    let runtimeCommitted = false;
     try {
       const result = await this.invokeStrategyRuntime(
         operatorId,
@@ -1014,32 +1046,61 @@ export class PluginManager {
           if (!runtime.invokeAction) throw new Error('strategy_action_not_supported');
           return runtime.invokeAction(snapshotPluginData(invocation, 'structured'));
         },
+        { signal },
       );
-      if (result?.qsoCompletions?.length) {
-        this.orchestrator.commitQSOCompletionEffectsFromAction(operatorId, result.qsoCompletions);
-      }
+      this.assertIntentTransactionCurrent(token, signal, 'strategy_action_superseded');
+
       if (result?.requestOperatorStart) {
-        await this.deps.requestOperatorStrategyStart?.(
+        if (!this.deps.prepareOperatorStrategyStart || !this.deps.cancelPreparedOperatorStrategyStart) {
+          throw new Error('operator_strategy_start_unavailable');
+        }
+        preparedStart = await this.deps.prepareOperatorStrategyStart(
           operatorId,
           `strategy action ${invocation.actionId}`,
         );
+        this.assertIntentTransactionCurrent(token, signal, 'strategy_action_superseded');
       }
-      if (result?.requestDecision) {
+
+      let decision: import('@tx5dr/plugin-api').StrategyDecisionResult | null = null;
+      if (result?.requestDecision || result?.requestOperatorStart) {
         this.orchestrator.invalidateDecisionMessageSet(operatorId);
-        const decision = await this.orchestrator.revalidateQueueExecution(operatorId);
-        const afterTransmissionSignature = this.orchestrator.readCurrentTransmissionSignature(operatorId);
-        if (!decision?.stop && beforeTransmissionSignature !== afterTransmissionSignature) {
-          this.deps.triggerReEncode?.(operatorId, {
-            source: 'operator-edit',
-            reason: `strategy action ${invocation.actionId}`,
-          });
-        } else {
-          logger.debug('Strategy action left physical transmission intent unchanged', {
-            operatorId,
-            actionId: invocation.actionId,
-            decisionStopped: decision?.stop === true,
-          });
-        }
+        decision = await this.orchestrator.revalidateStrategyExecutionInLane(
+          operatorId,
+          token,
+          signal,
+          { deferEffects: true },
+        );
+        this.assertIntentTransactionCurrent(token, signal, 'strategy_action_superseded');
+      }
+
+      // All reversible work is complete. Persist action and decision effects
+      // together before applying post-decision stop/failure notifications.
+      runtimeCommitted = true;
+      const completionEffects = [
+        ...(result?.qsoCompletions ?? []),
+        ...(decision?.qsoCompletion ? [decision.qsoCompletion] : []),
+        ...(decision?.qsoCompletions ?? []),
+      ];
+      if (completionEffects.length > 0) {
+        this.orchestrator.commitQSOCompletionEffectsFromAction(operatorId, completionEffects);
+      }
+      await this.orchestrator.applyRevalidatedStrategyEffects(operatorId, decision);
+
+      const afterTransmissionSignature = this.orchestrator.readCurrentTransmissionSignature(operatorId);
+      if (!decision?.stop
+          && (preparedStart || beforeTransmissionSignature !== afterTransmissionSignature)
+          && (result?.requestDecision || result?.requestOperatorStart)) {
+        this.deps.triggerReEncode?.(operatorId, {
+          source: 'operator-edit',
+          reason: `strategy action ${invocation.actionId}`,
+          decisionEpoch: token.epoch,
+        });
+      } else if (result?.requestDecision || result?.requestOperatorStart) {
+        logger.debug('Strategy action left physical transmission intent unchanged', {
+          operatorId,
+          actionId: invocation.actionId,
+          decisionStopped: decision?.stop === true,
+        });
       }
       this.deps.notifyOperatorStatusChanged?.(operatorId);
       logger.info('PluginManager strategy action applied', {
@@ -1049,13 +1110,49 @@ export class PluginManager {
       });
       return result;
     } catch (error) {
-      if (checkpoint !== undefined) {
-        this.invokeStrategyRuntimeSync(operatorId, 'restore:failed-strategy-action', (runtime) => {
-          runtime.restore(checkpoint);
-        });
+      if (!runtimeCommitted) {
+        const ownsExecution = this.intentCoordinator.ownsExecution(token);
+        this.restoreUncommittedRuntime(operatorId, checkpoint, token, 'failed-strategy-action');
+        if (preparedStart && ownsExecution) {
+          try {
+            await this.deps.cancelPreparedOperatorStrategyStart?.(
+              operatorId,
+              `strategy action ${invocation.actionId} failed before commit`,
+            );
+          } catch (cancelError) {
+            logger.error('Failed to cancel an uncommitted strategy action start', {
+              operatorId,
+              actionId: invocation.actionId,
+              error: cancelError instanceof Error ? cancelError.message : String(cancelError),
+            });
+          }
+        }
       }
       throw error;
     }
+  }
+
+  private assertIntentTransactionCurrent(
+    token: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken,
+    signal: AbortSignal,
+    message: string,
+  ): void {
+    if (!signal.aborted && this.intentCoordinator.isCurrent(token)) return;
+    const error = new Error(message);
+    error.name = 'AbortError';
+    throw error;
+  }
+
+  private restoreUncommittedRuntime(
+    operatorId: string,
+    checkpoint: unknown,
+    token: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken,
+    operation: string,
+  ): void {
+    if (checkpoint === undefined || !this.intentCoordinator.ownsExecution(token)) return;
+    this.invokeStrategyRuntimeSync(operatorId, `restore:${operation}`, (runtime) => {
+      runtime.restore(snapshotPluginData(checkpoint, 'structured'));
+    });
   }
 
   private findStrategyAction(
@@ -1413,6 +1510,20 @@ export class PluginManager {
       'onQSOComplete',
       (hook, ctx) => hook(snapshotPluginData(record, 'structured'), ctx),
       (instance) => this.getCtxForInstance(instance),
+    );
+  }
+
+  async notifyPluginSessionQSOComplete(
+    operatorId: string,
+    pluginName: string,
+    record: QSORecord,
+  ): Promise<void> {
+    const instance = this.instances.get(operatorId)?.get(pluginName);
+    if (!instance) return;
+    await this.dispatcher.dispatchInstance(
+      instance,
+      'onQSOComplete',
+      (hook, ctx) => hook(snapshotPluginData(record, 'structured'), ctx),
     );
   }
 

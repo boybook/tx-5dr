@@ -1449,7 +1449,7 @@ export class WSServer extends WSMessageHandler {
         stateId,
         expectedLifecycleEpoch,
       });
-      this.digitalRadioEngine.operatorManager.setOperatorStreamState(operatorId, {
+      await this.digitalRadioEngine.operatorManager.setOperatorStreamState(operatorId, {
         streamId,
         stateId,
         expectedLifecycleEpoch,

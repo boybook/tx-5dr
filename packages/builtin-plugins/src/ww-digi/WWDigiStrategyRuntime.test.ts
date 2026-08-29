@@ -328,7 +328,7 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
 
     expect(runtime.getTransmissions()).toEqual([]);
 
-    runtime.observeDecodedMessages([], observation());
+    runtime.observeDecodedMessages([], observation(BASE_TIME + MODES.FT8.slotMs));
     expect(runtime.getQueueSnapshot().rows[0]).toMatchObject({ displayState: 'paused', pauseReason: 'stale' });
     expect(runtime.getTransmissions()).toEqual([]);
     expect((await runtime.decide([], decision())).stop).toBe(true);
@@ -341,6 +341,23 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
     })).toMatchObject({ requestDecision: true, requestOperatorStart: true });
     setTransmitting(true);
     expect((await runtime.decide([], decision(2))).transmissions).toHaveLength(1);
+  });
+
+  it('counts each chronological receive slot once for authorization expiry', () => {
+    const { runtime, setTransmitting } = createRuntime({ authorizedStaleReceiveCycles: 2 });
+    runtime.enqueueTarget({ callsign: 'JA1AAA' });
+    setTransmitting(true);
+
+    runtime.observeDecodedMessages([], observation(BASE_TIME));
+    runtime.observeDecodedMessages([], observation(BASE_TIME + MODES.FT8.slotMs));
+    runtime.observeDecodedMessages([], {
+      ...observation(BASE_TIME + MODES.FT8.slotMs),
+      source: 'late-decode',
+    });
+    expect(runtime.getQueueSnapshot().rows[0]).toMatchObject({ displayState: 'authorized' });
+
+    runtime.observeDecodedMessages([], observation(BASE_TIME + MODES.FT8.slotMs * 3));
+    expect(runtime.getQueueSnapshot().rows[0]).toMatchObject({ displayState: 'paused', pauseReason: 'stale' });
   });
 
   it('collects a CQ pile-up, auto-authorizes three, and retains overflow candidates', async () => {
@@ -440,7 +457,7 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
       .toMatchObject({ displayState: 'authorized', lastHeardCycle: 0 });
   });
 
-  it('treats a manual cycle switch while TX is enabled as one batch authorization', async () => {
+  it('parks the active QSO when changing cycle and resumes it without losing protocol state', async () => {
     const { runtime, setTransmitting, config } = createRuntime({
       parallelStreams: 1,
       cqSelectionPolicy: 'FIRST',
@@ -455,12 +472,8 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
     await runtime.decide(callers, decision(2));
 
     const active = runtime.getSnapshot().streams?.[0];
-    expect(active).toBeDefined();
-    await runtime.invokeAction({
-      target: { kind: 'stream', streamId: active!.streamId, lifecycleEpoch: active!.qsoLifecycleEpoch },
-      actionId: 'end-qso',
-    });
-    await runtime.decide([], decision(3));
+    expect(active).toMatchObject({ targetCallsign: 'JA1AAA', currentState: 'wait-rr73' });
+    confirmTransmissions(runtime, await runtime.decide([], decision(3)));
 
     const moved = parsed('BG5DRB JA2BBB PM96', BASE_TIME + MODES.FT8.slotMs * 2);
     runtime.observeDecodedMessages([moved], observation(moved.timestamp));
@@ -470,11 +483,250 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
       transmitCycles: [1],
       source: 'manual',
     })).toBe(true);
+    expect(runtime.getTransmissions()).toEqual([]);
+    expect(runtime.getQueueSnapshot().rows.find((row) => row.callsign === 'JA1AAA')).toMatchObject({
+      displayState: 'paused',
+      actions: [expect.objectContaining({ id: 'end-queued-target' })],
+    });
 
     const switched = await runtime.decide([], decision(4));
     expect(switched.transmissions?.map((item) => item.text)).toEqual(['JA2BBB BG5DRB R OL32']);
     expect(runtime.getQueueSnapshot().rows.find((row) => row.callsign === 'JA2BBB'))
       .toMatchObject({ displayState: 'engaged', lastHeardCycle: 0 });
+
+    config.transmitCycles = [0];
+    expect(runtime.onOperatorTransmitCyclesChanged({
+      previousTransmitCycles: [1],
+      transmitCycles: [0],
+      source: 'manual',
+    })).toBe(true);
+    const resumed = await runtime.decide([], decision(5));
+    expect(resumed.transmissions?.map((item) => item.text)).toEqual(['JA1AAA BG5DRB R OL32']);
+    expect(resumed.snapshot.streams?.[0]).toMatchObject({
+      targetCallsign: 'JA1AAA',
+      currentState: 'wait-rr73',
+      qsoLifecycleEpoch: active!.qsoLifecycleEpoch,
+    });
+    const final = parsed('BG5DRB JA1AAA RR73', BASE_TIME + MODES.FT8.slotMs * 3);
+    runtime.observeDecodedMessages([final], observation(final.timestamp));
+    const completion = await runtime.decide([final], decision(6));
+    expect(completion.qsoCompletions?.[0]?.record.messageHistory).toEqual([
+      'BG5DRB JA1AAA PM95',
+      'JA1AAA BG5DRB R OL32',
+      'BG5DRB JA1AAA RR73',
+    ]);
+  });
+
+  it('keeps observing a parked QSO without transmitting and resumes it on the matching cycle', async () => {
+    const { runtime, config } = createRuntime({ transmitting: true });
+    const started = await activateInbound(runtime, 'JA1AAA', 'PM95');
+    expect(started.transmissions?.[0]?.text).toBe('JA1AAA BG5DRB R OL32');
+
+    config.transmitCycles = [1];
+    expect(runtime.onOperatorTransmitCyclesChanged({
+      previousTransmitCycles: [0], transmitCycles: [1], source: 'manual',
+    })).toBe(true);
+    const waiting = await runtime.decide([], decision(2));
+    expect(waiting).toMatchObject({ stop: false, transmissions: [] });
+    expect(waiting.snapshot.attentions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'qso-other-cycle-paused', params: { count: 1 } }),
+    ]));
+
+    config.transmitCycles = [0];
+    expect(runtime.onOperatorTransmitCyclesChanged({
+      previousTransmitCycles: [1], transmitCycles: [0], source: 'manual',
+    })).toBe(true);
+    const resumed = await runtime.decide([], decision(3));
+    expect(resumed.transmissions?.[0]?.text).toBe('JA1AAA BG5DRB R OL32');
+  });
+
+  it('stops after two receive cycles when a parked QSO remains silent', async () => {
+    const { runtime, config } = createRuntime({ transmitting: true });
+    await activateInbound(runtime, 'JA1AAA', 'PM95');
+
+    config.transmitCycles = [1];
+    runtime.onOperatorTransmitCyclesChanged({
+      previousTransmitCycles: [0], transmitCycles: [1], source: 'manual',
+    });
+    expect((await runtime.decide([], decision(2))).stop).toBe(false);
+
+    runtime.observeDecodedMessages([], observation(BASE_TIME));
+    expect((await runtime.decide([], decision(3))).stop).toBe(false);
+    runtime.observeDecodedMessages([], observation(BASE_TIME + MODES.FT8.slotMs * 2));
+    expect(await runtime.decide([], decision(4))).toMatchObject({ stop: true, transmissions: [] });
+  });
+
+  it('follows the latest heard cycle while a QSO is parked', async () => {
+    const { runtime, config } = createRuntime({ transmitting: true });
+    await activateInbound(runtime, 'JA1AAA', 'PM95');
+
+    config.transmitCycles = [1];
+    runtime.onOperatorTransmitCyclesChanged({
+      previousTransmitCycles: [0], transmitCycles: [1], source: 'manual',
+    });
+    expect((await runtime.decide([], decision(2))).stop).toBe(false);
+
+    const moved = parsed('BG5DRB JA1AAA PM95', BASE_TIME + MODES.FT8.slotMs * 2);
+    runtime.observeDecodedMessages([moved], observation(moved.timestamp));
+    expect((await runtime.decide([moved], decision(3))).transmissions?.[0]?.text)
+      .toBe('JA1AAA BG5DRB R OL32');
+
+    config.transmitCycles = [0];
+    runtime.onOperatorTransmitCyclesChanged({
+      previousTransmitCycles: [1], transmitCycles: [0], source: 'manual',
+    });
+    expect(runtime.getTransmissions()).toEqual([]);
+  });
+
+  it('retains directed progress received before the operator switches back to a parked QSO', async () => {
+    const { runtime, config } = createRuntime({ transmitting: true });
+    confirmTransmissions(runtime, await activateInbound(runtime, 'JA1AAA', 'PM95'));
+
+    config.transmitCycles = [1];
+    runtime.onOperatorTransmitCyclesChanged({
+      previousTransmitCycles: [0], transmitCycles: [1], source: 'manual',
+    });
+    expect((await runtime.decide([], decision(2))).stop).toBe(false);
+
+    const final = parsed('BG5DRB JA1AAA RR73', BASE_TIME + MODES.FT8.slotMs);
+    runtime.observeDecodedMessages([final], observation(final.timestamp));
+    expect(runtime.getSnapshot().streams).toEqual([]);
+    const completed = await runtime.decide([], decision(3));
+    const effect = completed.qsoCompletions?.[0];
+    expect(effect).toBeDefined();
+    runtime.settleQSOCompletion({
+      streamId: effect!.streamId,
+      lifecycleEpoch: effect!.lifecycleEpoch,
+      recordId: effect!.record.id,
+      status: 'committed',
+    });
+    expect((await runtime.decide([], decision(4))).stop).toBe(true);
+  });
+
+  it('applies a late physical receipt to a parked protocol checkpoint', async () => {
+    const { runtime, config } = createRuntime({ transmitting: true });
+    runtime.enqueueTarget({ callsign: 'JA1AAA' });
+    confirmTransmissions(runtime, await runtime.decide([], decision()));
+    const rogerGrid = parsed('BG5DRB JA1AAA R PM95', BASE_TIME + MODES.FT8.slotMs);
+    const rr73 = await runtime.decide([rogerGrid], decision(2));
+    expect(rr73.transmissions?.[0]?.text).toBe('JA1AAA BG5DRB RR73');
+
+    config.transmitCycles = [1];
+    runtime.onOperatorTransmitCyclesChanged({
+      previousTransmitCycles: [0], transmitCycles: [1], source: 'manual',
+    });
+    confirmTransmissions(runtime, rr73);
+
+    const completed = await runtime.decide([], decision(3));
+    expect(completed.transmissions).toEqual([]);
+    const effect = completed.qsoCompletions?.[0];
+    expect(effect).toBeDefined();
+    runtime.settleQSOCompletion({
+      streamId: effect!.streamId,
+      lifecycleEpoch: effect!.lifecycleEpoch,
+      recordId: effect!.record.id,
+      status: 'committed',
+    });
+    expect((await runtime.decide([], decision(4))).stop).toBe(true);
+  });
+
+  it('does not settle a new QSO when a parked completion reuses its stream identity', async () => {
+    const { runtime, config } = createRuntime({ transmitting: true });
+    confirmTransmissions(runtime, await activateInbound(runtime, 'JA1AAA', 'PM95'));
+
+    config.transmitCycles = [1];
+    runtime.onOperatorTransmitCyclesChanged({
+      previousTransmitCycles: [0], transmitCycles: [1], source: 'manual',
+    });
+    const finalA = parsed('BG5DRB JA1AAA RR73', BASE_TIME + MODES.FT8.slotMs);
+    runtime.observeDecodedMessages([finalA], observation(finalA.timestamp));
+    const parkedCompletion = (await runtime.decide([], decision(2))).qsoCompletions?.[0];
+    expect(parkedCompletion).toBeDefined();
+
+    runtime.enqueueTarget({ callsign: 'JA2BBB' });
+    confirmTransmissions(runtime, await runtime.decide([], decision(3)));
+    const rogerGridB = parsed('BG5DRB JA2BBB R PM96', BASE_TIME + MODES.FT8.slotMs * 2);
+    const finalTransmissionB = await runtime.decide([rogerGridB], decision(4));
+    confirmTransmissions(runtime, finalTransmissionB);
+
+    runtime.settleQSOCompletion({
+      streamId: parkedCompletion!.streamId,
+      lifecycleEpoch: parkedCompletion!.lifecycleEpoch,
+      recordId: parkedCompletion!.record.id,
+      status: 'committed',
+    });
+    const liveCompletion = (await runtime.decide([], decision(5))).qsoCompletions?.[0];
+    expect(liveCompletion?.record.callsign).toBe('JA2BBB');
+    expect(liveCompletion?.record.id).not.toBe(parkedCompletion!.record.id);
+  });
+
+  it('stops cleanly when a committed parked QSO belongs to a disabled stream', async () => {
+    const { runtime, config } = createRuntime({ transmitting: true, parallelStreams: 2 });
+    runtime.enqueueTarget({ callsign: 'JA1AAA', lastMessage: selected('BG5DRB JA1AAA PM95') });
+    runtime.enqueueTarget({ callsign: 'JA2BBB', lastMessage: selected('BG5DRB JA2BBB PM96') });
+    confirmTransmissions(runtime, await runtime.decide([], decision()));
+
+    config.transmitCycles = [1];
+    runtime.onOperatorTransmitCyclesChanged({
+      previousTransmitCycles: [0], transmitCycles: [1], source: 'manual',
+    });
+    const finals = [
+      parsed('BG5DRB JA1AAA RR73', BASE_TIME + MODES.FT8.slotMs),
+      parsed('BG5DRB JA2BBB RR73', BASE_TIME + MODES.FT8.slotMs),
+    ];
+    runtime.observeDecodedMessages(finals, observation(finals[0]!.timestamp));
+    const completions = (await runtime.decide([], decision(2))).qsoCompletions ?? [];
+    expect(completions).toHaveLength(2);
+
+    config.parallelStreams = 1;
+    runtime.getQueueSnapshot();
+    for (const effect of completions) {
+      runtime.settleQSOCompletion({
+        streamId: effect.streamId,
+        lifecycleEpoch: effect.lifecycleEpoch,
+        recordId: effect.record.id,
+        status: 'committed',
+      });
+    }
+    const stopped = await runtime.decide([], decision(3));
+    expect(stopped).toMatchObject({ stop: true, transmissions: [] });
+  });
+
+  it('keeps a failed parked completion retryable without restoring its RF lane', async () => {
+    const { runtime, config } = createRuntime({ transmitting: true, sessionId: 'ww-digi-session' });
+    confirmTransmissions(runtime, await activateInbound(runtime, 'JA1AAA', 'PM95'));
+
+    config.transmitCycles = [1];
+    runtime.onOperatorTransmitCyclesChanged({
+      previousTransmitCycles: [0], transmitCycles: [1], source: 'manual',
+    });
+    const final = parsed('BG5DRB JA1AAA RR73', BASE_TIME + MODES.FT8.slotMs);
+    runtime.observeDecodedMessages([final], observation(final.timestamp));
+    const effect = (await runtime.decide([], decision(2))).qsoCompletions?.[0];
+    expect(effect).toBeDefined();
+    runtime.settleQSOCompletion({
+      streamId: effect!.streamId,
+      lifecycleEpoch: effect!.lifecycleEpoch,
+      recordId: effect!.record.id,
+      status: 'failed',
+    });
+
+    expect((await runtime.decide([], decision(3))).stop).toBe(true);
+    const row = runtime.getQueueSnapshot().rows[0]!;
+    expect(row).toMatchObject({
+      displayState: 'review',
+      actions: [expect.objectContaining({ id: 'retry-parked-log' }), expect.anything()],
+    });
+    const retried = await runtime.invokeAction({
+      target: { kind: 'queue-entry', entryId: row.entryId, queueVersion: runtime.getQueueSnapshot().version },
+      actionId: 'retry-parked-log',
+    });
+    expect(retried?.qsoCompletions?.[0]).toMatchObject({
+      streamId: effect!.streamId,
+      lifecycleEpoch: effect!.lifecycleEpoch,
+      record: { id: effect!.record.id },
+      destination: { kind: 'plugin-session', sessionId: 'ww-digi-session' },
+    });
   });
 
   it('keeps dupes as candidates but excludes them from automatic CQ selection', async () => {
@@ -515,8 +767,14 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
     confirmTransmissions(runtime, first);
     const second = await runtime.decide([], decision(2));
     confirmTransmissions(runtime, second);
+    runtime.observeDecodedMessages([], observation(BASE_TIME));
+    const afterTxEcho = await runtime.decide([], decision(3));
+    expect(afterTxEcho.stop).toBe(false);
+    expect(afterTxEcho.snapshot.attentions).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'cq-no-response' }),
+    ]));
     runtime.observeDecodedMessages([], observation(BASE_TIME + MODES.FT8.slotMs));
-    const stopped = await runtime.decide([], decision(3));
+    const stopped = await runtime.decide([], decision(4));
     expect(stopped.stop).toBe(true);
     expect(stopped.snapshot.attentions).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'cq-no-response', params: { count: 2 } }),
@@ -751,14 +1009,17 @@ describe('WWDigiStrategyRuntime protocol flows', () => {
   });
 
   it('allows an explicit log action after a directed exchange', async () => {
-    const { runtime } = createRuntime({ transmitting: true });
+    const { runtime } = createRuntime({ transmitting: true, sessionId: 'ww-digi-session' });
     await activateInbound(runtime, 'JA1AAA', 'PM95');
     const stream = runtime.getSnapshot().streams![0]!;
     const result = await runtime.invokeAction({
       target: { kind: 'stream', streamId: stream.streamId, lifecycleEpoch: stream.qsoLifecycleEpoch },
       actionId: 'log-current',
     });
-    expect(result?.qsoCompletions?.[0]?.record).toMatchObject({ callsign: 'JA1AAA', grid: 'PM95' });
+    expect(result?.qsoCompletions?.[0]).toMatchObject({
+      destination: { kind: 'plugin-session', sessionId: 'ww-digi-session' },
+      record: { callsign: 'JA1AAA', grid: 'PM95' },
+    });
   });
 
   it('reports the actual timeout stage and keeps the target retryable', async () => {
@@ -846,7 +1107,7 @@ describe('WWDigiStrategyRuntime settlement and refill', () => {
   });
 
   it('keeps a failed settlement in review until the operator retries the same completion', async () => {
-    const { runtime } = createRuntime({ transmitting: true });
+    const { runtime } = createRuntime({ transmitting: true, sessionId: 'ww-digi-session' });
     const started = await activateInbound(runtime, 'JA1AAA', 'PM95');
     confirmTransmissions(runtime, started);
     const final = parsed('BG5DRB JA1AAA RR73', BASE_TIME + MODES.FT8.slotMs);
@@ -881,6 +1142,7 @@ describe('WWDigiStrategyRuntime settlement and refill', () => {
     expect(retry?.qsoCompletions).toEqual([
       expect.objectContaining({
         lifecycleEpoch: effect!.lifecycleEpoch,
+        destination: { kind: 'plugin-session', sessionId: 'ww-digi-session' },
         record: expect.objectContaining({ id: effect!.record.id }),
       }),
     ]);
