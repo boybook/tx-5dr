@@ -14,6 +14,35 @@ const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 
 interface ArtifactIndex { artifacts: ImageArtifact[] }
 
+function migrateLegacyFaxCalibrationSources(value: unknown): { value: unknown; migrated: boolean } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { value, migrated: false };
+  const record = value as { artifacts?: unknown };
+  if (!Array.isArray(record.artifacts)) return { value, migrated: false };
+
+  let migrated = false;
+  const artifacts = record.artifacts.map((artifact) => {
+    if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) return artifact;
+    const calibration = (artifact as { faxCalibration?: unknown }).faxCalibration;
+    if (!calibration || typeof calibration !== 'object' || Array.isArray(calibration)) return artifact;
+    const autoPoints = (calibration as { autoPoints?: unknown }).autoPoints;
+    if (!Array.isArray(autoPoints)) return artifact;
+
+    let artifactMigrated = false;
+    const migratedPoints = autoPoints.map((point) => {
+      if (!point || typeof point !== 'object' || Array.isArray(point)
+        || (point as { source?: unknown }).source !== 'deadSector') return point;
+      migrated = true;
+      artifactMigrated = true;
+      return { ...point, source: 'imageContent' };
+    });
+
+    if (!artifactMigrated) return artifact;
+    return { ...artifact, faxCalibration: { ...calibration, autoPoints: migratedPoints } };
+  });
+
+  return migrated ? { value: { ...record, artifacts }, migrated: true } : { value, migrated: false };
+}
+
 export interface SaveArtifactInput {
   family: ImageFamily;
   direction: 'rx' | 'tx';
@@ -49,14 +78,21 @@ export class ImageArtifactStore {
   async initialize(): Promise<void> {
     if (this.initialized) return;
     await fs.mkdir(this.imageDir, { recursive: true });
+    let migratedLegacyCalibration = false;
     const loaded = await loadJsonWithRecovery<ArtifactIndex>(this.indexPath, {
       defaultValue: () => ({ artifacts: [] }),
       validate: (value) => {
-        const record = value as { artifacts?: unknown };
+        const migration = migrateLegacyFaxCalibrationSources(value);
+        migratedLegacyCalibration ||= migration.migrated;
+        const record = migration.value as { artifacts?: unknown };
         return { artifacts: ImageArtifactSchema.array().parse(record?.artifacts ?? []) };
       },
       writer: this.writer,
     });
+    if (migratedLegacyCalibration) {
+      await this.writer.writeFile(this.indexPath, `${JSON.stringify(loaded.value, null, 2)}\n`);
+      logger.info('Migrated legacy fax calibration sources in image artifact index');
+    }
     for (const artifact of loaded.value.artifacts) this.artifacts.set(artifact.id, artifact);
     this.initialized = true;
     await this.enforceQuota();
