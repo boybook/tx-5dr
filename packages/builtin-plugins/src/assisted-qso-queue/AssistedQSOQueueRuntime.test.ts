@@ -323,6 +323,25 @@ describe('AssistedQSOQueueRuntime queue capability', () => {
     expect((await runtime.decide([], decision(2))).transmission).toContain('JA1AAA');
   });
 
+  it('resets a single active QSO to TX6 through the stream state API', async () => {
+    const { runtime } = createRuntime({ transmitting: true });
+    runtime.enqueueTarget({ callsign: 'JA1AAA' });
+    const active = await runtime.decide([], decision());
+    const stream = active.snapshot.streams?.[0];
+    expect(stream?.stateOptions?.some((option) => option.id === 'TX6')).toBe(true);
+
+    runtime.setStreamState({
+      streamId: stream!.streamId,
+      stateId: 'TX6',
+      expectedLifecycleEpoch: stream!.qsoLifecycleEpoch,
+    });
+    const reset = await runtime.decide([], decision(2));
+
+    expect(reset.snapshot.streams).toEqual([]);
+    expect(runtime.getQueueSnapshot().rows).toEqual([]);
+    expect(reset.transmission).toBe('CQ BG5DRB OL32');
+  });
+
   it('falls back to CQ when every queued target is paused or inactive', async () => {
     const { runtime } = createRuntime({ transmitting: true });
     runtime.enqueueTarget({ callsign: 'JA1AAA', lastMessage: selected('CQ JA1AAA PM95') });

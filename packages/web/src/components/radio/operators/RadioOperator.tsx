@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Select, SelectItem, Input, Button, Switch, Selection, Tooltip, Popover, PopoverTrigger, PopoverContent } from "@heroui/react";
+import { Input, Button, Switch, Selection, Tooltip, Popover, PopoverTrigger, PopoverContent } from "@heroui/react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faChevronRight, faWandMagicSparkles, faRepeat, faBook, faRotateLeft, faPause, faPlay } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useCurrentOperatorId, useOperators, useRadioState, useSlotPacks } from '../../../store/radioStore';
@@ -823,11 +823,47 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
     });
   }, [activeStrategyStatus?.ui?.pages, operatorStatus.id, operatorStatus.strategy.name]);
   const singleStateStream = resolveSingleControllableStream(streamPresentations, configuredStreamCount);
+  const singleStateCanResetToCQ = singleStateStream?.stateOptions?.some((option) => option.id === 'TX6') === true;
   const legacyStateChoices: OperatorStateChoice[] = operatorStatus.strategy.availableSlots.map((slot) => ({
     id: slot,
     label: slot,
     content: localSlotContents[slot as OperatorRuntimeSlot] ?? operatorStatus.slots?.[slot as OperatorRuntimeSlot],
   }));
+  const resetLegacyStateToCQ = React.useCallback(() => {
+    setOperatorContext({
+      targetCallsign: '',
+      targetGrid: '',
+      reportSent: null,
+      reportReceived: null,
+    });
+    setOperatorRuntimeState('TX6');
+  }, [setOperatorContext, setOperatorRuntimeState]);
+  const resetSingleStreamToCQ = React.useCallback(() => {
+    if (!singleStateStream || singleStateStream.qsoLifecycleEpoch === undefined) return;
+    setOperatorStreamState(
+      singleStateStream.streamId,
+      'TX6',
+      singleStateStream.qsoLifecycleEpoch,
+    );
+  }, [
+    setOperatorStreamState,
+    singleStateStream,
+  ]);
+  const resetToCqButton = (onReset: () => void) => (
+    <Tooltip content={t('operator.resetToCQ')} placement="top" offset={6}>
+      <Button
+        size="sm"
+        variant="light"
+        isIconOnly
+        onPress={onReset}
+        className="h-auto p-2 min-w-0 w-auto"
+        aria-label={t('operator.resetToCQ')}
+        isDisabled={!connection.state.isConnected}
+      >
+        <FontAwesomeIcon icon={faRotateLeft} className="text-default-400" />
+      </Button>
+    </Tooltip>
+  );
   const singleStreamDetailPanel = singleStateStream?.currentState
       && singleStateStream.qsoLifecycleEpoch !== undefined ? (
     <div className="overflow-hidden rounded-lg bg-content2 text-xs">
@@ -1467,7 +1503,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
             </div>
           ) : singleStateStream && singleStateStream.currentState
               && singleStateStream.qsoLifecycleEpoch !== undefined ? (
-              <div className="flex min-w-0 flex-1 items-center px-2">
+              <div className="flex min-w-0 flex-1 items-center gap-0 px-2">
                 <OperatorStateSelect
                   choices={streamStateChoices(singleStateStream)}
                   currentState={singleStateStream.currentState}
@@ -1478,79 +1514,27 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
                   )}
                   disabled={!connection.state.isConnected}
                   ariaLabel={t('operator.selectStreamState', { callsign: singleStateStream.targetCallsign ?? '' })}
+                  standardSingleQso
                 />
+                {singleStateStream.currentState !== 'TX6'
+                  && singleStateCanResetToCQ
+                  && resetToCqButton(resetSingleStreamToCQ)}
               </div>
           ) : (
           <div className="flex items-center gap-0">
-            <Select
+            <OperatorStateSelect
               key={`slot-select-${shortcutSelectHighlightToken ?? 'idle'}`}
-              selectedKeys={[operatorStatus.currentSlot || 'TX6']}
-              onSelectionChange={(keys) => {
-                const slot = Array.from(keys)[0] as OperatorRuntimeSlot | undefined;
-                if (slot) {
-                  setOperatorRuntimeState(slot);
-                }
-              }}
-              size="sm"
-              variant="bordered"
-              className="w-auto min-w-[200px]"
-              classNames={{
-                trigger: `bg-transparent border-none shadow-none p-1 pl-2 h-auto min-h-0 rounded-md data-[hover=true]:bg-content2 ${shortcutSelectHighlightToken ? 'tx-slot-shortcut-select-glow' : ''}`,
-                value: "text-sm font-mono text-foreground p-0",
-                selectorIcon: "text-default-400 text-xs",
-                popoverContent: "min-w-[260px]",
-              }}
-              isDisabled={!connection.state.isConnected}
-              aria-label={t('operator.selectSlot')}
-              renderValue={(items) => {
-                const item = items[0];
-                if (!item || !operatorStatus.slots) return String(item?.key || 'TX6');
-
-                // 显示为"TXN: 内容"格式
-                const slotKey = String(item.key);
-                const slotContent = operatorStatus.slots[item.key as keyof typeof operatorStatus.slots];
-                return slotContent ? slotContent : slotKey;
-              }}
-            >
-              {operatorStatus.strategy.availableSlots.map((slot) => {
-                const runtimeSlot = slot as OperatorRuntimeSlot;
-                const slotContent = operatorStatus.slots?.[slot as keyof typeof operatorStatus.slots];
-                const displayText = slotContent ? `${slot}: ${slotContent}` : slot;
-                return (
-                  <SelectItem key={runtimeSlot}>
-                    {displayText}
-                  </SelectItem>
-                );
-              })}
-            </Select>
+              choices={legacyStateChoices}
+              currentState={operatorStatus.currentSlot || 'TX6'}
+              onSelect={(stateId) => setOperatorRuntimeState(stateId as OperatorRuntimeSlot)}
+              disabled={!connection.state.isConnected}
+              ariaLabel={t('operator.selectSlot')}
+              standardSingleQso
+              highlighted={Boolean(shortcutSelectHighlightToken)}
+            />
 
             {/* 重置按钮 - 仅在非TX6状态下显示 */}
-            {operatorStatus.currentSlot !== 'TX6' && (
-              <Tooltip content={t('operator.resetToCQ')} placement="top" offset={6}>
-                <Button
-                  size="sm"
-                  variant="light"
-                  isIconOnly
-                  onPress={() => {
-                    // 第1步：清理通联上下文
-                    setOperatorContext({
-                      targetCallsign: '',
-                      targetGrid: '',
-                      reportSent: null,
-                      reportReceived: null,
-                    });
-
-                    // 第2步：切换到 TX6 槽位
-                    setOperatorRuntimeState('TX6');
-                  }}
-                  className="h-auto p-2 min-w-0 w-auto"
-                  aria-label={t('operator.resetToCQ')}
-                  isDisabled={!connection.state.isConnected}
-                >
-                  <FontAwesomeIcon icon={faRotateLeft} className="text-default-400" />
-                </Button>
-              </Tooltip>
-            )}
+            {operatorStatus.currentSlot !== 'TX6' && resetToCqButton(resetLegacyStateToCQ)}
           </div>
           )}
         </div>

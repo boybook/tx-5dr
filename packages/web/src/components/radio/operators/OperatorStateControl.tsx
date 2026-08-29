@@ -16,6 +16,8 @@ interface OperatorStateSelectProps {
   disabled?: boolean;
   ariaLabel: string;
   compact?: boolean;
+  standardSingleQso?: boolean;
+  highlighted?: boolean;
 }
 
 export function OperatorStateSelect({
@@ -25,6 +27,8 @@ export function OperatorStateSelect({
   disabled = false,
   ariaLabel,
   compact = false,
+  standardSingleQso = false,
+  highlighted = false,
 }: OperatorStateSelectProps) {
   const handleSelectionChange = (keys: Selection) => {
     const stateId = Array.from(keys)[0];
@@ -41,7 +45,9 @@ export function OperatorStateSelect({
       classNames={{
         trigger: compact
           ? 'h-7 min-h-7 border-divider bg-default-100 px-2 shadow-none'
-          : 'h-auto min-h-0 rounded-md border-none bg-transparent p-1 pl-2 shadow-none data-[hover=true]:bg-content2',
+          : `h-auto min-h-0 rounded-md border-none bg-transparent p-1 pl-2 shadow-none data-[hover=true]:bg-content2 ${
+            highlighted ? 'tx-slot-shortcut-select-glow' : ''
+          }`,
         value: compact ? 'p-0 text-xs font-mono text-foreground' : 'p-0 text-sm font-mono text-foreground',
         selectorIcon: 'text-default-400 text-xs',
         popoverContent: compact ? 'min-w-[240px]' : 'min-w-[280px]',
@@ -51,17 +57,24 @@ export function OperatorStateSelect({
       renderValue={(items) => {
         const selected = choices.find((choice) => choice.id === String(items[0]?.key ?? currentState));
         if (!selected) return currentState;
+        if (standardSingleQso) return selected.content || selected.label;
         return selected.content ? `${selected.label}: ${selected.content}` : selected.label;
       }}
     >
       {choices.map((choice) => (
         <SelectItem key={choice.id} textValue={`${choice.label} ${choice.content ?? ''}`}>
-          <div className="flex min-w-0 flex-col py-0.5">
-            <span className="text-xs font-medium text-foreground">{choice.label}</span>
-            {choice.content && (
-              <span className="truncate font-mono text-[11px] text-default-500">{choice.content}</span>
-            )}
-          </div>
+          {standardSingleQso ? (
+            <span className="block truncate font-mono text-sm text-foreground">
+              {choice.content ? `${choice.label}: ${choice.content}` : choice.label}
+            </span>
+          ) : (
+            <div className="flex min-w-0 flex-col py-0.5">
+              <span className="text-xs font-medium text-foreground">{choice.label}</span>
+              {choice.content && (
+                <span className="truncate font-mono text-[11px] text-default-500">{choice.content}</span>
+              )}
+            </div>
+          )}
         </SelectItem>
       ))}
     </Select>

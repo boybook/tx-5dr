@@ -36,11 +36,28 @@ export interface SimulationScenarioState {
   timeouts?: SimulationScenarioTimeoutRule[];
 }
 
+export interface SimulationAddressedRestartPolicy {
+  /**
+   * States whose RF peer may be reassigned to a dormant identity. Addressed
+   * rules must contain `{{peerCallsign}}`, and the decoded callsign must be a
+   * standalone message token.
+   */
+  reclaimableStates: string[];
+  /** Allow a choice that marked the peer complete to restart on a new addressed exchange. */
+  restartCompleted?: boolean;
+}
+
 /** Declarative protocol-peer state machine used only by the development simulator. */
 export interface SimulationScenarioDescriptor {
   id: string;
   modes: SimulationMode[];
   initialState: string;
+  /**
+   * Allow a completed or explicitly reclaimable peer, or a dormant pooled
+   * identity, to restart when an addressed message matches a global or
+   * initial-state rule.
+   */
+  addressedRestart?: SimulationAddressedRestartPolicy;
   /** Rules evaluated before the current state's rules, for protocol messages that may interrupt any state. */
   globalRules?: SimulationScenarioRule[];
   /** Optional identities reused by a bounded number of configured RF peer slots. */

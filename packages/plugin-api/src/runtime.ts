@@ -162,6 +162,7 @@ export interface StrategyActionDescriptor {
     title: string;
     description?: string;
     confirmLabel?: string;
+    cancelLabel?: string;
   };
   input?: StrategyActionInput;
   /** Host-validated navigation to a page declared by the owning plugin. */
@@ -229,11 +230,17 @@ export interface StrategyActionInvocation {
   payload?: unknown;
 }
 
+export type StrategyLogbookSessionEffect =
+  | { operation: 'open'; sessionKey: string; title: string; retention?: 'durable' | 'runtime' }
+  | { operation: 'destroy'; sessionKey: string };
+
 export interface StrategyActionResult {
   requestDecision?: boolean;
   /** Start this operator through the Host's normal automation path after a direct user action. */
   requestOperatorStart?: boolean;
   qsoCompletions?: StrategyQSOCompletionEffect[];
+  /** Host-managed plugin logbook session operations caused by this explicit action. */
+  logbookSessionEffects?: StrategyLogbookSessionEffect[];
   outcome?: { code: string; message?: string };
 }
 
@@ -435,10 +442,9 @@ export interface StrategyQSOCompletionEffect {
   /** Host persistence behavior requested by the strategy. */
   persistencePolicy?: 'merge-nearby' | 'preserve-distinct';
   /** Optional Host-issued destination. Omitted effects use the operator's primary logbook. */
-  destination?: {
-    kind: 'plugin-session';
-    sessionId: string;
-  };
+  destination?:
+    | { kind: 'plugin-session'; sessionId: string }
+    | { kind: 'plugin-session-key'; sessionKey: string };
   /** Structured-cloneable source metadata returned with post-commit delivery. */
   metadata?: Record<string, unknown>;
 }
@@ -469,6 +475,8 @@ export interface StrategyDecisionResult extends StrategyDecision {
   qsoCompletion?: StrategyQSOCompletionEffect;
   /** Parallel QSO effects committed in the same accepted decision. */
   qsoCompletions?: StrategyQSOCompletionEffect[];
+  /** Host-managed plugin logbook lifecycle effects accepted with this decision. */
+  logbookSessionEffects?: StrategyLogbookSessionEffect[];
   /** Optional cycle selected from the triggering RX frame; applied by the host after target reservation. */
   requestedTransmitCycle?: number;
 }

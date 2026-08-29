@@ -78,6 +78,7 @@ interface LaneCheckpoint {
   pendingSettlement?: { lifecycleEpoch: number; recordId: string };
   latestSlotStartMs: number;
   final73Lease?: Final73Lease;
+  resetToCqRequested: boolean;
   delegate: StrategyRuntimeCheckpoint;
 }
 
@@ -208,6 +209,7 @@ export class StandardQSOProtocolLane implements ProtocolLane<AssistedQueueEntryD
   private pendingSettlement?: { lifecycleEpoch: number; recordId: string };
   private latestSlotStartMs = 0;
   private final73Lease?: Final73Lease;
+  private resetToCqRequested = false;
 
   constructor(options: {
     streamId: string;
@@ -323,6 +325,13 @@ export class StandardQSOProtocolLane implements ProtocolLane<AssistedQueueEntryD
     meta: StrategyDecisionMetaV2,
   ): Promise<ProtocolLaneDecision<AssistedQueueEntryData>> {
     if (meta.signal.aborted) throw new DOMException('Strategy decision aborted', 'AbortError');
+    if (this.resetToCqRequested && this.activeEntry) {
+      this.resetToCqRequested = false;
+      return {
+        queueChanged: true,
+        release: { disposition: 'remove-entry', reason: 'operator reset QSO to CQ' },
+      };
+    }
     this.expireFinal73Lease(this.latestSlotStartMs);
     if (this.final73Lease?.scheduled
         || (this.final73Lease?.pendingMessage && this.canScheduleFinal73Retry())) {
@@ -534,6 +543,11 @@ export class StandardQSOProtocolLane implements ProtocolLane<AssistedQueueEntryD
     const snapshot = this.delegate.getSnapshot();
     if (!snapshot.availableSlots?.includes(stateId)) return false;
     if (snapshot.currentState === stateId) return false;
+    if (stateId === 'TX6') {
+      this.delegate.resetRuntime('operator reset to CQ');
+      this.resetToCqRequested = true;
+      return true;
+    }
     this.delegate.setState(stateId as StrategyRuntimeSlot);
     return true;
   }
@@ -553,6 +567,7 @@ export class StandardQSOProtocolLane implements ProtocolLane<AssistedQueueEntryD
       pendingSettlement: this.pendingSettlement,
       latestSlotStartMs: this.latestSlotStartMs,
       final73Lease: this.final73Lease,
+      resetToCqRequested: this.resetToCqRequested,
       delegate: this.delegate.checkpoint(),
     });
   }
@@ -569,6 +584,7 @@ export class StandardQSOProtocolLane implements ProtocolLane<AssistedQueueEntryD
     this.pendingSettlement = state.pendingSettlement ? clone(state.pendingSettlement) : undefined;
     this.latestSlotStartMs = state.latestSlotStartMs;
     this.final73Lease = state.final73Lease ? clone(state.final73Lease) : undefined;
+    this.resetToCqRequested = state.resetToCqRequested === true;
     this.delegate.restore(state.delegate);
   }
 
@@ -582,6 +598,7 @@ export class StandardQSOProtocolLane implements ProtocolLane<AssistedQueueEntryD
     this.pendingSettlement = undefined;
     this.latestSlotStartMs = 0;
     this.final73Lease = undefined;
+    this.resetToCqRequested = false;
     this.delegate.reset(reason);
   }
 

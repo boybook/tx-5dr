@@ -39,6 +39,7 @@ export type {
   SimulationScenarioRule,
   SimulationScenarioTimeoutRule,
   SimulationScenarioState,
+  SimulationAddressedRestartPolicy,
   SimulationScenarioDescriptor,
 } from './simulation.js';
 export type {
@@ -99,6 +100,7 @@ export type {
   StrategyActionTarget,
   StrategyActionInvocation,
   StrategyActionResult,
+  StrategyLogbookSessionEffect,
   StrategyStreamSnapshot,
   StrategyStreamStateUpdate,
   StrategyTransmission,

@@ -820,8 +820,10 @@ export function createMockContext<
         ...access,
         id: `plugin-session-${descriptor.sessionKey}`,
         title: descriptor.title,
+        async destroy() {},
       };
     },
+    async destroy() {},
   };
   const readOnlyLogbook = {
     hasWorked: logbook.hasWorked,

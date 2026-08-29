@@ -27,6 +27,7 @@ import type { AutoCallProposalResult } from './PluginHookDispatcher.js';
 import { evaluateAutomaticTargetEligibility } from './AutoTargetEligibility.js';
 import type { DecisionOrchestratorDeps, OperatorDecisionState } from './types.js';
 import { createLogger } from '../utils/logger.js';
+import { LogManager } from '../log/LogManager.js';
 import { snapshotPluginData } from './plugin-data-boundary.js';
 import { FT8MessageParser, CycleUtils, isUndecodedCallsignPlaceholder } from '@tx5dr/core';
 import type { OperatorCommandToken } from '../transmission/OperatorIntentCoordinator.js';
@@ -939,6 +940,9 @@ export class DecisionOrchestrator {
           ...(result.qsoCompletion ? [result.qsoCompletion] : []),
           ...(result.qsoCompletions ?? []),
         ];
+        if (result.logbookSessionEffects?.length) {
+          await this.applyStrategyLogbookSessionEffects(operatorId, result.logbookSessionEffects);
+        }
         if (qsoCompletions.length > 0 && options.commitQsoCompletions !== false) {
           this.commitQSOCompletionEffects(
             operatorId,
@@ -997,6 +1001,20 @@ export class DecisionOrchestrator {
     void tail.finally(() => {
       if (this.qsoCompletionTails.get(operatorId) === tail) this.qsoCompletionTails.delete(operatorId);
     });
+  }
+
+  private async applyStrategyLogbookSessionEffects(
+    operatorId: string,
+    effects: import('@tx5dr/plugin-api').StrategyLogbookSessionEffect[],
+  ): Promise<void> {
+    const pluginName = this.deps.getStrategyPluginName?.(operatorId);
+    const operator = this.deps.getOperatorById(operatorId);
+    if (!pluginName || !operator) throw new Error('strategy_logbook_session_unavailable');
+    await LogManager.getInstance().applyPluginSessionEffects(
+      pluginName,
+      operator.config.myCallsign,
+      effects,
+    );
   }
 
   private async commitQSOCompletionEffect(

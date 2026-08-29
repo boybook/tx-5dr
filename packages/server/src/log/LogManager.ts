@@ -1,6 +1,9 @@
 import type { LogbookHealth } from '@tx5dr/contracts';
 import type { ILogProvider, LogbookWriteFailure } from '@tx5dr/core';
 import { createHash } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 import { ADIFLogProvider } from './ADIFLogProvider.js';
 import { LegacyLogbookMaintenance } from './persistence/LegacyLogbookMaintenance.js';
@@ -19,14 +22,21 @@ export interface LogBookInstance {
   name: string;
   description?: string;
   filePath: string;
-  storageKind: 'managed' | 'custom';
+  storageKind: 'managed' | 'custom' | 'ephemeral';
+  ephemeralRoot?: string;
   provider: ILogProvider;
   createdAt: number;
   lastUsed: number;
   isActive: boolean;
   binding:
     | { kind: 'primary'; callsign: string }
-    | { kind: 'plugin-session'; pluginName: string; stationCallsign: string; sessionKey: string }
+    | {
+        kind: 'plugin-session';
+        pluginName: string;
+        stationCallsign: string;
+        sessionKey: string;
+        retention?: 'durable' | 'runtime';
+      }
     | { kind: 'custom' };
 }
 
@@ -364,11 +374,13 @@ export class LogManager {
     stationCallsign: string;
     sessionKey: string;
     title: string;
+    retention?: 'durable' | 'runtime';
   }): Promise<LogBookInstance> {
     const pluginName = input.pluginName.trim();
     const stationCallsign = normalizeCallsign(input.stationCallsign);
     const sessionKey = input.sessionKey.trim();
     const title = input.title.trim();
+    const retention = input.retention ?? 'durable';
     if (!/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(pluginName)) {
       throw new Error('Invalid plugin logbook session owner');
     }
@@ -386,7 +398,7 @@ export class LogManager {
       throw new Error('Invalid plugin logbook session title');
     }
 
-    const identity = `${pluginName}\0${stationCallsign}\0${sessionKey}`;
+    const identity = `${pluginName}\0${stationCallsign}\0${sessionKey}${retention === 'runtime' ? '\0runtime' : ''}`;
     const existingId = this.pluginSessionLogBookMap.get(identity);
     if (existingId) {
       const existing = this.logBooks.get(existingId);
@@ -399,21 +411,56 @@ export class LogManager {
 
     const digest = createHash('sha256').update(identity).digest('hex');
     const logBookId = `plugin-session-${digest.slice(0, 24)}`;
+    const ephemeralRoot = retention === 'runtime'
+      ? await mkdtemp(path.join(tmpdir(), 'tx5dr-plugin-log-'))
+      : undefined;
     const creation = this.createLogBook({
       id: logBookId,
       name: title,
       description: `Plugin logbook session for ${stationCallsign}`,
-      logFileName: `logbook/plugin-sessions/${pluginName}/${digest}.adi`,
+      ...(ephemeralRoot
+        ? { filePath: path.join(ephemeralRoot, 'session.adi') }
+        : { logFileName: `logbook/plugin-sessions/${pluginName}/${digest}.adi` }),
       autoCreateFile: true,
-      binding: { kind: 'plugin-session', pluginName, stationCallsign, sessionKey },
+      binding: { kind: 'plugin-session', pluginName, stationCallsign, sessionKey, retention },
     }).then((logBook) => {
+      if (ephemeralRoot) {
+        logBook.storageKind = 'ephemeral';
+        logBook.ephemeralRoot = ephemeralRoot;
+      }
       this.pluginSessionLogBookMap.set(identity, logBook.id);
       return logBook;
+    }).catch(async (error) => {
+      if (ephemeralRoot) await rm(ephemeralRoot, { recursive: true, force: true });
+      throw error;
     }).finally(() => {
       this.pluginSessionLogBookInFlight.delete(identity);
     });
     this.pluginSessionLogBookInFlight.set(identity, creation);
     return creation;
+  }
+
+  async destroyRuntimePluginSessionLogBook(
+    sessionId: string,
+    pluginName: string,
+    stationCallsign: string,
+  ): Promise<void> {
+    const logBook = this.getPluginSessionLogBook(sessionId, pluginName, stationCallsign);
+    if (!logBook || logBook.binding.kind !== 'plugin-session') {
+      throw new Error('Plugin logbook session is unavailable');
+    }
+    if (logBook.binding.retention !== 'runtime' || !logBook.ephemeralRoot) {
+      throw new Error('Durable plugin logbook sessions cannot be destroyed');
+    }
+    const identity = [
+      logBook.binding.pluginName,
+      logBook.binding.stationCallsign,
+      logBook.binding.sessionKey,
+      'runtime',
+    ].join('\0');
+    this.pluginSessionLogBookMap.delete(identity);
+    await this.deleteLogBook(logBook.id);
+    await rm(logBook.ephemeralRoot, { recursive: true, force: true });
   }
 
   /** Resolves a session only when its owner and station identity both match. */
@@ -428,6 +475,62 @@ export class LogManager {
     if (logBook.binding.stationCallsign !== normalizeCallsign(stationCallsign)) return null;
     logBook.lastUsed = Date.now();
     return logBook;
+  }
+
+  getPluginSessionLogBookByKey(
+    pluginName: string,
+    stationCallsign: string,
+    sessionKey: string,
+  ): LogBookInstance | null {
+    const normalizedCallsign = normalizeCallsign(stationCallsign);
+    for (const retentionSuffix of ['\0runtime', '']) {
+      const identity = `${pluginName.trim()}\0${normalizedCallsign}\0${sessionKey.trim()}${retentionSuffix}`;
+      const sessionId = this.pluginSessionLogBookMap.get(identity);
+      if (!sessionId) continue;
+      const logBook = this.getPluginSessionLogBook(sessionId, pluginName, normalizedCallsign);
+      if (logBook) return logBook;
+    }
+    return null;
+  }
+
+  async awaitLogBookReady(logBookId: string): Promise<LogbookHealth> {
+    const initialization = this.initializationById.get(logBookId);
+    if (initialization) return initialization;
+    const logBook = this.logBooks.get(logBookId);
+    if (!logBook) throw new Error(`logbook ${logBookId} is unavailable`);
+    return logBook.provider.getHealth();
+  }
+
+  async destroyRuntimePluginSessionLogBookByKey(
+    pluginName: string,
+    stationCallsign: string,
+    sessionKey: string,
+  ): Promise<void> {
+    const logBook = this.getPluginSessionLogBookByKey(pluginName, stationCallsign, sessionKey);
+    if (!logBook) return;
+    await this.destroyRuntimePluginSessionLogBook(logBook.id, pluginName, stationCallsign);
+  }
+
+  async applyPluginSessionEffects(
+    pluginName: string,
+    stationCallsign: string,
+    effects: import('@tx5dr/plugin-api').StrategyLogbookSessionEffect[],
+  ): Promise<void> {
+    for (const effect of effects) {
+      if (effect.operation === 'open') {
+        const logbook = await this.getOrCreatePluginSessionLogBook({
+          pluginName,
+          stationCallsign,
+          sessionKey: effect.sessionKey,
+          title: effect.title,
+          retention: effect.retention,
+        });
+        const health = await this.awaitLogBookReady(logbook.id);
+        if (!health.writable) throw new Error(`plugin_logbook_session_unavailable:${health.state}`);
+      } else {
+        await this.destroyRuntimePluginSessionLogBookByKey(pluginName, stationCallsign, effect.sessionKey);
+      }
+    }
   }
 
   /**
@@ -711,6 +814,11 @@ export class LogManager {
         logger.error('Failed to drain logbook during shutdown', result.reason);
       }
     }
+    await Promise.allSettled(Array.from(this.logBooks.values()).flatMap((logBook) => (
+      logBook.ephemeralRoot
+        ? [rm(logBook.ephemeralRoot, { recursive: true, force: true })]
+        : []
+    )));
     for (const unsubscribeList of this.providerSubscriptions.values()) {
       for (const unsubscribe of unsubscribeList) unsubscribe();
     }
