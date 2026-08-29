@@ -43,13 +43,19 @@ function createContestContext(options: {
   records?: QSORecord[];
   awaitReady?: () => Promise<void>;
   simulation?: boolean;
+  frequency?: number;
+  band?: string;
 } = {}) {
   const queryQSOs = vi.fn(async (_filter?: unknown) => options.records ?? []);
   const ctx = createMockContext({
     permissions: ['logbook:session', 'operator:transmit-control', 'plugin:event-bus'] as const,
     callsign: 'BG5DRB',
     grid: 'OL32',
-    radio: { isSimulation: options.simulation === true },
+    radio: {
+      isSimulation: options.simulation === true,
+      frequency: options.frequency ?? 14_091_000,
+      band: options.band ?? '20m',
+    },
     config: {
       contestYear: options.contestYear ?? 2026,
       location: 'DX',
@@ -316,7 +322,7 @@ describe('WW Digi contest edition persistence', () => {
   });
 
   it('projects contest worked state and gates transmission until settings are confirmed', () => {
-    const { ctx } = createContestContext();
+    const { ctx } = createContestContext({ simulation: true });
     const config = {
       callsign: 'BG5DRB', location: 'DX', categoryBand: 'ALL' as const, categoryPower: 'LOW' as const,
       categoryOperator: 'SINGLE-OP' as const, categoryTransmitter: 'ONE' as const, operators: [], createdBy: 'test',
@@ -384,5 +390,61 @@ describe('WW Digi contest edition persistence', () => {
     });
     expect(wwDigiTestables.runtimePresentation(changedGrid as never).transmitGate)
       .toMatchObject({ reason: 'transmitBlockedSetupUnconfirmed' });
+  });
+
+  it('blocks physical RF outside the official period and all radios outside allowed bands', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 0, 15, 12));
+    try {
+      const config = {
+        callsign: 'BG5DRB', location: 'DX', categoryBand: 'ALL' as const, categoryPower: 'LOW' as const,
+        categoryOperator: 'SINGLE-OP' as const, categoryTransmitter: 'ONE' as const, operators: [], createdBy: 'test',
+      };
+      const confirm = (ctx: ReturnType<typeof createContestContext>['ctx']) => {
+        ctx.store.global.set(wwDigiTestables.sessionKey('BG5DRB', 2026), {
+          schemaVersion: 2,
+          revision: 0,
+          config,
+          overrides: {},
+          operatorTransmitters: {},
+          migratedOperators: {},
+          health: { state: 'healthy' },
+          setup: {
+            status: 'confirmed',
+            fingerprint: wwDigiTestables.sessionFingerprint(ctx, 2026, config),
+          },
+          operatingIndex: {
+            revision: 0, contestYear: 2026, callsign: 'BG5DRB', workedByBand: {}, workedFieldsByBand: {},
+          },
+        });
+      };
+
+      const physical = createContestContext();
+      confirm(physical.ctx);
+      expect(wwDigiTestables.runtimePresentation(physical.ctx as never)).toMatchObject({
+        transmitGate: { allowed: false, reason: 'transmitBlockedOutsidePeriod' },
+        attentions: [expect.objectContaining({ id: 'contest-operating-gate:2026:transmitBlockedOutsidePeriod' })],
+      });
+      vi.setSystemTime(Date.UTC(2026, 7, 29, 12));
+      expect(wwDigiTestables.runtimePresentation(physical.ctx as never).transmitGate).toBeUndefined();
+
+      vi.setSystemTime(Date.UTC(2026, 0, 15, 12));
+      const virtual = createContestContext({ simulation: true });
+      confirm(virtual.ctx);
+      expect(wwDigiTestables.runtimePresentation(virtual.ctx as never).transmitGate).toBeUndefined();
+
+      const offBandVirtual = createContestContext({
+        simulation: true,
+        frequency: 18_100_000,
+        band: '17m',
+      });
+      confirm(offBandVirtual.ctx);
+      expect(wwDigiTestables.runtimePresentation(offBandVirtual.ctx as never)).toMatchObject({
+        transmitGate: { allowed: false, reason: 'transmitBlockedBand' },
+        attentions: [expect.objectContaining({ id: 'contest-operating-gate:2026:transmitBlockedBand' })],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

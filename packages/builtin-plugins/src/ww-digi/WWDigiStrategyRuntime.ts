@@ -73,7 +73,7 @@ interface RuntimeCheckpoint {
   coordinator: ReturnType<ParallelQSOCoordinator<WWDigiEntryData>['checkpoint']>;
   callSession: ReturnType<BoundedCallSessionController['checkpoint']>;
   receiveEpoch: number;
-  lastObservedSlotId?: string;
+  lastObservedReceiveSlotStartMs?: number;
   previousTransmitting: boolean;
   startPurpose?: 'authorized-work' | 'recovery-work';
   exhaustedAtReceiveEpoch?: number;
@@ -107,9 +107,10 @@ function selectedSender(raw: string): { callsign?: string; grid?: string } {
 
 export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   private readonly coordinator: ParallelQSOCoordinator<WWDigiEntryData>;
+  private readonly lanesByStreamId = new Map<string, WWDigiProtocolLane>();
   private readonly callSession = new BoundedCallSessionController();
   private receiveEpoch = 0;
-  private lastObservedSlotId?: string;
+  private lastObservedReceiveSlotStartMs?: number;
   private previousTransmitting = false;
   private startPurpose?: 'authorized-work' | 'recovery-work';
   private exhaustedAtReceiveEpoch?: number;
@@ -137,18 +138,22 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       maxSupportedStreams: 3,
       initialMaxStreams: this.parallelStreams(),
       entryIdPrefix: 'ww-digi',
-      createLane: ({ streamId, laneIndex }) => new WWDigiProtocolLane(
-        streamId,
-        () => {
-          const frequencies = resolveFrequencies();
-          if (frequencies.length !== 3 || !Number.isFinite(frequencies[laneIndex])) {
-            throw new Error('WW Digi lane frequencies became invalid');
-          }
-          return frequencies[laneIndex]!;
-        },
-        () => this.operator.config,
-        logger,
-      ),
+      createLane: ({ streamId, laneIndex }) => {
+        const lane = new WWDigiProtocolLane(
+          streamId,
+          () => {
+            const frequencies = resolveFrequencies();
+            if (frequencies.length !== 3 || !Number.isFinite(frequencies[laneIndex])) {
+              throw new Error('WW Digi lane frequencies became invalid');
+            }
+            return frequencies[laneIndex]!;
+          },
+          () => this.operator.config,
+          logger,
+        );
+        this.lanesByStreamId.set(streamId, lane);
+        return lane;
+      },
     });
   }
 
@@ -157,7 +162,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       coordinator: this.coordinator.checkpoint(),
       callSession: this.callSession.checkpoint(),
       receiveEpoch: this.receiveEpoch,
-      lastObservedSlotId: this.lastObservedSlotId,
+      lastObservedReceiveSlotStartMs: this.lastObservedReceiveSlotStartMs,
       previousTransmitting: this.previousTransmitting,
       startPurpose: this.startPurpose,
       exhaustedAtReceiveEpoch: this.exhaustedAtReceiveEpoch,
@@ -173,7 +178,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     this.coordinator.restore(state.coordinator);
     if (state.callSession) this.callSession.restore(state.callSession);
     this.receiveEpoch = state.receiveEpoch ?? 0;
-    this.lastObservedSlotId = state.lastObservedSlotId;
+    this.lastObservedReceiveSlotStartMs = state.lastObservedReceiveSlotStartMs;
     this.previousTransmitting = state.previousTransmitting === true;
     this.startPurpose = state.startPurpose;
     this.exhaustedAtReceiveEpoch = state.exhaustedAtReceiveEpoch;
@@ -185,11 +190,15 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   observeDecodedMessages(messages: ParsedFT8Message[], meta: QueuedStrategyObservationMeta): boolean {
     if (!this.operator.isTransmitting) this.previousTransmitting = false;
     let changed = false;
-    if (meta.slotInfo.id !== this.lastObservedSlotId) {
-      this.lastObservedSlotId = meta.slotInfo.id;
+    const observedCycle = CycleUtils.isEvenCycle(meta.slotInfo.cycleNumber) ? 0 : 1;
+    const isReceiveSlot = !this.operator.config.transmitCycles.includes(observedCycle);
+    if (isReceiveSlot && (this.lastObservedReceiveSlotStartMs === undefined
+        || meta.slotInfo.startMs > this.lastObservedReceiveSlotStartMs)) {
+      this.lastObservedReceiveSlotStartMs = meta.slotInfo.startMs;
       this.receiveEpoch += 1;
       changed = this.expireAuthorizations() || changed;
     }
+    let resumeSelectedCycle = false;
     for (const message of messages) {
       if (message.isPartialDecode) continue;
       const sender = selectedSender(message.rawMessage);
@@ -231,20 +240,23 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       const targetCallsign = 'targetCallsign' in parsed ? parsed.targetCallsign : undefined;
       const activeEntryIds = this.coordinator.getQueueSnapshot().activeEntryIds;
       const isActive = activeEntryIds.includes(entry.entryId);
+      const requestedTransmitCycle = (1 - lastHeardCycle) as 0 | 1;
       if (!isActive) {
-        this.coordinator.setRequestedTransmitCycle(entry.entryId, (1 - lastHeardCycle) as 0 | 1);
+        this.coordinator.setRequestedTransmitCycle(entry.entryId, requestedTransmitCycle);
       }
       if (!activeEntryIds.includes(entry.entryId)
-          && entry.data.status === 'authorized' && targetCallsign
+          && (entry.data.status === 'authorized' || entry.data.status === 'cycle-paused') && targetCallsign
           && targetKey(targetCallsign) !== targetKey(this.operator.config.myCallsign)) {
         if (this.coordinator.updateEntry(entry.entryId, (data) => {
           data.status = 'paused';
           data.authorizationId = undefined;
           data.authorizedAt = undefined;
           data.authorizedReceiveEpoch = undefined;
+          data.cycleResume = undefined;
           return true;
         })) changed = true;
       }
+      let parkedMatchesSelectedCycle = false;
       if (this.coordinator.updateEntry(entry.entryId, (data) => {
         let updated = false;
         if (sender.grid && data.targetGrid !== sender.grid) {
@@ -268,9 +280,26 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
           data.lastHeardCycle = lastHeardCycle;
           updated = true;
         }
+        if (data.status === 'cycle-paused'
+            && data.cycleResume) {
+          if (data.cycleResume.transmitCycle !== requestedTransmitCycle) {
+            data.cycleResume.transmitCycle = requestedTransmitCycle;
+            updated = true;
+          }
+          const updatedCheckpoint = this.lanesByStreamId.get(data.cycleResume.streamId)
+            ?.applyDecodedMessagesToCheckpoint(data.cycleResume.laneCheckpoint, [message]);
+          if (updatedCheckpoint !== undefined) {
+            data.cycleResume.laneCheckpoint = updatedCheckpoint;
+            updated = true;
+          }
+          parkedMatchesSelectedCycle = requestedTransmitCycle
+            === (this.operator.config.transmitCycles[0] === 1 ? 1 : 0);
+        }
         return updated;
       })) changed = true;
+      if (parkedMatchesSelectedCycle) resumeSelectedCycle = true;
     }
+    if (resumeSelectedCycle) this.switchActiveCycle(this.operator.config.transmitCycles[0] === 1 ? 1 : 0);
     const observed = this.coordinator.observe(messages, meta);
     return observed || changed;
   }
@@ -374,11 +403,13 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       rows: snapshot.entries.map((row, order) => {
         const stream = row.streamId ? streamsById.get(row.streamId) : undefined;
         const status = row.entry.data.status;
+        const parkedLogFailed = status === 'cycle-paused'
+          && row.entry.data.cycleResume?.settlement === 'failed';
         const displayState: AssistedQueueDisplayState = status === 'candidate' ? 'candidate'
           : status === 'dupe' ? 'dupe'
           : status === 'authorized' && !row.active ? 'authorized'
-          : status === 'review' || stream?.currentState === 'review' ? 'review'
-          : status === 'stale' || status === 'paused' ? 'paused'
+          : status === 'review' || parkedLogFailed || stream?.currentState === 'review' ? 'review'
+          : status === 'stale' || status === 'paused' || status === 'cycle-paused' ? 'paused'
           : status === 'no-response' ? 'no-response'
             : stream?.currentState === 'closing' ? 'closing'
               : row.active ? 'engaged' : 'later';
@@ -390,14 +421,15 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
           displayState,
           tone: status === 'dupe' ? 'warning'
             : status === 'authorized' && !row.active ? 'success'
-            : status === 'review' || stream?.currentState === 'review' ? 'danger'
+            : status === 'review' || parkedLogFailed || stream?.currentState === 'review' ? 'danger'
             : status === 'stale' || status === 'paused' ? 'warning'
+            : status === 'cycle-paused' ? 'neutral'
             : status === 'no-response' ? 'warning'
               : row.active ? 'active' : 'neutral',
           icon: status === 'dupe' ? 'triangle-alert'
             : status === 'authorized' && !row.active ? 'check-circle'
-            : status === 'review' || stream?.currentState === 'review' ? 'triangle-alert'
-            : status === 'stale' || status === 'paused' ? 'pause'
+            : status === 'review' || parkedLogFailed || stream?.currentState === 'review' ? 'triangle-alert'
+            : status === 'stale' || status === 'paused' || status === 'cycle-paused' ? 'pause'
             : status === 'no-response' ? 'clock'
               : row.active ? 'radio' : 'circle',
           targetGrid: row.entry.data.targetGrid,
@@ -438,7 +470,9 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       }
     }
 
+    this.resumeCommittedParkedLanes();
     const decision = await this.coordinator.decide(messages, meta);
+    const parkedCompletions = this.collectParkedCompletions();
     for (const released of decision.releasedEntries) {
       if (released.disposition !== 'retain-entry') continue;
       this.coordinator.updateEntry(released.entryId, (data) => {
@@ -481,13 +515,14 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     });
     if (fill.activatedEntryIds.length > 0) this.allowQueuedCycleSelection = false;
     const projected = this.result({
-      qsoCompletions: decision.qsoCompletions,
+      qsoCompletions: [...decision.qsoCompletions, ...parkedCompletions],
       qsoFailures: decision.qsoFailures,
       requestedTransmitCycle: allowCycleSelection ? fill.requestedTransmitCycle : undefined,
     });
     if ((projected.transmissions?.length ?? 0) === 0 && this.shouldStopForIdle()) {
       const candidates = this.countCandidates();
       const invalid = this.countInvalidAuthorizations();
+      const cyclePaused = this.countCyclePaused();
       this.stopAttention = candidates > 0
         ? {
             id: 'cq-candidates-awaiting-authorization', tone: 'info',
@@ -498,6 +533,9 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
         : invalid > 0 ? {
             id: 'cq-authorizations-invalid', tone: 'warning', title: 'attentionAuthorizationsInvalid',
             description: 'attentionAuthorizationsInvalidDesc', params: { count: invalid }, notify: true,
+          } : cyclePaused > 0 ? {
+            id: 'qso-other-cycle-paused', tone: 'info', title: 'attentionOtherCyclePaused',
+            description: 'attentionOtherCyclePausedDesc', params: { count: cyclePaused }, notify: true,
           } : {
             id: 'cq-session-complete', tone: 'success', title: 'attentionSessionComplete',
             description: 'attentionSessionCompleteDesc',
@@ -565,6 +603,10 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
           id: 'cq-collecting', tone: 'info' as const, title: 'attentionCqCollecting',
           description: 'attentionCqCollectingDesc', params: { count: this.countCandidates() },
         }] : []),
+        ...(this.countCyclePaused() > 0 ? [{
+          id: 'qso-other-cycle-paused', tone: 'info' as const, title: 'attentionOtherCyclePaused',
+          description: 'attentionOtherCyclePausedDesc', params: { count: this.countCyclePaused() },
+        }] : []),
         ...(this.stopAttention ? [this.stopAttention] : []),
         ...(extension.attentions ?? []),
       ],
@@ -589,12 +631,12 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
         const checked = await this.preflightMessage(text, this.operator.config.modeName);
         if (!checked.encodable) throw new Error(checked.error || checked.reason || 'alternate_message_not_encodable');
       }
-      const result = await this.coordinator.invokeStreamAction(
+      const result = this.withCompletionDestination(await this.coordinator.invokeStreamAction(
         invocation.target.streamId,
         invocation.target.lifecycleEpoch,
         invocation.actionId,
         invocation.payload,
-      );
+      ));
       this.validateLaneSpacing();
       if ((invocation.actionId === 'send-73-once' || invocation.actionId === 'resend-rr73')
           && !this.operator.isTransmitting) {
@@ -609,6 +651,24 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     if (invocation.actionId === 'end-queued-target') {
       this.coordinator.remove(entry.entryId, invocation.target.queueVersion);
       return { requestDecision: true };
+    }
+    if (invocation.actionId === 'retry-parked-log') {
+      const resume = entry.data.cycleResume;
+      if (entry.data.status !== 'cycle-paused' || resume?.settlement !== 'failed') {
+        throw new Error('log_retry_not_available');
+      }
+      const retry = this.lanesByStreamId.get(resume.streamId)
+        ?.retryCompletionInCheckpoint(resume.laneCheckpoint);
+      if (!retry) throw new Error('log_retry_not_available');
+      this.coordinator.updateEntry(entry.entryId, (data) => {
+        if (data.status !== 'cycle-paused' || !data.cycleResume) return false;
+        data.cycleResume.laneCheckpoint = retry.checkpoint;
+        data.cycleResume.settlement = undefined;
+        return true;
+      });
+      return this.withCompletionDestination({
+        qsoCompletions: [{ ...retry.effect, streamId: resume.streamId }],
+      });
     }
     if (invocation.actionId === 'authorize-target' || invocation.actionId === 'authorize-dupe') {
       this.authorizeEntry(entry.entryId);
@@ -665,12 +725,18 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   setSlotContent(_update: StrategyRuntimeSlotContentUpdate): void {}
 
   onOperatorTransmitCyclesChanged(change: StrategyOperatorTransmitCyclesChanged): boolean {
-    if (change.source !== 'manual' || !this.operator.isTransmitting) return false;
+    if (change.source !== 'manual') return false;
     const previous = change.previousTransmitCycles.length === 1
       ? change.previousTransmitCycles[0]
       : undefined;
     const selected = change.transmitCycles.length === 1 ? change.transmitCycles[0] : undefined;
     if ((selected !== 0 && selected !== 1) || selected === previous) return false;
+    const hasCyclePausedQso = this.coordinator.getQueueSnapshot().entries.some((row) => (
+      row.entry.data.status === 'cycle-paused'
+    ));
+    if (!this.operator.isTransmitting && !hasCyclePausedQso) return false;
+    this.switchActiveCycle(selected);
+    if (!this.operator.isTransmitting) return true;
     this.pendingManualCycleAuthorization = {
       transmitCycle: selected,
       authorizationId: randomUUID(),
@@ -682,6 +748,26 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
 
   settleQSOCompletion(settlement: StrategyQSOCompletionSettlement): void {
     this.coordinator.settleQSOCompletion(settlement);
+    const configuredCycle = this.operator.config.transmitCycles[0] === 1 ? 1 : 0;
+    for (const row of this.coordinator.getQueueSnapshot().entries) {
+      const resume = row.entry.data.cycleResume;
+      if (row.entry.data.status !== 'cycle-paused' || !resume || resume.streamId !== settlement.streamId) continue;
+      const checkpoint = this.lanesByStreamId.get(resume.streamId)
+        ?.settleCompletionInCheckpoint(resume.laneCheckpoint, settlement);
+      if (checkpoint === undefined) continue;
+      this.coordinator.setRequestedTransmitCycle(row.entry.entryId, configuredCycle);
+      this.coordinator.updateEntry(row.entry.entryId, (data) => {
+        if (data.status !== 'cycle-paused' || !data.cycleResume) return false;
+        data.cycleResume = {
+          ...data.cycleResume,
+          transmitCycle: configuredCycle,
+          laneCheckpoint: checkpoint,
+          settlement: settlement.status,
+        };
+        return true;
+      });
+    }
+    this.resumeCommittedParkedLanes();
   }
 
   onTransmissionsCompleted(receipts: StreamPhysicalReceipt[]): void {
@@ -690,7 +776,22 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
         && this.callSession.attemptsExhausted) {
       this.exhaustedAtReceiveEpoch = this.receiveEpoch;
     }
-    this.coordinator.onPhysicalReceipts(receipts.filter((receipt) => receipt.streamId !== 'cq'));
+    const laneReceipts = receipts.filter((receipt) => receipt.streamId !== 'cq');
+    for (const receipt of laneReceipts) {
+      for (const row of this.coordinator.getQueueSnapshot().entries) {
+        const resume = row.entry.data.cycleResume;
+        if (row.entry.data.status !== 'cycle-paused' || resume?.streamId !== receipt.streamId) continue;
+        const checkpoint = this.lanesByStreamId.get(receipt.streamId)
+          ?.applyPhysicalSuccessToCheckpoint(resume.laneCheckpoint, receipt);
+        if (checkpoint === undefined) continue;
+        this.coordinator.updateEntry(row.entry.entryId, (data) => {
+          if (data.status !== 'cycle-paused' || data.cycleResume?.streamId !== receipt.streamId) return false;
+          data.cycleResume.laneCheckpoint = checkpoint;
+          return true;
+        });
+      }
+    }
+    this.coordinator.onPhysicalReceipts(laneReceipts);
   }
 
   onTransmissionQueued(transmission: string): void {
@@ -708,7 +809,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     this.coordinator.reset(reason);
     this.callSession.reset();
     this.receiveEpoch = 0;
-    this.lastObservedSlotId = undefined;
+    this.lastObservedReceiveSlotStartMs = undefined;
     this.previousTransmitting = this.operator.isTransmitting;
     this.startPurpose = undefined;
     this.exhaustedAtReceiveEpoch = undefined;
@@ -723,10 +824,9 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     requestedTransmitCycle?: number;
     stop?: boolean;
   } = {}): StrategyDecisionResult {
-    const qsoCompletions = options.qsoCompletions?.map((effect) => {
-      const destination = this.completionDestination();
-      return { ...effect, ...(destination ? { destination } : {}) };
-    });
+    const qsoCompletions = this.withCompletionDestination({
+      qsoCompletions: options.qsoCompletions,
+    })?.qsoCompletions;
     return {
       transmission: null,
       transmissions: this.getTransmissions(),
@@ -791,12 +891,136 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     )).length;
   }
 
+  private countCyclePaused(): number {
+    return this.coordinator.getQueueSnapshot().entries.filter((row) => (
+      row.entry.data.status === 'cycle-paused'
+    )).length;
+  }
+
   private shouldStopForIdle(): boolean {
     if (this.callSession.state === 'calling' || this.callSession.state === 'collecting') return false;
     if (this.coordinator.getQueueSnapshot().activeEntryIds.length > 0) return false;
-    return !this.coordinator.getQueueSnapshot().entries.some((row) => (
-      row.entry.data.status === 'authorized' || row.entry.data.status === 'review'
+    return !this.coordinator.getQueueSnapshot().entries.some((row) => {
+      if (row.entry.data.status === 'authorized' || row.entry.data.status === 'review') return true;
+      const resume = row.entry.data.cycleResume;
+      if (row.entry.data.status !== 'cycle-paused' || !resume || resume.settlement !== undefined) return false;
+      return this.receiveEpoch < resume.observeUntilReceiveEpoch;
+    });
+  }
+
+  private collectParkedCompletions(): StrategyQSOCompletionEffect[] {
+    const effects: StrategyQSOCompletionEffect[] = [];
+    for (const row of this.coordinator.getQueueSnapshot().entries) {
+      const resume = row.entry.data.cycleResume;
+      if (row.entry.data.status !== 'cycle-paused' || !resume) continue;
+      const pending = this.lanesByStreamId.get(resume.streamId)
+        ?.takePendingCompletionFromCheckpoint(resume.laneCheckpoint);
+      if (!pending) continue;
+      this.coordinator.updateEntry(row.entry.entryId, (data) => {
+        if (data.status !== 'cycle-paused' || !data.cycleResume) return false;
+        data.cycleResume.laneCheckpoint = pending.checkpoint;
+        return true;
+      });
+      effects.push({ ...pending.effect, streamId: resume.streamId });
+    }
+    return effects;
+  }
+
+  private resumeCommittedParkedLanes(): void {
+    const configuredCycle = this.operator.config.transmitCycles[0] === 1 ? 1 : 0;
+    const parked = this.coordinator.getQueueSnapshot().entries.filter((row) => (
+      row.entry.data.status === 'cycle-paused'
+      && row.entry.data.cycleResume?.settlement === 'committed'
     ));
+    for (const row of parked) {
+      const resume = row.entry.data.cycleResume!;
+      this.coordinator.setRequestedTransmitCycle(row.entry.entryId, configuredCycle);
+      this.coordinator.updateEntry(row.entry.entryId, (data) => {
+        data.status = 'authorized';
+        data.cycleResume = undefined;
+        return true;
+      });
+      const activated = this.coordinator.activateEntry(row.entry.entryId, {
+        currentTransmitCycle: configuredCycle,
+        streamId: resume.streamId,
+      });
+      if (activated.activatedEntryIds.length === 0) {
+        this.coordinator.updateEntry(row.entry.entryId, (data) => {
+          data.status = 'cycle-paused';
+          data.cycleResume = structuredClone(resume);
+          return true;
+        });
+        continue;
+      }
+      this.lanesByStreamId.get(resume.streamId)?.restore(structuredClone(resume.laneCheckpoint));
+    }
+  }
+
+  private switchActiveCycle(selectedCycle: 0 | 1): void {
+    const checkpoint = this.coordinator.checkpoint();
+    const streamsById = new Map(this.coordinator.getStreams().map((stream) => [stream.streamId, stream]));
+    for (const binding of checkpoint.bindings) {
+      if (binding.transmitCycle === selectedCycle) continue;
+      const completionState = streamsById.get(binding.streamId)?.completion?.state;
+      if (completionState === 'committing' || completionState === 'committed' || completionState === 'failed') {
+        continue;
+      }
+      const laneCheckpoint = checkpoint.lanes.find((lane) => lane.streamId === binding.streamId)?.checkpoint;
+      if (laneCheckpoint === undefined) continue;
+      this.coordinator.releaseEntry(binding.entryId, {
+        removeEntry: false,
+        resetLane: true,
+        reason: 'operator selected the other transmit cycle',
+      });
+      this.coordinator.updateEntry(binding.entryId, (data) => {
+        data.status = 'cycle-paused';
+        data.cycleResume = {
+          streamId: binding.streamId,
+          transmitCycle: binding.transmitCycle,
+          laneCheckpoint: structuredClone(laneCheckpoint),
+          observeUntilReceiveEpoch: this.receiveEpoch + 2,
+        };
+        return true;
+      });
+    }
+
+    const resumable = this.coordinator.getQueueSnapshot().entries
+      .filter((row) => row.entry.data.status === 'cycle-paused'
+        && row.entry.data.cycleResume?.transmitCycle === selectedCycle)
+      .sort((left, right) => (
+        left.entry.data.cycleResume!.streamId.localeCompare(right.entry.data.cycleResume!.streamId)
+      ));
+    for (const row of resumable) {
+      const resume = row.entry.data.cycleResume!;
+      this.coordinator.updateEntry(row.entry.entryId, (data) => {
+        data.status = 'authorized';
+        data.cycleResume = undefined;
+        return true;
+      });
+      const activated = this.coordinator.activateEntry(row.entry.entryId, {
+        currentTransmitCycle: selectedCycle,
+        streamId: resume.streamId,
+      });
+      if (activated.activatedEntryIds.length === 0) {
+        this.coordinator.updateEntry(row.entry.entryId, (data) => {
+          data.status = 'cycle-paused';
+          data.cycleResume = structuredClone(resume);
+          return true;
+        });
+        continue;
+      }
+      this.lanesByStreamId.get(resume.streamId)?.restore(structuredClone(resume.laneCheckpoint));
+    }
+  }
+
+  private withCompletionDestination(result: StrategyActionResult | void): StrategyActionResult | void {
+    if (!result?.qsoCompletions?.length) return result;
+    const destination = this.completionDestination();
+    if (!destination) return result;
+    return {
+      ...result,
+      qsoCompletions: result.qsoCompletions.map((effect) => ({ ...effect, destination })),
+    };
   }
 
   private async classifyCandidateDupes(): Promise<void> {
@@ -956,6 +1180,13 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       return [{
         id: 'reauthorize-target', label: 'actionReauthorize', icon: 'rotate-right', tone: 'primary' as const, presentation: 'primary' as const,
       }, {
+        id: 'end-queued-target', label: 'actionEndQso', icon: 'xmark', tone: 'danger' as const, presentation: 'menu' as const,
+      }];
+    }
+    if (entry.data.status === 'cycle-paused') {
+      return [...(entry.data.cycleResume?.settlement === 'failed' ? [{
+        id: 'retry-parked-log', label: 'actionRetry', icon: 'rotate-right', tone: 'primary' as const, presentation: 'primary' as const,
+      }] : []), {
         id: 'end-queued-target', label: 'actionEndQso', icon: 'xmark', tone: 'danger' as const, presentation: 'menu' as const,
       }];
     }

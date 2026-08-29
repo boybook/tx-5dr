@@ -35,6 +35,10 @@ import {
   AudioStreamManager,
   CW_INPUT_PROCESSING_SAMPLE_RATE,
   DEFAULT_INPUT_PROCESSING_SAMPLE_RATE,
+  type AudioPlaybackReadiness,
+  type PlaybackKind,
+  type PlayAudioOptions,
+  type StopPlaybackOptions,
 } from './audio/AudioStreamManager.js';
 import { WSJTXDecodeWorkQueue } from './decode/WSJTXDecodeWorkQueue.js';
 import type { DecodeWorkerPoolHealthSnapshot } from './decode/WSJTXDecodeProcessPool.js';
@@ -86,6 +90,14 @@ type OperatingStateSyncStatus = 'applied' | 'skipped-offline' | 'partially-appli
 interface OperatingStateSyncResult {
   status: OperatingStateSyncStatus;
   detail?: string;
+}
+
+interface PhysicalTxAudioBackend {
+  playAudio(audioData: Float32Array, sampleRate: number, options?: PlayAudioOptions): Promise<void>;
+  stopCurrentPlayback(options?: StopPlaybackOptions): Promise<number>;
+  prepareAudioPlayback(kind: PlaybackKind): Promise<AudioPlaybackReadiness>;
+  getAudioPlaybackReadiness(kind: PlaybackKind): AudioPlaybackReadiness;
+  isPlaying(kind?: PlaybackKind): boolean;
 }
 
 // 子系统
@@ -232,6 +244,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private clockSource: ClockSourceSystem;
   private currentMode: ModeDescriptor = MODES.FT8;
   private audioStreamManager: AudioStreamManager;
+  private physicalTxAudioBackend: PhysicalTxAudioBackend;
   private realDecodeQueue: WSJTXDecodeWorkQueue;
   private realEncodeQueue: WSJTXEncodeWorkQueue;
   private slotPackManager: SlotPackManager;
@@ -279,6 +292,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private _callsignTracker: CallsignContextTracker;
   private ntpCalibrationService: NtpCalibrationService;
   private virtualRadioSession: VirtualRadioSession | null = null;
+  private virtualRadioSessionStopPromise: Promise<void> | null = null;
   private dataDir = '';
   private voiceManualPttActive = false;
   private voiceKeyerPttActive = false;
@@ -311,6 +325,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       },
     );
     this.audioStreamManager = new AudioStreamManager({ now: () => this.clockSource.now() });
+    this.physicalTxAudioBackend = this.audioStreamManager;
     this.realDecodeQueue = new WSJTXDecodeWorkQueue();
     const decodeWorkerEvents = this as unknown as DecodeWorkerEngineEmitter;
     this.realDecodeQueue.on('decodeWorkerUnavailable', (status) => {
@@ -340,44 +355,13 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.physicalTxCoordinator = new PhysicalTxCoordinator({
       isRadioConnected: () => this.radioManager.isConnected(),
       setPTT: (active) => this.radioManager.setPTT(active),
-      playAudio: async (audioData, sampleRate, options) => {
-        if (ConfigManager.getInstance().getActiveVirtualRadioProfile()) {
-          if (!this.virtualRadioSession) {
-            throw new Error('virtual radio playback is unavailable while its session is stopped');
-          }
-          return this.virtualRadioSession.playAudio(audioData, sampleRate, options);
-        }
-        return this.audioStreamManager.playAudio(audioData, sampleRate, options);
-      },
-      stopCurrentPlayback: (options) => {
-        if (ConfigManager.getInstance().getActiveVirtualRadioProfile()) {
-          return this.virtualRadioSession?.stopCurrentPlayback(options) ?? Promise.resolve(0);
-        }
-        return this.audioStreamManager.stopCurrentPlayback(options);
-      },
-      prepareAudioPlayback: (kind) => {
-        if (ConfigManager.getInstance().getActiveVirtualRadioProfile()) {
-          return this.virtualRadioSession?.prepareAudioPlayback(kind) ?? Promise.resolve({
-            ready: false,
-            waitedForDrain: false,
-            reason: 'virtual radio session is not running',
-          });
-        }
-        return this.audioStreamManager.prepareAudioPlayback(kind);
-      },
-      getAudioPlaybackReadiness: (kind) => {
-        if (ConfigManager.getInstance().getActiveVirtualRadioProfile()) {
-          return this.virtualRadioSession?.getAudioPlaybackReadiness(kind) ?? {
-            ready: false,
-            waitedForDrain: false,
-            reason: 'virtual radio session is not running',
-          };
-        }
-        return this.audioStreamManager.getAudioPlaybackReadiness(kind);
-      },
-      isAudioPlaying: (kind) => ConfigManager.getInstance().getActiveVirtualRadioProfile()
-        ? (this.virtualRadioSession?.isPlaying(kind) ?? false)
-        : this.audioStreamManager.isPlaying(kind),
+      playAudio: (audioData, sampleRate, options) => (
+        this.physicalTxAudioBackend.playAudio(audioData, sampleRate, options)
+      ),
+      stopCurrentPlayback: (options) => this.physicalTxAudioBackend.stopCurrentPlayback(options),
+      prepareAudioPlayback: (kind) => this.physicalTxAudioBackend.prepareAudioPlayback(kind),
+      getAudioPlaybackReadiness: (kind) => this.physicalTxAudioBackend.getAudioPlaybackReadiness(kind),
+      isAudioPlaying: (kind) => this.physicalTxAudioBackend.isPlaying(kind),
       setTxDialOffset: (shiftHz) => this.radioManager.setTxDialOffset(shiftHz),
       clearTxDialOffset: () => this.radioManager.clearTxDialOffset(),
       now: () => this.clockSource.now(),
@@ -517,8 +501,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       requestOperatorStrategyStop: (operatorId, reason) => {
         this._operatorManager.requestStrategyStop(operatorId, reason);
       },
-      requestOperatorStrategyStart: (operatorId) => {
-        this._operatorManager.startOperator(operatorId);
+      prepareOperatorStrategyStart: (operatorId) => {
+        return this._operatorManager.prepareOperatorStrategyStart(operatorId);
+      },
+      cancelPreparedOperatorStrategyStart: (operatorId, reason) => {
+        this._operatorManager.cancelPreparedOperatorStrategyStart(operatorId, reason);
       },
       transitionTargetReservation: (operatorId, epoch, targetCallsign) => (
         this._operatorManager.transitionTargetReservation(operatorId, epoch, targetCallsign)
@@ -1519,6 +1506,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   }
 
   private async prepareVirtualRadioSession(): Promise<void> {
+    await this.virtualRadioSessionStopPromise;
     const profile = ConfigManager.getInstance().getActiveVirtualRadioProfile();
     if (!profile) {
       await this.stopVirtualRadioSession('physical profile active');
@@ -1527,7 +1515,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     if (this.engineMode !== 'digital' || (this.currentMode.name !== 'FT8' && this.currentMode.name !== 'FT4')) {
       throw new Error('virtual radio supports only FT8 and FT4 digital engine modes');
     }
-    if (this.virtualRadioSession) return;
+    if (this.virtualRadioSession) {
+      this.physicalTxAudioBackend = this.virtualRadioSession;
+      return;
+    }
     const scenarios = validateVirtualRadioSafety(
       profile,
       ConfigManager.getInstance(),
@@ -1550,6 +1541,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     try {
       await session.start();
       this.virtualRadioSession = session;
+      this.physicalTxAudioBackend = session;
     } catch (error) {
       await session.stop('virtual session start failed');
       throw error;
@@ -1557,9 +1549,29 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   }
 
   private async stopVirtualRadioSession(reason: string): Promise<void> {
+    if (this.virtualRadioSessionStopPromise) {
+      return this.virtualRadioSessionStopPromise;
+    }
     const session = this.virtualRadioSession;
+    if (!session) return;
     this.virtualRadioSession = null;
-    await session?.stop(reason);
+    const stopPromise = (async () => {
+      try {
+        await session.stop(reason);
+      } finally {
+        if (this.physicalTxAudioBackend === session) {
+          this.physicalTxAudioBackend = this.audioStreamManager;
+        }
+      }
+    })();
+    this.virtualRadioSessionStopPromise = stopPromise;
+    try {
+      await stopPromise;
+    } finally {
+      if (this.virtualRadioSessionStopPromise === stopPromise) {
+        this.virtualRadioSessionStopPromise = null;
+      }
+    }
   }
 
   async destroy(): Promise<void> {

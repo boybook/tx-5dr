@@ -306,19 +306,40 @@ export class DecisionOrchestrator {
     token: OperatorCommandToken,
     signal: AbortSignal,
   ): Promise<StrategyDecisionResult | null> {
+    if (this.deps.hasTargetQueue?.(operatorId) !== true) return null;
+    return this.revalidateStrategyExecutionInLane(operatorId, token, signal);
+  }
+
+  async revalidateStrategyExecutionInLane(
+    operatorId: string,
+    token: OperatorCommandToken,
+    signal: AbortSignal,
+    options: { deferEffects?: boolean } = {},
+  ): Promise<StrategyDecisionResult | null> {
     const operator = this.deps.getOperatorById(operatorId);
-    if (!operator?.isTransmitting || this.deps.hasTargetQueue?.(operatorId) !== true) return null;
+    if (!operator?.isTransmitting) return null;
     const decision = await this.invokeStrategyDecision(
       operatorId,
       [],
       { isReDecision: true },
       token,
       signal,
+      { commitQsoCompletions: options.deferEffects !== true },
     );
     if (!this.isCommandCurrent(token, signal)) return null;
+    if (options.deferEffects) return decision;
     await this.notifyQSOFailIfPresent(operatorId, decision);
+    if (!this.isCommandCurrent(token, signal)) return null;
     if (decision?.stop) await this.applyStrategyStop(operatorId);
     return decision;
+  }
+
+  async applyRevalidatedStrategyEffects(
+    operatorId: string,
+    decision: StrategyDecisionResult | null,
+  ): Promise<void> {
+    if (decision?.stop) await this.applyStrategyStop(operatorId);
+    await this.notifyQSOFailIfPresent(operatorId, decision);
   }
 
   private async reDecideOperatorInLane(
@@ -810,6 +831,7 @@ export class DecisionOrchestrator {
     meta: { isReDecision: boolean },
     token: OperatorCommandToken,
     signal: AbortSignal,
+    options: { commitQsoCompletions?: boolean } = {},
   ): Promise<StrategyDecisionResult | null> {
     if (!this.deps.getStrategyRuntime(operatorId)) {
       return null;
@@ -845,13 +867,7 @@ export class DecisionOrchestrator {
         );
         if (!result) return null;
         if (!this.isCommandCurrent(token, signal)) {
-          this.deps.invokeStrategyRuntimeSync(
-            operatorId,
-            'restore:superseded-decision',
-            (runtime) => {
-              runtime.restore(snapshotPluginData(checkpoint, 'structured'));
-            },
-          );
+          this.restoreDecisionCheckpoint(operatorId, checkpoint, token, 'superseded-decision');
           return null;
         }
 
@@ -867,13 +883,12 @@ export class DecisionOrchestrator {
             ? this.deps.transitionTargetReservation(operatorId, token.epoch, nextTarget)
             : true;
         if (!reservationAccepted) {
-          this.deps.invokeStrategyRuntimeSync(
+          if (!this.restoreDecisionCheckpoint(
             operatorId,
-            'restore:target-reservation-conflict',
-            (runtime) => {
-              runtime.restore(snapshotPluginData(checkpoint, 'structured'));
-            },
-          );
+            checkpoint,
+            token,
+            'target-reservation-conflict',
+          )) return null;
           if (streamTargets.length > 1 || !nextTarget || rejectedTargets.has(nextTarget)) {
             logger.warn('Strategy repeatedly selected a target reserved by another operator', {
               operatorId,
@@ -924,7 +939,7 @@ export class DecisionOrchestrator {
           ...(result.qsoCompletion ? [result.qsoCompletion] : []),
           ...(result.qsoCompletions ?? []),
         ];
-        if (qsoCompletions.length > 0) {
+        if (qsoCompletions.length > 0 && options.commitQsoCompletions !== false) {
           this.commitQSOCompletionEffects(
             operatorId,
             runtimeGeneration,
@@ -934,13 +949,7 @@ export class DecisionOrchestrator {
         }
         return result;
       } catch (error) {
-        this.deps.invokeStrategyRuntimeSync(
-          operatorId,
-          'restore:failed-decision',
-          (runtime) => {
-            runtime.restore(snapshotPluginData(checkpoint, 'structured'));
-          },
-        );
+        this.restoreDecisionCheckpoint(operatorId, checkpoint, token, 'failed-decision');
         if (signal.aborted || (error instanceof Error && error.name === 'AbortError')) {
           logger.debug('Discarded aborted strategy decision', { operatorId, epoch: token.epoch, source });
           return null;
@@ -949,6 +958,23 @@ export class DecisionOrchestrator {
       }
     }
     return null;
+  }
+
+  private restoreDecisionCheckpoint(
+    operatorId: string,
+    checkpoint: unknown,
+    token: OperatorCommandToken,
+    reason: string,
+  ): boolean {
+    if (!this.deps.intentCoordinator.ownsExecution(token)) return false;
+    this.deps.invokeStrategyRuntimeSync(
+      operatorId,
+      `restore:${reason}`,
+      (runtime) => {
+        runtime.restore(snapshotPluginData(checkpoint, 'structured'));
+      },
+    );
+    return true;
   }
 
   private commitQSOCompletionEffects(

@@ -547,29 +547,55 @@ function runtimePresentation(ctx: StrategyPluginContext): Pick<
     }],
   };
   const confirmed = isSessionConfirmed(ctx, contestYear, session);
-  const gateReason = !confirmed
+  const sessionGateReason = !confirmed
     ? 'transmitBlockedSetupUnconfirmed'
     : session.health.state !== 'healthy'
       ? 'transmitBlockedLedgerUnhealthy'
       : undefined;
-  if (!gateReason) return { messagePresentation };
+  if (sessionGateReason) {
+    return {
+      messagePresentation,
+      transmitGate: { allowed: false, reason: sessionGateReason, actionId: 'open-contest-settings' },
+      actions: [{
+        id: 'open-contest-settings',
+        label: 'actionOpenContestSettings',
+        icon: 'file-lines',
+        tone: 'warning',
+        presentation: 'primary',
+        navigation: { kind: 'plugin-page', pageId: 'contest-log' },
+      }],
+      attentions: [{
+        id: `contest-session-gate:${contestYear}:${sessionGateReason}`,
+        tone: session.health.state === 'degraded' ? 'danger' : 'warning',
+        title: !confirmed ? 'attentionContestSetupRequired' : 'attentionContestLedgerUnhealthy',
+        description: !confirmed ? 'attentionContestSetupRequiredDesc' : 'attentionContestLedgerUnhealthyDesc',
+        actionIds: ['open-contest-settings'],
+      }],
+    };
+  }
+
+  const operatingGate = !resolveWWDigiBand(ctx.radio.frequency)
+    ? {
+        reason: 'transmitBlockedBand',
+        title: 'attentionContestBandUnavailable',
+        description: 'attentionContestBandUnavailableDesc',
+      }
+    : !ctx.radio.isSimulation && !isWithinWWDigiContestPeriod(Date.now(), contestYear)
+      ? {
+          reason: 'transmitBlockedOutsidePeriod',
+          title: 'attentionContestOutsidePeriod',
+          description: 'attentionContestOutsidePeriodDesc',
+        }
+      : undefined;
+  if (!operatingGate) return { messagePresentation };
   return {
     messagePresentation,
-    transmitGate: { allowed: false, reason: gateReason, actionId: 'open-contest-settings' },
-    actions: [{
-      id: 'open-contest-settings',
-      label: 'actionOpenContestSettings',
-      icon: 'file-lines',
-      tone: 'warning',
-      presentation: 'primary',
-      navigation: { kind: 'plugin-page', pageId: 'contest-log' },
-    }],
+    transmitGate: { allowed: false, reason: operatingGate.reason },
     attentions: [{
-      id: `contest-session-gate:${contestYear}:${gateReason}`,
-      tone: session.health.state === 'degraded' ? 'danger' : 'warning',
-      title: !confirmed ? 'attentionContestSetupRequired' : 'attentionContestLedgerUnhealthy',
-      description: !confirmed ? 'attentionContestSetupRequiredDesc' : 'attentionContestLedgerUnhealthyDesc',
-      actionIds: ['open-contest-settings'],
+      id: `contest-operating-gate:${contestYear}:${operatingGate.reason}`,
+      tone: 'warning',
+      title: operatingGate.title,
+      description: operatingGate.description,
     }],
   };
 }

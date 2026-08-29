@@ -19,6 +19,7 @@ import { FT8MessageParser, LogbookOperationError } from '@tx5dr/core';
 import { ConfigManager } from '../../config/config-manager.js';
 import { LogManager } from '../../log/LogManager.js';
 import { PluginManager } from '../../plugin/PluginManager.js';
+import { OperatorIntentCoordinator } from '../../transmission/OperatorIntentCoordinator.js';
 import { RadioOperatorManager } from '../RadioOperatorManager.js';
 
 function buildSlotPack(slotId: string, startMs: number, frames: FrameMessage[]): SlotPack {
@@ -167,6 +168,10 @@ function automaticQSO(id: string, callsign = 'N0CALL'): QSORecord {
 }
 
 describe('operator transmit-cycle plugin projection', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('forwards the previous cycle and manual source before rebuilding the frame', async () => {
     const { manager } = createManager({
       logBook: {
@@ -208,14 +213,52 @@ describe('operator transmit-cycle plugin projection', () => {
       manager.stop();
     }
   });
+
+  it('waits for a stale decision checkpoint before applying a manual cycle change', async () => {
+    mockConfigManagerForOperatorMutation();
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG5DRB',
+    });
+    const order: string[] = [];
+    manager.setPluginManager({
+      notifyOperatorTransmitCyclesChanged: vi.fn(() => { order.push('cycle'); }),
+      invalidateDecisionMessageSet: vi.fn(),
+      isQueueExecutionSuspended: vi.fn(() => false),
+      getCurrentTransmissions: vi.fn(() => []),
+      getOperatorRuntimeStatus: vi.fn(() => undefined),
+      isRunning: vi.fn(() => false),
+    } as any);
+    await addBasicOperator(manager, 'op1', 'BG5DRB');
+    let markDecisionEntered!: () => void;
+    const decisionEntered = new Promise<void>((resolve) => { markDecisionEntered = resolve; });
+    const coordinator = (manager as any).intentCoordinator as OperatorIntentCoordinator;
+    const staleDecision = coordinator.submit('op1', 'slot-auto', async (_token, signal) => {
+      markDecisionEntered();
+      await new Promise<void>((resolve) => {
+        if (signal.aborted) resolve();
+        else signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+      order.push('restore');
+    });
+
+    await decisionEntered;
+    await manager.setOperatorTransmitCycles('op1', [1]);
+    await staleDecision;
+
+    expect(order).toEqual(['restore', 'cycle']);
+    expect(manager.getOperatorById('op1')?.getTransmitCycles()).toEqual([1]);
+  });
 });
 
 function attachQSOHookSpy(manager: RadioOperatorManager) {
   const notifyQSOComplete = vi.fn().mockResolvedValue(undefined);
+  const notifyPluginSessionQSOComplete = vi.fn().mockResolvedValue(undefined);
   const autoSync = vi.fn();
   const interruptOperatorTransmission = vi.fn().mockResolvedValue(undefined);
   manager.setPluginManager({
     notifyQSOComplete,
+    notifyPluginSessionQSOComplete,
     getOperatorRuntimeStatus: vi.fn(() => undefined),
     resetOperatorPluginRuntime: vi.fn(),
     interruptOperatorTransmission,
@@ -223,7 +266,12 @@ function attachQSOHookSpy(manager: RadioOperatorManager) {
       onQSOComplete: autoSync,
     },
   } as any);
-  return { notifyQSOComplete, autoSync, interruptOperatorTransmission };
+  return {
+    notifyQSOComplete,
+    notifyPluginSessionQSOComplete,
+    autoSync,
+    interruptOperatorTransmission,
+  };
 }
 
 function mockMaxSameTransmissionCount(limit: number) {
@@ -707,6 +755,64 @@ describe('RadioOperatorManager same transmission guard', () => {
     expect(encodeQueue.push.mock.calls.filter((call) => call[0].operatorId === 'op2')).toHaveLength(2);
   });
 
+  it('cannot reset the limit by rotating stream ids for the same physical text', async () => {
+    mockMaxSameTransmissionCount(2);
+    const encodeQueue = { push: vi.fn() };
+    const { manager, eventEmitter } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+      clockNow: 0,
+      encodeQueue,
+    });
+
+    await addBasicOperator(manager, 'op1');
+    manager.start();
+    for (let index = 0; index < 3; index += 1) {
+      eventEmitter.emit('requestTransmit', {
+        operatorId: 'op1',
+        streamId: `rotating-${index}`,
+        transmission: 'CQ BG4IAJ OM96',
+      });
+      manager.processPendingTransmissions(createSlotInfo(index * MODES.FT8.slotMs));
+    }
+
+    expect(encodeQueue.push).toHaveBeenCalledTimes(2);
+    expect(manager.getOperatorById('op1')?.isTransmitting).toBe(false);
+  });
+
+  it('allows three stable streams to advance independently', async () => {
+    mockMaxSameTransmissionCount(1);
+    const encodeQueue = { push: vi.fn() };
+    const { manager, eventEmitter } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+      clockNow: 0,
+      encodeQueue,
+    });
+
+    await addBasicOperator(manager, 'op1');
+    manager.start();
+    const frames = [
+      ['JA1AAA BG4IAJ OM96', 'K2BBB BG4IAJ FN31', 'VK3CCC BG4IAJ QF22'],
+      ['JA1AAA BG4IAJ -10', 'K2BBB BG4IAJ -08', 'VK3CCC BG4IAJ -06'],
+      ['JA1AAA BG4IAJ RR73', 'K2BBB BG4IAJ RR73', 'VK3CCC BG4IAJ RR73'],
+    ];
+    for (const [index, messages] of frames.entries()) {
+      eventEmitter.emit('requestTransmitBatch', {
+        operatorId: 'op1',
+        transmissions: messages.map((transmission, streamIndex) => ({
+          streamId: `stream-${streamIndex + 1}`,
+          transmission,
+          audioFrequencyHz: 1_000 + streamIndex * 200,
+        })),
+      });
+      manager.processPendingTransmissions(createSlotInfo(index * MODES.FT8.slotMs));
+    }
+
+    expect(encodeQueue.push).toHaveBeenCalledTimes(9);
+    expect(manager.getOperatorById('op1')?.isTransmitting).toBe(true);
+  });
+
   it('does not count same-slot replacement encodes as another repeated transmission', async () => {
     mockMaxSameTransmissionCount(1);
     const encodeQueue = { push: vi.fn() };
@@ -853,14 +959,20 @@ describe('RadioOperatorManager automatic QSO logging', () => {
       getStatistics: vi.fn(async () => ({ totalQSOs: 0 })),
     };
     const {
-      manager, fakeLogManager, sessionLogBook,
+      manager, eventEmitter, fakeLogManager, sessionLogBook,
     } = createManager({
       logBook: { id: 'primary-log', name: 'Primary', provider },
       callsign: 'BG5DRB',
     });
     sessionLogBook.provider.addQSO = sessionAdd;
     sessionLogBook.provider.getLastQSOWithCallsign = vi.fn(async () => null);
-    const { notifyQSOComplete, autoSync } = attachQSOHookSpy(manager);
+    const added = vi.fn();
+    const updated = vi.fn();
+    const logbookUpdated = vi.fn();
+    eventEmitter.on('qsoRecordAdded', added);
+    eventEmitter.on('qsoRecordUpdated', updated);
+    eventEmitter.on('logbookUpdated', logbookUpdated);
+    const { notifyQSOComplete, notifyPluginSessionQSOComplete, autoSync } = attachQSOHookSpy(manager);
 
     await invokeRecordQSO(manager, {
       operatorId: 'op1',
@@ -877,7 +989,15 @@ describe('RadioOperatorManager automatic QSO logging', () => {
     expect(sessionAdd).toHaveBeenCalledOnce();
     expect(primaryAdd).not.toHaveBeenCalled();
     expect(autoSync).not.toHaveBeenCalled();
-    expect(notifyQSOComplete).toHaveBeenCalledOnce();
+    expect(notifyQSOComplete).not.toHaveBeenCalled();
+    expect(notifyPluginSessionQSOComplete).toHaveBeenCalledWith(
+      'op1',
+      'ww-digi',
+      expect.objectContaining({ id: 'contest-qso' }),
+    );
+    expect(added).not.toHaveBeenCalled();
+    expect(updated).not.toHaveBeenCalled();
+    expect(logbookUpdated).not.toHaveBeenCalled();
   });
 
   it('fails a missing plugin-session destination without falling back to the primary logbook', async () => {
@@ -3468,6 +3588,46 @@ describe('RadioOperatorManager transmission acceptance notification', () => {
     resolveResume(true);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(encodeQueue.push).toHaveBeenCalledTimes(1);
+  });
+
+  it('prepares a strategy-action start without scheduling its own decision or physical frame', async () => {
+    mockMaxSameTransmissionCount(20);
+    const encodeQueue = { push: vi.fn() };
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+      clockNow: 4_500,
+      encodeQueue,
+    });
+    await manager.addOperator({
+      id: 'op1',
+      myCallsign: 'BG4IAJ',
+      myGrid: 'OM96',
+      frequency: 1_500,
+      transmitCycles: [0],
+      mode: MODES.FT8,
+    });
+    const suspendQueueExecution = vi.fn();
+    const resumeQueueExecution = vi.fn();
+    manager.setPluginManager({
+      hasTargetQueue: vi.fn(() => true),
+      suspendQueueExecution,
+      resumeQueueExecution,
+      getCurrentTransmission: vi.fn(() => 'JA1AAA BG4IAJ -10'),
+      getCurrentTransmissions: vi.fn(() => defaultTransmissionSet('JA1AAA BG4IAJ -10')),
+      getOperatorRuntimeStatus: vi.fn(() => undefined),
+    } as any);
+    manager.start();
+
+    expect(manager.prepareOperatorStrategyStart('op1')).toBe(true);
+    expect(manager.getOperatorById('op1')?.isTransmitting).toBe(true);
+    expect(suspendQueueExecution).toHaveBeenCalledWith('op1');
+    expect(resumeQueueExecution).not.toHaveBeenCalled();
+    expect(encodeQueue.push).not.toHaveBeenCalled();
+
+    manager.cancelPreparedOperatorStrategyStart('op1', 'test rollback');
+    expect(manager.getOperatorById('op1')?.isTransmitting).toBe(false);
+    expect(encodeQueue.push).not.toHaveBeenCalled();
   });
 
   it('includes the authoritative queue projection in operator-status deduplication', () => {

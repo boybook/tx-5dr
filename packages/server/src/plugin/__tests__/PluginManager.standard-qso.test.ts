@@ -588,19 +588,24 @@ describe('PluginManager standard-qso late re-decision', () => {
       const changed = vi.fn();
       eventEmitter.on('operatorStreamStateChanged', changed);
 
-      pluginManager.setOperatorStreamState(operatorId, {
+      await pluginManager.setOperatorStreamState(operatorId, {
         streamId: stream!.streamId,
         stateId: 'TX4',
         expectedLifecycleEpoch: stream!.qsoLifecycleEpoch,
       });
 
       expect(pluginManager.getOperatorRuntimeStatus(operatorId).streams?.[0]?.currentState).toBe('TX4');
-      expect(changed).toHaveBeenCalledWith({ operatorId, streamId: stream!.streamId, state: 'TX4' });
-      expect(() => pluginManager.setOperatorStreamState(operatorId, {
+      expect(changed).toHaveBeenCalledWith(expect.objectContaining({
+        operatorId,
+        streamId: stream!.streamId,
+        state: 'TX4',
+        source: 'manual',
+      }));
+      await expect(pluginManager.setOperatorStreamState(operatorId, {
         streamId: stream!.streamId,
         stateId: 'TX3',
         expectedLifecycleEpoch: stream!.qsoLifecycleEpoch + 1,
-      })).toThrow('stream_lifecycle_conflict');
+      })).rejects.toThrow('stream_lifecycle_conflict');
     });
 
     it('observes direct callers while stopped without starting the operator', async () => {

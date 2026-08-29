@@ -287,6 +287,9 @@ export class RadioOperatorManager {
 
   // 每操作员连续相同发射文本计数，用于防止插件/策略卡住后无限重复发射。
   private sameTransmissionGuardStates: Map<string, SameTransmissionGuardState> = new Map();
+  // Stream IDs are plugin-owned, so the physical text set is guarded separately
+  // to prevent rotating IDs from resetting the fail-safe.
+  private operatorTransmissionSetGuardStates: Map<string, SameTransmissionGuardState> = new Map();
   private readonly unsavedQsoAttempts = new Map<string, UnsavedQsoAttempt>();
   private readonly qsoPersistenceInFlight = new Map<string, string>();
   private readonly unsavedQsoRetryFlights = new Map<string, Promise<QSORecord>>();
@@ -648,15 +651,18 @@ export class RadioOperatorManager {
 
         // Everything below is a post-commit side effect. A listener, sync plugin,
         // or statistics failure must never turn a durable QSO into a write failure.
-        try {
-          this.eventEmitter.emit(eventName as any, {
-            operatorId: data.operatorId,
-            logBookId: logBook.id,
-            qsoRecord: persistedQSO
-          });
-          logger.debug(`Emitted ${eventName} event: ${persistedQSO.callsign}`);
-        } catch (eventError) {
-          logger.warn(`Failed to emit ${eventName} after QSO commit:`, eventError);
+        const isPluginSession = logBook.binding?.kind === 'plugin-session';
+        if (!isPluginSession) {
+          try {
+            this.eventEmitter.emit(eventName as any, {
+              operatorId: data.operatorId,
+              logBookId: logBook.id,
+              qsoRecord: persistedQSO
+            });
+            logger.debug(`Emitted ${eventName} event: ${persistedQSO.callsign}`);
+          } catch (eventError) {
+            logger.warn(`Failed to emit ${eventName} after QSO commit:`, eventError);
+          }
         }
 
         if (shouldAutoSync && logBook.binding?.kind !== 'plugin-session') {
@@ -671,22 +677,32 @@ export class RadioOperatorManager {
         }
 
         try {
-          await this._pluginManager?.notifyQSOComplete(data.operatorId, persistedQSO);
+          if (logBook.binding?.kind === 'plugin-session') {
+            await this._pluginManager?.notifyPluginSessionQSOComplete?.(
+              data.operatorId,
+              logBook.binding.pluginName,
+              persistedQSO,
+            );
+          } else {
+            await this._pluginManager?.notifyQSOComplete(data.operatorId, persistedQSO);
+          }
         } catch (pluginError) {
           logger.warn('Plugin QSO completion notification failed after QSO commit:', pluginError);
         }
         
         // 获取更新的统计信息并发射日志本更新事件
-        try {
-          const statistics = await logBook.provider.getStatistics();
-          this.eventEmitter.emit('logbookUpdated' as any, {
-            logBookId: logBook.id,
-            statistics,
-            operatorId: data.operatorId,
-          });
-          logger.debug(`Emitted logbookUpdated event: ${logBook.name}`);
-        } catch (statsError) {
-          logger.warn(`Failed to get logbook statistics:`, statsError);
+        if (!isPluginSession) {
+          try {
+            const statistics = await logBook.provider.getStatistics();
+            this.eventEmitter.emit('logbookUpdated' as any, {
+              logBookId: logBook.id,
+              statistics,
+              operatorId: data.operatorId,
+            });
+            logger.debug(`Emitted logbookUpdated event: ${logBook.name}`);
+          } catch (statsError) {
+            logger.warn(`Failed to get logbook statistics:`, statsError);
+          }
         }
 
       } catch (error) {
@@ -852,7 +868,13 @@ export class RadioOperatorManager {
     this.eventEmitter.on('operatorSlotChanged', handleOperatorSlotChanged);
     this.eventListeners.set('operatorSlotChanged', handleOperatorSlotChanged);
 
-    const handleOperatorStreamStateChanged = (data: { operatorId: string; streamId: string; state: string }) => {
+    const handleOperatorStreamStateChanged = (data: {
+      operatorId: string;
+      streamId: string;
+      state: string;
+      commandEpoch?: number;
+      source?: 'manual' | 'plugin' | 'late-decode' | 'slot-auto';
+    }) => {
       logger.info('operatorStreamStateChanged -> requestOperatorFrameMutation', {
         operatorId: data.operatorId,
         streamId: data.streamId,
@@ -860,6 +882,8 @@ export class RadioOperatorManager {
       });
       this.requestOperatorFrameMutation(data.operatorId, {
         kind: 'slot',
+        commandEpoch: data.commandEpoch,
+        source: data.source,
         reason: `operator stream ${data.streamId} state changed`,
       });
       this.emitOperatorStatusUpdate(data.operatorId);
@@ -1354,13 +1378,13 @@ export class RadioOperatorManager {
     this.emitOperatorStatusUpdate(operatorId);
   }
 
-  setOperatorStreamState(
+  async setOperatorStreamState(
     operatorId: string,
     update: { streamId: string; stateId: string; expectedLifecycleEpoch: number },
-  ): void {
+  ): Promise<void> {
     const operator = this.operators.get(operatorId);
     if (!operator) throw new Error(`operator ${operatorId} not found`);
-    this._pluginManager?.setOperatorStreamState(operatorId, update);
+    await this._pluginManager?.setOperatorStreamState(operatorId, update);
     this.emitOperatorStatusUpdate(operatorId);
   }
 
@@ -1402,22 +1426,57 @@ export class RadioOperatorManager {
       throw new Error(`operator ${operatorId} not found`);
     }
 
-    await this.persistTransmitCycles(operatorId, transmitCycles);
-    operator.setTransmitCycles(transmitCycles, {
-      source: 'manual',
-      reason: 'operator selected transmit cycle',
+    const outcome = await this.intentCoordinator.submit(operatorId, 'manual', async (token, signal) => {
+      await this.persistTransmitCycles(operatorId, transmitCycles);
+      if (signal.aborted || !this.intentCoordinator.isCurrent(token)) return;
+      operator.setTransmitCycles(transmitCycles, {
+        commandEpoch: token.epoch,
+        source: 'manual',
+        reason: 'operator selected transmit cycle',
+      });
+      this.emitOperatorStatusUpdate(operatorId);
     });
-    this.emitOperatorStatusUpdate(operatorId);
+    if (outcome.status !== 'completed') throw new Error('transmit_cycle_command_superseded');
   }
 
   /**
    * 启动操作员发射
    */
   startOperator(operatorId: string): void {
+    this.startOperatorInternal(operatorId, false);
+  }
+
+  /**
+   * Arms an idle operator for a strategy action. Decision and physical-frame
+   * scheduling remain with the caller's existing intent transaction.
+   */
+  prepareOperatorStrategyStart(operatorId: string): boolean {
+    return this.startOperatorInternal(operatorId, true);
+  }
+
+  cancelPreparedOperatorStrategyStart(operatorId: string, reason: string): void {
     const operator = this.operators.get(operatorId);
     if (!operator) {
       throw new Error(`operator ${operatorId} not found`);
     }
+    this._pluginManager?.suspendQueueExecution?.(operatorId);
+    this.pendingTransmissions = this.pendingTransmissions.filter(
+      (request) => request.operatorId !== operatorId,
+    );
+    this.releaseTargetReservation(operatorId);
+    this.requestStrategyStop(operatorId, reason);
+    this.clearSameTransmissionGuard(operatorId);
+    operator.stop();
+    logger.info(`Cancelled prepared strategy start for operator ${operatorId}`, { reason });
+    this.emitOperatorStatusUpdate(operatorId);
+  }
+
+  private startOperatorInternal(operatorId: string, deferInitialDecision: boolean): boolean {
+    const operator = this.operators.get(operatorId);
+    if (!operator) {
+      throw new Error(`operator ${operatorId} not found`);
+    }
+    if (deferInitialDecision && operator.isTransmitting) return false;
     const transmitGate = typeof this._pluginManager?.getOperatorTransmitGate === 'function'
       ? this._pluginManager.getOperatorTransmitGate(operatorId)
       : undefined;
@@ -1430,11 +1489,17 @@ export class RadioOperatorManager {
         'Resolve the unsaved QSO before restarting automatic operation',
       );
     }
-    
+
+    const started = !operator.isTransmitting;
     this.clearSameTransmissionGuard(operatorId);
     operator.start();
     logger.info(`Started transmitting for operator ${operatorId}`);
     this.emitOperatorStatusUpdate(operatorId);
+
+    if (deferInitialDecision) {
+      this._pluginManager?.suspendQueueExecution?.(operatorId);
+      return started;
+    }
 
     if (this._pluginManager?.hasTargetQueue?.(operatorId)) {
       void this._pluginManager.resumeQueueExecution(operatorId).then((validated) => {
@@ -1442,12 +1507,12 @@ export class RadioOperatorManager {
       }).catch((error) => {
         logger.warn(`Failed to revalidate assisted queue execution for ${operatorId}`, error);
       });
-      return;
+      return started;
     }
 
     // 立即检查并触发发射（如果在发射周期内）
     this.checkAndTriggerTransmission(operatorId);
-    
+    return started;
   }
 
   listUnsavedQsos(logBookId: string, operatorIds?: ReadonlySet<string>): Array<{
@@ -1676,6 +1741,7 @@ export class RadioOperatorManager {
     for (const key of this.sameTransmissionGuardStates.keys()) {
       if (key.startsWith(prefix)) this.sameTransmissionGuardStates.delete(key);
     }
+    this.operatorTransmissionSetGuardStates.delete(operatorId);
   }
 
   private evaluateSameTransmissionGuard(
@@ -1685,12 +1751,41 @@ export class RadioOperatorManager {
     slotStartMs: number,
   ): SameTransmissionGuardEvaluation {
     const canonicalMessage = this.canonicalizeTransmissionMessage(transmission);
-    if (!canonicalMessage) {
-      return { allowed: true };
-    }
+    return this.evaluateTransmissionGuardState(
+      this.sameTransmissionGuardStates,
+      buildTrackId(operatorId, streamId),
+      canonicalMessage,
+      slotStartMs,
+    );
+  }
 
-    const guardKey = buildTrackId(operatorId, streamId);
-    const previous = this.sameTransmissionGuardStates.get(guardKey);
+  private evaluateOperatorTransmissionSetGuard(
+    operatorId: string,
+    transmissions: readonly string[],
+    slotStartMs: number,
+  ): SameTransmissionGuardEvaluation {
+    const canonicalMessage = JSON.stringify(
+      transmissions
+        .map((transmission) => this.canonicalizeTransmissionMessage(transmission))
+        .filter(Boolean)
+        .sort(),
+    );
+    return this.evaluateTransmissionGuardState(
+      this.operatorTransmissionSetGuardStates,
+      operatorId,
+      canonicalMessage === '[]' ? '' : canonicalMessage,
+      slotStartMs,
+    );
+  }
+
+  private evaluateTransmissionGuardState(
+    states: ReadonlyMap<string, SameTransmissionGuardState>,
+    guardKey: string,
+    canonicalMessage: string,
+    slotStartMs: number,
+  ): SameTransmissionGuardEvaluation {
+    if (!canonicalMessage) return { allowed: true };
+    const previous = states.get(guardKey);
     if (!previous || previous.canonicalMessage !== canonicalMessage) {
       return {
         allowed: true,
@@ -1727,10 +1822,11 @@ export class RadioOperatorManager {
 
   private commitSameTransmissionGuardEvaluations(
     evaluations: readonly SameTransmissionGuardEvaluation[],
+    states: Map<string, SameTransmissionGuardState> = this.sameTransmissionGuardStates,
   ): void {
     for (const evaluation of evaluations) {
       if (evaluation.guardKey && evaluation.nextState) {
-        this.sameTransmissionGuardStates.set(evaluation.guardKey, evaluation.nextState);
+        states.set(evaluation.guardKey, evaluation.nextState);
       }
     }
   }
@@ -1949,7 +2045,38 @@ export class RadioOperatorManager {
     if (waitingForTransmitCycle.length > 0) {
       this.requeueForNextSlot(waitingForTransmitCycle, 'waiting for operator transmit cycle');
     }
-    const eligibleRequests = admittedGroups.flatMap((group) => group.requests);
+    const admittedRequestsByOperator = new Map<string, QueuedTransmitRequest[]>();
+    for (const group of admittedGroups) {
+      const operatorRequests = admittedRequestsByOperator.get(group.requests[0]!.operatorId) ?? [];
+      operatorRequests.push(...group.requests);
+      admittedRequestsByOperator.set(group.requests[0]!.operatorId, operatorRequests);
+    }
+    const rejectedOperatorSets = new Set<string>();
+    const operatorSetGuardEvaluations: SameTransmissionGuardEvaluation[] = [];
+    for (const [operatorId, operatorRequests] of admittedRequestsByOperator) {
+      const evaluation = this.evaluateOperatorTransmissionSetGuard(
+        operatorId,
+        operatorRequests.map((request) => request.transmission),
+        slotStartMs,
+      );
+      if (!evaluation.allowed) {
+        rejectedOperatorSets.add(operatorId);
+        const messages = [...new Set(operatorRequests.map((request) => request.transmission))];
+        this.stopOperatorAfterSameTransmissionLimit(
+          operatorId,
+          messages.join(' | '),
+          evaluation.attemptedCount!,
+          evaluation.maxCount!,
+        );
+        continue;
+      }
+      operatorSetGuardEvaluations.push(evaluation);
+    }
+
+    const eligibleGroups = admittedGroups.filter(
+      (group) => !rejectedOperatorSets.has(group.requests[0]!.operatorId),
+    );
+    const eligibleRequests = eligibleGroups.flatMap((group) => group.requests);
     if (eligibleRequests.length === 0) return;
     if (!this.validateMultiTrackFrequencies(eligibleRequests, currentMode.name)) return;
 
@@ -1985,7 +2112,11 @@ export class RadioOperatorManager {
       return;
     }
     this.commitSameTransmissionGuardEvaluations(
-      admittedGroups.flatMap((group) => group.guardEvaluations),
+      eligibleGroups.flatMap((group) => group.guardEvaluations),
+    );
+    this.commitSameTransmissionGuardEvaluations(
+      operatorSetGuardEvaluations,
+      this.operatorTransmissionSetGuardStates,
     );
     this.digitalFrameCoordinator.beginEncoding(prepared.frame.frameId);
 
@@ -2807,6 +2938,7 @@ export class RadioOperatorManager {
     this.activeQsoLifecycles.clear();
     this.pendingTransmissions = [];
     this.sameTransmissionGuardStates.clear();
+    this.operatorTransmissionSetGuardStates.clear();
 
     // 关闭日志管理器
     await this.logManager.close();

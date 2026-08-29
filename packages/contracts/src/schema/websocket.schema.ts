@@ -2219,7 +2219,13 @@ export interface DigitalRadioEngineEvents {
   transmitStart: (slotInfo: z.infer<typeof SlotInfoSchema>) => void;
   timingWarning: (data: { title: string; text: string }) => void;
   operatorSlotChanged: (data: { operatorId: string; slot: string }) => void;
-  operatorStreamStateChanged: (data: { operatorId: string; streamId: string; state: string }) => void;
+  operatorStreamStateChanged: (data: {
+    operatorId: string;
+    streamId: string;
+    state: string;
+    commandEpoch?: number;
+    source?: 'manual' | 'plugin' | 'late-decode' | 'slot-auto';
+  }) => void;
   operatorSlotContentChanged: (data: { operatorId: string; slot: string; content: string }) => void;
   operatorFrequencyChanged: (data: { operatorId: string; frequency: number }) => void;
   operatorTransmitCyclesChanged: (data: {

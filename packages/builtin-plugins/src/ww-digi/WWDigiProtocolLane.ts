@@ -34,7 +34,7 @@ export interface WWDigiEntryData {
   lastMessageRaw?: string;
   targetGrid?: string;
   lastSnr?: number;
-  status?: 'candidate' | 'authorized' | 'paused' | 'stale' | 'no-response' | 'review' | 'dupe';
+  status?: 'candidate' | 'authorized' | 'paused' | 'cycle-paused' | 'stale' | 'no-response' | 'review' | 'dupe';
   authorizedReceiveEpoch?: number;
   lastHeardReceiveEpoch?: number;
   lastHeardCycle?: 0 | 1;
@@ -46,6 +46,13 @@ export interface WWDigiEntryData {
   noResponseCycles?: number;
   alternateText?: string;
   encodingError?: string;
+  cycleResume?: {
+    streamId: string;
+    transmitCycle: 0 | 1;
+    laneCheckpoint: unknown;
+    observeUntilReceiveEpoch: number;
+    settlement?: 'committed' | 'failed';
+  };
 }
 
 export interface WWDigiLaneConfig {
@@ -201,6 +208,7 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
     this.outgoing = null;
     this.targetGrid = undefined;
     this.qsoStartTime = undefined;
+    this.qsoLifecycleEpoch = 0;
     this.attempts = 0;
     this.history = [];
     this.completion = undefined;
@@ -266,60 +274,7 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
       };
     }
     const config = this.getConfig();
-    let queueChanged = false;
-
-    for (const message of messages) {
-      const parsed = parseWWDigiMessage(message.rawMessage);
-      const standard = message.message;
-      if (!('senderCallsign' in parsed)
-          || !callsignMatches(parsed.senderCallsign, this.active.callsign)) {
-        if (this.phase === 'wait-r-grid'
-            && standard.type === FT8MessageType.SIGNAL_REPORT
-            && callsignMatches(standard.senderCallsign, this.active.callsign)
-            && callsignMatches(standard.targetCallsign, config.myCallsign)) {
-          this.acceptInbound(message.rawMessage);
-          this.phase = 'wait-standard-final';
-          this.outgoing = FT8MessageParser.generateMessage({
-            type: FT8MessageType.ROGER_REPORT,
-            senderCallsign: config.myCallsign,
-            targetCallsign: this.active.callsign,
-            report: message.snr,
-          });
-          this.attempts = 0;
-          queueChanged = true;
-        } else if ((this.phase === 'wait-standard-final' || this.phase === 'wait-rr73')
-            && this.attempts > 0
-            && (standard.type === FT8MessageType.RRR
-              || standard.type === FT8MessageType.SEVENTY_THREE)
-            && callsignMatches(standard.senderCallsign, this.active.callsign)
-            && callsignMatches(standard.targetCallsign, config.myCallsign)) {
-          this.acceptInbound(message.rawMessage);
-          this.prepareCompletion();
-          queueChanged = true;
-        }
-        continue;
-      }
-
-      if (this.phase === 'wait-r-grid' && parsed.type === 'roger-grid'
-          && callsignMatches(parsed.targetCallsign, config.myCallsign)) {
-        this.acceptInbound(message.rawMessage);
-        this.targetGrid = parsed.grid;
-        this.phase = 'send-rr73';
-        this.outgoing = buildWWDigiRR73(this.active.callsign, config.myCallsign);
-        this.attempts = 0;
-        queueChanged = true;
-      } else if (this.phase === 'wait-rr73' && parsed.type === 'rr73'
-          && callsignMatches(parsed.targetCallsign, config.myCallsign)) {
-        this.acceptInbound(message.rawMessage);
-        this.prepareCompletion();
-        queueChanged = true;
-      } else if (this.phase === 'wait-standard-final' && this.attempts > 0 && parsed.type === 'rr73'
-          && callsignMatches(parsed.targetCallsign, config.myCallsign)) {
-        this.acceptInbound(message.rawMessage);
-        this.prepareCompletion();
-        queueChanged = true;
-      }
-    }
+    const queueChanged = this.processReceivedMessages(messages);
 
     if (this.completion?.settled === 'committed') {
       return {
@@ -536,27 +491,87 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
     this.lastPhysicalFrame = state.lastPhysicalFrame ? { ...state.lastPhysicalFrame } : undefined;
   }
 
-  onPhysicalSuccess(receipt: StreamPhysicalReceipt): void {
-    if (receipt.streamId !== this.streamId) return;
+  onPhysicalSuccess(receipt: StreamPhysicalReceipt): boolean {
+    if (receipt.streamId !== this.streamId) return false;
     const previous = this.lastPhysicalFrame;
-    if (previous && (receipt.frameId === previous.frameId && receipt.revision <= previous.revision)) return;
+    if (previous && (receipt.frameId === previous.frameId && receipt.revision <= previous.revision)) return false;
     this.lastPhysicalFrame = { frameId: receipt.frameId, revision: receipt.revision };
 
     if (this.finalRetry?.scheduledText && receipt.text === this.finalRetry.scheduledText) {
       this.finalRetry.scheduledText = undefined;
       this.finalRetry.expiresAt = Date.now() + this.getConfig().slotMs * 4;
-      return;
+      return true;
     }
-    if (!this.active || receipt.text !== this.outgoing) return;
+    if (!this.active || receipt.text !== this.outgoing) return true;
     this.history.push(receipt.text);
     this.attempts += 1;
     if (this.phase === 'send-rr73' && this.hasDirectedReply) this.prepareCompletion();
+    return true;
+  }
+
+  applyDecodedMessagesToCheckpoint(
+    checkpoint: unknown,
+    messages: ParsedFT8Message[],
+  ): unknown | undefined {
+    return this.updateCheckpoint(checkpoint, () => this.processReceivedMessages(messages));
+  }
+
+  applyPhysicalSuccessToCheckpoint(
+    checkpoint: unknown,
+    receipt: StreamPhysicalReceipt,
+  ): unknown | undefined {
+    return this.updateCheckpoint(checkpoint, () => this.onPhysicalSuccess(receipt));
+  }
+
+  takePendingCompletionFromCheckpoint(checkpoint: unknown): {
+    checkpoint: unknown;
+    effect: StrategyQSOCompletionEffect;
+  } | undefined {
+    const live = this.checkpoint();
+    try {
+      this.restore(checkpoint);
+      if (!this.completion || this.completion.emitted) return undefined;
+      this.completion.emitted = true;
+      return {
+        checkpoint: this.checkpoint(),
+        effect: structuredClone(this.completion.effect),
+      };
+    } finally {
+      this.restore(live);
+    }
+  }
+
+  settleCompletionInCheckpoint(
+    checkpoint: unknown,
+    settlement: StrategyQSOCompletionSettlement,
+  ): unknown | undefined {
+    return this.updateCheckpoint(checkpoint, () => this.settleQSOCompletion(settlement));
+  }
+
+  retryCompletionInCheckpoint(checkpoint: unknown): {
+    checkpoint: unknown;
+    effect: StrategyQSOCompletionEffect;
+  } | undefined {
+    const live = this.checkpoint();
+    try {
+      this.restore(checkpoint);
+      if (!this.completion || this.completion.settled !== 'failed') return undefined;
+      this.completion.settled = undefined;
+      this.completion.emitted = true;
+      return {
+        checkpoint: this.checkpoint(),
+        effect: structuredClone(this.completion.effect),
+      };
+    } finally {
+      this.restore(live);
+    }
   }
 
   settleQSOCompletion(settlement: StrategyQSOCompletionSettlement): boolean {
     if (!this.completion
         || settlement.streamId !== this.streamId
-        || settlement.lifecycleEpoch !== this.qsoLifecycleEpoch) return false;
+        || settlement.lifecycleEpoch !== this.qsoLifecycleEpoch
+        || settlement.recordId !== this.completion.effect.record.id) return false;
     this.completion.settled = settlement.status;
     if (settlement.status === 'failed') {
       this.phase = 'review';
@@ -571,7 +586,6 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
     this.outgoing = null;
     this.targetGrid = undefined;
     this.qsoStartTime = undefined;
-    this.qsoLifecycleEpoch = 0;
     this.attempts = 0;
     this.history = [];
     this.completion = undefined;
@@ -588,6 +602,75 @@ export class WWDigiProtocolLane implements ProtocolLane<WWDigiEntryData> {
     if (this.history[this.history.length - 1] !== rawMessage) this.history.push(rawMessage);
     this.hasDirectedReply = true;
     this.lastReceivedText = rawMessage;
+  }
+
+  private processReceivedMessages(messages: ParsedFT8Message[]): boolean {
+    if (!this.active) return false;
+    const config = this.getConfig();
+    let changed = false;
+    for (const message of messages) {
+      const parsed = parseWWDigiMessage(message.rawMessage);
+      const standard = message.message;
+      if (!('senderCallsign' in parsed)
+          || !callsignMatches(parsed.senderCallsign, this.active.callsign)) {
+        if (this.phase === 'wait-r-grid'
+            && standard.type === FT8MessageType.SIGNAL_REPORT
+            && callsignMatches(standard.senderCallsign, this.active.callsign)
+            && callsignMatches(standard.targetCallsign, config.myCallsign)) {
+          this.acceptInbound(message.rawMessage);
+          this.phase = 'wait-standard-final';
+          this.outgoing = FT8MessageParser.generateMessage({
+            type: FT8MessageType.ROGER_REPORT,
+            senderCallsign: config.myCallsign,
+            targetCallsign: this.active.callsign,
+            report: message.snr,
+          });
+          this.attempts = 0;
+          changed = true;
+        } else if ((this.phase === 'wait-standard-final' || this.phase === 'wait-rr73')
+            && this.attempts > 0
+            && (standard.type === FT8MessageType.RRR
+              || standard.type === FT8MessageType.SEVENTY_THREE)
+            && callsignMatches(standard.senderCallsign, this.active.callsign)
+            && callsignMatches(standard.targetCallsign, config.myCallsign)) {
+          this.acceptInbound(message.rawMessage);
+          this.prepareCompletion();
+          changed = true;
+        }
+        continue;
+      }
+
+      if (this.phase === 'wait-r-grid' && parsed.type === 'roger-grid'
+          && callsignMatches(parsed.targetCallsign, config.myCallsign)) {
+        this.acceptInbound(message.rawMessage);
+        this.targetGrid = parsed.grid;
+        this.phase = 'send-rr73';
+        this.outgoing = buildWWDigiRR73(this.active.callsign, config.myCallsign);
+        this.attempts = 0;
+        changed = true;
+      } else if (this.phase === 'wait-rr73' && parsed.type === 'rr73'
+          && callsignMatches(parsed.targetCallsign, config.myCallsign)) {
+        this.acceptInbound(message.rawMessage);
+        this.prepareCompletion();
+        changed = true;
+      } else if (this.phase === 'wait-standard-final' && this.attempts > 0 && parsed.type === 'rr73'
+          && callsignMatches(parsed.targetCallsign, config.myCallsign)) {
+        this.acceptInbound(message.rawMessage);
+        this.prepareCompletion();
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  private updateCheckpoint(checkpoint: unknown, update: () => boolean): unknown | undefined {
+    const live = this.checkpoint();
+    try {
+      this.restore(checkpoint);
+      return update() ? this.checkpoint() : undefined;
+    } finally {
+      this.restore(live);
+    }
   }
 
   private getActions(): StrategyActionDescriptor[] {

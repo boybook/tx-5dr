@@ -237,7 +237,14 @@ export interface PluginManagerDeps {
   ) => Promise<void>;
   interruptOperatorTransmission: (operatorId: string) => Promise<void>;
   requestOperatorStrategyStop?: (operatorId: string, reason: string) => void;
-  requestOperatorStrategyStart?: (operatorId: string, reason: string) => void | Promise<void>;
+  /**
+   * Starts an idle operator without independently scheduling a strategy
+   * decision or physical transmission. The caller owns both steps in its
+   * current intent transaction. Returns true only when this call started it.
+   */
+  prepareOperatorStrategyStart?: (operatorId: string, reason: string) => boolean | Promise<boolean>;
+  /** Rolls back a start created by prepareOperatorStrategyStart without revoking the current intent. */
+  cancelPreparedOperatorStrategyStart?: (operatorId: string, reason: string) => void | Promise<void>;
   transitionTargetReservation?: (operatorId: string, epoch: number, targetCallsign?: string) => boolean;
   transitionTargetReservations?: (
     operatorId: string,

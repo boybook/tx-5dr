@@ -160,11 +160,16 @@ export class ProfileManager {
     }
 
     const engine = DigitalRadioEngine.getInstance();
-    const wasRunning = engine.getStatus().isRunning;
+    const engineStatus = engine.getStatus();
+    const wasRunning = engineStatus.isRunning;
     const previousProfileId = configManager.getActiveProfileId();
+    const involvesVirtualRadio = configManager.getActiveVirtualRadioProfile() !== null
+      || profile.isVirtual === true;
+    const requiresEngineStop = wasRunning
+      || (involvesVirtualRadio && engineStatus.engineState !== 'idle');
 
     // 阶段1：安全停止引擎
-    if (wasRunning) {
+    if (requiresEngineStop) {
       try {
         await Promise.race([
           engine.stop(),
@@ -174,7 +179,13 @@ export class ProfileManager {
         ]);
         logger.info('Engine stopped');
       } catch (stopError) {
-        // 停止超时或失败：记录日志但继续切换
+        // A physical/virtual handover cannot share a late playback lease. Keep
+        // the current Profile active until its engine has stopped completely.
+        if (involvesVirtualRadio) {
+          logger.error('Engine stop failed during virtual radio Profile handover:', stopError);
+          throw stopError;
+        }
+        // Preserve the existing best-effort behavior for same-backend Profiles.
         logger.warn('Engine stop error, proceeding with profile switch:', stopError);
       }
     }
