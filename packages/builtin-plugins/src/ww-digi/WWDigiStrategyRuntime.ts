@@ -48,6 +48,7 @@ import {
   buildWWDigiCompletionEffect,
   isWWDigiProtocolContext,
   reduceWWDigiInbound,
+  type WWDigiProtocolContext,
 } from './WWDigiProtocolContext.js';
 
 const MIN_PROTOCOL_CONTEXT_RECEIVE_CYCLES = 12;
@@ -60,6 +61,7 @@ export interface WWDigiRuntimeConfig extends WWDigiLaneConfig {
   cqMaxAttempts?: number;
   cqSelectionPolicy?: 'FIRST' | 'MAX_DISTANCE' | 'MAX_SNR' | 'MIN_SNR';
   authorizedStaleReceiveCycles?: number;
+  replaceQueueOnManualTarget?: boolean;
 }
 
 export interface WWDigiRuntimeOperator {
@@ -91,6 +93,7 @@ interface RuntimeCheckpoint {
   practiceSessionDestroyPending?: boolean;
   detachedCompletions?: Array<[string, DetachedCompletion]>;
   detachedCompletionEpoch?: number;
+  detachedProtocolContexts?: Array<[string, DetachedProtocolContext]>;
 }
 
 interface DetachedCompletion {
@@ -99,6 +102,11 @@ interface DetachedCompletion {
   effect: StrategyQSOCompletionEffect;
   emitted: boolean;
   settled?: 'committed' | 'failed';
+}
+
+interface DetachedProtocolContext {
+  context: WWDigiProtocolContext;
+  expiresAtReceiveEpoch: number;
 }
 
 function targetKey(callsign: string): string {
@@ -140,6 +148,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   private practiceSessionDestroyPending = false;
   private readonly detachedCompletions = new Map<string, DetachedCompletion>();
   private detachedCompletionEpoch = 0;
+  private readonly detachedProtocolContexts = new Map<string, DetachedProtocolContext>();
 
   constructor(
     private readonly operator: WWDigiRuntimeOperator,
@@ -204,6 +213,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       practiceSessionDestroyPending: this.practiceSessionDestroyPending,
       detachedCompletions: Array.from(this.detachedCompletions.entries()),
       detachedCompletionEpoch: this.detachedCompletionEpoch,
+      detachedProtocolContexts: Array.from(this.detachedProtocolContexts.entries()),
     } satisfies RuntimeCheckpoint;
   }
 
@@ -227,6 +237,10 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       this.detachedCompletions.set(recordId, structuredClone(completion));
     }
     this.detachedCompletionEpoch = state.detachedCompletionEpoch ?? 0;
+    this.detachedProtocolContexts.clear();
+    for (const [key, detached] of state.detachedProtocolContexts ?? []) {
+      this.detachedProtocolContexts.set(key, structuredClone(detached));
+    }
   }
 
   observeDecodedMessages(messages: ParsedFT8Message[], meta: QueuedStrategyObservationMeta): boolean {
@@ -247,6 +261,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       const sender = selectedSender(message.rawMessage);
       if (!sender.callsign) continue;
       const callsign = sender.callsign.trim().toUpperCase();
+      changed = this.observeDetachedProtocolContext(callsign, message) || changed;
       const parsed = parseWWDigiMessage(message.rawMessage);
       let entry = this.coordinator.findEntryByTargetKey(targetKey(callsign));
       const lastHeardCycle = CycleUtils.isEvenCycle(meta.slotInfo.cycleNumber) ? 0 : 1;
@@ -419,7 +434,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       }
     }
     const requiresAlternate = !isValidCallsign(callsign) || callsign.includes('/');
-    const result = this.coordinator.enqueue({
+    const input: Parameters<typeof this.coordinator.enqueue>[0] = {
       targetKey: targetKey(callsign),
       callsign,
       requestedTransmitCycle,
@@ -440,11 +455,41 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
         status: requiresAlternate ? 'review' : 'authorized',
         encodingError: requiresAlternate ? 'special_callsign_requires_preflight' : undefined,
       },
-    });
-    if (result.outcome === 'accepted' && !this.operator.isTransmitting) {
-      this.allowQueuedCycleSelection = true;
+    };
+    if (this.operator.config.replaceQueueOnManualTarget !== true) {
+      const result = this.coordinator.enqueue(input);
+      if (result.outcome === 'accepted' && !this.operator.isTransmitting) {
+        this.allowQueuedCycleSelection = true;
+      }
+      return this.mutationResult(result);
     }
-    return this.mutationResult(result);
+    if (this.hasUnsettledCompletionWork()) {
+      return this.mutationResult({
+        outcome: 'rejected',
+        reason: 'active_entry',
+        version: this.coordinator.getQueueSnapshot().version,
+        affectedStreamIds: [],
+      });
+    }
+    const checkpoint = this.checkpoint();
+    try {
+      this.detachAndRemoveExecutableWork();
+      const result = this.coordinator.enqueue(input);
+      if (result.outcome !== 'accepted') {
+        this.restore(checkpoint);
+        return this.mutationResult(result);
+      }
+      this.callSession.reset();
+      this.exhaustedAtReceiveEpoch = undefined;
+      this.stopAttention = undefined;
+      this.pendingManualCycleAuthorization = undefined;
+      this.startPurpose = this.operator.isTransmitting ? undefined : 'authorized-work';
+      this.allowQueuedCycleSelection = true;
+      return { ...this.mutationResult(result), requestOperatorStart: true };
+    } catch (error) {
+      this.restore(checkpoint);
+      throw error;
+    }
   }
 
   reorderTarget(entryId: string, beforeEntryId: string | null, expectedVersion: number): QueuedStrategyMutationResult {
@@ -483,7 +528,10 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
 
   clearTargets(expectedVersion: number): QueuedStrategyMutationResult {
     const result = this.coordinator.clear(expectedVersion);
-    if (result.outcome === 'accepted') this.allowQueuedCycleSelection = false;
+    if (result.outcome === 'accepted') {
+      this.allowQueuedCycleSelection = false;
+      this.detachedProtocolContexts.clear();
+    }
     return this.mutationResult(result);
   }
 
@@ -1023,6 +1071,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     this.revokePractice();
     this.detachedCompletions.clear();
     this.detachedCompletionEpoch = 0;
+    this.detachedProtocolContexts.clear();
   }
 
   private result(options: {
@@ -1249,15 +1298,46 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     return effects;
   }
 
+  private observeDetachedProtocolContext(callsign: string, message: ParsedFT8Message): boolean {
+    const key = targetKey(callsign);
+    const detached = this.detachedProtocolContexts.get(key);
+    if (!detached) return false;
+    const reduced = reduceWWDigiInbound(detached.context, message, this.operator.config);
+    if (!reduced.changed) return false;
+    if (!reduced.completed) {
+      detached.context = structuredClone(reduced.context);
+      detached.expiresAtReceiveEpoch = this.protocolContextExpiryEpoch();
+      return true;
+    }
+    const streamId = `recovered-${key}`;
+    const effect = buildWWDigiCompletionEffect(reduced.context, {
+      streamId,
+      lifecycleEpoch: ++this.detachedCompletionEpoch,
+      endTime: message.timestamp,
+      recoveredFinalAcknowledgement: true,
+    }, this.operator.config);
+    if (!this.detachedCompletions.has(effect.record.id)) {
+      this.detachedCompletions.set(effect.record.id, {
+        callsign: reduced.context.callsign,
+        effect,
+        emitted: false,
+      });
+    }
+    this.detachedProtocolContexts.delete(key);
+    return true;
+  }
+
   private discardDetachedDuplicates(completedTargetKeys: ReadonlySet<string>): void {
     for (const [recordId, completion] of this.detachedCompletions) {
       if (!completedTargetKeys.has(targetKey(completion.callsign))) continue;
       this.detachedCompletions.delete(recordId);
     }
+    for (const key of completedTargetKeys) this.detachedProtocolContexts.delete(key);
   }
 
   private clearCompletionRecovery(callsign: string): void {
     const key = targetKey(callsign);
+    this.detachedProtocolContexts.delete(key);
     for (const [recordId, completion] of this.detachedCompletions) {
       if (targetKey(completion.callsign) === key) this.detachedCompletions.delete(recordId);
     }
@@ -1459,6 +1539,45 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     ));
   }
 
+  private hasUnsettledCompletionWork(): boolean {
+    if (this.coordinator.getStreams().some((stream) => (
+      stream.completion?.state === 'committing' || stream.completion?.state === 'failed'
+    ))) return true;
+    return this.coordinator.getQueueSnapshot().entries.some((row) => {
+      const resume = row.entry.data.cycleResume;
+      return row.entry.data.status === 'cycle-paused'
+        && resume !== undefined
+        && this.lanesByStreamId.get(resume.streamId)
+          ?.hasUnsettledCompletionInCheckpoint(resume.laneCheckpoint) === true;
+    });
+  }
+
+  private detachAndRemoveExecutableWork(): void {
+    const preservedEntryIds = new Set(Array.from(this.detachedCompletions.values()).flatMap((completion) => (
+      completion.entryId ? [completion.entryId] : []
+    )));
+    for (const row of this.coordinator.getQueueSnapshot().entries) {
+      if (preservedEntryIds.has(row.entry.entryId)) continue;
+      const resume = row.entry.data.cycleResume;
+      const context = row.active && row.streamId
+        ? this.lanesByStreamId.get(row.streamId)?.readProtocolContext()
+        : resume
+          ? this.lanesByStreamId.get(resume.streamId)?.readProtocolContext(resume.laneCheckpoint)
+          : row.entry.data.protocolContext;
+      if (isWWDigiProtocolContext(context)) {
+        this.detachedProtocolContexts.set(row.entry.targetKey, {
+          context: structuredClone(context),
+          expiresAtReceiveEpoch: this.protocolContextExpiryEpoch(),
+        });
+      }
+      const removed = this.coordinator.remove(
+        row.entry.entryId,
+        this.coordinator.getQueueSnapshot().version,
+      );
+      if (removed.outcome !== 'accepted') throw new Error(removed.reason ?? 'queue_replace_failed');
+    }
+  }
+
   private protocolContextExpiryEpoch(): number {
     const configured = Math.max(
       1,
@@ -1469,6 +1588,11 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
 
   private expireProtocolContexts(): boolean {
     let changed = false;
+    for (const [key, detached] of this.detachedProtocolContexts) {
+      if (this.receiveEpoch < detached.expiresAtReceiveEpoch) continue;
+      this.detachedProtocolContexts.delete(key);
+      changed = true;
+    }
     for (const row of this.coordinator.getQueueSnapshot().entries) {
       if (row.active || !isWWDigiProtocolContext(row.entry.data.protocolContext)) continue;
       const expiresAt = row.entry.data.protocolContextExpiresAtReceiveEpoch;

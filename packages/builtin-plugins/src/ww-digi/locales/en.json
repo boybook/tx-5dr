@@ -5,6 +5,8 @@
   "contestYearDesc": "Select the WW Digi event year and submission period.",
   "parallelStreams": "Concurrent QSOs",
   "parallelStreamsDesc": "Maximum WW Digi QSOs to work at once. Defaults to 1 and supports up to 3.",
+  "replaceQueueOnManualTarget": "Replace queue on double-click",
+  "replaceQueueOnManualTargetDesc": "When enabled, double-clicking a station ends queued and active work and calls only the newly selected station.",
   "stateWaitRGrid": "Send grid",
   "stateWaitRr73": "Send R + grid",
   "stateWaitStandardFinal": "Send R report",

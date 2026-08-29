@@ -721,7 +721,7 @@ export class PluginManager {
         if (!operator) return;
 
         if (!operator.isTransmitting
-            && beforeSnapshot.rows.length === 0
+            && (beforeSnapshot.rows.length === 0 || result.requestOperatorStart === true)
             && !this.getOperatorTransmitGate(operatorId)) {
           operator.start();
         }

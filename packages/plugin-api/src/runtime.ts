@@ -361,6 +361,8 @@ export interface QueuedStrategyMutationResult {
   reason?: 'queue_full' | 'invalid_target' | 'entry_not_found' | 'entry_not_retryable' | 'active_entry' | 'version_conflict';
   /** Authoritative queue state after the attempted mutation. */
   snapshot: AssistedQueueSnapshot;
+  /** Requests a normal operator start after this explicit manual queue mutation. */
+  requestOperatorStart?: boolean;
 }
 
 /** Optional capability implemented by strategies that own a target queue. */

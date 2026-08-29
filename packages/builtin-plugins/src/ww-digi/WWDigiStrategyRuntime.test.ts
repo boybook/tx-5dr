@@ -91,6 +91,7 @@ function createRuntime(options: {
   authorizedStaleReceiveCycles?: number;
   cqMaxAttempts?: number;
   cqSelectionPolicy?: WWDigiRuntimeConfig['cqSelectionPolicy'];
+  replaceQueueOnManualTarget?: boolean;
   workedCallsigns?: string[];
   busyCallsigns?: string[];
   transmitBlocked?: boolean;
@@ -112,6 +113,7 @@ function createRuntime(options: {
     authorizedStaleReceiveCycles: options.authorizedStaleReceiveCycles,
     cqMaxAttempts: options.cqMaxAttempts ?? 6,
     cqSelectionPolicy: options.cqSelectionPolicy ?? 'MAX_DISTANCE',
+    replaceQueueOnManualTarget: options.replaceQueueOnManualTarget ?? false,
   };
   const operator: WWDigiRuntimeOperator = {
     get config() { return config; },
@@ -176,6 +178,21 @@ async function activateInbound(
   return runtime.decide([], decision(epoch));
 }
 
+async function activateCqBatch(
+  runtime: WWDigiStrategyRuntime,
+  setTransmitting: (value: boolean) => void,
+  callsigns: readonly string[],
+  epoch = 1,
+): Promise<StrategyDecisionResult> {
+  setTransmitting(true);
+  confirmTransmissions(runtime, await runtime.decide([], decision(epoch)));
+  const callers = callsigns.map((callsign, index) => (
+    parsed(`BG5DRB ${callsign} PM9${index}`, BASE_TIME + MODES.FT8.slotMs)
+  ));
+  runtime.observeDecodedMessages(callers, observation(BASE_TIME + MODES.FT8.slotMs));
+  return runtime.decide(callers, decision(epoch + 1));
+}
+
 describe('WWDigiStrategyRuntime manual queue policy', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -195,6 +212,7 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
     });
 
     expect(mutation.outcome).toBe('accepted');
+    expect(mutation.requestOperatorStart).toBeUndefined();
     expect(mutation.snapshot.activeEntryIds).toEqual([]);
     expect(runtime.getTransmissions()).toEqual([]);
     expect((await runtime.decide([], decision())).transmissions).toEqual([]);
@@ -209,8 +227,33 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
     expect(runtime.getQueueSnapshot().activeEntryIds).toEqual(['ww-digi-1']);
   });
 
-  it('starts three manually authorized targets in parallel', async () => {
+  it('does not clear the existing target when the replacement is invalid', () => {
+    const { runtime } = createRuntime({ replaceQueueOnManualTarget: true });
+    runtime.enqueueTarget({ callsign: 'JA1AAA' });
+
+    expect(runtime.enqueueTarget({ callsign: 'BG5DRB' })).toMatchObject({
+      outcome: 'rejected',
+      reason: 'invalid_target',
+    });
+    expect(runtime.getQueueSnapshot().rows.map((row) => row.callsign)).toEqual(['JA1AAA']);
+  });
+
+  it('keeps appending manual targets when replacement is disabled', async () => {
     const { runtime, setTransmitting } = createRuntime({ parallelStreams: 3 });
+    for (const callsign of ['JA1AAA', 'JA2BBB', 'JA3CCC']) runtime.enqueueTarget({ callsign });
+    expect(runtime.getQueueSnapshot().rows.map((row) => row.callsign)).toEqual([
+      'JA1AAA', 'JA2BBB', 'JA3CCC',
+    ]);
+
+    setTransmitting(true);
+    expect((await runtime.decide([], decision())).transmissions).toHaveLength(3);
+  });
+
+  it('replaces all previous manual targets with the latest double-click target', async () => {
+    const { runtime, setTransmitting } = createRuntime({
+      parallelStreams: 3,
+      replaceQueueOnManualTarget: true,
+    });
     for (const callsign of ['JA1AAA', 'JA2BBB', 'JA3CCC']) {
       expect(runtime.enqueueTarget({ callsign }).outcome).toBe('accepted');
     }
@@ -218,27 +261,56 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
     setTransmitting(true);
     const result = await runtime.decide([], decision());
     expect(result.transmissions).toEqual([
-      { streamId: 'stream-1', text: 'JA1AAA BG5DRB OL32', audioFrequencyHz: 1_200 },
-      { streamId: 'stream-2', text: 'JA2BBB BG5DRB OL32', audioFrequencyHz: 1_500 },
-      { streamId: 'stream-3', text: 'JA3CCC BG5DRB OL32', audioFrequencyHz: 1_800 },
+      { streamId: 'stream-1', text: 'JA3CCC BG5DRB OL32', audioFrequencyHz: 1_200 },
     ]);
-    expect(result.snapshot.streams).toHaveLength(3);
-    expect(runtime.getQueueSnapshot().activeEntryIds).toHaveLength(3);
+    expect(runtime.getQueueSnapshot().rows.map((row) => row.callsign)).toEqual(['JA3CCC']);
+  });
+
+  it('replaces active lanes while preserving their late-final logging evidence', async () => {
+    const { runtime, setTransmitting } = createRuntime({
+      parallelStreams: 3,
+      cqSelectionPolicy: 'FIRST',
+      replaceQueueOnManualTarget: true,
+    });
+    const active = await activateCqBatch(runtime, setTransmitting, ['JA1AAA', 'JA2BBB', 'JA3CCC']);
+    confirmTransmissions(runtime, active);
+
+    expect(runtime.enqueueTarget({ callsign: 'JA4DDD' })).toMatchObject({
+      outcome: 'accepted',
+      requestOperatorStart: true,
+    });
+    const replacement = await runtime.decide([], decision(3));
+    expect(replacement.transmissions).toEqual([{
+      streamId: 'stream-1', text: 'JA4DDD BG5DRB OL32', audioFrequencyHz: 1_200,
+    }]);
+    expect(runtime.getQueueSnapshot().rows.map((row) => row.callsign)).toEqual(['JA4DDD']);
+
+    const lateFinal = parsed('BG5DRB JA1AAA RR73', BASE_TIME + MODES.FT8.slotMs * 2);
+    runtime.observeDecodedMessages([lateFinal], observation(lateFinal.timestamp));
+    const recovered = await runtime.decide([lateFinal], decision(4));
+    expect(recovered.qsoCompletions?.map((effect) => effect.record.callsign)).toEqual(['JA1AAA']);
+    expect(recovered.transmissions?.[0]?.text).toBe('JA4DDD BG5DRB OL32');
   });
 
   it('keeps the requested count while the Host forces one active contest stream', async () => {
     const { runtime, setTransmitting, config } = createRuntime({ parallelStreams: 3, streamLimit: 1 });
-    for (const callsign of ['JA1AAA', 'JA2BBB', 'JA3CCC']) runtime.enqueueTarget({ callsign });
-    setTransmitting(true);
-
-    expect((await runtime.decide([], decision())).transmissions).toHaveLength(1);
+    expect((await activateCqBatch(runtime, setTransmitting, ['JA1AAA', 'JA2BBB', 'JA3CCC'])).transmissions)
+      .toHaveLength(1);
     expect(runtime.getQueueSnapshot()).toMatchObject({
       maxActiveStreams: 1,
       requestedMaxActiveStreams: 3,
     });
 
     config.maxConcurrentStreams = 3;
-    expect((await runtime.decide([], decision(2))).transmissions).toHaveLength(3);
+    for (let expected = 2; expected <= 3; expected += 1) {
+      const queue = runtime.getQueueSnapshot();
+      const candidate = queue.rows.find((row) => row.displayState === 'candidate')!;
+      await runtime.invokeAction({
+        target: { kind: 'queue-entry', entryId: candidate.entryId, queueVersion: queue.version },
+        actionId: 'authorize-target',
+      });
+      expect((await runtime.decide([], decision(expected + 1))).transmissions).toHaveLength(expected);
+    }
   });
 
   it('switches one lane to an exposed protocol state and rejects a stale lifecycle', async () => {
@@ -439,8 +511,12 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
     expect(selectedTarget.transmissions?.[0]?.text).toBe('JA1AAA BG5DRB OL32');
   });
 
-  it('fills only targets covered by the selected cycle while TX is already enabled', async () => {
-    const { runtime } = createRuntime({ transmitting: true, parallelStreams: 3 });
+  it('replaces the active workset and follows the latest target cycle while TX is enabled', async () => {
+    const { runtime } = createRuntime({
+      transmitting: true,
+      parallelStreams: 3,
+      replaceQueueOnManualTarget: true,
+    });
     runtime.enqueueTarget({
       callsign: 'JA1AAA',
       lastMessage: selected('CQ WW JA1AAA PM95', BASE_TIME + MODES.FT8.slotMs),
@@ -451,10 +527,9 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
     });
 
     const selectedBatch = await runtime.decide([], decision());
-    expect(selectedBatch.requestedTransmitCycle).toBeUndefined();
-    expect(selectedBatch.transmissions?.map((item) => item.text)).toEqual(['JA1AAA BG5DRB OL32']);
-    expect(runtime.getQueueSnapshot().rows.find((row) => row.callsign === 'JA2BBB'))
-      .toMatchObject({ displayState: 'authorized', lastHeardCycle: 0 });
+    expect(selectedBatch.requestedTransmitCycle).toBe(1);
+    expect(selectedBatch.transmissions?.map((item) => item.text)).toEqual(['JA2BBB BG5DRB OL32']);
+    expect(runtime.getQueueSnapshot().rows.map((row) => row.callsign)).toEqual(['JA2BBB']);
   });
 
   it('parks the active QSO when changing cycle and resumes it without losing protocol state', async () => {
@@ -630,8 +705,11 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
     expect((await runtime.decide([], decision(4))).stop).toBe(true);
   });
 
-  it('does not settle a new QSO when a parked completion reuses its stream identity', async () => {
-    const { runtime, config } = createRuntime({ transmitting: true });
+  it('rejects manual replacement while a parked completion is unsettled', async () => {
+    const { runtime, config } = createRuntime({
+      transmitting: true,
+      replaceQueueOnManualTarget: true,
+    });
     confirmTransmissions(runtime, await activateInbound(runtime, 'JA1AAA', 'PM95'));
 
     config.transmitCycles = [1];
@@ -643,11 +721,11 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
     const parkedCompletion = (await runtime.decide([], decision(2))).qsoCompletions?.[0];
     expect(parkedCompletion).toBeDefined();
 
-    runtime.enqueueTarget({ callsign: 'JA2BBB' });
-    confirmTransmissions(runtime, await runtime.decide([], decision(3)));
-    const rogerGridB = parsed('BG5DRB JA2BBB R PM96', BASE_TIME + MODES.FT8.slotMs * 2);
-    const finalTransmissionB = await runtime.decide([rogerGridB], decision(4));
-    confirmTransmissions(runtime, finalTransmissionB);
+    expect(runtime.enqueueTarget({ callsign: 'JA2BBB' })).toMatchObject({
+      outcome: 'rejected',
+      reason: 'active_entry',
+    });
+    expect(runtime.getQueueSnapshot().rows.map((row) => row.callsign)).toEqual(['JA1AAA']);
 
     runtime.settleQSOCompletion({
       streamId: parkedCompletion!.streamId,
@@ -655,16 +733,12 @@ describe('WWDigiStrategyRuntime manual queue policy', () => {
       recordId: parkedCompletion!.record.id,
       status: 'committed',
     });
-    const liveCompletion = (await runtime.decide([], decision(5))).qsoCompletions?.[0];
-    expect(liveCompletion?.record.callsign).toBe('JA2BBB');
-    expect(liveCompletion?.record.id).not.toBe(parkedCompletion!.record.id);
   });
 
   it('stops cleanly when a committed parked QSO belongs to a disabled stream', async () => {
-    const { runtime, config } = createRuntime({ transmitting: true, parallelStreams: 2 });
-    runtime.enqueueTarget({ callsign: 'JA1AAA', lastMessage: selected('BG5DRB JA1AAA PM95') });
-    runtime.enqueueTarget({ callsign: 'JA2BBB', lastMessage: selected('BG5DRB JA2BBB PM96') });
-    confirmTransmissions(runtime, await runtime.decide([], decision()));
+    const { runtime, config, setTransmitting } = createRuntime({ parallelStreams: 2 });
+    const started = await activateCqBatch(runtime, setTransmitting, ['JA1AAA', 'JA2BBB']);
+    confirmTransmissions(runtime, started);
 
     config.transmitCycles = [1];
     runtime.onOperatorTransmitCyclesChanged({
@@ -1104,8 +1178,12 @@ describe('WWDigiStrategyRuntime protocol flows', () => {
     }]);
   });
 
-  it('retains late R-grid progress while the only lane is serving another target', async () => {
-    const { runtime } = createRuntime({ transmitting: true, maxAttempts: 1 });
+  it('does not let a replaced target reclaim the lane with a late R-grid', async () => {
+    const { runtime } = createRuntime({
+      transmitting: true,
+      maxAttempts: 1,
+      replaceQueueOnManualTarget: true,
+    });
     runtime.enqueueTarget({ callsign: 'JA1AAA' });
     const first = await runtime.decide([], decision());
     confirmTransmissions(runtime, first);
@@ -1119,17 +1197,7 @@ describe('WWDigiStrategyRuntime protocol flows', () => {
     runtime.observeDecodedMessages([lateRogerGrid], observation(lateRogerGrid.timestamp));
     const waiting = await runtime.decide([lateRogerGrid], decision(4));
     expect(waiting.transmissions?.[0]?.text).toBe('JA2BBB BG5DRB OL32');
-    expect(runtime.getQueueSnapshot().rows.find((row) => row.callsign === 'JA1AAA'))
-      .toMatchObject({ displayState: 'authorized' });
-
-    const active = runtime.getSnapshot().streams![0]!;
-    await runtime.invokeAction({
-      target: { kind: 'stream', streamId: active.streamId, lifecycleEpoch: active.qsoLifecycleEpoch },
-      actionId: 'end-qso',
-    });
-    expect((await runtime.decide([], decision(5))).transmissions).toEqual([{
-      streamId: 'stream-1', text: 'JA1AAA BG5DRB RR73', audioFrequencyHz: 1_200,
-    }]);
+    expect(runtime.getQueueSnapshot().rows.map((row) => row.callsign)).toEqual(['JA2BBB']);
   });
 
   it('starts a fresh grid exchange after an inactive protocol context expires', async () => {
@@ -1236,10 +1304,14 @@ describe('WWDigiStrategyRuntime settlement and refill', () => {
   });
 
   it('uses the next TX cycle for an already authorized caller after RR73', async () => {
-    const { runtime } = createRuntime({ transmitting: true, parallelStreams: 1 });
-    runtime.enqueueTarget({ callsign: 'JA1AAA', lastMessage: selected('BG5DRB JA1AAA PM95') });
-    runtime.enqueueTarget({ callsign: 'JA2BBB', lastMessage: selected('BG5DRB JA2BBB PM96') });
-    const started = await runtime.decide([], decision());
+    const { runtime, setTransmitting } = createRuntime({ parallelStreams: 1, cqSelectionPolicy: 'FIRST' });
+    const started = await activateCqBatch(runtime, setTransmitting, ['JA1AAA', 'JA2BBB']);
+    const queue = runtime.getQueueSnapshot();
+    const candidate = queue.rows.find((row) => row.callsign === 'JA2BBB')!;
+    await runtime.invokeAction({
+      target: { kind: 'queue-entry', entryId: candidate.entryId, queueVersion: queue.version },
+      actionId: 'authorize-target',
+    });
     confirmTransmissions(runtime, started);
 
     const final = parsed('BG5DRB JA1AAA RR73', BASE_TIME + MODES.FT8.slotMs);
@@ -1253,17 +1325,15 @@ describe('WWDigiStrategyRuntime settlement and refill', () => {
   });
 
   it('refills a completed lane in the same decision without waiting for log settlement', async () => {
-    const { runtime } = createRuntime({ transmitting: true, parallelStreams: 3 });
-    for (const [callsign, grid] of [
-      ['JA1AAA', 'PM95'],
-      ['JA2BBB', 'PM96'],
-      ['JA3CCC', 'PM97'],
-      ['JA4DDD', 'PM98'],
-    ] as const) {
-      runtime.enqueueTarget({ callsign, lastMessage: selected(`BG5DRB ${callsign} ${grid}`) });
-    }
-    const started = await runtime.decide([], decision());
+    const { runtime, setTransmitting } = createRuntime({ parallelStreams: 3, cqSelectionPolicy: 'FIRST' });
+    const started = await activateCqBatch(runtime, setTransmitting, ['JA1AAA', 'JA2BBB', 'JA3CCC', 'JA4DDD']);
     expect(started.transmissions).toHaveLength(3);
+    const queue = runtime.getQueueSnapshot();
+    const candidate = queue.rows.find((row) => row.callsign === 'JA4DDD')!;
+    await runtime.invokeAction({
+      target: { kind: 'queue-entry', entryId: candidate.entryId, queueVersion: queue.version },
+      actionId: 'authorize-target',
+    });
     confirmTransmissions(runtime, started);
 
     const final = parsed('BG5DRB JA1AAA RR73', BASE_TIME + MODES.FT8.slotMs);
