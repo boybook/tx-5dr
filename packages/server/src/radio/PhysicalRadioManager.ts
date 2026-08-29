@@ -2536,6 +2536,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     // 频率变化（来自 IRadioConnection）
     const onFrequencyChanged = (frequency: number) => {
+      if (this.txDialOffsetActive) {
+        logger.debug('Ignoring frequency event during TX dial offset', { frequency });
+        return;
+      }
       if (this.shouldIgnoreFrequencyObservation(frequency, this.frequencyWriteEpoch, 'connection-event')) {
         return;
       }

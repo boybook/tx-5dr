@@ -1629,6 +1629,34 @@ describe('PhysicalRadioManager', () => {
   });
 
   describe('fake frequency TX dial offset', () => {
+    it('suppresses connection frequency events while applying and restoring the TX offset', async () => {
+      const connection = Object.assign(new EventEmitter(), {
+        setKnownFrequency: vi.fn(),
+      });
+      const setFrequency = vi.fn(async (frequency: number) => {
+        connection.emit('frequencyChanged', frequency);
+      });
+      Object.assign(connection, { setFrequency });
+      asTestManager(manager).connection = connection as unknown as TestRadioConnection;
+      asTestManager(manager).lastKnownFrequency = 7074000;
+      asTestManager(manager).setupConnectionEventForwarding();
+      const observedFrequencies: number[] = [];
+      manager.on('radioFrequencyChanged', (frequency) => observedFrequencies.push(frequency));
+
+      await expect(manager.setTxDialOffset(681)).resolves.toBe(true);
+      await expect(manager.clearTxDialOffset()).resolves.toBeUndefined();
+
+      expect(setFrequency).toHaveBeenNthCalledWith(1, 7074681);
+      expect(setFrequency).toHaveBeenNthCalledWith(2, 7074000);
+      expect(observedFrequencies).toEqual([]);
+      expect(asTestManager(manager).lastKnownFrequency).toBe(7074000);
+
+      connection.emit('frequencyChanged', 7075000);
+
+      expect(observedFrequencies).toEqual([7075000]);
+      expect(asTestManager(manager).lastKnownFrequency).toBe(7075000);
+    });
+
     it('applies the offset once and is idempotent for the same offset while active', async () => {
       const setFrequency = vi.fn().mockResolvedValue(undefined);
       asTestManager(manager).connection = { setFrequency };
