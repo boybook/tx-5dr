@@ -59,6 +59,8 @@ export interface StrategyDecision {
   };
   /** Optional structured reason for a strategy-requested QSO failure stop. */
   qsoFailure?: QSOFailureInfo;
+  /** Parallel lane failures emitted by one accepted decision. */
+  qsoFailures?: QSOFailureInfo[];
 }
 
 /**

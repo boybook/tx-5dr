@@ -12,7 +12,7 @@ export const QUEUE_VISIBLE_ROW_COUNT = 3;
 export const QUEUE_ROW_HEIGHT_PX = 28;
 export const QUEUE_BODY_HEIGHT_PX = QUEUE_VISIBLE_ROW_COUNT * QUEUE_ROW_HEIGHT_PX;
 
-export type OperatorTargetAction = 'enqueue' | 'request-call';
+export type OperatorTargetAction = 'enqueue-and-start' | 'enqueue-only' | 'request-call';
 
 interface OperatorTargetService {
   enqueueQueueTarget(
@@ -39,7 +39,14 @@ export function resolveOperatorTargetAction(
   operator: OperatorStatus | undefined,
   plugins: PluginStatus[] = [],
 ): OperatorTargetAction {
-  return isTargetQueueStrategy(operator, plugins) ? 'enqueue' : 'request-call';
+  if (!isTargetQueueStrategy(operator, plugins)) return 'request-call';
+  const queueActivation = plugins.find((plugin) => plugin.name === operator?.strategy.name)
+    ?.strategyFeatures?.queueActivation;
+  return queueActivation === 'operator-toggle' ? 'enqueue-only' : 'enqueue-and-start';
+}
+
+export function isQueueTargetAction(action: OperatorTargetAction): boolean {
+  return action !== 'request-call';
 }
 
 export function submitOperatorTarget(
@@ -49,8 +56,10 @@ export function submitOperatorTarget(
   callsign: string,
   selectedFrame?: WSSelectedFrame,
 ): void {
-  if (action === 'enqueue') {
-    service.enqueueQueueTarget(operatorId, callsign, selectedFrame, { startIfIdle: true });
+  if (isQueueTargetAction(action)) {
+    service.enqueueQueueTarget(operatorId, callsign, selectedFrame, {
+      startIfIdle: action === 'enqueue-and-start',
+    });
     return;
   }
   service.sendRequestCall(operatorId, callsign, selectedFrame);

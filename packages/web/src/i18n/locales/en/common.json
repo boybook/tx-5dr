@@ -116,7 +116,7 @@
     "subtitle": "Digital Radio Remote Control"
   },
   "automation": {
-    "title": "Automation"
+    "title": "QSO Workflow"
   },
   "theme": {
     "toggle": "Toggle Theme",
@@ -805,6 +805,13 @@
   "voice": {
     "qsoTab": "QSOs"
   },
+  "pluginPage": {
+    "title": "QSO extension page",
+    "invalidRoute": "The QSO extension page address is incomplete.",
+    "unavailable": "This QSO extension page is unavailable.",
+    "operatorRequired": "Select an operator before opening this QSO extension page.",
+    "loadFailed": "Failed to load the QSO extension page."
+  },
   "bootstrapStatus": {
     "chip": {
       "failed": "Some services are not ready",
@@ -843,7 +850,7 @@
       },
       "plugin-bootstrap": {
         "label": "Plugins",
-        "description": "Load plugins and automation strategies"
+        "description": "Load plugins and QSO workflows"
       },
       "ntp-initial-check": {
         "label": "Clock calibration",

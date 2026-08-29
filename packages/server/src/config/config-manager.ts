@@ -22,6 +22,13 @@ import { MODES } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';
 import { createLogger } from '../utils/logger.js';
 import { normalizeHamlibConfig, normalizeSerialConnectionConfig } from '../radio/hamlibConfigUtils.js';
+import {
+  isVirtualRadioProfile,
+  parseInternalProfiles,
+  projectVirtualRadioProfile,
+  type InternalRadioProfile,
+  type VirtualRadioProfile,
+} from './virtualRadioProfile.js';
 import { DEFAULT_NTP_SERVERS } from '../services/ntpServers.js';
 import { JsonFileStore, PersistenceCoordinator } from '../utils/persistence/index.js';
 import {
@@ -60,7 +67,7 @@ function normalizeOperatorIdentityFields<T extends Partial<Pick<RadioOperatorCon
 // 应用配置接口
 export interface AppConfig {
   // Profile 系统（取代旧的顶层 radio/audio）
-  profiles: RadioProfile[];
+  profiles: InternalRadioProfile[];
   activeProfileId: string | null;
 
   ft8: {
@@ -469,6 +476,7 @@ export class ConfigManager {
       backups: 3,
     });
     const parsedConfig = await this.configStore.load() as any;
+    parsedConfig.profiles = parseInternalProfiles(parsedConfig.profiles);
     const configData = `${JSON.stringify(parsedConfig, null, 2)}\n`;
     let migrated = false;
 
@@ -827,6 +835,12 @@ export class ConfigManager {
    * 获取所有 Profile
    */
   getProfiles(): RadioProfile[] {
+    return this.config.profiles.map((profile) => (
+      isVirtualRadioProfile(profile) ? projectVirtualRadioProfile(profile) : profile
+    ));
+  }
+
+  getInternalProfiles(): InternalRadioProfile[] {
     return [...this.config.profiles];
   }
 
@@ -842,14 +856,31 @@ export class ConfigManager {
    */
   getActiveProfile(): RadioProfile | null {
     if (!this.config.activeProfileId) return null;
-    return this.config.profiles.find(p => p.id === this.config.activeProfileId) || null;
+    const profile = this.config.profiles.find(p => p.id === this.config.activeProfileId);
+    return profile && !isVirtualRadioProfile(profile) ? profile : null;
+  }
+
+  getActiveVirtualRadioProfile(): VirtualRadioProfile | null {
+    if (!this.config.activeProfileId) return null;
+    const profile = this.config.profiles.find((item) => item.id === this.config.activeProfileId);
+    return profile && isVirtualRadioProfile(profile) ? profile : null;
+  }
+
+  getPublicActiveProfileId(): string | null {
+    return this.config.activeProfileId;
+  }
+
+  hasConfiguredProfiles(): boolean {
+    return this.config.profiles.length > 0;
   }
 
   /**
    * 获取指定 Profile
    */
   getProfile(id: string): RadioProfile | null {
-    return this.config.profiles.find(p => p.id === id) || null;
+    const profile = this.config.profiles.find(p => p.id === id);
+    if (!profile) return null;
+    return isVirtualRadioProfile(profile) ? projectVirtualRadioProfile(profile) : profile;
   }
 
   /**
@@ -873,6 +904,9 @@ export class ConfigManager {
     }
 
     const existing = this.config.profiles[index];
+    if (isVirtualRadioProfile(existing)) {
+      throw new Error(`Profile ${id} is not editable through the public Profile API`);
+    }
     let nextUpdates = { ...updates };
     if (updates.audio) {
       const nextAudio = { ...updates.audio };
@@ -923,7 +957,7 @@ export class ConfigManager {
     };
 
     await this.saveConfig();
-    return this.config.profiles[index];
+    return this.config.profiles[index] as RadioProfile;
   }
 
   /**
@@ -933,6 +967,10 @@ export class ConfigManager {
     const index = this.config.profiles.findIndex(p => p.id === id);
     if (index === -1) {
       throw new Error(`Profile ${id} does not exist`);
+    }
+
+    if (isVirtualRadioProfile(this.config.profiles[index])) {
+      throw new Error(`Profile ${id} is not deletable through the public Profile API`);
     }
 
     this.config.profiles.splice(index, 1);
@@ -947,12 +985,11 @@ export class ConfigManager {
     const profileMap = new Map(this.config.profiles.map(p => [p.id, p]));
     const reordered = orderedIds
       .map(id => profileMap.get(id))
-      .filter((p): p is RadioProfile => p !== undefined);
+      .filter((p): p is InternalRadioProfile => p !== undefined);
 
-    if (reordered.length !== this.config.profiles.length) {
+    if (reordered.length !== this.config.profiles.length || orderedIds.length !== this.config.profiles.length) {
       throw new Error('Sort list does not match existing Profiles');
     }
-
     this.config.profiles = reordered;
     await this.saveConfig();
   }
@@ -961,7 +998,7 @@ export class ConfigManager {
    * 设置激活的 Profile ID
    */
   async setActiveProfileId(id: string | null): Promise<void> {
-    if (id !== null && !this.config.profiles.find(p => p.id === id)) {
+    if (id !== null && !this.getProfile(id)) {
       throw new Error(`Profile ${id} does not exist`);
     }
     this.config.activeProfileId = id;
@@ -1062,6 +1099,14 @@ export class ConfigManager {
    * 获取音频配置（从 activeProfile 派生）
    */
   getAudioConfig(): AudioDeviceSettings {
+    if (this.getActiveVirtualRadioProfile()) {
+      return normalizeAudioDeviceSettings({
+        inputSampleRate: 12_000,
+        outputSampleRate: 12_000,
+        inputBufferSize: 1_200,
+        outputBufferSize: 1_200,
+      });
+    }
     const profile = this.getActiveProfile();
     return normalizeAudioDeviceSettings(profile?.audio ?? DEFAULT_AUDIO);
   }
@@ -1070,6 +1115,7 @@ export class ConfigManager {
    * 更新音频配置（写入 activeProfile）
    */
   async updateAudioConfig(audioConfig: Partial<AudioDeviceSettings>): Promise<void> {
+    if (this.getActiveVirtualRadioProfile()) return;
     const activeProfileId = this.config.activeProfileId;
     if (!activeProfileId) return;
 
@@ -1184,6 +1230,13 @@ export class ConfigManager {
    * 获取电台(Hamlib)配置（从 activeProfile 派生）
    */
   getRadioConfig(): HamlibConfig {
+    const virtual = this.getActiveVirtualRadioProfile();
+    if (virtual) {
+      return {
+        type: 'none',
+        transmitCompensationMs: virtual.radio.transmitCompensationMs,
+      };
+    }
     const profile = this.getActiveProfile();
     return profile?.radio ? normalizeHamlibConfig({ ...profile.radio } as HamlibConfig) : { ...DEFAULT_RADIO };
   }

@@ -12,8 +12,15 @@ import { FlagDisplay } from '../../common/FlagDisplay';
 import { ScrollToBottomButton } from '../../common/ScrollToBottomButton';
 import { CallsignInfoPopover } from './CallsignInfoPopover';
 import { BOTTOM_TOLERANCE_PX, TOP_TOLERANCE_PX, getBottomGroupSignature, shouldShowScrollToBottomButton } from './framesTableAutoScroll';
-import { extractBaseCallsign, type GridLocation } from '@tx5dr/core';
+import { extractBaseCallsign, FT8MessageParser, type GridLocation } from '@tx5dr/core';
+import { FT8MessageType, type StrategyMessagePresentationProjection } from '@tx5dr/contracts';
+import { resolvePluginLabel } from '../../../utils/pluginLocales';
 import { resolveFrameCallsign } from './frameCallsign';
+import {
+  resolveFrameRowPresentation,
+  resolveStrategyPresentationClass,
+  type FrameRowMessageFacts,
+} from './frameRowPresentation';
 
 export interface FrameDisplayMessage {
   utc: string;
@@ -22,6 +29,7 @@ export interface FrameDisplayMessage {
   freq: number;
   message: string;
   operatorId?: string;
+  streamId?: string;
   emphasisCallsigns?: string[];
   country?: string;
   countryZh?: string;
@@ -73,7 +81,9 @@ interface FramesTableProps {
   className?: string;
   onRowDoubleClick?: (message: FrameDisplayMessage, group: FrameGroup) => void;
   myCallsigns?: string[]; // 自己的呼号列表
-  targetCallsign?: string; // 当前选中操作员的目标呼号
+  targetCallsigns?: string[]; // 当前选中操作员的全部活动目标呼号
+  /** Compatibility input for older callers. */
+  targetCallsign?: string;
   onMessageHover?: (freq: number | null) => void; // 消息hover回调
   showLogbookAnalysisVisuals?: boolean; // 是否显示日志本分析的视觉效果（划线、标签等）
   enableCallsignPopover?: boolean; // 是否启用呼号信息浮层（hover国旗区域弹出）
@@ -83,6 +93,8 @@ interface FramesTableProps {
   groupHeaderBand?: string | null; // 当前波段，用于截图上下文
   groupHeaderMode?: string | null; // 当前模式名，如 "FT8"
   queueCallsignOrder?: Readonly<Record<string, number>>; // 服务端队列投影中的呼号顺序
+  strategyName?: string;
+  strategyMessagePresentation?: StrategyMessagePresentationProjection;
 }
 
 const EMPTY_QUEUE_CALLSIGN_ORDER: Readonly<Record<string, number>> = {};
@@ -97,13 +109,15 @@ const cleanCallsignForMatching = (word: string): string => {
 };
 
 const isSpecialMessageType = (message: string): boolean => {
-  const upperMessage = message.toUpperCase().trim();
-  return upperMessage.startsWith('CQ') ||
-    upperMessage.includes('RR73') ||
-    upperMessage.includes('RRR') ||
-    upperMessage.includes(' 73') ||
-    upperMessage.endsWith(' 73') ||
-    upperMessage === '73';
+  try {
+    const type = FT8MessageParser.parseMessage(message).type;
+    return type === FT8MessageType.CQ
+      || type === FT8MessageType.RRR
+      || type === FT8MessageType.SEVENTY_THREE
+      || type === FT8MessageType.FOX_RR73;
+  } catch {
+    return false;
+  }
 };
 
 const containsMyCallsign = (message: string, myCallsigns: string[]): boolean => {
@@ -117,16 +131,16 @@ const containsMyCallsign = (message: string, myCallsigns: string[]): boolean => 
   });
 };
 
-const isTargetRelated = (messageObj: FrameDisplayMessage, targetCallsign: string): boolean => {
-  if (!targetCallsign || targetCallsign.trim() === '') return false;
-  const upperTarget = targetCallsign.toUpperCase().trim();
+export const isTargetRelated = (messageObj: FrameDisplayMessage, targetCallsigns: string[]): boolean => {
+  const normalizedTargets = new Set(targetCallsigns.map((callsign) => callsign.trim().toUpperCase()).filter(Boolean));
+  if (normalizedTargets.size === 0) return false;
   if (messageObj.db === 'TX') {
     const upperMessage = messageObj.message.toUpperCase();
     const words = upperMessage.split(/\s+/);
-    return words.some(word => cleanCallsignForMatching(word) === upperTarget);
+    return words.some(word => normalizedTargets.has(cleanCallsignForMatching(word)));
   }
   if (messageObj.logbookAnalysis?.callsign) {
-    return messageObj.logbookAnalysis.callsign.toUpperCase().trim() === upperTarget;
+    return normalizedTargets.has(messageObj.logbookAnalysis.callsign.toUpperCase().trim());
   }
   return false;
 };
@@ -159,6 +173,33 @@ export const resolveFrameLocationDisplay = (
     conflictGrid: isConflict ? message.locationGrid : undefined,
   };
 };
+
+export function resolveStrategyMessagePresentationClass(
+  message: FrameDisplayMessage,
+  group: FrameGroup,
+  projection?: StrategyMessagePresentationProjection,
+): ReturnType<typeof resolveStrategyPresentationClass> {
+  return resolveStrategyPresentationClass(buildMessageFacts(message, group, projection), projection);
+}
+
+function buildMessageFacts(
+  message: FrameDisplayMessage,
+  group: FrameGroup,
+  projection?: StrategyMessagePresentationProjection,
+): FrameRowMessageFacts {
+  const partition = projection?.partitionBy === 'mode'
+    ? group.frequencyContext?.mode
+    : projection?.partitionBy === 'none'
+      ? undefined
+      : group.frequencyContext?.band;
+  return {
+    isTx: message.db === 'TX',
+    rawText: message.message,
+    callsign: resolveFrameCallsign(message),
+    grid: message.locationGrid ?? message.logbookAnalysis?.grid,
+    partition,
+  };
+}
 
 const formatGroupHeaderTime = (startMs: number): string => {
   const date = new Date(startMs);
@@ -202,10 +243,12 @@ interface MessageRowProps {
   gridCols: string;
   isNarrow: boolean;
   myCallsigns: string[];
-  targetCallsign: string;
+  targetCallsigns: string[];
   showLogbookAnalysisVisuals: boolean;
   enableCallsignPopover: boolean;
   queueCallsignOrder: Readonly<Record<string, number>>;
+  strategyName?: string;
+  strategyMessagePresentation?: StrategyMessagePresentationProjection;
   cycleBackgrounds: FrameTableCycleBackgrounds['light'];
   isZh: boolean;
   highlightTypeLabels: Record<string, string>;
@@ -217,8 +260,9 @@ interface MessageRowProps {
 }
 
 const MessageRow = React.memo<MessageRowProps>(({
-  message, group, isFirstInGroup, isLastInGroup, gridCols, isNarrow, myCallsigns, targetCallsign,
-  showLogbookAnalysisVisuals, enableCallsignPopover, queueCallsignOrder, cycleBackgrounds, isZh, highlightTypeLabels,
+  message, group, isFirstInGroup, isLastInGroup, gridCols, isNarrow, myCallsigns, targetCallsigns,
+  showLogbookAnalysisVisuals, enableCallsignPopover, queueCallsignOrder, strategyName, strategyMessagePresentation,
+  cycleBackgrounds, isZh, highlightTypeLabels,
   getHighestPriorityHighlight, getHighlightColor,
   onDoubleClick, onMouseEnter, onMouseLeave,
 }) => {
@@ -227,49 +271,60 @@ const MessageRow = React.memo<MessageRowProps>(({
     [message.emphasisCallsigns, myCallsigns],
   );
   const hasMyCallsign = containsMyCallsign(message.message, emphasisCallsigns);
-  const isWorkedCallsign = showLogbookAnalysisVisuals && message.logbookAnalysis?.isNewCallsign === false;
-  const isTarget = isTargetRelated(message, targetCallsign);
+  const presentation = useMemo(() => {
+    const highlightType = message.db !== 'TX' && message.logbookAnalysis
+      ? getHighestPriorityHighlight(message.logbookAnalysis)
+      : null;
+    return resolveFrameRowPresentation({
+      facts: buildMessageFacts(message, group, strategyMessagePresentation),
+      strategy: strategyMessagePresentation,
+      logbook: {
+        enabled: showLogbookAnalysisVisuals,
+        worked: message.db !== 'TX' && message.logbookAnalysis?.isNewCallsign === false,
+        isSpecialMessage: isSpecialMessageType(message.message),
+        highlight: highlightType ? {
+          label: highlightTypeLabels[highlightType],
+          color: getHighlightColor(highlightType),
+        } : undefined,
+      },
+    });
+  }, [
+    getHighlightColor,
+    getHighestPriorityHighlight,
+    group,
+    highlightTypeLabels,
+    message,
+    showLogbookAnalysisVisuals,
+    strategyMessagePresentation,
+  ]);
+  const isWorkedCallsign = presentation.textDecoration === 'line-through';
+  const isTarget = isTargetRelated(message, targetCallsigns);
   const queuedOrder = useMemo(
     () => resolveQueuedFrameOrder(message, queueCallsignOrder),
     [message, queueCallsignOrder],
   );
-  const showChips = showLogbookAnalysisVisuals && message.db !== 'TX' && message.logbookAnalysis && isSpecialMessageType(message.message);
 
   // Hover style
   const hoverStyle = useMemo(() => {
     if (message.db === 'TX') return {};
-    if (showLogbookAnalysisVisuals && message.logbookAnalysis && isSpecialMessageType(message.message)) {
-      const ht = getHighestPriorityHighlight(message.logbookAnalysis);
-      if (ht) {
-        const baseColor = getHighlightColor(ht);
-        const opacity = group.cycle === 'even' ? 0.3 : 0.35;
-        return { '--hover-bg': hexToRgba(baseColor, opacity) } as React.CSSProperties;
-      }
+    if (presentation.highlightedHover && presentation.color) {
+      const opacity = group.cycle === 'even' ? 0.3 : 0.35;
+      return { '--hover-bg': hexToRgba(presentation.color, opacity) } as React.CSSProperties;
     }
     return {
       '--hover-bg': group.cycle === 'even' ? cycleBackgrounds.even : cycleBackgrounds.odd
     } as React.CSSProperties;
-  }, [message.db, message.logbookAnalysis, message.message, showLogbookAnalysisVisuals, group.cycle, cycleBackgrounds.even, cycleBackgrounds.odd, getHighestPriorityHighlight, getHighlightColor]);
+  }, [message.db, presentation.highlightedHover, presentation.color, group.cycle, cycleBackgrounds.even, cycleBackgrounds.odd]);
 
-  // Logbook analysis background style
-  const logbookStyle = useMemo(() => {
-    if (!showLogbookAnalysisVisuals || message.db === 'TX' || !message.logbookAnalysis || !isSpecialMessageType(message.message)) {
+  const presentationStyle = useMemo(() => {
+    if (!presentation.background || !presentation.color || message.db === 'TX') {
       return {};
     }
-    const ht = getHighestPriorityHighlight(message.logbookAnalysis);
-    if (!ht) return {};
-    const color = getHighlightColor(ht);
     const opacity = group.cycle === 'even' ? 0.15 : 0.2;
-    return { backgroundColor: hexToRgba(color, opacity) } as React.CSSProperties;
-  }, [showLogbookAnalysisVisuals, group.cycle, message.db, message.logbookAnalysis, message.message, getHighestPriorityHighlight, getHighlightColor]);
+    return { backgroundColor: hexToRgba(presentation.color, opacity) } as React.CSSProperties;
+  }, [presentation.background, presentation.color, group.cycle, message.db]);
 
-  // Right border color
-  const rightBorderColor = useMemo(() => {
-    if (message.db === 'TX' || !message.logbookAnalysis) return null;
-    const ht = getHighestPriorityHighlight(message.logbookAnalysis);
-    if (!ht) return null;
-    return getHighlightColor(ht);
-  }, [message.db, message.logbookAnalysis, getHighestPriorityHighlight, getHighlightColor]);
+  const rightBorderColor = message.db !== 'TX' && presentation.accent ? presentation.color : undefined;
 
   const formattedUtc = isNarrow ? message.utc.replace(/:/g, '') : message.utc;
 
@@ -309,34 +364,42 @@ const MessageRow = React.memo<MessageRowProps>(({
     return inner;
   }, [isZh, isNarrow, message, enableCallsignPopover]);
 
-  // Chip for logbook analysis
-  const chipNode = useMemo(() => {
-    if (!showChips || !message.logbookAnalysis) return null;
-    const ht = getHighestPriorityHighlight(message.logbookAnalysis);
-    if (!ht) return null;
-    const baseColor = getHighlightColor(ht);
-    const label = highlightTypeLabels[ht];
-    const badgeColors = getBadgeColors(baseColor, true);
+  const badgeNodes = useMemo(() => presentation.badges.map((badge, index) => {
+    const label = badge.strategyLabel && strategyName
+      ? resolvePluginLabel(badge.label, strategyName)
+      : badge.label;
+    if (badge.color) {
+      const badgeColors = getBadgeColors(badge.color, true);
+      return (
+        <Chip
+          key={`${badge.label}:${index}`}
+          size="sm"
+          variant="flat"
+          className="h-4 font-medium"
+          style={{
+            backgroundColor: badgeColors.backgroundColor,
+            color: badgeColors.textColor,
+            borderColor: badgeColors.borderColor,
+            borderWidth: '1px',
+            borderStyle: 'solid',
+          }}
+        >
+          {label}
+        </Chip>
+      );
+    }
+    const color = badge.tone === 'neutral' ? 'default' : badge.tone;
     return (
-      <Chip
-        size="sm"
-        variant="flat"
-        className="h-4 font-medium"
-        style={{
-          backgroundColor: badgeColors.backgroundColor,
-          color: badgeColors.textColor,
-          borderColor: badgeColors.borderColor,
-          borderWidth: '1px',
-          borderStyle: 'solid'
-        }}
-      >
+      <Chip key={`${badge.label}:${index}`} size="sm" variant="flat" color={color} className="h-4 font-medium">
         {label}
       </Chip>
     );
-  }, [showChips, message.logbookAnalysis, getHighestPriorityHighlight, getHighlightColor, highlightTypeLabels]);
+  }), [presentation.badges, strategyName]);
 
   return (
     <div
+      data-presentation-source={presentation.source}
+      data-presentation-badges={presentation.badges.map((badge) => badge.label).join(',')}
       className={`
         ft8-row
         transition-colors duration-150
@@ -346,7 +409,7 @@ const MessageRow = React.memo<MessageRowProps>(({
       style={{
         ...(message.db === 'TX' ? { backgroundColor: 'var(--ft8-tx-row-bg)' } : {}),
         ...hoverStyle,
-        ...logbookStyle,
+        ...presentationStyle,
       }}
       onDoubleClick={onDoubleClick}
       onMouseEnter={onMouseEnter}
@@ -363,7 +426,7 @@ const MessageRow = React.memo<MessageRowProps>(({
           {queuedOrder}
         </div>
       )}
-      {/* 右侧颜色条（非特殊消息类型时显示） */}
+      {/* Final row presentation owns the accent; the renderer does not inspect business state. */}
       {rightBorderColor && (
         <div
           className="absolute right-0 top-0 bottom-0 w-1"
@@ -398,11 +461,11 @@ const MessageRow = React.memo<MessageRowProps>(({
             />
           )}
           <span
-            className={`min-w-0 max-w-full whitespace-normal break-words ${hasMyCallsign ? 'font-semibold' : ''} ${message.db !== 'TX' && hasMyCallsign ? 'text-danger' : ''} ${isWorkedCallsign ? 'line-through opacity-70' : ''}`}
+            className={`min-w-0 max-w-full whitespace-normal break-words ${hasMyCallsign ? 'font-semibold' : ''} ${message.db !== 'TX' && hasMyCallsign ? 'text-danger' : ''} ${isWorkedCallsign ? 'line-through' : ''} ${presentation.opacity === 'muted' || isWorkedCallsign ? 'opacity-70' : ''}`}
           >
             {message.message}
           </span>
-          {chipNode}
+          {badgeNodes}
         </span>
       </div>
       <div className={`pl-1 text-xs text-right ${isNarrow ? '' : 'pr-1'}`}>
@@ -415,7 +478,7 @@ MessageRow.displayName = 'MessageRow';
 
 // ─── 主组件 ─────────────────────────────────
 
-export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [], targetCallsign = '', onMessageHover, showLogbookAnalysisVisuals = true, enableCallsignPopover = false, scrollToBottomTrigger, showGroupHeader = false, shouldShowGroupHeader: shouldShowGroupHeaderPredicate, groupHeaderBand = null, groupHeaderMode = null, queueCallsignOrder = EMPTY_QUEUE_CALLSIGN_ORDER }) => {
+export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [], targetCallsigns = [], targetCallsign = '', onMessageHover, showLogbookAnalysisVisuals = true, enableCallsignPopover = false, scrollToBottomTrigger, showGroupHeader = false, shouldShowGroupHeader: shouldShowGroupHeaderPredicate, groupHeaderBand = null, groupHeaderMode = null, queueCallsignOrder = EMPTY_QUEUE_CALLSIGN_ORDER, strategyName, strategyMessagePresentation }) => {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language === 'zh';
   const highlightTypeLabels = useMemo(() => getHighlightTypeLabels(t), [t]);
@@ -427,6 +490,10 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
   const [wasAtBottom, setWasAtBottom] = useState(true);
   const [isAtTop, setIsAtTop] = useState(true);
   const [isNarrow, setIsNarrow] = useState(false);
+  const activeTargetCallsigns = useMemo(
+    () => Array.from(new Set([...targetCallsigns, targetCallsign].map((callsign) => callsign.trim()).filter(Boolean))),
+    [targetCallsign, targetCallsigns],
+  );
   const [activeTheme, setActiveTheme] = useState<'light' | 'dark'>(() => (
     typeof document !== 'undefined' && document.documentElement.classList.contains('dark') ? 'dark' : 'light'
   ));
@@ -616,7 +683,11 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
           }
         }
       `}</style>
-      <div ref={containerRef} className={`${className} relative flex flex-col rounded-lg overflow-hidden cursor-default`}>
+      <div
+        ref={containerRef}
+        data-strategy-presentation={strategyMessagePresentation ? 'active' : 'none'}
+        className={`${className} relative flex flex-col rounded-lg overflow-hidden cursor-default`}
+      >
         {/* 固定表头 */}
         <div className="flex-shrink-0 cursor-default select-none">
           <div className={`grid ${gridCols} gap-0 ${isNarrow ? 'px-2' : 'px-3'} py-1`}>
@@ -694,10 +765,12 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
                           gridCols={gridCols}
                           isNarrow={isNarrow}
                           myCallsigns={myCallsigns}
-                          targetCallsign={targetCallsign}
+                          targetCallsigns={activeTargetCallsigns}
                           showLogbookAnalysisVisuals={showLogbookAnalysisVisuals}
                           enableCallsignPopover={enableCallsignPopover}
                           queueCallsignOrder={queueCallsignOrder}
+                          strategyName={strategyName}
+                          strategyMessagePresentation={strategyMessagePresentation}
                           cycleBackgrounds={cycleBackgrounds}
                           isZh={isZh}
                           highlightTypeLabels={highlightTypeLabels}

@@ -3877,6 +3877,58 @@ function setupIpcHandlers() {
     }
   });
 
+  ipcMain.handle('window:openPluginPage', async (_event, queryString: string) => {
+    const params = new URLSearchParams(queryString);
+    const pluginName = params.get('pluginName')?.trim();
+    const pageId = params.get('pageId')?.trim();
+    if (!pluginName || !pageId) {
+      throw new Error('pluginName and pageId are required');
+    }
+
+    logger.info(`IPC window:openPluginPage, plugin=${pluginName}, page=${pageId}`);
+    try {
+      const pluginPageWindow = new BrowserWindow({
+        width: 1200,
+        height: 800,
+        minWidth: 640,
+        minHeight: 480,
+        show: true,
+        titleBarStyle: 'hiddenInset',
+        titleBarOverlay: process.platform === 'win32' ? {
+          color: '#ffffff',
+          symbolColor: '#000000',
+        } : false,
+        frame: process.platform !== 'darwin',
+        webPreferences: {
+          contextIsolation: true,
+          nodeIntegration: false,
+          webSecurity: false,
+          allowRunningInsecureContent: true,
+          backgroundThrottling: false,
+          preload: app.isPackaged
+            ? join(process.resourcesPath, 'app', 'packages', 'electron-preload', 'dist', 'preload.js')
+            : join(__dirname, '../../electron-preload/dist/preload.js'),
+        },
+      });
+
+      if (process.platform === 'win32' || process.platform === 'linux') {
+        pluginPageWindow.setMenuBarVisibility(false);
+      }
+
+      const baseUrl = `${getWebUrl()}/plugin-page.html?${params.toString()}`;
+      const pluginPageUrl = await buildAuthenticatedRendererUrl(baseUrl);
+      logger.info(`IPC window:openPluginPage loading URL: ${redactSensitiveText(pluginPageUrl)}`);
+      await pluginPageWindow.loadURL(pluginPageUrl);
+      if (process.env.NODE_ENV === 'development' && !app.isPackaged && shouldOpenDevTools()) {
+        pluginPageWindow.webContents.openDevTools();
+      }
+      pluginPageWindow.focus();
+    } catch (error) {
+      logger.error('IPC window:openPluginPage failed to create window', error);
+      throw error;
+    }
+  });
+
   // 处理打开独立频谱图窗口的请求
   ipcMain.handle('window:openSpectrumWindow', async (_event) => {
     logger.info('IPC window:openSpectrumWindow');

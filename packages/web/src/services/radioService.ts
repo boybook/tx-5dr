@@ -363,8 +363,41 @@ export class RadioService {
     }
   }
 
+  setOperatorStreamState(
+    operatorId: string,
+    streamId: string,
+    stateId: string,
+    expectedLifecycleEpoch: number,
+  ): void {
+    if (this.isConnected) {
+      logger.info('UI command: setOperatorStreamState', {
+        operatorId,
+        streamId,
+        stateId,
+        expectedLifecycleEpoch,
+      });
+      this.wsClient.send('setOperatorStreamState', {
+        operatorId,
+        streamId,
+        stateId,
+        expectedLifecycleEpoch,
+      });
+    }
+  }
+
+  invokeOperatorStrategyAction(
+    operatorId: string,
+    target: import('@tx5dr/contracts').StrategyActionTarget,
+    actionId: string,
+    payload?: unknown,
+  ): void {
+    if (!this.isConnected) return;
+    logger.info('UI command: invokeOperatorStrategyAction', { operatorId, target, actionId });
+    this.wsClient.send('invokeOperatorStrategyAction', { operatorId, target, actionId, payload });
+  }
+
   /**
-   * 设置操作员策略运行时槽位内容
+   * 设置操作员通联机制的 Tx 消息内容
    */
   setOperatorRuntimeSlotContent(operatorId: string, slot: OperatorRuntimeSlot, content: string): void {
     if (this.isConnected) {

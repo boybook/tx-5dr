@@ -74,6 +74,7 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, 'index.html'),
         logbook: resolve(__dirname, 'logbook.html'),
+        pluginPage: resolve(__dirname, 'plugin-page.html'),
         spectrum: resolve(__dirname, 'spectrum.html'),
         about: resolve(__dirname, 'about.html'),
       },

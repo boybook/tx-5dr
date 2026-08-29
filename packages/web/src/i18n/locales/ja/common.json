@@ -116,7 +116,7 @@
     "subtitle": "デジタル無線機リモコン"
   },
   "automation": {
-    "title": "自動化された手順"
+    "title": "交信方式"
   },
   "theme": {
     "toggle": "テーマを切り替える",
@@ -805,6 +805,13 @@
   "voice": {
     "qsoTab": "交信"
   },
+  "pluginPage": {
+    "title": "交信拡張ページ",
+    "invalidRoute": "交信拡張ページのアドレスが不完全です。",
+    "unavailable": "この交信拡張ページは現在利用できません。",
+    "operatorRequired": "交信拡張ページを開く前にオペレーターを選択してください。",
+    "loadFailed": "交信拡張ページを読み込めませんでした。"
+  },
   "bootstrapStatus": {
     "chip": {
       "failed": "一部の機能は準備ができていません",
@@ -843,7 +850,7 @@
       },
       "plugin-bootstrap": {
         "label": "プラグイン",
-        "description": "プラグインと自動化戦略をロードする"
+        "description": "プラグインと交信方式を読み込む"
       },
       "ntp-initial-check": {
         "label": "時間校正",

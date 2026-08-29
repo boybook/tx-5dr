@@ -5,6 +5,9 @@ export interface FrameAudioIdentity {
 
 export interface EncodedTrack {
   operatorId: string;
+  streamId: string;
+  trackId: string;
+  audioFrequencyHz: number;
   audioData: Float32Array;
   sampleRate: number;
   slotStartMs: number;
@@ -51,11 +54,11 @@ export class FrameAudioRepository {
       };
       this.frames.set(key, frame);
     }
-    const existing = frame.tracks.get(track.operatorId);
+    const existing = frame.tracks.get(track.trackId);
     if (existing?.requestId && track.requestId === existing.requestId) return false;
     frame.slotId = identity.slotId;
     frame.txDialShiftHz = txDialShiftHz;
-    frame.tracks.set(track.operatorId, track);
+    frame.tracks.set(track.trackId, track);
     this.prune();
     return true;
   }
@@ -75,14 +78,14 @@ export class FrameAudioRepository {
   cloneFrame(
     source: FrameAudioIdentity,
     target: FrameAudioIdentity & { slotId: string },
-    retainedOperatorIds: readonly string[],
+    retainedTrackIds: readonly string[],
   ): FrameAudioSnapshot | null {
     const sourceFrame = this.frames.get(frameKey(source));
     if (!sourceFrame) return null;
     const tracks = new Map<string, EncodedTrack>();
-    for (const operatorId of retainedOperatorIds) {
-      const track = sourceFrame.tracks.get(operatorId);
-      if (track) tracks.set(operatorId, track);
+    for (const trackId of retainedTrackIds) {
+      const track = sourceFrame.tracks.get(trackId);
+      if (track) tracks.set(track.trackId, track);
     }
     const cloned: MutableFrameAudio = {
       frameId: target.frameId,

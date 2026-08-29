@@ -23,6 +23,7 @@ import type {
   RadioPowerView,
   RadioPowerCommandPort,
   LogbookAccess,
+  PluginLogbookSessions,
   BandAccess,
   UIBridge,
   PluginFileStore,
@@ -188,6 +189,14 @@ export function createMockKVStore(initial?: Record<string, unknown>): MockKVStor
         data.set(key, clonedEntry[key]);
       }
     },
+    update<T = unknown>(key: string, reducer: (current: T | undefined) => T | undefined): T | undefined {
+      const current = data.has(key) ? cloneJsonValue(data.get(key)) as T : undefined;
+      const next = reducer(current);
+      const clonedEntry = cloneJsonValue({ [key]: next }) as Record<string, unknown>;
+      if (!Object.prototype.hasOwnProperty.call(clonedEntry, key)) data.delete(key);
+      else data.set(key, clonedEntry[key]);
+      return data.has(key) ? cloneJsonValue(data.get(key)) as T : undefined;
+    },
     delete(key: string): void {
       data.delete(key);
     },
@@ -263,6 +272,7 @@ export function createMockOperatorSnapshot(
     callsign: overrides?.callsign ?? 'W1AW',
     grid: overrides?.grid ?? 'FN31',
     frequency: overrides?.frequency ?? 1500,
+    maxConcurrentStreams: overrides?.maxConcurrentStreams ?? 3,
     get mode() { return cloneStructuredValue(mode); },
     get transmitCycles() { return cloneStructuredValue(transmitCycles); },
     get automation() { return cloneStructuredValue(automation); },
@@ -303,6 +313,7 @@ export function createMockRadioView(
     band: overrides?.band ?? '20m',
     get mode() { return cloneStructuredValue(mode); },
     isConnected: overrides?.isConnected ?? true,
+    isSimulation: overrides?.isSimulation ?? false,
   };
 }
 
@@ -383,6 +394,7 @@ export function createMockLogbookAccess(
   const callsignAccess = {
     callsign: 'N0CALL',
     getLogBookId: async () => 'logbook-N0CALL',
+    awaitReady: async () => {},
     queryQSOs: async () => [],
     readQsoSnapshot,
     countQSOs: async () => 0,
@@ -444,6 +456,9 @@ export function createMockUIBridge(): MockUIBridge {
     },
     clearPanelContributions(groupId: string): void {
       events.push({ type: 'panel-contributions', id: groupId, data: [] });
+    },
+    refreshOperatorProjection(): void {
+      events.push({ type: 'operator-projection-refresh', id: 'operator' });
     },
     registerPageHandler(_handler: Parameters<UIBridge['registerPageHandler']>[0]): void {
       // no-op in mock
@@ -757,6 +772,8 @@ export interface MockPluginContextOptions<
   radioPowerCommands?: RadioPowerCommandPort;
   /** Logbook access overrides. */
   logbook?: Partial<LogbookAccess>;
+  /** Plugin-owned logbook session override. */
+  logbookSessions?: PluginLogbookSessions;
   /** Band access overrides. */
   band?: Partial<BandAccess>;
   /** Host settings control overrides. */
@@ -796,6 +813,18 @@ export function createMockContext<
 
   const radio = createMockRadioView(opts.radio);
   const logbook = createMockLogbookAccess(opts.logbook);
+  const logbookSessions: PluginLogbookSessions = opts.logbookSessions ?? {
+    async open(descriptor) {
+      const access = logbook.forCallsign(descriptor.stationCallsign);
+      return {
+        ...access,
+        id: `plugin-session-${descriptor.sessionKey}`,
+        title: descriptor.title,
+        async destroy() {},
+      };
+    },
+    async destroy() {},
+  };
   const readOnlyLogbook = {
     hasWorked: logbook.hasWorked,
     hasWorkedDXCC: logbook.hasWorkedDXCC,
@@ -808,6 +837,7 @@ export function createMockContext<
       return {
         callsign: access.callsign,
         getLogBookId: access.getLogBookId,
+        awaitReady: access.awaitReady,
         queryQSOs: access.queryQSOs,
         readQsoSnapshot: access.readQsoSnapshot,
         countQSOs: access.countQSOs,
@@ -834,6 +864,14 @@ export function createMockContext<
       Object.assign(configState, cloneJsonValue(patch));
     },
     store: { global: globalStore, operator: operatorStore },
+    digitalMessagePreflight: {
+      async check(request) {
+        const text = request.text.trim().toUpperCase().replace(/\s+/g, ' ');
+        return text
+          ? { encodable: true, requestedText: text, transmittedText: text }
+          : { encodable: false, requestedText: text, reason: 'empty' as const };
+      },
+    },
     log,
     timers,
     operator,
@@ -841,8 +879,15 @@ export function createMockContext<
     band,
     ui,
     files,
-    ...((opts.permissions?.includes('logbook:read') || opts.permissions?.includes('logbook:write')) ? {
-      logbook: opts.permissions?.includes('logbook:write') ? logbook : readOnlyLogbook,
+    ...((opts.permissions?.includes('logbook:read')
+      || opts.permissions?.includes('logbook:write')
+      || opts.permissions?.includes('logbook:session')) ? {
+      logbook: {
+        ...(opts.permissions?.includes('logbook:write')
+          ? logbook
+          : opts.permissions?.includes('logbook:read') ? readOnlyLogbook : {}),
+        ...(opts.permissions?.includes('logbook:session') ? { sessions: logbookSessions } : {}),
+      },
     } : {}),
     ...(opts.permissions?.includes('logbook:sync') ? { logbookSync } : {}),
     ...((opts.permissions ?? []).some(permission => permission.startsWith('settings:')) ? {

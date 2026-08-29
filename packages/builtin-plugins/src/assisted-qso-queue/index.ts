@@ -1,6 +1,7 @@
 import {
   definePlugin,
   type PluginQuickSetting,
+  type PluginSettingDescriptor,
   type StrategyPluginContext,
 } from '@tx5dr/plugin-api';
 import {
@@ -28,14 +29,26 @@ const ASSISTED_QSO_QUEUE_SETTING_KEYS = [
   'maxCallAttempts',
 ] as const;
 
-export const assistedQSOQueueSettings = Object.fromEntries(
-  ASSISTED_QSO_QUEUE_SETTING_KEYS.map((key) => [key, standardQSOSettings[key]]),
-);
+export const assistedQSOQueueSettings: Record<string, PluginSettingDescriptor> = {
+  ...Object.fromEntries(
+    ASSISTED_QSO_QUEUE_SETTING_KEYS.map((key) => [key, standardQSOSettings[key]]),
+  ),
+  parallelStreams: {
+    type: 'number',
+    default: 1,
+    label: 'parallelStreams',
+    description: 'parallelStreamsDesc',
+    scope: 'operator',
+    min: 1,
+    max: 3,
+  },
+};
 
 export const assistedQSOQueueQuickSettings: PluginQuickSetting[] = [
   { settingKey: 'replyToWorkedStations' },
   { settingKey: 'distinguishWorkedStationsByBand' },
   { settingKey: 'skipTx1' },
+  { settingKey: 'parallelStreams' },
 ];
 
 function createOperator(ctx: StrategyPluginContext): StandardQSOPluginOperator {
@@ -67,7 +80,12 @@ export const assistedQSOQueueStrategyPlugin = definePlugin({
   name: BUILTIN_ASSISTED_QSO_QUEUE_PLUGIN_NAME,
   version: '1.0.0',
   type: 'strategy',
-  strategyFeatures: { targetQueue: 1 },
+  strategyFeatures: {
+    targetQueue: 1,
+    parallelTargetQueue: 1,
+    queueActivation: 'immediate',
+    maxConcurrentStreams: 3,
+  },
   description: 'Assisted FT8/FT4 target queue using the standard QSO protocol',
   settings: assistedQSOQueueSettings,
   quickSettings: assistedQSOQueueQuickSettings,
@@ -76,6 +94,8 @@ export const assistedQSOQueueStrategyPlugin = definePlugin({
       operator: createOperator(ctx),
       isTransmitting: () => ctx.operator.isTransmitting,
       logger: ctx.log,
+      getMaxStreams: () => Number(ctx.config.parallelStreams ?? 1),
+      getStreamLimit: () => ctx.operator.maxConcurrentStreams,
     });
   },
 });

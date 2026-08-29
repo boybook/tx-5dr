@@ -1,6 +1,7 @@
 import {
   OperatorConfig,
   QSORecord,
+  type QSOPersistencePolicy,
   DigitalRadioEngineEvents,
   MODES,
   ModeDescriptor,
@@ -14,6 +15,7 @@ const logger = createLogger('RadioOperator');
 interface RadioOperatorEvents extends DigitalRadioEngineEvents {
     operatorTransmitCyclesChanged: (data: {
         operatorId: string;
+        previousTransmitCycles?: number[];
         transmitCycles: number[];
         commandEpoch?: number;
         source?: 'manual' | 'plugin' | 'late-decode' | 'slot-auto';
@@ -21,15 +23,22 @@ interface RadioOperatorEvents extends DigitalRadioEngineEvents {
     }) => void;
     qsoLifecycleChanged: (data: {
         operatorId: string;
+        streamId?: string;
         lifecycleEpoch: number;
         runtimeGeneration?: number;
     }) => void;
     recordQSO: (data: {
         operatorId: string;
+        streamId?: string;
         qsoLifecycleId?: string;
         qsoLifecycleEpoch?: number;
         qsoRuntimeGeneration?: number;
         qsoRecord: QSORecord;
+        persistencePolicy?: QSOPersistencePolicy;
+        destination?:
+            | { kind: 'plugin-session'; sessionId: string }
+            | { kind: 'plugin-session-key'; sessionKey: string };
+        sourcePluginName?: string;
         retryAttemptId?: string;
         resolve?: (record: QSORecord) => void;
         reject?: (error: unknown) => void;
@@ -134,9 +143,11 @@ export class RadioOperator {
             reason?: string;
         },
     ): void {
+        const previousTransmitCycles = [...this._config.transmitCycles];
         this._config.transmitCycles = Array.isArray(transmitCycles) ? transmitCycles : [transmitCycles];
         this._eventEmitter.emit('operatorTransmitCyclesChanged', {
             operatorId: this._config.id,
+            previousTransmitCycles,
             transmitCycles: this._config.transmitCycles,
             ...mutation,
         });
@@ -147,17 +158,27 @@ export class RadioOperator {
     }
 
     recordQSOLog(qsoRecord: QSORecord, options?: {
+        streamId?: string;
         retryAttemptId?: string;
         qsoLifecycleId?: string;
         qsoLifecycleEpoch?: number;
         qsoRuntimeGeneration?: number;
+        persistencePolicy?: QSOPersistencePolicy;
+        destination?:
+            | { kind: 'plugin-session'; sessionId: string }
+            | { kind: 'plugin-session-key'; sessionKey: string };
+        sourcePluginName?: string;
     }): Promise<QSORecord> {
         return new Promise<QSORecord>((resolve, reject) => {
             this._eventEmitter.emit('recordQSO', {
                 operatorId: this._config.id,
+                streamId: options?.streamId,
                 qsoLifecycleId: options?.qsoLifecycleId,
                 qsoLifecycleEpoch: options?.qsoLifecycleEpoch,
                 qsoRuntimeGeneration: options?.qsoRuntimeGeneration,
+                persistencePolicy: options?.persistencePolicy,
+                destination: options?.destination,
+                sourcePluginName: options?.sourcePluginName,
                 qsoRecord,
                 retryAttemptId: options?.retryAttemptId,
                 resolve,

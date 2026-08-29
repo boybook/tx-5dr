@@ -1,6 +1,8 @@
 import {
   PLUGIN_COMMAND_CAPABILITY_PERMISSIONS,
   type AnyPluginDefinition,
+  type SimulationScenarioChoice,
+  type SimulationScenarioDescriptor,
 } from '@tx5dr/plugin-api';
 import type { PluginPanelDescriptor, PluginRuntimeLogEntry, PluginUIPageDescriptor } from '@tx5dr/contracts';
 import { PluginManifestSchema } from '@tx5dr/contracts';
@@ -14,6 +16,8 @@ import { validateArchiveRelativePath } from './path-security.js';
 
 const logger = createLogger('PluginLoader');
 const ENTRY_FILE_CANDIDATES = ['plugin.js', 'plugin.mjs', 'index.js', 'index.mjs'] as const;
+const SIMULATION_CALLSIGN = /^[A-Z0-9]+(?:\/[A-Z0-9]+)*$/i;
+const SIMULATION_GRID = /^[A-R]{2}[0-9]{2}$/i;
 
 export interface PluginLoaderRuntimeLogEvent {
   stage: PluginRuntimeLogEntry['stage'];
@@ -84,6 +88,8 @@ export function validatePluginDefinition(def: AnyPluginDefinition): void {
     }
   }
 
+  validateSimulationScenarios(def);
+
   for (const quickSetting of manifest.quickSettings ?? []) {
     const setting = manifest.settings?.[quickSetting.settingKey];
     if (!setting) {
@@ -111,7 +117,7 @@ export function validatePluginDefinition(def: AnyPluginDefinition): void {
     if (!uiPageIds.has(panel.pageId)) {
       throw new Error(`Iframe panel "${panel.id}" references unknown ui page "${panel.pageId}"`);
     }
-    validateRadioControlToolbarPanel(manifest, panel, uiPageById.get(panel.pageId));
+    validateSpecialPanel(manifest, panel, uiPageById.get(panel.pageId));
   }
 
   if (manifest.instanceScope === 'global') {
@@ -192,8 +198,119 @@ export function canonicalizePluginDefinition(def: AnyPluginDefinition): AnyPlugi
     hooks: def.hooks ? { ...def.hooks } : undefined,
     isTransmitControlEnabled: def.isTransmitControlEnabled,
     isAutoCallEnabled: def.isAutoCallEnabled,
+    simulationScenarios: def.simulationScenarios
+      ? structuredClone(def.simulationScenarios)
+      : undefined,
   };
   return deepFreezeDefinition(canonical);
+}
+
+function validateSimulationScenarios(def: AnyPluginDefinition): void {
+  const scenarios = def.simulationScenarios ?? [];
+  const scenarioIds = new Set<string>();
+  for (const scenario of scenarios) {
+    if (!scenario.id?.trim() || scenarioIds.has(scenario.id)) {
+      throw new Error(`Simulation scenario id must be non-empty and unique: ${scenario.id ?? ''}`);
+    }
+    scenarioIds.add(scenario.id);
+    if (scenario.modes.length === 0 || scenario.modes.some((mode) => mode !== 'FT8' && mode !== 'FT4')) {
+      throw new Error(`Simulation scenario "${scenario.id}" must declare FT8 and/or FT4`);
+    }
+    if (!scenario.states[scenario.initialState]) {
+      throw new Error(`Simulation scenario "${scenario.id}" references missing initial state "${scenario.initialState}"`);
+    }
+    const restart = scenario.addressedRestart;
+    if (restart) {
+      if (!Array.isArray(restart.reclaimableStates)
+          || restart.reclaimableStates.length === 0
+          || new Set(restart.reclaimableStates).size !== restart.reclaimableStates.length
+          || restart.reclaimableStates.some((stateId) => (
+            typeof stateId !== 'string' || !scenario.states[stateId]
+          ))) {
+        throw new Error(`Simulation scenario "${scenario.id}" addressedRestart has invalid reclaimable states`);
+      }
+      if (restart.restartCompleted !== undefined && typeof restart.restartCompleted !== 'boolean') {
+        throw new Error(`Simulation scenario "${scenario.id}" addressedRestart.restartCompleted must be a boolean`);
+      }
+    }
+    if (scenario.identityPool && scenario.identityPool.length === 0) {
+      throw new Error(`Simulation scenario "${scenario.id}" identity pool must not be empty`);
+    }
+    const identityCallsigns = new Set<string>();
+    for (const identity of scenario.identityPool ?? []) {
+      const callsign = identity.callsign?.trim().toUpperCase();
+      if (!callsign || !SIMULATION_CALLSIGN.test(callsign) || identityCallsigns.has(callsign)) {
+        throw new Error(`Simulation scenario "${scenario.id}" has an invalid or duplicate identity callsign`);
+      }
+      if (!SIMULATION_GRID.test(identity.grid?.trim() ?? '')) {
+        throw new Error(`Simulation scenario "${scenario.id}" identity "${callsign}" has an invalid grid`);
+      }
+      identityCallsigns.add(callsign);
+    }
+    for (const rule of scenario.globalRules ?? []) {
+      validateSimulationRule(scenario.id, 'global', rule, scenario.states);
+    }
+    for (const [stateId, state] of Object.entries(scenario.states)) {
+      for (const rule of state.rules ?? []) {
+        validateSimulationRule(scenario.id, stateId, rule, scenario.states);
+      }
+      for (const timeout of state.timeouts ?? []) {
+        if (!Number.isInteger(timeout.afterReceiveCycles) || timeout.afterReceiveCycles < 1) {
+          throw new Error(`Simulation scenario "${scenario.id}" state "${stateId}" has an invalid timeout`);
+        }
+        validateSimulationChoices(scenario.id, stateId, timeout.choices, scenario.states);
+      }
+    }
+  }
+}
+
+function validateSimulationRule(
+  scenarioId: string,
+  stateId: string,
+  rule: import('@tx5dr/plugin-api').SimulationScenarioRule,
+  states: SimulationScenarioDescriptor['states'],
+): void {
+  if (!rule.pattern || rule.pattern.length > 512) {
+    throw new Error(`Simulation scenario "${scenarioId}" state "${stateId}" has an invalid pattern`);
+  }
+  try {
+    void new RegExp(`^(?:${rule.pattern})$`, 'i');
+  } catch (error) {
+    throw new Error(`Simulation scenario "${scenarioId}" state "${stateId}" has an invalid pattern: ${(error as Error).message}`);
+  }
+  validateSimulationChoices(scenarioId, stateId, rule.choices, states);
+}
+
+function validateSimulationChoices(
+  scenarioId: string,
+  stateId: string,
+  choices: SimulationScenarioChoice[],
+  states: SimulationScenarioDescriptor['states'],
+): void {
+  if (choices.length === 0) {
+    throw new Error(`Simulation scenario "${scenarioId}" state "${stateId}" has no choices`);
+  }
+  for (const choice of choices) {
+    const actionCount = Number(Boolean(choice.reply))
+      + Number(Boolean(choice.repeatLast))
+      + Number(Boolean(choice.silence))
+      + Number(Boolean(choice.complete));
+    if (actionCount !== 1) {
+      throw new Error(`Simulation scenario "${scenarioId}" state "${stateId}" choice must declare exactly one action`);
+    }
+    if (choice.weight !== undefined && (!Number.isFinite(choice.weight) || choice.weight <= 0)) {
+      throw new Error(`Simulation scenario "${scenarioId}" state "${stateId}" has an invalid weight`);
+    }
+    if (choice.delayCycles !== undefined && (!Number.isInteger(choice.delayCycles) || choice.delayCycles < 1)) {
+      throw new Error(`Simulation scenario "${scenarioId}" state "${stateId}" has an invalid delayCycles`);
+    }
+    if (choice.advanceIdentity !== undefined && typeof choice.advanceIdentity !== 'boolean') {
+      throw new Error(`Simulation scenario "${scenarioId}" state "${stateId}" has an invalid advanceIdentity`);
+    }
+    if (choice.nextState && !states[choice.nextState]) {
+      throw new Error(`Simulation scenario "${scenarioId}" references missing state "${choice.nextState}"`);
+    }
+  }
 }
 
 function validatePluginUiPaths(manifest: ReturnType<typeof PluginManifestSchema.parse>): void {
@@ -216,11 +333,23 @@ function validatePluginUiPaths(manifest: ReturnType<typeof PluginManifestSchema.
   }
 }
 
-function validateRadioControlToolbarPanel(
+function validateSpecialPanel(
   manifest: ReturnType<typeof PluginManifestSchema.parse>,
   panel: PluginPanelDescriptor,
   page: PluginUIPageDescriptor | undefined,
 ): void {
+  if (panel.slot === 'operator-action') {
+    if (manifest.instanceScope !== 'operator') {
+      throw new Error('operator-action panels are only supported for operator-scoped plugins');
+    }
+    if (panel.openMode !== 'page') {
+      throw new Error(`operator-action panel "${panel.id}" must use openMode "page"`);
+    }
+    if (page?.resourceBinding !== 'operator') {
+      throw new Error(`operator-action panel "${panel.id}" must reference a UI page with resourceBinding "operator"`);
+    }
+    return;
+  }
   if (panel.slot !== 'radio-control-toolbar') {
     return;
   }

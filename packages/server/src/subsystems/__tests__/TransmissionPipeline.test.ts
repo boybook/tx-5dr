@@ -26,6 +26,7 @@ function createHarness(options: {
   stopPlayback?: Promise<void>;
   playbackStartMs?: number;
   operatorIds?: string[];
+  validateDigitalFrameStart?: (operatorIds: readonly string[]) => void;
 } = {}) {
   const engineEmitter = new EventEmitter();
   const encodeQueue = new EventEmitter();
@@ -134,6 +135,9 @@ function createHarness(options: {
     onBeforeStartPTT: vi.fn(async () => {
       if (options.beforeStart) await options.beforeStart;
     }),
+    validateDigitalFrameStart: vi.fn((operatorIds: readonly string[]) => {
+      options.validateDigitalFrameStart?.(operatorIds);
+    }),
   };
   const pipeline = new TransmissionPipeline(deps as never);
   pipeline.setup();
@@ -192,6 +196,36 @@ function createHarness(options: {
 }
 
 describe('TransmissionPipeline lifecycle integration', () => {
+  it('cancels the owning frame when a non-default stream encode fails', () => {
+    const harness = createHarness();
+    const frame = harness.deps.digitalFrameCoordinator.prepareFrame({
+      slotId: 'slot-1',
+      intents: [{
+        operatorId: 'operator-a',
+        streamId: 'stream-2',
+        audioFrequencyHz: 1600,
+        source: 'plugin',
+        reason: 'parallel lane',
+        text: 'A B RR73',
+        decisionEpoch: 2,
+      }],
+    });
+    harness.deps.digitalFrameCoordinator.beginEncoding(frame.frame!.frameId);
+
+    (harness.pipeline as any).handleEncodeError(new Error('encoder failed'), {
+      operatorId: 'operator-a',
+      streamId: 'stream-2',
+      message: 'A B RR73',
+      frequency: 1600,
+      frameId: frame.frame!.frameId,
+      frameRevision: frame.frame!.revision,
+      decisionEpoch: 2,
+    });
+
+    expect(harness.deps.digitalFrameCoordinator.getFrame(frame.frame!.frameId))
+      .toMatchObject({ phase: 'cancelled' });
+  });
+
   it('reports on-air only after PTT confirmation and audio start, then completes once', async () => {
     const harness = createHarness();
     const physicalPhases: Array<{ phase: string; pttConfirmed: boolean }> = [];
@@ -226,6 +260,22 @@ describe('TransmissionPipeline lifecycle integration', () => {
     });
     expect(harness.deps.operatorManager.notifyPhysicalTransmissionComplete)
       .toHaveBeenCalledWith('operator-a', 'A B 73');
+  });
+
+  it('revalidates the digital frame after encoding and before asserting PTT', async () => {
+    const validateStart = vi.fn(() => {
+      throw new Error('Multi-slot transmission is unavailable on the standard FT8 dial frequency 14.074 MHz');
+    });
+    const harness = createHarness({ validateDigitalFrameStart: validateStart });
+
+    await (harness.pipeline as any).handleMixedAudioReady(harness.mixedAudio);
+
+    expect(validateStart).toHaveBeenCalledWith(['operator-a']);
+    expect(harness.setPTT).not.toHaveBeenCalled();
+    expect(harness.playAudio).not.toHaveBeenCalled();
+    expect(harness.deps.digitalFrameCoordinator.getFrame('frame-1')).toMatchObject({
+      phase: 'terminal',
+    });
   });
 
   it('requeues a severe output failure for the next transmit cycle without reporting success', () => {
@@ -516,6 +566,62 @@ describe('TransmissionPipeline lifecycle integration', () => {
     expect(harness.setPTT.mock.calls.map(([active]) => active)).toEqual([true, false]);
   });
 
+  it('revalidates an active-lease replacement before changing its audio', async () => {
+    let blocked = false;
+    const stopPlayback = deferred<void>();
+    const harness = createHarness({
+      stopPlayback: stopPlayback.promise,
+      validateDigitalFrameStart: () => {
+        if (blocked) throw new Error('Multi-slot transmission is unavailable on the standard FT8 dial frequency');
+      },
+    });
+    const initialHandling = (harness.pipeline as any).handleMixedAudioReady(harness.mixedAudio);
+    await vi.waitFor(() => expect(harness.playAudio).toHaveBeenCalledTimes(1));
+
+    const replacement = harness.deps.digitalFrameCoordinator.prepareFrame({
+      slotId: 'slot-0',
+      intents: [{
+        operatorId: 'operator-a',
+        source: 'late-decode',
+        reason: 'late correction after dial change',
+        text: 'A B RR73',
+        decisionEpoch: 2,
+      }],
+      nowMs: 1_000,
+      slotEndMs: 15_000,
+      expectedDurationMs: 1_000,
+      playbackStartMs: 500,
+    });
+    harness.deps.digitalFrameCoordinator.beginEncoding(replacement.frame!.frameId);
+    harness.deps.digitalFrameCoordinator.acceptEncodeResult({
+      frameId: replacement.frame!.frameId,
+      operatorId: 'operator-a',
+      decisionEpoch: replacement.intents[0].decisionEpoch,
+      revision: replacement.frame!.revision,
+    });
+    const replacementAudio = {
+      ...harness.mixedAudio,
+      frameId: replacement.frame!.frameId,
+      frameRevision: replacement.frame!.revision,
+    };
+    harness.setFrameMix(replacement.frame!.frameId, replacement.frame!.revision, replacementAudio);
+
+    const replacementHandling = (harness.pipeline as any).handleMixedAudioReady(replacementAudio);
+    await vi.waitFor(() => expect(harness.deps.audioStreamManager.stopCurrentPlayback).toHaveBeenCalledOnce());
+    blocked = true;
+    stopPlayback.resolve();
+    await Promise.all([initialHandling, replacementHandling]);
+
+    expect(harness.playAudio).toHaveBeenCalledTimes(1);
+    expect(harness.deps.digitalFrameCoordinator.getFrame(replacement.frame!.frameId)).toMatchObject({
+      phase: 'terminal',
+    });
+    expect(harness.deps.physicalTxCoordinator.getSnapshot()).toMatchObject({
+      phase: 'idle',
+    });
+    expect(harness.setPTT.mock.calls.map(([active]) => active)).toEqual([true, false]);
+  });
+
   it('does not double-trim replacement audio across delayed mix and output drain stages', async () => {
     const harness = createHarness({ nowMs: 1_000 });
     const oldHandling = (harness.pipeline as any).handleMixedAudioReady(harness.mixedAudio);
@@ -604,7 +710,7 @@ describe('TransmissionPipeline lifecycle integration', () => {
     expect(harness.deps.audioMixer.cloneFrameTracks).toHaveBeenCalledWith(
       { frameId: 'frame-1', frameRevision: 1 },
       { frameId: 'frame-2', frameRevision: 2, slotId: 'slot-0' },
-      ['operator-b'],
+      ['operator-b\u0000default'],
     );
 
     harness.getAudioDone(1).resolve();

@@ -57,6 +57,7 @@ export interface EngineLifecycleDeps {
   getCWDecoderManager: () => import('../cw-decoder/index.js').CWDecoderManager;
   getAudioVolumeController: () => AudioVolumeController;
   getAudioSidecar: () => AudioSidecarController;
+  isVirtualRadioActive?: () => boolean;
   getImageRadioService?: () => ImageRadioService | null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   getStatus: () => any;
@@ -789,9 +790,11 @@ export class EngineLifecycle {
       this.audioStarted = true;
 
       // 5. 启动音频 sidecar（fire-and-forget，不阻塞引擎主流程）
-      void this.deps.getAudioSidecar().start().catch((err) => {
-        logger.error('audio sidecar start threw unexpectedly', err);
-      });
+      if (!this.deps.isVirtualRadioActive?.()) {
+        void this.deps.getAudioSidecar().start().catch((err) => {
+          logger.error('audio sidecar start threw unexpectedly', err);
+        });
+      }
 
       logger.info('Engine started successfully');
     } catch (error) {

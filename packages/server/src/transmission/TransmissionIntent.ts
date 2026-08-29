@@ -7,12 +7,26 @@ export type TransmissionIntentSource =
   | 'persistence'
   | 'device';
 
+export const DEFAULT_STREAM_ID = 'default';
+
+export function normalizeStreamId(streamId?: string): string {
+  const normalized = streamId?.trim();
+  return normalized || DEFAULT_STREAM_ID;
+}
+
+export function buildTrackId(operatorId: string, streamId?: string): string {
+  return `${operatorId}\u0000${normalizeStreamId(streamId)}`;
+}
+
 export interface TransmissionIntent {
   operatorId?: string;
+  streamId: string;
+  trackId: string;
   source: TransmissionIntentSource;
   reason: string;
   slotId?: string;
   text?: string;
+  audioFrequencyHz?: number;
   decisionEpoch: number;
   replacesFrameId?: string;
 }
@@ -32,6 +46,7 @@ export interface FrameLease {
   frameId: string;
   slotId: string;
   participantOperatorIds: string[];
+  participantTrackIds: string[];
   decisionEpoch: number;
   revision: number;
   phase: FramePhase;

@@ -1,5 +1,6 @@
 import type {
   KVStore,
+  ReadonlyKVStore,
   PluginLogger,
   PluginTimers,
   OperatorSnapshot,
@@ -12,6 +13,7 @@ import type {
   RadioPowerCommandPort,
   LogbookReadAccess,
   LogbookAccess,
+  PluginLogbookSessions,
   BandAccess,
   UIBridge,
   PluginFileStore,
@@ -75,6 +77,9 @@ export interface PluginContextBase {
      */
     readonly operator: KVStore;
   };
+
+  /** Read-only validation for exact FT8/FT4 message encoding. */
+  readonly digitalMessagePreflight: import('./helpers.js').DigitalMessagePreflight;
 
   /**
    * Structured logger scoped to the plugin.
@@ -146,14 +151,24 @@ type SettingsCapability<Permissions extends readonly PluginPermission[]> =
             & CapabilityProperty<Permissions, 'settings:ntp', Pick<HostSettingsControl, 'ntp'>>;
         };
 
+type MainLogbookCapability<Permissions extends readonly PluginPermission[]> =
+  'logbook:write' extends Permissions[number]
+    ? LogbookAccess
+    : 'logbook:read' extends Permissions[number]
+      ? LogbookReadAccess
+      : object;
+
+type SessionLogbookCapability<Permissions extends readonly PluginPermission[]> =
+  'logbook:session' extends Permissions[number]
+    ? { readonly sessions: PluginLogbookSessions }
+    : object;
+
 type LogbookCapability<Permissions extends readonly PluginPermission[]> =
   number extends Permissions['length']
     ? object
-    : 'logbook:write' extends Permissions[number]
-      ? { readonly logbook: LogbookAccess }
-      : 'logbook:read' extends Permissions[number]
-        ? { readonly logbook: LogbookReadAccess }
-        : object;
+    : Extract<Permissions[number], 'logbook:read' | 'logbook:write' | 'logbook:session'> extends never
+      ? object
+      : { readonly logbook: MainLogbookCapability<Permissions> & SessionLogbookCapability<Permissions> };
 
 /**
  * Plugin context whose privileged ports are derived from literal manifest
@@ -223,7 +238,7 @@ export type RuntimePluginContext = PluginContextBase & Partial<{
   radioTunerCommands: RadioTunerCommandPort;
   radioPower: RadioPowerView;
   radioPowerCommands: RadioPowerCommandPort;
-  logbook: LogbookReadAccess | LogbookAccess;
+  logbook: LogbookReadAccess | LogbookAccess | { readonly sessions: PluginLogbookSessions };
   logbookSync: LogbookSyncRegistrar;
   settings: Partial<HostSettingsControl>;
   network: PluginNetworkControl;
@@ -244,6 +259,15 @@ export interface StrategyPluginContext {
   readonly log: PluginLogger;
   /** Read-only operator snapshot; mutation ports are deliberately absent. */
   readonly operator: OperatorSnapshot;
+  /** Read-only projection of the current radio band and operating mode. */
+  readonly radio: RadioView;
+  /** Live, read-only views of the storage scopes declared by this plugin. */
+  readonly store: {
+    readonly global: ReadonlyKVStore;
+    readonly operator: ReadonlyKVStore;
+  };
+  /** Read-only exact-message encoding validation. */
+  readonly digitalMessagePreflight: import('./helpers.js').DigitalMessagePreflight;
 }
 
 /** Minimal context used to evaluate a transmit-control eligibility predicate. */

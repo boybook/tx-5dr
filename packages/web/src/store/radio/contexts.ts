@@ -65,6 +65,7 @@ export const ProfilesContext = createContext<{
   profiles: RadioProfile[];
   activeProfileId: string | null;
   profilesLoaded: boolean;
+  hasConfiguredProfiles: boolean;
 } | undefined>(undefined);
 
 export const RadioConnectionContext = createContext<{

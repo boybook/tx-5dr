@@ -1,6 +1,5 @@
 import type {
   AssistedQueueDisplayState,
-  AssistedQueuePauseReason,
   AssistedQueueSnapshot,
   FrameMessage,
   ParsedFT8Message,
@@ -17,148 +16,63 @@ import type {
   StrategyRuntimeSlot,
   StrategyRuntimeSlotContentUpdate,
   StrategyRuntimeSnapshot,
+  StrategyStreamStateUpdate,
+  StrategyActionInvocation,
+  StrategyActionResult,
+  StreamPhysicalReceipt,
   SlotInfo,
 } from '@tx5dr/plugin-api';
-import { FT8MessageType, normalizeCallsign } from '@tx5dr/plugin-api';
+import { FT8MessageType } from '@tx5dr/plugin-api';
 import {
   FT8MessageParser,
+  CycleUtils,
   isValidCallsign,
   isUndecodedCallsignPlaceholder,
 } from '@tx5dr/core';
 import {
-  StandardQSOPluginRuntime,
-  type StandardQSOPluginOperator,
-} from '../standard-qso/StandardQSOPluginRuntime.js';
+  ParallelQSOCoordinator,
+  type ParallelQSOCoordinatorCheckpoint,
+  type ParallelQSOQueueEntry,
+} from '@tx5dr/plugin-api/toolkit';
+import type { StandardQSOPluginOperator } from '../standard-qso/StandardQSOPluginRuntime.js';
+import {
+  StandardQSOProtocolLane,
+  type AssistedQueueEntryData,
+  type PendingSlot,
+  callsignMatches,
+  gridOf,
+  isDirectedTo,
+  lastMessageFromParsed,
+  normalized,
+  pendingSlotForMessage,
+  senderOf,
+  targetOf,
+} from './StandardQSOProtocolLane.js';
 
 const MAX_QUEUE_SIZE = 64;
+const MAX_PARALLEL_STREAMS = 3;
 const STALE_AFTER_MODE_SLOTS = 6;
 const INACTIVE_AFTER_MODE_SLOTS = 12;
-const FINAL_73_RETRY_WINDOW_SLOTS = 2;
-
-type PendingSlot = Exclude<StrategyRuntimeSlot, 'TX6'>;
-type QueueEntryState = 'queued' | 'active' | 'engaged' | 'closing' | 'paused' | 'no-response' | 'review';
-
-interface PendingContext {
-  revision: number;
-  nextLocalTxSlot: PendingSlot | null;
-  hasDirectEvidence: boolean;
-  lastMessage?: { message: FrameMessage; slotInfo: SlotInfo };
-  validUntil: number;
-}
-
-interface QueueEntry {
-  entryId: string;
-  targetKey: string;
-  callsign: string;
-  source: 'manual' | 'inbound-direct';
-  state: QueueEntryState;
-  pending: PendingContext;
-  delegateAppliedPendingRevision: number;
-  pauseReason?: AssistedQueuePauseReason;
-  noResponseCycles?: number;
-  targetGrid?: string;
-  lastSnr?: number;
-  lastHeardAt?: number;
-  logCommitted: boolean;
-  delegateReleased: boolean;
-  lastOnAirSlot?: PendingSlot;
-  lastOnAirLifecycleEpoch?: number;
-  pendingSettlement?: { lifecycleEpoch: number; recordId: string };
-}
-
-interface Final73Lease {
-  targetKey: string;
-  callsign: string;
-  transmission: string;
-  targetGrid?: string;
-  reportSent?: number;
-  reportReceived?: number;
-  actualFrequency?: number;
-  lifecycleEpoch: number;
-  expiresAtSlotStartMs: number;
-  pendingMessage?: { message: FrameMessage; slotInfo: SlotInfo };
-  scheduled: boolean;
-}
 
 interface QueueCheckpoint {
-  version: number;
-  nextEntrySequence: number;
-  entries: QueueEntry[];
-  activeEntryId?: string;
-  lastQueueFullWarningAt: number;
+  coordinator: ParallelQSOCoordinatorCheckpoint<AssistedQueueEntryData>;
   latestSlotStartMs: number;
-  final73Lease?: Final73Lease;
-  delegate: StrategyRuntimeCheckpoint;
+  lastQueueFullWarningAt: number;
 }
 
 export interface AssistedQSOQueueRuntimeOptions {
   operator: StandardQSOPluginOperator;
   isTransmitting: () => boolean;
   logger: PluginLogger;
+  getMaxStreams?: () => number;
+  getStreamLimit?: () => number;
 }
 
-function normalized(value: string | undefined): string {
-  if (!value) return '';
-  const upper = value.trim().toUpperCase();
-  return normalizeCallsign(upper) || upper;
+function clone<T>(value: T): T {
+  return structuredClone(value);
 }
 
-function callsignMatches(left: string | undefined, right: string | undefined): boolean {
-  return Boolean(left && right && normalized(left) === normalized(right));
-}
-
-function senderOf(message: ParsedFT8Message): string | undefined {
-  const sender = (message.message as { senderCallsign?: unknown }).senderCallsign;
-  return typeof sender === 'string' && sender.trim() ? sender.trim().toUpperCase() : undefined;
-}
-
-function targetOf(message: ParsedFT8Message): string | undefined {
-  const target = (message.message as { targetCallsign?: unknown }).targetCallsign;
-  return typeof target === 'string' && target.trim() ? target.trim().toUpperCase() : undefined;
-}
-
-function gridOf(message: ParsedFT8Message): string | undefined {
-  const directGrid = (message.message as { grid?: unknown }).grid;
-  if (typeof directGrid === 'string' && directGrid.trim()) return directGrid.trim().toUpperCase();
-  const analyzedGrid = message.logbookAnalysis?.grid;
-  return typeof analyzedGrid === 'string' && analyzedGrid.trim()
-    ? analyzedGrid.trim().toUpperCase()
-    : undefined;
-}
-
-function isDirectedTo(message: ParsedFT8Message, callsign: string): boolean {
-  if (callsignMatches(targetOf(message), callsign)) return true;
-  if (message.message.type !== FT8MessageType.FOX_RR73) return false;
-  const completed = (message.message as { completedCallsign?: unknown }).completedCallsign;
-  return typeof completed === 'string' && callsignMatches(completed, callsign);
-}
-
-function slotInfoFromMessage(message: ParsedFT8Message, modeName: string, slotMs: number): SlotInfo {
-  return {
-    id: message.slotId,
-    startMs: message.timestamp,
-    utcSeconds: Math.floor(message.timestamp / 1000),
-    phaseMs: 0,
-    driftMs: 0,
-    cycleNumber: Math.floor(message.timestamp / slotMs) % 2,
-    mode: modeName,
-  };
-}
-
-function lastMessageFromParsed(message: ParsedFT8Message, modeName: string, slotMs: number) {
-  return {
-    message: {
-      message: message.rawMessage,
-      snr: message.snr,
-      dt: message.dt,
-      freq: message.df,
-      confidence: 1,
-    } as FrameMessage,
-    slotInfo: slotInfoFromMessage(message, modeName, slotMs),
-  };
-}
-
-function parsedFromLastMessage(lastMessage: { message: FrameMessage; slotInfo: SlotInfo }): ParsedFT8Message {
+function parsedSelectedMessage(lastMessage: { message: FrameMessage; slotInfo: SlotInfo }): ParsedFT8Message {
   return {
     message: FT8MessageParser.parseMessage(lastMessage.message.message),
     snr: lastMessage.message.snr,
@@ -170,344 +84,332 @@ function parsedFromLastMessage(lastMessage: { message: FrameMessage; slotInfo: S
   };
 }
 
-function pendingSlotForMessage(
-  message: ParsedFT8Message,
-  myCallsign: string,
-  fallback: PendingSlot,
-): PendingSlot | null {
-  const direct = isDirectedTo(message, myCallsign);
-  if (!direct) {
-    return message.message.type === FT8MessageType.CQ ? 'TX1' : fallback;
-  }
-  switch (message.message.type) {
-    case FT8MessageType.CALL: return 'TX2';
-    case FT8MessageType.SIGNAL_REPORT: return 'TX3';
-    case FT8MessageType.ROGER_REPORT: return 'TX4';
-    case FT8MessageType.RRR: return 'TX5';
-    case FT8MessageType.SEVENTY_THREE: return null;
-    case FT8MessageType.FOX_RR73: return null;
-    default: return fallback;
-  }
+function clampMaxStreams(value: number): number {
+  if (!Number.isFinite(value)) return 1;
+  return Math.max(1, Math.min(MAX_PARALLEL_STREAMS, Math.trunc(value)));
 }
 
 export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
-  private readonly delegate: StandardQSOPluginRuntime;
   private readonly operator: StandardQSOPluginOperator;
   private readonly isTransmitting: () => boolean;
   private readonly logger: PluginLogger;
-  private entries: QueueEntry[] = [];
-  private activeEntryId?: string;
-  private version = 0;
-  private nextEntrySequence = 0;
-  private lastQueueFullWarningAt = Number.NEGATIVE_INFINITY;
+  private readonly getConfiguredMaxStreams: () => number;
+  private readonly getStreamLimit: () => number;
+  private readonly coordinator: ParallelQSOCoordinator<AssistedQueueEntryData>;
+  private readonly lanes: StandardQSOProtocolLane[] = [];
   private latestSlotStartMs = 0;
-  private final73Lease?: Final73Lease;
+  private lastQueueFullWarningAt = Number.NEGATIVE_INFINITY;
 
   constructor(options: AssistedQSOQueueRuntimeOptions) {
     this.operator = options.operator;
     this.isTransmitting = options.isTransmitting;
     this.logger = options.logger;
-    this.delegate = new StandardQSOPluginRuntime(options.operator, options.logger);
+    this.getConfiguredMaxStreams = options.getMaxStreams ?? (() => 1);
+    this.getStreamLimit = options.getStreamLimit ?? (() => MAX_PARALLEL_STREAMS);
+    this.coordinator = new ParallelQSOCoordinator({
+      maxSupportedStreams: MAX_PARALLEL_STREAMS,
+      initialMaxStreams: this.readMaxStreams(),
+      maxQueueSize: MAX_QUEUE_SIZE,
+      createLane: ({ streamId, laneIndex }) => {
+        const lane = new StandardQSOProtocolLane({
+          streamId,
+          laneIndex,
+          operator: this.operator,
+          logger: this.logger,
+        });
+        this.lanes.push(lane);
+        return lane;
+      },
+    });
   }
 
   checkpoint(): StrategyRuntimeCheckpoint {
-    return {
-      version: this.version,
-      nextEntrySequence: this.nextEntrySequence,
-      entries: structuredClone(this.entries),
-      activeEntryId: this.activeEntryId,
-      lastQueueFullWarningAt: this.lastQueueFullWarningAt,
+    return clone({
+      coordinator: this.coordinator.checkpoint(),
       latestSlotStartMs: this.latestSlotStartMs,
-      final73Lease: this.final73Lease ? structuredClone(this.final73Lease) : undefined,
-      delegate: structuredClone(this.delegate.checkpoint()),
-    } satisfies QueueCheckpoint;
+      lastQueueFullWarningAt: this.lastQueueFullWarningAt,
+    } satisfies QueueCheckpoint);
   }
 
   restore(checkpoint: StrategyRuntimeCheckpoint): void {
     const state = checkpoint as QueueCheckpoint;
-    if (!state || !Array.isArray(state.entries)) throw new Error('Invalid assisted queue checkpoint');
-    this.version = state.version;
-    this.nextEntrySequence = state.nextEntrySequence;
-    this.entries = structuredClone(state.entries);
-    this.activeEntryId = state.activeEntryId;
-    this.lastQueueFullWarningAt = state.lastQueueFullWarningAt ?? Number.NEGATIVE_INFINITY;
+    if (!state || typeof state !== 'object' || !state.coordinator) {
+      throw new Error('Invalid assisted queue checkpoint');
+    }
+    this.coordinator.restore(state.coordinator);
     this.latestSlotStartMs = state.latestSlotStartMs ?? 0;
-    this.final73Lease = state.final73Lease ? structuredClone(state.final73Lease) : undefined;
-    this.delegate.restore(state.delegate);
+    this.lastQueueFullWarningAt = state.lastQueueFullWarningAt ?? Number.NEGATIVE_INFINITY;
   }
 
   observeDecodedMessages(messages: ParsedFT8Message[], meta: QueuedStrategyObservationMeta): boolean {
     if (meta.signal.aborted) return false;
     const before = this.queueProjectionFingerprint();
+    const beforeVersion = this.coordinator.getQueueSnapshot().version;
     this.latestSlotStartMs = Math.max(this.latestSlotStartMs, meta.slotInfo.startMs);
-    this.expireFinal73Lease(meta.slotInfo.startMs);
     this.updatePauseStates(meta.slotInfo.startMs);
     const mode = this.operator.config.mode;
-    const fallback = this.operator.config.skipTx1 === true ? 'TX2' : 'TX1';
+    const fallback = this.fallbackSlot();
 
     for (const message of messages) {
       if (message.isPartialDecode) continue;
       const sender = senderOf(message);
       if (!sender || !isValidCallsign(sender) || isUndecodedCallsignPlaceholder(sender)) continue;
       if (callsignMatches(sender, this.operator.config.myCallsign)) continue;
-      this.observeFinal73Retry(message, meta.slotInfo);
       const key = normalized(sender);
       const direct = isDirectedTo(message, this.operator.config.myCallsign);
-      let entry = this.entries.find((candidate) => candidate.targetKey === key);
+      let entry = this.coordinator.findEntryByTargetKey(key);
 
       if (!entry && direct && (
         message.message.type === FT8MessageType.CALL
         || message.message.type === FT8MessageType.SIGNAL_REPORT
       )) {
-        if (this.entries.length >= MAX_QUEUE_SIZE) {
-          if (message.timestamp - this.lastQueueFullWarningAt >= mode.slotMs * 2) {
+        const result = this.coordinator.enqueue({
+          targetKey: key,
+          callsign: sender,
+          requestedTransmitCycle: (meta.slotInfo.cycleNumber + 1) % 2 as 0 | 1,
+          data: this.createEntryData('inbound-direct', fallback),
+        });
+        if (result.outcome === 'rejected') {
+          if (result.reason === 'queue_full'
+              && message.timestamp - this.lastQueueFullWarningAt >= mode.slotMs * 2) {
             this.lastQueueFullWarningAt = message.timestamp;
             this.logger.warn('Ignoring inbound caller because the assisted queue is full', { callsign: sender });
           }
           continue;
         }
-        entry = this.createEntry(sender, 'inbound-direct', fallback);
-        this.entries.push(entry);
+        entry = result.entry;
       }
-      if (!entry || entry.state === 'review') continue;
+      if (!entry || entry.data.state === 'review') continue;
+      if (!callsignMatches(sender, entry.callsign)) continue;
 
+      const wasPriority = this.isPriorityInboundEntry(entry);
       const relevantCq = message.message.type === FT8MessageType.CQ;
-      const existingTarget = callsignMatches(sender, entry.callsign);
-      if (!existingTarget) continue;
-      const wasPriorityInbound = this.isPriorityInboundEntry(entry);
-      const recoversFromObservation = entry.state === 'paused' || entry.state === 'no-response';
-      entry.lastHeardAt = message.timestamp;
-      entry.lastSnr = message.snr;
-      entry.targetGrid = gridOf(message) ?? entry.targetGrid;
-      entry.pending.validUntil = message.timestamp + mode.slotMs * STALE_AFTER_MODE_SLOTS;
-
-      const correlatedProtocol = direct && this.hasProtocolCorrelation(entry, message.message.type);
+      const correlatedProtocol = direct && this.laneForEntry(entry.entryId)?.isCorrelatedMessage(message) === true;
       const canRefreshContext = relevantCq || (direct && (
         message.message.type === FT8MessageType.CALL
         || message.message.type === FT8MessageType.SIGNAL_REPORT
         || correlatedProtocol
       ));
-      if (recoversFromObservation) {
-        entry.state = 'queued';
-        entry.pauseReason = undefined;
-        entry.noResponseCycles = undefined;
-        if (!canRefreshContext) {
-          entry.pending = {
-            revision: entry.pending.revision + 1,
-            nextLocalTxSlot: fallback,
-            hasDirectEvidence: false,
-            validUntil: message.timestamp + mode.slotMs * STALE_AFTER_MODE_SLOTS,
-          };
+      const changed = this.coordinator.updateEntry(entry.entryId, (data) => {
+        const fingerprint = JSON.stringify(data);
+        const recovers = data.state === 'paused' || data.state === 'no-response';
+        data.lastHeardAt = message.timestamp;
+        data.lastHeardCycle = CycleUtils.isEvenCycle(meta.slotInfo.cycleNumber) ? 0 : 1;
+        data.lastSnr = message.snr;
+        data.targetGrid = gridOf(message) ?? data.targetGrid;
+        data.pending.validUntil = message.timestamp + mode.slotMs * STALE_AFTER_MODE_SLOTS;
+        if (recovers) {
+          data.state = 'queued';
+          data.pauseReason = undefined;
+          data.noResponseCycles = undefined;
+          if (!canRefreshContext) {
+            data.pending = {
+              revision: data.pending.revision + 1,
+              nextLocalTxSlot: fallback,
+              hasDirectEvidence: false,
+              validUntil: message.timestamp + mode.slotMs * STALE_AFTER_MODE_SLOTS,
+            };
+          }
         }
-      }
+        if (canRefreshContext) {
+          const nextSlot = pendingSlotForMessage(message, this.operator.config.myCallsign, fallback);
+          const previousRaw = data.pending.lastMessage?.message.message;
+          const previousSlot = data.pending.lastMessage?.slotInfo.startMs;
+          if (message.rawMessage !== previousRaw
+              || message.timestamp !== previousSlot
+              || data.pending.nextLocalTxSlot !== nextSlot) {
+            data.pending = {
+              revision: data.pending.revision + 1,
+              nextLocalTxSlot: nextSlot,
+              hasDirectEvidence: direct,
+              lastMessage: lastMessageFromParsed(message, mode.name, mode.slotMs),
+              validUntil: message.timestamp + mode.slotMs * STALE_AFTER_MODE_SLOTS,
+            };
+          }
+        }
+        return fingerprint !== JSON.stringify(data);
+      });
+      entry = this.coordinator.getEntry(entry.entryId)!;
       if (canRefreshContext) {
-        const nextSlot = pendingSlotForMessage(message, this.operator.config.myCallsign, fallback);
-        const nextRaw = message.rawMessage;
-        const previousRaw = entry.pending.lastMessage?.message.message;
-        const previousSlot = entry.pending.lastMessage?.slotInfo.startMs;
-        if (nextRaw !== previousRaw || previousSlot !== message.timestamp || entry.pending.nextLocalTxSlot !== nextSlot) {
-          entry.pending = {
-            revision: entry.pending.revision + 1,
-            nextLocalTxSlot: nextSlot,
-            hasDirectEvidence: direct,
-            lastMessage: lastMessageFromParsed(message, mode.name, mode.slotMs),
-            validUntil: message.timestamp + mode.slotMs * STALE_AFTER_MODE_SLOTS,
-          };
-        }
-        if (!wasPriorityInbound && this.isPriorityInboundEntry(entry)) {
-          this.promotePriorityInbound(entry.entryId);
-        }
-      } else if (!direct && targetOf(message)) {
-        if (entry.entryId === this.activeEntryId && entry.state === 'active') {
-          this.pauseEntry(entry, 'target-busy');
-          this.activeEntryId = undefined;
-          this.delegate.reset('assisted queue target started working another station');
-        } else if (entry.entryId !== this.activeEntryId
-          && entry.state !== 'paused'
-          && entry.state !== 'no-response') {
-          this.pauseEntry(entry, 'target-busy');
-        }
+        this.coordinator.setRequestedTransmitCycle(
+          entry.entryId,
+          (meta.slotInfo.cycleNumber + 1) % 2 as 0 | 1,
+        );
+        entry = this.coordinator.getEntry(entry.entryId)!;
+      }
+      if ((!wasPriority || changed) && this.isPriorityInboundEntry(entry)) {
+        this.promotePriorityInbound(entry.entryId);
       }
 
-      if (entry.entryId === this.activeEntryId && direct && (
-        message.message.type === FT8MessageType.SIGNAL_REPORT || correlatedProtocol
-      )) {
-        if (
-          message.message.type === FT8MessageType.SIGNAL_REPORT
-          || message.message.type === FT8MessageType.ROGER_REPORT
-          || message.message.type === FT8MessageType.RRR
-        ) {
-          if (entry.state !== 'engaged' && entry.state !== 'closing') {
-            entry.state = message.message.type === FT8MessageType.RRR ? 'closing' : 'engaged';
-          }
-        } else if (message.message.type === FT8MessageType.SEVENTY_THREE
-          || message.message.type === FT8MessageType.FOX_RR73) {
-          entry.state = 'closing';
+      if (!canRefreshContext && !direct && targetOf(message)) {
+        const streamId = this.activeStreamIdForEntry(entry.entryId);
+        if (streamId && this.laneForEntry(entry.entryId)?.getActiveData()?.state === 'active') {
+          this.coordinator.updateEntry(entry.entryId, (data) => {
+            data.state = 'paused';
+            data.pauseReason = 'target-busy';
+            data.noResponseCycles = undefined;
+            return true;
+          });
+          this.coordinator.releaseEntry(entry.entryId, {
+            removeEntry: false,
+            reason: 'assisted queue target started working another station',
+            resetLane: true,
+          });
+        } else if (!streamId && entry.data.state !== 'paused' && entry.data.state !== 'no-response') {
+          this.coordinator.updateEntry(entry.entryId, (data) => {
+            data.state = 'paused';
+            data.pauseReason = 'target-busy';
+            data.noResponseCycles = undefined;
+            return true;
+          });
         }
       }
     }
-    return this.bumpVersionIfProjectionChanged(before);
+    this.refreshActiveLanes();
+    this.coordinator.observe(messages, meta);
+    this.syncLaneEntryData();
+    const changed = this.queueProjectionFingerprint() !== before;
+    if (changed && this.coordinator.getQueueSnapshot().version === beforeVersion) {
+      this.coordinator.markChanged();
+    }
+    return changed;
   }
 
   enqueueTarget(request: QueuedStrategyTargetRequest): QueuedStrategyMutationResult {
     const callsign = request.callsign.trim().toUpperCase();
-    if (!isValidCallsign(callsign) || isUndecodedCallsignPlaceholder(callsign)) {
+    if (!isValidCallsign(callsign)
+        || isUndecodedCallsignPlaceholder(callsign)
+        || callsignMatches(callsign, this.operator.config.myCallsign)) {
       return this.result('rejected', 'invalid_target');
     }
-    if (callsignMatches(callsign, this.operator.config.myCallsign)) return this.result('rejected', 'invalid_target');
-    const targetKey = normalized(callsign);
-    if (this.entries.some((entry) => entry.targetKey === targetKey)) return this.result('duplicate');
-    if (this.entries.length >= MAX_QUEUE_SIZE) return this.result('rejected', 'queue_full');
-
-    const fallback = this.operator.config.skipTx1 === true ? 'TX2' : 'TX1';
-    const entry = this.createEntry(callsign, 'manual', fallback);
+    const fallback = this.fallbackSlot();
+    const data = this.createEntryData('manual', fallback);
+    let requestedTransmitCycle: 0 | 1 | undefined;
     if (request.lastMessage) {
-      const parsed = FT8MessageParser.parseMessage(request.lastMessage.message.message);
-      const selectedSender = 'senderCallsign' in parsed ? parsed.senderCallsign : undefined;
-      const direct = callsignMatches(
-        (parsed as { targetCallsign?: string }).targetCallsign,
-        this.operator.config.myCallsign,
-      );
-      const type = parsed.type;
+      const parsed = parsedSelectedMessage(request.lastMessage);
+      const selectedSender = senderOf(parsed);
+      const direct = isDirectedTo(parsed, this.operator.config.myCallsign);
       if (callsignMatches(selectedSender, callsign)) {
-        const selectedGrid = (parsed as { grid?: unknown }).grid;
-        entry.targetGrid = typeof selectedGrid === 'string' && selectedGrid.trim()
-          ? selectedGrid.trim().toUpperCase()
-          : undefined;
-        entry.lastSnr = request.lastMessage.message.snr;
-        entry.lastHeardAt = request.lastMessage.slotInfo.startMs;
+        data.targetGrid = gridOf(parsed);
+        data.lastSnr = request.lastMessage.message.snr;
+        data.lastHeardAt = request.lastMessage.slotInfo.startMs;
+        data.lastHeardCycle = CycleUtils.isEvenCycle(request.lastMessage.slotInfo.cycleNumber) ? 0 : 1;
         this.latestSlotStartMs = Math.max(this.latestSlotStartMs, request.lastMessage.slotInfo.startMs);
-        entry.pending.nextLocalTxSlot = direct && type === FT8MessageType.CALL
+        data.pending.nextLocalTxSlot = direct && parsed.message.type === FT8MessageType.CALL
           ? 'TX2'
-          : direct && type === FT8MessageType.SIGNAL_REPORT
+          : direct && parsed.message.type === FT8MessageType.SIGNAL_REPORT
             ? 'TX3'
             : fallback;
-        entry.pending.hasDirectEvidence = direct && (
-          type === FT8MessageType.CALL || type === FT8MessageType.SIGNAL_REPORT
+        data.pending.hasDirectEvidence = direct && (
+          parsed.message.type === FT8MessageType.CALL
+          || parsed.message.type === FT8MessageType.SIGNAL_REPORT
         );
-        entry.pending.lastMessage = structuredClone(request.lastMessage);
-        entry.pending.validUntil = request.lastMessage.slotInfo.startMs
+        data.pending.lastMessage = clone(request.lastMessage);
+        data.pending.validUntil = request.lastMessage.slotInfo.startMs
           + this.operator.config.mode.slotMs * STALE_AFTER_MODE_SLOTS;
+        requestedTransmitCycle = (request.lastMessage.slotInfo.cycleNumber + 1) % 2 as 0 | 1;
       }
     }
-    this.entries.push(entry);
-    if (this.isPriorityInboundEntry(entry)) this.promotePriorityInbound(entry.entryId);
-    this.bumpVersion();
-    return this.result('accepted');
+    const mutation = this.coordinator.enqueue({
+      targetKey: normalized(callsign),
+      callsign,
+      requestedTransmitCycle,
+      data,
+    });
+    if (mutation.outcome === 'accepted' && mutation.entry && this.isPriorityInboundEntry(mutation.entry)) {
+      this.promotePriorityInbound(mutation.entry.entryId);
+    }
+    return this.fromCoordinatorMutation(mutation.outcome, mutation.reason);
   }
 
   reorderTarget(entryId: string, beforeEntryId: string | null, expectedVersion: number): QueuedStrategyMutationResult {
-    if (expectedVersion !== this.version) return this.result('rejected', 'version_conflict');
-    if (entryId === this.activeEntryId) return this.result('rejected', 'active_entry');
-    const from = this.entries.findIndex((entry) => entry.entryId === entryId);
-    if (from < 0) return this.result('rejected', 'entry_not_found');
-    if (beforeEntryId === entryId) return this.result('accepted');
-    if (beforeEntryId && !this.entries.some((entry) => entry.entryId === beforeEntryId)) {
-      return this.result('rejected', 'entry_not_found');
-    }
-    const before = this.queueProjectionFingerprint();
-    const [entry] = this.entries.splice(from, 1);
-    const target = beforeEntryId ? this.entries.findIndex((candidate) => candidate.entryId === beforeEntryId) : -1;
-    const minimum = this.activeEntryId && this.entries[0]?.entryId === this.activeEntryId ? 1 : 0;
-    const insertAt = target < 0 ? this.entries.length : Math.max(minimum, target);
-    this.entries.splice(insertAt, 0, entry);
-    this.bumpVersionIfProjectionChanged(before);
-    return this.result('accepted');
+    const mutation = this.coordinator.reorder(entryId, beforeEntryId, expectedVersion);
+    return this.fromCoordinatorMutation(mutation.outcome, mutation.reason);
   }
 
   retryTarget(entryId: string, expectedVersion: number): QueuedStrategyMutationResult {
-    if (expectedVersion !== this.version) return this.result('rejected', 'version_conflict');
-    const entry = this.entries.find((candidate) => candidate.entryId === entryId);
+    if (expectedVersion !== this.coordinator.getQueueSnapshot().version) {
+      return this.result('rejected', 'version_conflict');
+    }
+    const entry = this.coordinator.getEntry(entryId);
     if (!entry) return this.result('rejected', 'entry_not_found');
-    if (entry.state !== 'no-response' || entry.noResponseCycles === undefined) {
+    if (entry.data.state !== 'no-response' || entry.data.noResponseCycles === undefined) {
       return this.result('rejected', 'entry_not_retryable');
     }
-
-    const fallback = this.operator.config.skipTx1 === true ? 'TX2' : 'TX1';
-    entry.state = 'queued';
-    entry.noResponseCycles = undefined;
-    entry.pauseReason = undefined;
-    entry.lastOnAirSlot = undefined;
-    entry.lastOnAirLifecycleEpoch = undefined;
-    entry.pendingSettlement = undefined;
-    entry.logCommitted = false;
-    entry.delegateReleased = false;
-    entry.pending = {
-      revision: entry.pending.revision + 1,
-      nextLocalTxSlot: fallback,
-      hasDirectEvidence: false,
-      validUntil: Number.POSITIVE_INFINITY,
-    };
-    this.bumpVersion();
+    const fallback = this.fallbackSlot();
+    this.coordinator.updateEntry(entryId, (data) => {
+      data.state = 'queued';
+      data.noResponseCycles = undefined;
+      data.pauseReason = undefined;
+      data.pending = {
+        revision: data.pending.revision + 1,
+        nextLocalTxSlot: fallback,
+        hasDirectEvidence: false,
+        validUntil: Number.POSITIVE_INFINITY,
+      };
+      return true;
+    });
     return this.result('accepted');
   }
 
   removeTarget(entryId: string, expectedVersion: number): QueuedStrategyMutationResult {
-    if (expectedVersion !== this.version) return this.result('rejected', 'version_conflict');
-    const index = this.entries.findIndex((entry) => entry.entryId === entryId);
-    if (index < 0) return this.result('rejected', 'entry_not_found');
-    const active = entryId === this.activeEntryId;
-    this.entries.splice(index, 1);
-    if (active) {
-      this.activeEntryId = undefined;
-      this.delegate.reset('assisted queue active target removed by operator');
-    }
-    this.bumpVersion();
-    return this.result('accepted');
+    const mutation = this.coordinator.remove(entryId, expectedVersion);
+    return this.fromCoordinatorMutation(mutation.outcome, mutation.reason);
   }
 
   clearTargets(expectedVersion: number): QueuedStrategyMutationResult {
-    if (expectedVersion !== this.version) return this.result('rejected', 'version_conflict');
-    if (this.entries.length === 0) return this.result('accepted');
-
-    this.entries = [];
-    this.activeEntryId = undefined;
-    this.delegate.reset('assisted queue cleared by operator');
-    this.bumpVersion();
-    return this.result('accepted');
+    const mutation = this.coordinator.clear(expectedVersion);
+    return this.fromCoordinatorMutation(mutation.outcome, mutation.reason);
   }
 
   getQueueSnapshot(): AssistedQueueSnapshot {
-    const ordered = this.activeEntryId
-      ? [
-          ...this.entries.filter((entry) => entry.entryId === this.activeEntryId),
-          ...this.entries.filter((entry) => entry.entryId !== this.activeEntryId),
-        ]
-      : [...this.entries];
+    this.syncMaxStreams();
+    const snapshot = this.coordinator.getQueueSnapshot();
     return {
-      version: this.version,
-      activeEntryId: this.activeEntryId,
-      rows: ordered.map((entry, order) => {
-        const displayState = this.displayState(entry);
-        const active = entry.entryId === this.activeEntryId;
+      version: snapshot.version,
+      activeEntryId: snapshot.activeEntryIds[0],
+      activeEntryIds: snapshot.activeEntryIds,
+      maxActiveStreams: snapshot.maxActiveStreams,
+      requestedMaxActiveStreams: this.readRequestedMaxStreams(),
+      rows: snapshot.entries.map((row, order) => {
+        const lane = row.active ? this.lanes.find((candidate) => candidate.streamId === row.streamId) : undefined;
+        const data = lane?.getActiveData() ?? row.entry.data;
+        const displayState = lane?.displayState() ?? this.displayState(data);
         return {
-          entryId: entry.entryId,
-          callsign: entry.callsign,
+          entryId: row.entry.entryId,
+          callsign: row.entry.callsign,
           order,
-          draggable: !active,
+          draggable: !row.active,
           displayState,
-          tone: entry.state === 'review' ? 'danger'
-            : entry.state === 'closing' ? 'warning'
-              : entry.state === 'no-response' ? 'warning'
-              : entry.state === 'engaged' ? 'success'
-                : active ? 'active'
-                  : 'neutral',
-          icon: entry.state === 'review' ? 'triangle-alert'
-            : entry.state === 'closing' ? 'loader-circle'
-              : entry.state === 'engaged' ? 'check-circle'
-                : entry.state === 'paused' ? 'pause'
-                  : entry.state === 'no-response' ? 'clock'
-                  : active ? 'radio'
-                    : 'circle',
-          pauseReason: entry.pauseReason,
-          noResponseCycles: entry.noResponseCycles,
-          targetGrid: entry.targetGrid,
-          lastSnr: entry.lastSnr,
-          lastHeardCyclesAgo: entry.lastHeardAt === undefined
+          tone: data.state === 'review' ? 'danger'
+            : data.state === 'closing' ? 'warning'
+              : data.state === 'no-response' ? 'warning'
+                : data.state === 'engaged' ? 'success'
+                  : row.active ? 'active' : 'neutral',
+          icon: data.state === 'review' ? 'triangle-alert'
+            : data.state === 'closing' ? 'loader-circle'
+              : data.state === 'engaged' ? 'check-circle'
+                : data.state === 'paused' ? 'pause'
+                  : data.state === 'no-response' ? 'clock'
+                    : row.active ? 'radio' : 'circle',
+          pauseReason: data.pauseReason,
+          noResponseCycles: data.noResponseCycles,
+          targetGrid: data.targetGrid,
+          lastSnr: data.lastSnr,
+          lastHeardCyclesAgo: data.lastHeardAt === undefined
             ? undefined
             : Math.max(0, Math.floor(
-              (this.latestSlotStartMs - entry.lastHeardAt) / this.operator.config.mode.slotMs,
+              (this.latestSlotStartMs - data.lastHeardAt) / this.operator.config.mode.slotMs,
             )),
+          lastHeardCycle: data.lastHeardCycle,
+          streamId: row.streamId,
+          audioFrequencyHz: row.audioFrequencyHz,
+          actions: row.active ? [] : [
+            ...(data.state === 'no-response' ? [{
+              id: 'retry-target', label: 'actionRetry', icon: 'rotate-right', tone: 'primary' as const, presentation: 'primary' as const,
+            }] : []),
+            { id: 'remove-target', label: 'actionRemove', icon: 'trash', tone: 'danger' as const, presentation: 'menu' as const },
+          ],
         };
       }),
     };
@@ -515,115 +417,66 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
 
   async decide(messages: ParsedFT8Message[], meta: StrategyDecisionMetaV2): Promise<StrategyDecisionResult> {
     if (meta.signal.aborted) throw new DOMException('Strategy decision aborted', 'AbortError');
-    const before = this.queueProjectionFingerprint();
+    this.syncMaxStreams();
     this.updatePauseStates(Date.now());
-    if (!this.isTransmitting()) {
-      this.bumpVersionIfProjectionChanged(before);
-      return this.resultSnapshot(null);
-    }
+    if (!this.isTransmitting()) return this.resultSnapshot([]);
 
-    this.expireFinal73Lease(this.latestSlotStartMs);
-    const final73Retry = this.final73Lease;
-    if (final73Retry?.scheduled || (final73Retry?.pendingMessage && this.canScheduleFinal73Retry())) {
-      final73Retry.scheduled = true;
-      const requestedTransmitCycle = final73Retry.pendingMessage
-        ? (final73Retry.pendingMessage.slotInfo.cycleNumber + 1) % 2
-        : undefined;
-      return this.resultSnapshot(final73Retry.transmission, { requestedTransmitCycle });
+    const firstFill = await this.prepareLanes();
+    this.refreshActiveLanes();
+    const aggregate = await this.coordinator.decide(messages, meta);
+    this.syncLaneEntryData();
+    for (const released of aggregate.releasedEntries) {
+      if (released.disposition === 'retain-entry') this.moveToEnd(released.entryId);
     }
-
-    let requestedTransmitCycle: number | undefined;
-    const active = this.getActiveEntry();
-    if (active && active.state === 'active' && this.canPreemptActive(active)) {
-      const opportunity = await this.selectEligibleDirectOpportunity(active.entryId);
-      if (opportunity) requestedTransmitCycle = this.preemptActive(opportunity);
-    }
-    if (!this.activeEntryId) {
-      const candidate = await this.selectEligibleCandidate();
-      if (candidate) requestedTransmitCycle = this.activate(candidate);
-    }
-
-    const current = this.getActiveEntry();
-    if (!current) {
-      this.bumpVersionIfProjectionChanged(before);
-      return this.resultSnapshot(this.getIdleCQText());
-    }
-    const pendingMessage = current.pending.lastMessage
-      && current.delegateAppliedPendingRevision < current.pending.revision
-      ? parsedFromLastMessage(current.pending.lastMessage)
-      : undefined;
-    if (pendingMessage) {
-      requestedTransmitCycle ??= (current.pending.lastMessage!.slotInfo.cycleNumber + 1) % 2;
-    }
-    const decisionMessages = pendingMessage && !messages.some((message) => (
-      message.rawMessage === pendingMessage.rawMessage && message.timestamp === pendingMessage.timestamp
-    )) ? [...messages, pendingMessage] : messages;
-    const relevant = decisionMessages.filter((message) => {
-      const sender = senderOf(message);
-      return this.isEligibleActiveMessage(current, message) && (
-        message.message.type === FT8MessageType.FOX_RR73
-        || callsignMatches(sender, current.callsign)
-        || message.rawMessage.toUpperCase().includes(current.callsign.toUpperCase())
-      );
-    });
-    const final73LeaseCandidate = this.captureFinal73Lease(current);
-    const decision = await this.delegate.decide(relevant, meta);
-    if (pendingMessage) current.delegateAppliedPendingRevision = current.pending.revision;
-    const snapshot = decision.snapshot;
-    if (decision.qsoCompletion) {
-      current.state = 'closing';
-      current.pendingSettlement = {
-        lifecycleEpoch: decision.qsoCompletion.lifecycleEpoch,
-        recordId: decision.qsoCompletion.record.id,
-      };
-    }
-    if (snapshot.currentState === 'TX4' || snapshot.currentState === 'TX5') current.state = 'closing';
-    else if (snapshot.context?.reportReceived !== undefined && current.state === 'active') current.state = 'engaged';
-
-    if (decision.qsoFailure) {
-      this.markNoResponse(current, decision.qsoFailure);
-      this.bumpVersionIfProjectionChanged(before);
-      return this.resultSnapshot(this.getTransmitText(), { qsoFailure: decision.qsoFailure });
-    }
-    if (decision.stop && !snapshot.context?.targetCallsign) {
-      if (final73LeaseCandidate) this.final73Lease = final73LeaseCandidate;
-      current.delegateReleased = true;
-      if (current.logCommitted) {
-        this.completeActive(current);
-        const candidate = this.selectCandidate();
-        if (candidate) requestedTransmitCycle = this.activate(candidate);
-      } else if (!current.pendingSettlement && !decision.qsoCompletion) {
-        this.markNoResponse(current);
-      }
-      this.bumpVersionIfProjectionChanged(before);
-      return this.resultSnapshot(this.getTransmitText(), {
-        qsoCompletion: decision.qsoCompletion,
-        silentListen: decision.silentListen,
-        requestedTransmitCycle,
-      });
-    }
-    this.bumpVersionIfProjectionChanged(before);
+    const refill = aggregate.releasedEntries.length > 0 ? await this.prepareLanes() : undefined;
+    this.refreshActiveLanes();
+    const transmissions = this.getTransmissions();
+    const qsoCompletions = aggregate.qsoCompletions;
+    const qsoFailures = aggregate.qsoFailures;
     return {
-      ...decision,
       stop: false,
-      silentListen: undefined,
-      transmission: this.getTransmitText(),
+      transmission: transmissions[0]?.text ?? null,
+      transmissions,
       snapshot: this.getSnapshot(),
-      requestedTransmitCycle,
+      qsoCompletion: qsoCompletions.length === 1 ? qsoCompletions[0] : undefined,
+      qsoCompletions: qsoCompletions.length > 1 ? qsoCompletions : undefined,
+      qsoFailure: qsoFailures.length === 1 ? qsoFailures[0] : undefined,
+      qsoFailures: qsoFailures.length > 1 ? qsoFailures : undefined,
+      requestedTransmitCycle: firstFill.requestedTransmitCycle ?? refill?.requestedTransmitCycle,
     };
+  }
+
+  invokeAction(invocation: StrategyActionInvocation): StrategyActionResult | void {
+    if (invocation.target.kind !== 'queue-entry') throw new Error('strategy_action_not_available');
+    if (invocation.actionId === 'retry-target') {
+      const result = this.retryTarget(invocation.target.entryId, invocation.target.queueVersion);
+      if (result.outcome !== 'accepted') throw new Error(result.reason ?? 'strategy_action_not_available');
+      return { requestDecision: true };
+    }
+    if (invocation.actionId === 'remove-target') {
+      const result = this.removeTarget(invocation.target.entryId, invocation.target.queueVersion);
+      if (result.outcome !== 'accepted') throw new Error(result.reason ?? 'strategy_action_not_available');
+      return { requestDecision: true };
+    }
+    throw new Error('strategy_action_not_available');
   }
 
   getTransmitText(): string | null {
     if (!this.isTransmitting()) return null;
-    if (this.final73Lease?.scheduled) return this.final73Lease.transmission;
-    if (!this.activeEntryId) return this.getIdleCQText();
-    const entry = this.getActiveEntry();
-    if (!entry
-      || entry.delegateReleased
-      || entry.state === 'paused'
-      || entry.state === 'no-response'
-      || entry.state === 'review') return null;
-    return this.delegate.getTransmitText();
+    return this.getTransmissions()[0]?.text ?? null;
+  }
+
+  getTransmissions() {
+    this.syncMaxStreams();
+    if (!this.isTransmitting()) return [];
+    const transmissions = this.coordinator.getTransmissions();
+    if (transmissions.length > 0) return transmissions;
+    const idleCQ = this.getIdleCQText();
+    return idleCQ ? [{
+      streamId: this.lanes[0]!.streamId,
+      text: idleCQ,
+      audioFrequencyHz: this.lanes[0]!.audioFrequencyHz,
+    }] : [];
   }
 
   requestCall(callsign: string, lastMessage?: { message: FrameMessage; slotInfo: SlotInfo }): boolean {
@@ -631,87 +484,254 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
   }
 
   getSnapshot(): StrategyRuntimeSnapshot {
-    const delegate = this.delegate.getSnapshot();
-    const final73Lease = this.final73Lease;
-    if (final73Lease?.scheduled) {
-      return {
-        ...delegate,
-        currentState: 'TX5',
-        slots: { ...delegate.slots, TX5: final73Lease.transmission },
-        context: {
-          ...delegate.context,
-          targetCallsign: final73Lease.callsign,
-          targetGrid: final73Lease.targetGrid,
-          reportSent: final73Lease.reportSent,
-          reportReceived: final73Lease.reportReceived,
-          actualFrequency: final73Lease.actualFrequency,
-        },
-        queue: this.getQueueSnapshot(),
-      };
-    }
-    return { ...delegate, queue: this.getQueueSnapshot() };
+    this.syncMaxStreams();
+    const primary = this.primaryLane().getLegacySnapshot();
+    return {
+      ...primary,
+      streams: this.coordinator.getStreams(),
+      queue: this.getQueueSnapshot(),
+    };
   }
 
-  patchContext(patch: Partial<StrategyRuntimeContext>): void { this.delegate.patchContext(patch); }
-  setState(state: StrategyRuntimeSlot): void { this.delegate.setState(state); }
-  setSlotContent(update: StrategyRuntimeSlotContentUpdate): void { this.delegate.setSlotContent(update); }
+  patchContext(patch: Partial<StrategyRuntimeContext>): void { this.primaryLane().patchContext(patch); }
+  setState(state: StrategyRuntimeSlot): void { this.primaryLane().setState(state); }
+  setStreamState(update: StrategyStreamStateUpdate): void {
+    this.coordinator.setStreamState(update.streamId, update.stateId, update.expectedLifecycleEpoch);
+  }
+  setSlotContent(update: StrategyRuntimeSlotContentUpdate): void { this.primaryLane().setSlotContent(update); }
 
   settleQSOCompletion(settlement: StrategyQSOCompletionSettlement): void {
-    const before = this.queueProjectionFingerprint();
-    this.delegate.settleQSOCompletion(settlement);
-    const entry = this.entries.find((candidate) => (
-      candidate.pendingSettlement?.lifecycleEpoch === settlement.lifecycleEpoch
-      && candidate.pendingSettlement.recordId === settlement.recordId
-    ));
-    if (!entry) return;
-    if (settlement.status === 'committed') {
-      entry.logCommitted = true;
-      if (entry.delegateReleased) this.completeActive(entry);
-    } else {
-      entry.state = 'review';
+    const lane = settlement.streamId
+      ? this.lanes.find((candidate) => candidate.streamId === settlement.streamId)
+      : this.lanes.find((candidate) => candidate.canSettle(settlement));
+    if (lane?.settleQSOCompletion(settlement) !== true) return;
+    this.coordinator.markChanged();
+    const entryId = lane.getActiveEntryId();
+    if (entryId && lane.isReadyToReleaseAfterSettlement()) {
+      this.coordinator.releaseEntry(entryId, {
+        removeEntry: true,
+        reason: 'QSO persistence committed',
+      });
     }
-    entry.pendingSettlement = undefined;
-    this.bumpVersionIfProjectionChanged(before);
   }
 
   onTransmissionQueued(transmission: string): void {
-    const final73Lease = this.final73Lease;
-    if (final73Lease?.scheduled && transmission === final73Lease.transmission) {
-      final73Lease.scheduled = false;
-      final73Lease.pendingMessage = undefined;
-      final73Lease.expiresAtSlotStartMs = this.final73LeaseExpiryFrom(this.latestSlotStartMs);
-      this.logger.debug('Final 73 retry reached physical success', { callsign: final73Lease.callsign });
-      return;
-    }
-    const entry = this.getActiveEntry();
-    const snapshot = this.delegate.getSnapshot();
-    if (entry) {
-      const matchingSlot = (Object.entries(snapshot.slots ?? {}) as Array<[StrategyRuntimeSlot, string]>)
-        .find(([, text]) => text === transmission)?.[0];
-      if (matchingSlot && matchingSlot !== 'TX6') {
-        entry.lastOnAirSlot = matchingSlot;
-        entry.lastOnAirLifecycleEpoch = snapshot.qsoLifecycleEpoch;
-      }
-    }
-    this.delegate.onTransmissionQueued(transmission);
+    this.lanes.find((lane) => lane.getTransmitText() === transmission)
+      ?.onLegacyPhysicalSuccess(transmission);
+  }
+
+  onTransmissionsCompleted(receipts: StreamPhysicalReceipt[]): void {
+    this.coordinator.onPhysicalReceipts(receipts);
   }
 
   reset(reason?: string): void {
-    this.entries = [];
-    this.activeEntryId = undefined;
-    this.version = 0;
-    this.nextEntrySequence = 0;
-    this.lastQueueFullWarningAt = Number.NEGATIVE_INFINITY;
     this.latestSlotStartMs = 0;
-    this.final73Lease = undefined;
-    this.delegate.reset(reason);
+    this.lastQueueFullWarningAt = Number.NEGATIVE_INFINITY;
+    this.coordinator.reset(reason);
+    this.syncMaxStreams();
   }
 
-  private createEntry(callsign: string, source: QueueEntry['source'], fallback: PendingSlot): QueueEntry {
+  private async prepareLanes() {
+    await this.removeIneligibleWorkedInbound();
+    const previouslyActiveEntryIds = new Set(this.coordinator.getQueueSnapshot().activeEntryIds);
+    const fill = await this.fillLanes();
+    for (const entryId of fill.rejectedEntryIds) {
+      this.coordinator.updateEntry(entryId, (data) => {
+        data.state = 'review';
+        return true;
+      });
+    }
+    const snapshot = this.coordinator.getQueueSnapshot();
+    if (snapshot.activeEntryIds.length === snapshot.maxActiveStreams) {
+      const opportunity = this.selectDirectOpportunity();
+      const preemptible = this.lanes.find((lane) => {
+        const entryId = lane.getActiveEntryId();
+        return entryId && previouslyActiveEntryIds.has(entryId) && lane.canPreemptActive();
+      });
+      if (opportunity && preemptible?.getActiveEntryId()) {
+        const currentTransmitCycle = this.currentTransmitCycle();
+        if (snapshot.activeEntryIds.length > 1
+            && opportunity.requestedTransmitCycle !== undefined
+            && opportunity.requestedTransmitCycle !== currentTransmitCycle) {
+          return fill;
+        }
+        const previousEntryId = preemptible.getActiveEntryId()!;
+        const preemptedStreamId = preemptible.streamId;
+        this.coordinator.releaseEntry(previousEntryId, {
+          removeEntry: false,
+          reason: 'priority inbound caller preempted unanswered TX1',
+          resetLane: true,
+        });
+        this.moveToEnd(previousEntryId);
+        const preemptFill = this.coordinator.activateEntry(opportunity.entryId, {
+          currentTransmitCycle,
+          streamId: preemptedStreamId,
+        });
+        for (const entryId of preemptFill.rejectedEntryIds) {
+          this.coordinator.updateEntry(entryId, (data) => {
+            data.state = 'review';
+            return true;
+          });
+        }
+        return {
+          ...fill,
+          activatedEntryIds: [...fill.activatedEntryIds, ...preemptFill.activatedEntryIds],
+          rejectedEntryIds: [...fill.rejectedEntryIds, ...preemptFill.rejectedEntryIds],
+          requestedTransmitCycle: fill.requestedTransmitCycle ?? preemptFill.requestedTransmitCycle,
+        };
+      }
+    }
+    return fill;
+  }
+
+  private fillLanes() {
+    return this.coordinator.fillAvailableLanes({
+      currentTransmitCycle: this.currentTransmitCycle(),
+      isEligible: (entry) => entry.data.state === 'queued'
+        && entry.data.pending.nextLocalTxSlot !== null
+        && !this.operator.isTargetBeingWorkedByOthers(entry.callsign),
+    });
+  }
+
+  private async removeIneligibleWorkedInbound(): Promise<void> {
+    if (this.operator.config.replyToWorkedStations) return;
+    for (const row of this.coordinator.getQueueSnapshot().entries) {
+      if (row.active || row.entry.data.source !== 'inbound-direct') continue;
+      if (!await this.operator.hasWorkedCallsign(row.entry.callsign)) continue;
+      this.logger.debug('Removing automatically queued caller already worked under current settings', {
+        callsign: row.entry.callsign,
+      });
+      this.coordinator.remove(row.entry.entryId, this.coordinator.getQueueSnapshot().version);
+    }
+  }
+
+  private getIdleCQText(): string | null {
+    const snapshot = this.coordinator.getQueueSnapshot();
+    if (snapshot.activeEntryIds.length > 0) return null;
+    if (snapshot.entries.some((row) => row.entry.data.state === 'queued'
+        && row.entry.data.pending.nextLocalTxSlot !== null
+        && !this.operator.isTargetBeingWorkedByOthers(row.entry.callsign))) return null;
+    if (snapshot.entries.some((row) => row.entry.data.state === 'review'
+        || row.entry.data.state === 'closing')) return null;
+    return this.lanes[0]!.getIdleCQText();
+  }
+
+  private refreshActiveLanes(): void {
+    for (const row of this.coordinator.getQueueSnapshot().entries) {
+      if (!row.active || !row.streamId) continue;
+      this.lanes.find((lane) => lane.streamId === row.streamId)?.refreshEntry(row.entry);
+    }
+  }
+
+  private syncLaneEntryData(): void {
+    for (const lane of this.lanes) {
+      const entryId = lane.getActiveEntryId();
+      const laneData = lane.getActiveData();
+      if (!entryId || !laneData) continue;
+      this.coordinator.updateEntry(entryId, (data) => {
+        if (JSON.stringify(data) === JSON.stringify(laneData)) return false;
+        Object.assign(data, clone(laneData));
+        return true;
+      });
+    }
+  }
+
+  private updatePauseStates(now: number): void {
+    const slotMs = this.operator.config.mode.slotMs;
+    for (const row of this.coordinator.getQueueSnapshot().entries) {
+      const entry = row.entry;
+      if (entry.data.pending.validUntil === Number.POSITIVE_INFINITY) continue;
+      const evidenceAt = entry.data.lastHeardAt ?? entry.data.pending.lastMessage?.slotInfo.startMs;
+      const inactiveCycles = evidenceAt === undefined
+        ? STALE_AFTER_MODE_SLOTS
+        : Math.max(0, Math.floor((now - evidenceAt) / slotMs));
+      if (entry.data.state === 'paused' && inactiveCycles >= INACTIVE_AFTER_MODE_SLOTS) {
+        this.coordinator.updateEntry(entry.entryId, (data) => {
+          data.state = 'no-response';
+          data.noResponseCycles = undefined;
+          data.pauseReason = undefined;
+          return true;
+        });
+      } else if (entry.data.pending.validUntil < now && entry.data.state === 'queued') {
+        this.coordinator.updateEntry(entry.entryId, (data) => {
+          data.state = 'paused';
+          data.pauseReason = 'stale';
+          data.noResponseCycles = undefined;
+          return true;
+        });
+      } else if (entry.data.pending.validUntil < now
+          && row.active
+          && (entry.data.state === 'active'
+            || entry.data.state === 'engaged'
+            || entry.data.state === 'closing')
+          && !this.isTransmitting()) {
+        this.coordinator.updateEntry(entry.entryId, (data) => {
+          data.state = 'paused';
+          data.pauseReason = 'stale';
+          data.noResponseCycles = undefined;
+          return true;
+        });
+        this.coordinator.releaseEntry(entry.entryId, {
+          removeEntry: false,
+          reason: 'assisted queue active context expired while paused',
+          resetLane: true,
+        });
+      }
+    }
+  }
+
+  private promotePriorityInbound(entryId: string): void {
+    const snapshot = this.coordinator.getQueueSnapshot();
+    const row = snapshot.entries.find((candidate) => candidate.entry.entryId === entryId);
+    if (!row || row.active || !this.isPriorityInboundEntry(row.entry)) return;
+    const before = snapshot.entries.find((candidate) => (
+      !candidate.active
+      && candidate.entry.entryId !== entryId
+      && !this.isPriorityInboundEntry(candidate.entry)
+    ));
+    this.coordinator.reorder(entryId, before?.entry.entryId ?? null, snapshot.version);
+  }
+
+  private selectDirectOpportunity(): ParallelQSOQueueEntry<AssistedQueueEntryData> | undefined {
+    return this.coordinator.getQueueSnapshot().entries.find((row) => (
+      !row.active
+      && row.entry.data.state === 'queued'
+      && this.isPriorityInboundEntry(row.entry)
+      && !this.operator.isTargetBeingWorkedByOthers(row.entry.callsign)
+    ))?.entry;
+  }
+
+  private isPriorityInboundEntry(entry: ParallelQSOQueueEntry<AssistedQueueEntryData>): boolean {
+    return entry.data.state === 'queued'
+      && entry.data.pending.hasDirectEvidence
+      && (entry.data.pending.nextLocalTxSlot === 'TX2'
+        || entry.data.pending.nextLocalTxSlot === 'TX3');
+  }
+
+  private moveToEnd(entryId: string): void {
+    const version = this.coordinator.getQueueSnapshot().version;
+    this.coordinator.reorder(entryId, null, version);
+  }
+
+  private laneForEntry(entryId: string): StandardQSOProtocolLane | undefined {
+    const streamId = this.activeStreamIdForEntry(entryId);
+    return streamId ? this.lanes.find((lane) => lane.streamId === streamId) : undefined;
+  }
+
+  private activeStreamIdForEntry(entryId: string): string | undefined {
+    return this.coordinator.getQueueSnapshot().entries
+      .find((row) => row.active && row.entry.entryId === entryId)?.streamId;
+  }
+
+  private primaryLane(): StandardQSOProtocolLane {
+    const activeStreamId = this.coordinator.getQueueSnapshot().entries.find((row) => row.active)?.streamId;
+    return this.lanes.find((lane) => lane.streamId === activeStreamId)
+      ?? this.lanes.find((lane) => lane.getSnapshot() !== null)
+      ?? this.lanes[0]!;
+  }
+
+  private createEntryData(source: AssistedQueueEntryData['source'], fallback: PendingSlot): AssistedQueueEntryData {
     return {
-      entryId: `queue-${++this.nextEntrySequence}`,
-      targetKey: normalized(callsign),
-      callsign: callsign.trim().toUpperCase(),
       source,
       state: 'queued',
       pending: {
@@ -720,336 +740,54 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
         hasDirectEvidence: false,
         validUntil: Number.POSITIVE_INFINITY,
       },
-      delegateAppliedPendingRevision: 0,
-      logCommitted: false,
-      delegateReleased: false,
     };
   }
 
-  private selectCandidate(): QueueEntry | undefined {
-    const ready = this.entries.filter((entry) => entry.state === 'queued'
-      && entry.pending.nextLocalTxSlot !== null
-      && !this.operator.isTargetBeingWorkedByOthers(entry.callsign));
-    return ready[0];
+  private displayState(data: AssistedQueueEntryData): AssistedQueueDisplayState {
+    if (data.state === 'engaged') return 'engaged';
+    if (data.state === 'closing') return 'closing';
+    if (data.state === 'paused') return 'paused';
+    if (data.state === 'no-response') return 'no-response';
+    if (data.state === 'review') return 'review';
+    return data.pending.nextLocalTxSlot ?? 'review';
   }
 
-  private async selectEligibleCandidate(): Promise<QueueEntry | undefined> {
-    return this.selectEligibleEntry(() => this.selectCandidate());
+  private fallbackSlot(): PendingSlot {
+    return this.operator.config.skipTx1 === true ? 'TX2' : 'TX1';
   }
 
-  private getIdleCQText(): string | null {
-    if (this.activeEntryId || this.selectCandidate()) return null;
-    if (this.entries.some((entry) => (
-      entry.state === 'review'
-      || entry.state === 'closing'
-      || entry.pendingSettlement !== undefined
-    ))) return null;
-    return this.delegate.getIdleCQText();
+  private currentTransmitCycle(): 0 | 1 {
+    return this.operator.config.transmitCycles[0] === 1 ? 1 : 0;
   }
 
-  private isPriorityInboundEntry(entry: QueueEntry): boolean {
-    return entry.state === 'queued'
-      && entry.pending.hasDirectEvidence
-      && (entry.pending.nextLocalTxSlot === 'TX2' || entry.pending.nextLocalTxSlot === 'TX3');
+  private readRequestedMaxStreams(): number {
+    return clampMaxStreams(this.getConfiguredMaxStreams());
   }
 
-  private promotePriorityInbound(entryId: string): void {
-    if (entryId === this.activeEntryId) return;
-    const from = this.entries.findIndex((entry) => entry.entryId === entryId);
-    if (from < 0) return;
-    const [entry] = this.entries.splice(from, 1);
-    let insertAt = this.activeEntryId
-      ? Math.max(0, this.entries.findIndex((candidate) => candidate.entryId === this.activeEntryId) + 1)
-      : 0;
-    while (insertAt < this.entries.length && this.isPriorityInboundEntry(this.entries[insertAt]!)) {
-      insertAt += 1;
-    }
-    this.entries.splice(insertAt, 0, entry);
+  private readMaxStreams(): number {
+    return Math.min(this.readRequestedMaxStreams(), clampMaxStreams(this.getStreamLimit()));
   }
 
-  private selectDirectOpportunity(excludeEntryId: string): QueueEntry | undefined {
-    return this.entries.find((entry) => entry.entryId !== excludeEntryId
-      && entry.state === 'queued'
-      && entry.pending.hasDirectEvidence
-      && (entry.pending.nextLocalTxSlot === 'TX2' || entry.pending.nextLocalTxSlot === 'TX3')
-      && !this.operator.isTargetBeingWorkedByOthers(entry.callsign));
-  }
-
-  private async selectEligibleDirectOpportunity(excludeEntryId: string): Promise<QueueEntry | undefined> {
-    return this.selectEligibleEntry(() => this.selectDirectOpportunity(excludeEntryId));
-  }
-
-  private observeFinal73Retry(message: ParsedFT8Message, slotInfo: SlotInfo): void {
-    const lease = this.final73Lease;
-    if (!lease
-      || lease.scheduled
-      || message.message.type !== FT8MessageType.RRR
-      || !callsignMatches(senderOf(message), lease.callsign)
-      || !callsignMatches(targetOf(message), this.operator.config.myCallsign)
-      || slotInfo.startMs > lease.expiresAtSlotStartMs) {
-      return;
-    }
-
-    const lastMessage = lastMessageFromParsed(
-      message,
-      this.operator.config.mode.name,
-      this.operator.config.mode.slotMs,
+  private syncMaxStreams(): void {
+    const preemptedEntryIds = this.coordinator.setMaxStreams(
+      this.readMaxStreams(),
+      { preemptExcess: true },
     );
-    if (lease.pendingMessage?.message.message === lastMessage.message.message
-      && lease.pendingMessage.slotInfo.startMs === lastMessage.slotInfo.startMs) {
-      return;
-    }
-    lease.pendingMessage = lastMessage;
-    this.logger.debug('Observed correlated RR73 for a completed queue target', {
-      callsign: lease.callsign,
-      slotStartMs: slotInfo.startMs,
-    });
-  }
-
-  private captureFinal73Lease(entry: QueueEntry): Final73Lease | undefined {
-    const snapshot = this.delegate.getSnapshot();
-    const lifecycleEpoch = snapshot.qsoLifecycleEpoch;
-    const transmission = snapshot.slots?.TX5;
-    const targetCallsign = snapshot.context?.targetCallsign;
-    if (snapshot.currentState !== 'TX5'
-      || !transmission
-      || !targetCallsign
-      || !callsignMatches(targetCallsign, entry.callsign)
-      || entry.lastOnAirSlot !== 'TX5'
-      || entry.lastOnAirLifecycleEpoch !== lifecycleEpoch
-      || lifecycleEpoch === undefined) {
-      return undefined;
-    }
-
-    return {
-      targetKey: entry.targetKey,
-      callsign: entry.callsign,
-      transmission,
-      targetGrid: snapshot.context?.targetGrid,
-      reportSent: snapshot.context?.reportSent,
-      reportReceived: snapshot.context?.reportReceived,
-      actualFrequency: snapshot.context?.actualFrequency,
-      lifecycleEpoch,
-      expiresAtSlotStartMs: this.final73LeaseExpiryFrom(this.latestSlotStartMs),
-      scheduled: false,
-    };
-  }
-
-  private canScheduleFinal73Retry(): boolean {
-    const active = this.getActiveEntry();
-    if (!active) return true;
-    if (active.delegateReleased && callsignMatches(active.callsign, this.final73Lease?.callsign)) {
-      return true;
-    }
-    return active.state === 'active' && this.canPreemptActive(active);
-  }
-
-  private expireFinal73Lease(slotStartMs: number): void {
-    const lease = this.final73Lease;
-    if (!lease || lease.scheduled || slotStartMs <= lease.expiresAtSlotStartMs) return;
-    this.logger.debug('Final 73 retry lease expired', { callsign: lease.callsign });
-    this.final73Lease = undefined;
-  }
-
-  private final73LeaseExpiryFrom(slotStartMs: number): number {
-    const slotMs = this.operator.config.mode.slotMs;
-    const referenceSlotStartMs = slotStartMs > 0
-      ? slotStartMs
-      : Math.floor(Date.now() / slotMs) * slotMs;
-    return referenceSlotStartMs + slotMs * FINAL_73_RETRY_WINDOW_SLOTS;
-  }
-
-  private async selectEligibleEntry(select: () => QueueEntry | undefined): Promise<QueueEntry | undefined> {
-    let entry = select();
-    while (entry) {
-      if (entry.source !== 'inbound-direct' || this.operator.config.replyToWorkedStations) {
-        return entry;
-      }
-      if (!await this.operator.hasWorkedCallsign(entry.callsign)) {
-        return entry;
-      }
-
-      this.logger.debug('Removing automatically queued caller already worked under current settings', {
-        callsign: entry.callsign,
+    for (const entryId of preemptedEntryIds) {
+      this.coordinator.updateEntry(entryId, (data) => {
+        data.state = 'queued';
+        data.pauseReason = undefined;
+        data.noResponseCycles = undefined;
+        return true;
       });
-      const entryId = entry.entryId;
-      this.entries = this.entries.filter((candidate) => candidate.entryId !== entryId);
-      entry = select();
-    }
-    return undefined;
-  }
-
-  private canPreemptActive(entry: QueueEntry): boolean {
-    return this.delegate.getSnapshot().currentState === 'TX1'
-      && entry.pending.hasDirectEvidence === false;
-  }
-
-  private activate(entry: QueueEntry): number | undefined {
-    this.delegate.reset('assisted queue target activation');
-    const activation = this.delegate.activateTarget({
-      callsign: entry.callsign,
-      lastMessage: entry.pending.lastMessage,
-    });
-    if (!activation.accepted || activation.initialSlot !== entry.pending.nextLocalTxSlot) {
-      entry.state = 'review';
-      this.delegate.reset('assisted queue activation rejected');
-      return undefined;
-    }
-    const entryIndex = this.entries.findIndex((candidate) => candidate.entryId === entry.entryId);
-    if (entryIndex > 0) {
-      this.entries.splice(entryIndex, 1);
-      this.entries.unshift(entry);
-    }
-    this.activeEntryId = entry.entryId;
-    entry.state = 'active';
-    entry.logCommitted = false;
-    entry.delegateReleased = false;
-    entry.lastOnAirLifecycleEpoch = activation.lifecycleEpoch;
-    entry.pendingSettlement = undefined;
-    entry.delegateAppliedPendingRevision = entry.pending.revision;
-    return entry.pending.lastMessage
-      ? (entry.pending.lastMessage.slotInfo.cycleNumber + 1) % 2
-      : undefined;
-  }
-
-  private preemptActive(next: QueueEntry): number | undefined {
-    const current = this.getActiveEntry();
-    if (current) {
-      current.state = 'queued';
-      this.moveToEnd(current.entryId);
-    }
-    this.activeEntryId = undefined;
-    return this.activate(next);
-  }
-
-  private markNoResponse(
-    entry: QueueEntry,
-    failure?: import('@tx5dr/plugin-api').QSOFailureInfo,
-  ): void {
-    entry.state = 'no-response';
-    entry.noResponseCycles = failure?.stage === 'TX1'
-      ? this.operator.config.maxCallAttempts
-      : failure?.stage
-        ? this.operator.config.maxQSOTimeoutCycles
-        : this.operator.config.maxCallAttempts;
-    entry.pauseReason = undefined;
-    entry.lastOnAirSlot = undefined;
-    entry.lastOnAirLifecycleEpoch = undefined;
-    entry.pendingSettlement = undefined;
-    entry.delegateReleased = false;
-    this.moveToEnd(entry.entryId);
-    this.activeEntryId = undefined;
-    this.delegate.reset('assisted queue no-response hold');
-  }
-
-  private markInactive(entry: QueueEntry): void {
-    entry.state = 'no-response';
-    entry.noResponseCycles = undefined;
-    entry.pauseReason = undefined;
-    entry.lastOnAirSlot = undefined;
-    entry.lastOnAirLifecycleEpoch = undefined;
-    entry.pendingSettlement = undefined;
-    entry.delegateReleased = false;
-  }
-
-  private completeActive(entry: QueueEntry): void {
-    this.entries = this.entries.filter((candidate) => candidate.entryId !== entry.entryId);
-    this.activeEntryId = undefined;
-    this.delegate.reset('assisted queue QSO complete');
-  }
-
-  private moveToEnd(entryId: string): void {
-    const index = this.entries.findIndex((entry) => entry.entryId === entryId);
-    if (index < 0) return;
-    const [entry] = this.entries.splice(index, 1);
-    this.entries.push(entry);
-  }
-
-  private pauseEntry(
-    entry: QueueEntry,
-    reason: AssistedQueuePauseReason,
-  ): void {
-    entry.state = 'paused';
-    entry.pauseReason = reason;
-    entry.noResponseCycles = undefined;
-  }
-
-  private updatePauseStates(now: number): boolean {
-    let changed = false;
-    const slotMs = this.operator.config.mode.slotMs;
-    for (const entry of this.entries) {
-      if (entry.pending.validUntil === Number.POSITIVE_INFINITY) continue;
-      const evidenceAt = entry.lastHeardAt ?? entry.pending.lastMessage?.slotInfo.startMs;
-      const inactiveCycles = evidenceAt === undefined
-        ? STALE_AFTER_MODE_SLOTS
-        : Math.max(0, Math.floor((now - evidenceAt) / slotMs));
-      if (entry.state === 'paused' && inactiveCycles >= INACTIVE_AFTER_MODE_SLOTS) {
-        this.markInactive(entry);
-        changed = true;
-      } else if (entry.pending.validUntil < now && entry.state === 'queued') {
-        this.pauseEntry(entry, 'stale');
-        changed = true;
-      } else if (entry.pending.validUntil < now
-        && entry.entryId === this.activeEntryId
-        && (entry.state === 'active' || entry.state === 'engaged' || entry.state === 'closing')
-        && !entry.pendingSettlement
-        && !this.isTransmitting()) {
-        this.pauseEntry(entry, 'stale');
-        this.activeEntryId = undefined;
-        this.delegate.reset('assisted queue active context expired while paused');
-        changed = true;
-      }
-    }
-    return changed;
-  }
-
-  private hasProtocolCorrelation(entry: QueueEntry, type: ParsedFT8Message['message']['type']): boolean {
-    if (entry.entryId !== this.activeEntryId) return false;
-    const lifecycleEpoch = this.delegate.getSnapshot().qsoLifecycleEpoch;
-    if (entry.lastOnAirLifecycleEpoch !== lifecycleEpoch) return false;
-    switch (type) {
-      case FT8MessageType.ROGER_REPORT:
-        return entry.lastOnAirSlot === 'TX2' || entry.lastOnAirSlot === 'TX3';
-      case FT8MessageType.RRR:
-        return entry.lastOnAirSlot === 'TX3' || entry.lastOnAirSlot === 'TX4';
-      case FT8MessageType.SEVENTY_THREE:
-      case FT8MessageType.FOX_RR73:
-        return entry.lastOnAirSlot === 'TX3'
-          || entry.lastOnAirSlot === 'TX4'
-          || entry.lastOnAirSlot === 'TX5';
-      default:
-        return false;
     }
   }
 
-  private isEligibleActiveMessage(entry: QueueEntry, message: ParsedFT8Message): boolean {
-    if (message.isPartialDecode) return false;
-    if (message.message.type === FT8MessageType.FOX_RR73) {
-      const sender = senderOf(message);
-      return isDirectedTo(message, this.operator.config.myCallsign)
-        && (!sender || callsignMatches(sender, entry.callsign))
-        && this.hasProtocolCorrelation(entry, message.message.type);
-    }
-    if (!callsignMatches(senderOf(message), entry.callsign)) return false;
-    if (message.message.type === FT8MessageType.ROGER_REPORT
-      || message.message.type === FT8MessageType.RRR
-      || message.message.type === FT8MessageType.SEVENTY_THREE) {
-      return this.hasProtocolCorrelation(entry, message.message.type);
-    }
-    return true;
-  }
-
-  private getActiveEntry(): QueueEntry | undefined {
-    return this.entries.find((entry) => entry.entryId === this.activeEntryId);
-  }
-
-  private displayState(entry: QueueEntry): AssistedQueueDisplayState {
-    if (entry.state === 'engaged') return 'engaged';
-    if (entry.state === 'closing') return 'closing';
-    if (entry.state === 'paused') return 'paused';
-    if (entry.state === 'no-response') return 'no-response';
-    if (entry.state === 'review') return 'review';
-    return entry.pending.nextLocalTxSlot ?? 'review';
+  private fromCoordinatorMutation(
+    outcome: 'accepted' | 'duplicate' | 'rejected',
+    reason?: 'queue_full' | 'invalid_target' | 'entry_not_found' | 'active_entry' | 'version_conflict',
+  ): QueuedStrategyMutationResult {
+    return { outcome, reason, snapshot: this.getQueueSnapshot() };
   }
 
   private result(
@@ -1059,23 +797,20 @@ export class AssistedQSOQueueRuntime implements QueuedStrategyRuntime {
     return { outcome, reason, snapshot: this.getQueueSnapshot() };
   }
 
-  private resultSnapshot(
-    transmission: string | null,
-    extras: Partial<StrategyDecisionResult> = {},
-  ): StrategyDecisionResult {
-    return { ...extras, transmission, snapshot: this.getSnapshot() };
+  private resultSnapshot(transmissions: ReturnType<AssistedQSOQueueRuntime['getTransmissions']>): StrategyDecisionResult {
+    return {
+      transmission: transmissions[0]?.text ?? null,
+      transmissions,
+      snapshot: this.getSnapshot(),
+    };
   }
-
-  private bumpVersion(): void { this.version += 1; }
 
   private queueProjectionFingerprint(): string {
     const snapshot = this.getQueueSnapshot();
-    return JSON.stringify({ activeEntryId: snapshot.activeEntryId, rows: snapshot.rows });
-  }
-
-  private bumpVersionIfProjectionChanged(before: string): boolean {
-    if (this.queueProjectionFingerprint() === before) return false;
-    this.bumpVersion();
-    return true;
+    return JSON.stringify({
+      activeEntryIds: snapshot.activeEntryIds,
+      maxActiveStreams: snapshot.maxActiveStreams,
+      rows: snapshot.rows,
+    });
   }
 }

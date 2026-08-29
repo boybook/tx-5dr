@@ -118,6 +118,11 @@ export interface DecisionOrchestratorDeps {
   interruptOperatorTransmission: (operatorId: string) => Promise<void>;
   requestOperatorStrategyStop?: (operatorId: string, reason: string) => void;
   transitionTargetReservation?: (operatorId: string, epoch: number, targetCallsign?: string) => boolean;
+  transitionTargetReservations?: (
+    operatorId: string,
+    epoch: number,
+    targets: Array<{ streamId: string; targetCallsign: string }>,
+  ) => boolean;
   releaseTargetReservation?: (operatorId: string, epoch?: number) => void;
   analyzeCallsignForOperator?: (
     operatorId: string,
@@ -146,6 +151,9 @@ export interface DecisionOrchestratorDeps {
   markQueueExecutionValidated?: (operatorId: string) => void;
   getStrategyRuntime: (operatorId: string) => import('@tx5dr/plugin-api').StrategyRuntime | undefined;
   getStrategyRuntimeGeneration: (operatorId: string) => number | undefined;
+  getStrategyPluginName?: (operatorId: string) => string;
+  getStrategyMaxConcurrentStreams?: (operatorId: string) => number | undefined;
+  getEffectiveOperatorMaxConcurrentStreams?: (operatorId: string) => number;
   invokeStrategyRuntime: <T>(
     operatorId: string,
     operation: string,
@@ -184,6 +192,9 @@ export interface PluginManagerDeps {
   getOperatorById: (id: string) => import('@tx5dr/core').RadioOperator | undefined;
   /** 见 DecisionOrchestratorDeps.getCurrentMode 的注释 */
   getCurrentMode: () => import('@tx5dr/contracts').ModeDescriptor;
+  preflightDigitalMessage?: (
+    request: import('@tx5dr/plugin-api').DigitalMessagePreflightRequest,
+  ) => Promise<import('@tx5dr/plugin-api').DigitalMessagePreflightResult>;
   getOperatorAutomationSnapshot: (id: string) => import('@tx5dr/plugin-api').StrategyRuntimeSnapshot | null;
   requestOperatorCall: (
     operatorId: string,
@@ -226,7 +237,20 @@ export interface PluginManagerDeps {
   ) => Promise<void>;
   interruptOperatorTransmission: (operatorId: string) => Promise<void>;
   requestOperatorStrategyStop?: (operatorId: string, reason: string) => void;
+  /**
+   * Starts an idle operator without independently scheduling a strategy
+   * decision or physical transmission. The caller owns both steps in its
+   * current intent transaction. Returns true only when this call started it.
+   */
+  prepareOperatorStrategyStart?: (operatorId: string, reason: string) => boolean | Promise<boolean>;
+  /** Rolls back a start created by prepareOperatorStrategyStart without revoking the current intent. */
+  cancelPreparedOperatorStrategyStart?: (operatorId: string, reason: string) => void | Promise<void>;
   transitionTargetReservation?: (operatorId: string, epoch: number, targetCallsign?: string) => boolean;
+  transitionTargetReservations?: (
+    operatorId: string,
+    epoch: number,
+    targets: Array<{ streamId: string; targetCallsign: string }>,
+  ) => boolean;
   releaseTargetReservation?: (operatorId: string, epoch?: number) => void;
   removeOperatorContribution?: (
     operatorId: string,

@@ -26,6 +26,9 @@ import type {
   StrategyRuntime,
   StrategyRuntimeSlot,
   StrategyRuntimeSnapshot,
+  StrategyStreamStateUpdate,
+  StrategyActionInvocation,
+  StrategyActionDescriptor,
   AssistedQueueSnapshot,
   QueuedStrategyMutationResult,
   QueuedStrategyTargetRequest,
@@ -38,7 +41,7 @@ import {
   type PluginLoaderRuntimeLogEvent,
 } from './PluginLoader.js';
 import { ConfigManager } from '../config/config-manager.js';
-import { isUndecodedCallsignPlaceholder } from '@tx5dr/core';
+import { getStandardDigitalFrequencyMatch, isUndecodedCallsignPlaceholder } from '@tx5dr/core';
 import { PluginDevWatcher } from './PluginDevWatcher.js';
 import { PluginHookDispatcher } from './PluginHookDispatcher.js';
 import { PluginInvocationGuard } from './PluginInvocationGuard.js';
@@ -46,6 +49,7 @@ import { DecisionOrchestrator } from './DecisionOrchestrator.js';
 import { PluginContextFactory } from './PluginContextFactory.js';
 import { PluginEventBusHost } from './PluginEventBusHost.js';
 import { LogbookSyncHost } from './LogbookSyncHost.js';
+import { LogManager } from '../log/LogManager.js';
 import { PluginPageSessionStore, type PluginPageSession } from './PluginPageSessionStore.js';
 import {
   buildStandardQSODefaultTx6Message,
@@ -206,9 +210,11 @@ export class PluginManager {
       getOperatorById: deps.getOperatorById,
       getCurrentMode: deps.getCurrentMode,
       getOperatorAutomationSnapshot: deps.getOperatorAutomationSnapshot,
+      getStrategyPluginName: (operatorId) => this.getResolvedStrategyName(operatorId),
       interruptOperatorTransmission: deps.interruptOperatorTransmission,
       requestOperatorStrategyStop: deps.requestOperatorStrategyStop ?? (() => undefined),
       transitionTargetReservation: deps.transitionTargetReservation,
+      transitionTargetReservations: deps.transitionTargetReservations,
       releaseTargetReservation: deps.releaseTargetReservation,
       analyzeCallsignForOperator: deps.analyzeCallsignForOperator,
       resolveGrid: deps.resolveGrid,
@@ -217,6 +223,11 @@ export class PluginManager {
       isStoppedDirectCallAutoReplyEnabled: (operatorId) => this.isStoppedDirectCallAutoReplyEnabled(operatorId),
       getStrategyRuntime: (operatorId) => this.getStrategyRuntime(operatorId),
       getStrategyRuntimeGeneration: (operatorId) => this.getStrategyInstance(operatorId)?.generation,
+      getStrategyMaxConcurrentStreams: (operatorId) => this.getStrategyInstance(operatorId)
+        ?.plugin.definition.strategyFeatures?.maxConcurrentStreams,
+      getEffectiveOperatorMaxConcurrentStreams: (operatorId) => (
+        this.getEffectiveOperatorMaxConcurrentStreams(operatorId)
+      ),
       invokeStrategyRuntime: (operatorId, operation, callback, options) =>
         this.invokeStrategyRuntime(operatorId, operation, callback, options),
       invokeStrategyRuntimeSync: (operatorId, operation, callback) =>
@@ -424,7 +435,7 @@ export class PluginManager {
             'createStrategyRuntime',
             () => {
               const candidate = plugin.definition.createStrategyRuntime?.(
-                this.createStrategyPluginContext(instance.ctx),
+                this.createStrategyPluginContext(instance),
               );
               this.assertStrategyRuntimeV2(pluginName, candidate);
               return candidate;
@@ -573,23 +584,40 @@ export class PluginManager {
     return instance.ctx;
   }
 
-  private createStrategyPluginContext(ctx: RuntimePluginContext): StrategyPluginContext {
+  private createStrategyPluginContext(instance: PluginInstance): StrategyPluginContext {
+    const ctx = instance.ctx;
+    const declaredScopes = new Set(instance.plugin.definition.storage?.scopes ?? []);
+    const readonlyStore = (scope: 'global' | 'operator') => Object.freeze({
+      get<T>(key: string, fallback?: T): T {
+        if (!declaredScopes.has(scope)) return fallback as T;
+        return ctx.store[scope].get<T>(key, fallback);
+      },
+      has(key: string): boolean {
+        return declaredScopes.has(scope)
+          && Object.prototype.hasOwnProperty.call(ctx.store[scope].getAll(), key);
+      },
+      keys(): string[] {
+        return declaredScopes.has(scope) ? Object.keys(ctx.store[scope].getAll()) : [];
+      },
+    });
     return Object.freeze({
       get config() {
         return ctx.config;
       },
       log: ctx.log,
       operator: ctx.operator,
+      radio: ctx.radio,
+      store: Object.freeze({
+        global: readonlyStore('global'),
+        operator: readonlyStore('operator'),
+      }),
+      digitalMessagePreflight: ctx.digitalMessagePreflight,
     });
   }
 
-  getOperatorRuntimeStatus(operatorId: string): {
+  getOperatorRuntimeStatus(operatorId: string): Partial<StrategyRuntimeSnapshot> & {
     strategyName: string;
     currentSlot: string;
-    slots?: Record<string, string>;
-    context?: Record<string, unknown>;
-    availableSlots?: string[];
-    queue?: import('@tx5dr/plugin-api').AssistedQueueSnapshot;
   } {
     const strategyName = this.getResolvedStrategyName(operatorId);
     const snapshot = this.getOperatorAutomationSnapshot(operatorId);
@@ -599,16 +627,9 @@ export class PluginManager {
 
     try {
       return {
+        ...snapshot,
         strategyName,
         currentSlot: typeof snapshot.currentState === 'string' ? snapshot.currentState : 'TX6',
-        slots: snapshot.slots && typeof snapshot.slots === 'object'
-          ? snapshot.slots as Record<string, string>
-          : undefined,
-        context: snapshot.context && typeof snapshot.context === 'object'
-          ? snapshot.context as Record<string, unknown>
-          : undefined,
-        availableSlots: snapshot.availableSlots,
-        queue: snapshot.queue,
       };
     } catch (err) {
       logger.error(`Failed to read strategy status: operator=${operatorId}`, err);
@@ -627,6 +648,10 @@ export class PluginManager {
       logger.error(`Failed to read strategy snapshot: operator=${operatorId}`, err);
       return null;
     }
+  }
+
+  getOperatorTransmitGate(operatorId: string): StrategyRuntimeSnapshot['transmitGate'] | undefined {
+    return this.getOperatorAutomationSnapshot(operatorId)?.transmitGate;
   }
 
   hasTargetQueue(operatorId: string): boolean {
@@ -660,7 +685,7 @@ export class PluginManager {
         : false
     )) ?? false;
     if (signal.aborted || !this.intentCoordinator.isCurrent(token)) {
-      if (checkpoint !== undefined) {
+      if (checkpoint !== undefined && this.intentCoordinator.ownsExecution(token)) {
         this.invokeStrategyRuntimeSync(
           operatorId,
           'restore:superseded-queue-observation',
@@ -680,30 +705,42 @@ export class PluginManager {
     request: QueuedStrategyTargetRequest,
     options?: { startIfIdle?: boolean },
   ): Promise<QueuedStrategyMutationResult> {
+    const queueActivation = this.getStrategyInstance(operatorId)
+      ?.plugin.definition.strategyFeatures?.queueActivation ?? 'immediate';
     return this.submitQueueMutation(
       operatorId,
       'enqueue',
       (runtime) => runtime.enqueueTarget(snapshotPluginData(request, 'structured')),
       async ({ beforeSnapshot, result, token, signal }) => {
-        if (options?.startIfIdle !== true
-            || beforeSnapshot.rows.length !== 0
+        if (queueActivation !== 'immediate'
+            || options?.startIfIdle !== true
             || result.outcome !== 'accepted') {
           return;
         }
         const operator = this.deps.getOperatorById(operatorId);
-        if (!operator || operator.isTransmitting) return;
+        if (!operator) return;
 
-        operator.start();
+        if (!operator.isTransmitting
+            && beforeSnapshot.rows.length === 0
+            && !this.getOperatorTransmitGate(operatorId)) {
+          operator.start();
+        }
         if (!operator.isTransmitting) return;
+        const beforeTransmissionSignature = this.orchestrator.readCurrentTransmissionSignature(operatorId);
         const decision = await this.orchestrator.revalidateQueueExecutionInLane(
           operatorId,
           token,
           signal,
         );
-        if (!decision || request.lastMessage || signal.aborted || !this.intentCoordinator.isCurrent(token)) return;
+        const afterTransmissionSignature = this.orchestrator.readCurrentTransmissionSignature(operatorId);
+        if (decision?.stop
+            || beforeTransmissionSignature === afterTransmissionSignature
+            || decision?.requestedTransmitCycle !== undefined
+            || signal.aborted
+            || !this.intentCoordinator.isCurrent(token)) return;
         this.deps.triggerReEncode?.(operatorId, {
           source: 'operator-edit',
-          reason: 'manual first queue target started assisted operation',
+          reason: 'manual queue target became executable',
           decisionEpoch: token.epoch,
         });
       },
@@ -733,20 +770,21 @@ export class PluginManager {
         if (!runtime.retryTarget) throw new Error('strategy_queue_retry_unsupported');
         return runtime.retryTarget(entryId, expectedVersion);
       },
-      async ({ beforeSnapshot, result, token, signal }) => {
+      async ({ result, token, signal }) => {
         const operator = this.deps.getOperatorById(operatorId);
-        if (result.outcome !== 'accepted'
-            || beforeSnapshot.activeEntryId
-            || !operator?.isTransmitting) {
-          return;
-        }
+        if (result.outcome !== 'accepted' || !operator) return;
+        if (!operator.isTransmitting && !this.getOperatorTransmitGate(operatorId)) operator.start();
+        if (!operator.isTransmitting) return;
+        const beforeTransmissionSignature = this.orchestrator.readCurrentTransmissionSignature(operatorId);
         const decision = await this.orchestrator.revalidateQueueExecutionInLane(
           operatorId,
           token,
           signal,
         );
-        if (!decision?.transmission
-            || decision.requestedTransmitCycle !== undefined
+        const afterTransmissionSignature = this.orchestrator.readCurrentTransmissionSignature(operatorId);
+        if (decision?.stop
+            || beforeTransmissionSignature === afterTransmissionSignature
+            || decision?.requestedTransmitCycle !== undefined
             || signal.aborted
             || !this.intentCoordinator.isCurrent(token)) {
           return;
@@ -770,8 +808,14 @@ export class PluginManager {
       'remove',
       (runtime) => runtime.removeTarget(entryId, expectedVersion),
       async ({ beforeSnapshot, result, token, signal }) => {
-        if (result.outcome !== 'accepted' || beforeSnapshot.activeEntryId !== entryId) return;
-        await this.removeActiveQueueContribution(operatorId, entryId, token, signal, 'removed');
+        if (result.outcome !== 'accepted'
+            || !this.getActiveQueueEntryIds(beforeSnapshot).includes(entryId)) return;
+        await this.refreshQueueTransmissionSet(
+          operatorId,
+          token,
+          signal,
+          'active assisted queue target removed by operator',
+        );
       },
     );
   }
@@ -788,42 +832,42 @@ export class PluginManager {
         return runtime.clearTargets(expectedVersion);
       },
       async ({ beforeSnapshot, result, token, signal }) => {
-        if (result.outcome !== 'accepted' || !beforeSnapshot.activeEntryId) return;
-        await this.removeActiveQueueContribution(
+        if (result.outcome !== 'accepted'
+            || this.getActiveQueueEntryIds(beforeSnapshot).length === 0) return;
+        await this.refreshQueueTransmissionSet(
           operatorId,
-          beforeSnapshot.activeEntryId,
           token,
           signal,
-          'cleared',
+          'assisted queue cleared by operator',
         );
       },
     );
   }
 
-  private async removeActiveQueueContribution(
+  private getActiveQueueEntryIds(snapshot: AssistedQueueSnapshot): string[] {
+    if (snapshot.activeEntryIds) return snapshot.activeEntryIds;
+    return snapshot.activeEntryId ? [snapshot.activeEntryId] : [];
+  }
+
+  private async refreshQueueTransmissionSet(
     operatorId: string,
-    entryId: string,
     token: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken,
     signal: AbortSignal,
-    operation: 'removed' | 'cleared',
+    reason: string,
   ): Promise<void> {
-    this.deps.releaseTargetReservation?.(operatorId);
-    const reason = `active assisted queue target ${operation} by operator`;
-    try {
-      if (this.deps.removeOperatorContribution) {
-        await this.deps.removeOperatorContribution(operatorId, { signal, commandToken: token });
-      } else {
-        this.deps.requestOperatorStrategyStop?.(operatorId, reason);
-      }
-    } catch (error) {
-      logger.warn('Failed to remove active assisted queue target from physical frame', {
-        operatorId,
-        entryId,
-        operation,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      this.deps.requestOperatorStrategyStop?.(operatorId, reason);
-    }
+    const operator = this.deps.getOperatorById(operatorId);
+    if (!operator?.isTransmitting || signal.aborted || !this.intentCoordinator.isCurrent(token)) return;
+    const decision = await this.orchestrator.revalidateQueueExecutionInLane(
+      operatorId,
+      token,
+      signal,
+    );
+    if (!decision || decision.stop || signal.aborted || !this.intentCoordinator.isCurrent(token)) return;
+    this.deps.triggerReEncode?.(operatorId, {
+      source: 'operator-edit',
+      reason,
+      decisionEpoch: token.epoch,
+    });
   }
 
   private async submitQueueMutation(
@@ -926,6 +970,233 @@ export class PluginManager {
     this.eventEmitter.emit('operatorSlotChanged', { operatorId, slot: state });
   }
 
+  async setOperatorStreamState(operatorId: string, update: StrategyStreamStateUpdate): Promise<void> {
+    const outcome = await this.intentCoordinator.submit(operatorId, 'manual', (token, signal) => {
+      this.assertIntentTransactionCurrent(token, signal, 'stream_state_command_superseded');
+      const before = this.getOperatorAutomationSnapshot(operatorId)?.streams
+        ?.find((stream) => stream.streamId === update.streamId);
+      const checkpoint = this.invokeStrategyRuntimeSync(
+        operatorId,
+        'checkpoint:before-set-stream-state',
+        (runtime) => runtime.checkpoint(),
+      );
+      try {
+        this.invokeStrategyRuntimeSync(operatorId, 'setStreamState', (runtime) => {
+          if (!runtime.setStreamState) throw new Error('stream_state_control_not_supported');
+          runtime.setStreamState(update);
+        });
+      } catch (error) {
+        this.restoreUncommittedRuntime(operatorId, checkpoint, token, 'failed-set-stream-state');
+        throw error;
+      }
+      this.orchestrator.invalidateDecisionMessageSet(operatorId);
+      logger.info('PluginManager.setOperatorStreamState applied', {
+        operatorId,
+        streamId: update.streamId,
+        before: before?.currentState ?? null,
+        after: update.stateId,
+        lifecycleEpoch: update.expectedLifecycleEpoch,
+      });
+      this.eventEmitter.emit('operatorStreamStateChanged', {
+        operatorId,
+        streamId: update.streamId,
+        state: update.stateId,
+        commandEpoch: token.epoch,
+        source: 'manual',
+      });
+    });
+    if (outcome.status !== 'completed') throw new Error('stream_state_command_superseded');
+  }
+
+  async invokeOperatorStrategyAction(
+    operatorId: string,
+    invocation: StrategyActionInvocation,
+  ): Promise<import('@tx5dr/plugin-api').StrategyActionResult | void> {
+    const outcome = await this.intentCoordinator.submit(operatorId, 'manual', (token, signal) => (
+      this.invokeOperatorStrategyActionInLane(operatorId, invocation, token, signal)
+    ));
+    if (outcome.status === 'completed') return outcome.value;
+    throw new Error('strategy_action_superseded');
+  }
+
+  private async invokeOperatorStrategyActionInLane(
+    operatorId: string,
+    invocation: StrategyActionInvocation,
+    token: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken,
+    signal: AbortSignal,
+  ): Promise<import('@tx5dr/plugin-api').StrategyActionResult | void> {
+    this.assertIntentTransactionCurrent(token, signal, 'strategy_action_superseded');
+    const snapshot = this.getOperatorAutomationSnapshot(operatorId);
+    const action = this.findStrategyAction(snapshot, invocation);
+    if (!action) throw new Error('strategy_action_not_available');
+    if (action.disabledReason) throw new Error('strategy_action_disabled');
+
+    const checkpoint = this.invokeStrategyRuntimeSync(
+      operatorId,
+      'checkpoint:before-strategy-action',
+      (runtime) => runtime.checkpoint(),
+    );
+    const beforeTransmissionSignature = this.orchestrator.readCurrentTransmissionSignature(operatorId);
+    let preparedStart = false;
+    let runtimeCommitted = false;
+    try {
+      const result = await this.invokeStrategyRuntime(
+        operatorId,
+        `strategy-action:${invocation.actionId}`,
+        async (runtime) => {
+          if (!runtime.invokeAction) throw new Error('strategy_action_not_supported');
+          return runtime.invokeAction(snapshotPluginData(invocation, 'structured'));
+        },
+        { signal },
+      );
+      this.assertIntentTransactionCurrent(token, signal, 'strategy_action_superseded');
+
+      if (result?.logbookSessionEffects?.length) {
+        await this.applyStrategyLogbookSessionEffects(operatorId, result.logbookSessionEffects);
+        this.assertIntentTransactionCurrent(token, signal, 'strategy_action_superseded');
+      }
+
+      if (result?.requestOperatorStart) {
+        if (!this.deps.prepareOperatorStrategyStart || !this.deps.cancelPreparedOperatorStrategyStart) {
+          throw new Error('operator_strategy_start_unavailable');
+        }
+        preparedStart = await this.deps.prepareOperatorStrategyStart(
+          operatorId,
+          `strategy action ${invocation.actionId}`,
+        );
+        this.assertIntentTransactionCurrent(token, signal, 'strategy_action_superseded');
+      }
+
+      let decision: import('@tx5dr/plugin-api').StrategyDecisionResult | null = null;
+      if (result?.requestDecision || result?.requestOperatorStart) {
+        this.orchestrator.invalidateDecisionMessageSet(operatorId);
+        decision = await this.orchestrator.revalidateStrategyExecutionInLane(
+          operatorId,
+          token,
+          signal,
+          { deferEffects: true },
+        );
+        this.assertIntentTransactionCurrent(token, signal, 'strategy_action_superseded');
+      }
+
+      // All reversible work is complete. Persist action and decision effects
+      // together before applying post-decision stop/failure notifications.
+      runtimeCommitted = true;
+      const completionEffects = [
+        ...(result?.qsoCompletions ?? []),
+        ...(decision?.qsoCompletion ? [decision.qsoCompletion] : []),
+        ...(decision?.qsoCompletions ?? []),
+      ];
+      if (completionEffects.length > 0) {
+        this.orchestrator.commitQSOCompletionEffectsFromAction(operatorId, completionEffects);
+      }
+      await this.orchestrator.applyRevalidatedStrategyEffects(operatorId, decision);
+
+      const afterTransmissionSignature = this.orchestrator.readCurrentTransmissionSignature(operatorId);
+      if (!decision?.stop
+          && (preparedStart || beforeTransmissionSignature !== afterTransmissionSignature)
+          && (result?.requestDecision || result?.requestOperatorStart)) {
+        this.deps.triggerReEncode?.(operatorId, {
+          source: 'operator-edit',
+          reason: `strategy action ${invocation.actionId}`,
+          decisionEpoch: token.epoch,
+        });
+      } else if (result?.requestDecision || result?.requestOperatorStart) {
+        logger.debug('Strategy action left physical transmission intent unchanged', {
+          operatorId,
+          actionId: invocation.actionId,
+          decisionStopped: decision?.stop === true,
+        });
+      }
+      this.deps.notifyOperatorStatusChanged?.(operatorId);
+      logger.info('PluginManager strategy action applied', {
+        operatorId,
+        actionId: invocation.actionId,
+        targetKind: invocation.target.kind,
+      });
+      return result;
+    } catch (error) {
+      if (!runtimeCommitted) {
+        const ownsExecution = this.intentCoordinator.ownsExecution(token);
+        this.restoreUncommittedRuntime(operatorId, checkpoint, token, 'failed-strategy-action');
+        if (preparedStart && ownsExecution) {
+          try {
+            await this.deps.cancelPreparedOperatorStrategyStart?.(
+              operatorId,
+              `strategy action ${invocation.actionId} failed before commit`,
+            );
+          } catch (cancelError) {
+            logger.error('Failed to cancel an uncommitted strategy action start', {
+              operatorId,
+              actionId: invocation.actionId,
+              error: cancelError instanceof Error ? cancelError.message : String(cancelError),
+            });
+          }
+        }
+      }
+      throw error;
+    }
+  }
+
+  private assertIntentTransactionCurrent(
+    token: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken,
+    signal: AbortSignal,
+    message: string,
+  ): void {
+    if (!signal.aborted && this.intentCoordinator.isCurrent(token)) return;
+    const error = new Error(message);
+    error.name = 'AbortError';
+    throw error;
+  }
+
+  private async applyStrategyLogbookSessionEffects(
+    operatorId: string,
+    effects: NonNullable<import('@tx5dr/plugin-api').StrategyActionResult['logbookSessionEffects']>,
+  ): Promise<void> {
+    const instance = this.getStrategyInstance(operatorId);
+    const operator = this.deps.getOperatorById(operatorId);
+    if (!instance || !operator) throw new Error('strategy_logbook_session_unavailable');
+    const pluginName = instance.plugin.definition.name;
+    const stationCallsign = operator.config.myCallsign.trim().toUpperCase();
+    await LogManager.getInstance().applyPluginSessionEffects(pluginName, stationCallsign, effects);
+  }
+
+  private restoreUncommittedRuntime(
+    operatorId: string,
+    checkpoint: unknown,
+    token: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken,
+    operation: string,
+  ): void {
+    if (checkpoint === undefined || !this.intentCoordinator.ownsExecution(token)) return;
+    this.invokeStrategyRuntimeSync(operatorId, `restore:${operation}`, (runtime) => {
+      runtime.restore(snapshotPluginData(checkpoint, 'structured'));
+    });
+  }
+
+  private findStrategyAction(
+    snapshot: StrategyRuntimeSnapshot | null,
+    invocation: StrategyActionInvocation,
+  ): StrategyActionDescriptor | undefined {
+    if (!snapshot) return undefined;
+    const target = invocation.target;
+    if (target.kind === 'runtime') {
+      return snapshot.actions?.find((action) => action.id === invocation.actionId);
+    }
+    if (target.kind === 'stream') {
+      const stream = snapshot.streams?.find((candidate) => candidate.streamId === target.streamId);
+      if (!stream || stream.qsoLifecycleEpoch !== target.lifecycleEpoch) {
+        throw new Error('stream_lifecycle_conflict');
+      }
+      return stream.actions?.find((action) => action.id === invocation.actionId);
+    }
+    if (snapshot.queue?.version !== target.queueVersion) {
+      throw new Error('queue_version_conflict');
+    }
+    return snapshot.queue.rows
+      .find((row) => row.entryId === target.entryId)
+      ?.actions?.find((action) => action.id === invocation.actionId);
+  }
+
   setOperatorRuntimeSlotContent(
     operatorId: string,
     slot: StrategyRuntimeSlot,
@@ -951,6 +1222,10 @@ export class PluginManager {
 
   getCurrentTransmission(operatorId: string): string | null {
     return this.orchestrator.readCurrentTransmission(operatorId);
+  }
+
+  getCurrentTransmissions(operatorId: string): import('@tx5dr/plugin-api').StrategyTransmission[] {
+    return this.orchestrator.readCurrentTransmissions(operatorId);
   }
 
   handlePluginUserAction(
@@ -1038,6 +1313,17 @@ export class PluginManager {
         if (signal.aborted || !this.intentCoordinator.isCurrent(token) || !isInvocationCurrent()) return;
         const operator = this.deps.getOperatorById(operatorId);
         if (!operator) throw new Error(`Operator not found: ${operatorId}`);
+
+        const manualInitiation = this.getStrategyInstance(operatorId)
+          ?.plugin.definition.strategyFeatures?.manualInitiation === 1;
+        if (manualInitiation && (
+          command.type === 'start-automation'
+          || command.type === 'request-call'
+          || command.type === 'reply-to-decode'
+          || command.type === 'send-free-text'
+        )) {
+          throw new Error(`manual_initiation_required:${command.type}`);
+        }
 
         switch (command.type) {
           case 'start-automation':
@@ -1215,6 +1501,23 @@ export class PluginManager {
     );
   }
 
+  notifyTransmissionsCompleted(
+    operatorId: string,
+    receipts: import('@tx5dr/plugin-api').StreamPhysicalReceipt[],
+  ): void {
+    this.invokeStrategyRuntimeSync(
+      operatorId,
+      'onTransmissionsCompleted',
+      (runtime) => {
+        if (runtime.onTransmissionsCompleted) {
+          runtime.onTransmissionsCompleted(snapshotPluginData(receipts, 'structured'));
+          return;
+        }
+        for (const receipt of receipts) runtime.onTransmissionQueued?.(receipt.text);
+      },
+    );
+  }
+
   async interruptOperatorTransmission(operatorId: string): Promise<void> {
     await this.deps.interruptOperatorTransmission(operatorId);
   }
@@ -1225,6 +1528,20 @@ export class PluginManager {
       'onQSOComplete',
       (hook, ctx) => hook(snapshotPluginData(record, 'structured'), ctx),
       (instance) => this.getCtxForInstance(instance),
+    );
+  }
+
+  async notifyPluginSessionQSOComplete(
+    operatorId: string,
+    pluginName: string,
+    record: QSORecord,
+  ): Promise<void> {
+    const instance = this.instances.get(operatorId)?.get(pluginName);
+    if (!instance) return;
+    await this.dispatcher.dispatchInstance(
+      instance,
+      'onQSOComplete',
+      (hook, ctx) => hook(snapshotPluginData(record, 'structured'), ctx),
     );
   }
 
@@ -1519,6 +1836,11 @@ export class PluginManager {
     return this.loadedPlugins.get(pluginName);
   }
 
+  getSimulationScenarios(pluginName: string): import('@tx5dr/plugin-api').SimulationScenarioDescriptor[] {
+    const scenarios = this.loadedPlugins.get(pluginName)?.definition.simulationScenarios ?? [];
+    return structuredClone(scenarios);
+  }
+
   getPluginStorageDir(pluginName: string): string {
     return path.join(this.getPluginPaths().pluginDataDir, pluginName);
   }
@@ -1728,7 +2050,17 @@ export class PluginManager {
     }
     this.bumpGeneration();
     this.broadcastStatusChanged(pluginName);
+    this.deps.notifyOperatorStatusChanged?.(operatorId);
     return mergedSettings;
+  }
+
+  getEffectiveOperatorMaxConcurrentStreams(operatorId: string): number {
+    const configured = this.deps.getOperatorById(operatorId)?.config.maxConcurrentStreams ?? 3;
+    const standardFrequency = getStandardDigitalFrequencyMatch(
+      this.deps.getCurrentMode().name,
+      this.deps.getKnownRadioFrequency?.() ?? null,
+    );
+    return standardFrequency ? 1 : configured;
   }
 
   private mergePreservedHiddenOperatorSettings(
@@ -2471,13 +2803,26 @@ export class PluginManager {
         }
       }
 
+      if (panel.slot === 'operator-action') {
+        if ((plugin.definition.instanceScope ?? 'operator') !== 'operator') {
+          throw new Error('operator-action panels are only supported for operator-scoped plugins');
+        }
+        if (instanceTarget.kind !== 'operator') {
+          throw new Error(`operator-action panel "${panel.id}" must be contributed by an operator plugin instance`);
+        }
+        if (panel.component !== 'iframe' || !panel.pageId) {
+          throw new Error(`operator-action panel "${panel.id}" must reference an iframe UI page`);
+        }
+        if (panel.openMode !== 'page') {
+          throw new Error(`operator-action panel "${panel.id}" must use openMode "page"`);
+        }
+        const page = uiPageById.get(panel.pageId);
+        if (page?.resourceBinding !== 'operator') {
+          throw new Error(`operator-action panel "${panel.id}" must reference a UI page with resourceBinding "operator"`);
+        }
+      }
+
       if (panel.slot === 'radio-control-toolbar') {
-        if (plugin.definition.type !== 'utility' || (plugin.definition.instanceScope ?? 'operator') !== 'global') {
-          throw new Error('radio-control-toolbar panels are only supported for global utility plugins');
-        }
-        if (instanceTarget.kind !== 'global') {
-          throw new Error(`radio-control-toolbar panel "${panel.id}" must be contributed by a global plugin instance`);
-        }
         if (panel.component !== 'iframe') {
           throw new Error(`radio-control-toolbar panel "${panel.id}" must use iframe component`);
         }
@@ -2488,6 +2833,12 @@ export class PluginManager {
           throw new Error(`Iframe panel "${panel.id}" references unknown ui page "${panel.pageId}"`);
         }
         const page = uiPageById.get(panel.pageId);
+        if (plugin.definition.type !== 'utility' || (plugin.definition.instanceScope ?? 'operator') !== 'global') {
+          throw new Error('radio-control-toolbar panels are only supported for global utility plugins');
+        }
+        if (instanceTarget.kind !== 'global') {
+          throw new Error(`radio-control-toolbar panel "${panel.id}" must be contributed by a global plugin instance`);
+        }
         if ((page?.resourceBinding ?? 'none') !== 'none') {
           throw new Error(`radio-control-toolbar panel "${panel.id}" must reference a UI page with resourceBinding "none"`);
         }
@@ -2911,6 +3262,21 @@ export class PluginManager {
 
   invalidateDecisionMessageSet(operatorId: string): void {
     this.orchestrator.invalidateDecisionMessageSet(operatorId);
+  }
+
+  notifyOperatorTransmitCyclesChanged(
+    operatorId: string,
+    change: import('@tx5dr/plugin-api').StrategyOperatorTransmitCyclesChanged,
+  ): boolean {
+    const changed = this.invokeStrategyRuntimeSync(
+      operatorId,
+      'operator-transmit-cycles-changed',
+      (runtime) => runtime.onOperatorTransmitCyclesChanged?.(
+        snapshotPluginData(change, 'structured'),
+      ) === true,
+    ) ?? false;
+    if (changed) this.deps.notifyOperatorStatusChanged?.(operatorId);
+    return changed;
   }
 
   private emitPluginRuntimeLog(event: PluginLoaderRuntimeLogEvent): void {

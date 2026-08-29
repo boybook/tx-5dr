@@ -136,6 +136,47 @@ describe('operator queue presentation', () => {
     expect(service.sendRequestCall).toHaveBeenCalledWith('operator-1', 'JA2BBB', undefined);
   });
 
+  it('starts WW Digi when an empty queue receives a double-click target', () => {
+    const service = {
+      enqueueQueueTarget: vi.fn(),
+      sendRequestCall: vi.fn(),
+    };
+    const wwDigi = queuePlugin('ww-digi');
+    wwDigi.strategyFeatures = {
+      targetQueue: 1,
+      queueActivation: 'immediate',
+    };
+
+    submitOperatorTarget(service, resolveOperatorTargetAction(operator({
+      strategy: { name: 'ww-digi', state: 'idle', availableSlots: [] },
+    }), [wwDigi]), 'operator-1', 'JA1AAA');
+
+    expect(service.enqueueQueueTarget).toHaveBeenCalledWith(
+      'operator-1',
+      'JA1AAA',
+      undefined,
+      { startIfIdle: true },
+    );
+    expect(service.sendRequestCall).not.toHaveBeenCalled();
+  });
+
+  it('keeps operator-toggle queue strategies enqueue-only', () => {
+    const service = {
+      enqueueQueueTarget: vi.fn(),
+      sendRequestCall: vi.fn(),
+    };
+    const plugin = queuePlugin('manual-queue');
+    plugin.strategyFeatures = { targetQueue: 1, queueActivation: 'operator-toggle' };
+
+    submitOperatorTarget(service, resolveOperatorTargetAction(operator({
+      strategy: { name: 'manual-queue', state: 'idle', availableSlots: [] },
+    }), [plugin]), 'operator-1', 'JA1AAA');
+
+    expect(service.enqueueQueueTarget).toHaveBeenCalledWith(
+      'operator-1', 'JA1AAA', undefined, { startIfIdle: false },
+    );
+  });
+
   it('derives reorder payloads for waiting rows', () => {
     const rows = [
       queueRow({ entryId: 'entry-2' }),

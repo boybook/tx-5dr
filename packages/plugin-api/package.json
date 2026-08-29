@@ -34,6 +34,11 @@
       "require": "./dist/testing/index.js",
       "types": "./dist/testing/index.d.ts"
     },
+    "./toolkit": {
+      "import": "./dist/toolkit/index.js",
+      "require": "./dist/toolkit/index.js",
+      "types": "./dist/toolkit/index.d.ts"
+    },
     "./bridge": {
       "types": "./src/bridge.d.ts"
     }

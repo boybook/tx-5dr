@@ -77,6 +77,15 @@ export class OperatorIntentCoordinator {
     return this.lanes.get(token.operatorId)?.authoritativeEpoch === token.epoch;
   }
 
+  /**
+   * Whether this command still owns the serialized execution lane. A revoked
+   * command may use this while unwinding to restore its uncommitted checkpoint,
+   * but must not restore after the takeover grace period lets a successor run.
+   */
+  ownsExecution(token: OperatorCommandToken): boolean {
+    return this.lanes.get(token.operatorId)?.active?.token.epoch === token.epoch;
+  }
+
   getCurrentEpoch(operatorId: string): number {
     return this.getLane(operatorId).authoritativeEpoch;
   }

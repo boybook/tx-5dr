@@ -57,7 +57,7 @@ async function flushAsyncWork(): Promise<void> {
 }
 
 describe('PluginManager global instance scope', () => {
-  it('accepts runtime radio-control-toolbar panel contributions from global utility instances', async () => {
+  it('accepts runtime global toolbar and operator page-action contributions', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-global-toolbar-'));
     tempDirs.push(dataDir);
 
@@ -90,6 +90,36 @@ describe('PluginManager global instance scope', () => {
     await writeFile(
       join(dataDir, 'plugins', 'global-toolbar-test', 'ui', 'rotator.html'),
       '<!doctype html><html><body>rotator</body></html>',
+      'utf8',
+    );
+
+    await writeUserPlugin(dataDir, 'operator-action-test', `
+      export default {
+        name: 'operator-action-test',
+        version: '1.0.0',
+        type: 'utility',
+        ui: {
+          pages: [
+            { id: 'history', title: 'History', entry: 'history.html', accessScope: 'operator', resourceBinding: 'operator' },
+          ],
+        },
+        onLoad(ctx) {
+          ctx.ui.setPanelContributions('actions', [{
+            id: 'history-button',
+            title: 'History',
+            component: 'iframe',
+            pageId: 'history',
+            slot: 'operator-action',
+            icon: 'clock-rotate-left',
+            openMode: 'page',
+          }]);
+        },
+      };
+    `);
+    await mkdir(join(dataDir, 'plugins', 'operator-action-test', 'ui'), { recursive: true });
+    await writeFile(
+      join(dataDir, 'plugins', 'operator-action-test', 'ui', 'history.html'),
+      '<!doctype html><html><body>history</body></html>',
       'utf8',
     );
 
@@ -126,6 +156,7 @@ describe('PluginManager global instance scope', () => {
     pluginManager.loadConfig({
       configs: {
         'global-toolbar-test': { enabled: true, settings: {} },
+        'operator-action-test': { enabled: true, settings: {} },
       },
       operatorStrategies: {
         [operator.config.id]: 'standard-qso',
@@ -157,6 +188,19 @@ describe('PluginManager global instance scope', () => {
         component: 'iframe',
         pageId: 'rotator',
         slot: 'radio-control-toolbar',
+      })],
+    });
+    expect(pluginManager.getSnapshot().panelContributions).toContainEqual({
+      pluginName: 'operator-action-test',
+      groupId: 'actions',
+      source: 'runtime',
+      instanceTarget: { kind: 'operator', operatorId: operator.config.id },
+      panels: [expect.objectContaining({
+        id: 'history-button',
+        component: 'iframe',
+        pageId: 'history',
+        slot: 'operator-action',
+        openMode: 'page',
       })],
     });
 

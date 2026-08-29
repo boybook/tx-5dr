@@ -410,6 +410,42 @@ Then use the tokens in your plugin CSS:
 }
 ```
 
+The host deliberately does not inject component classes. Plugins own their
+markup and CSS, while the token layer exposes enough primitives to reproduce
+the host's control variants consistently. For example, a plugin can assemble
+its own flat primary button:
+
+```css
+.button {
+  min-height: var(--tx5dr-control-height-sm);
+  padding-inline: var(--tx5dr-control-padding-x-sm);
+  border: 1px solid transparent;
+  border-radius: var(--tx5dr-radius-sm);
+  font-size: var(--tx5dr-control-font-size-sm);
+  font-weight: var(--tx5dr-control-font-weight);
+  transition: background-color var(--tx5dr-control-transition);
+}
+
+.button--flat-primary {
+  color: var(--tx5dr-primary);
+  background: var(--tx5dr-primary-soft);
+}
+
+.button--flat-primary:hover:not(:disabled) {
+  background: var(--tx5dr-primary-soft-hover);
+}
+
+.button:disabled {
+  opacity: var(--tx5dr-control-disabled-opacity);
+}
+```
+
+The same primitives support plugin-owned `solid`, `flat`, `bordered`, and
+`light` variants. Semantic soft/foreground tokens are available for primary,
+success, warning, and danger controls; compact status, table, alert, shadow,
+focus, spacing, and typography primitives use the corresponding
+`--tx5dr-control-*`, `--tx5dr-chip-*`, `--tx5dr-table-*`, and base tokens.
+
 ## Testing
 
 ```typescript

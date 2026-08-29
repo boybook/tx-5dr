@@ -378,6 +378,7 @@ const QSO_PROJECTION_FIELD_NAMES = new Set([
   'mode',
   'submode',
   'comment',
+  'contest_id',
   'app_tx5dr_message_history',
   'app_tx5dr_id',
   'operator',
@@ -521,6 +522,7 @@ export function decodeAdifRecord(record: ScannedAdifRecord, runtimeId?: string):
     reportReceived: value('rst_rcvd') || undefined,
     messageHistory: text.messageHistory,
     comment: text.comment,
+    contestId: value('contest_id') || undefined,
     qth: value('qth') || undefined,
     notes: value('notes') || value('note') || undefined,
   };
@@ -614,6 +616,7 @@ export function encodeAdifRecord(qso: QSORecord, options: EncodeAdifRecordOption
   };
 
   append('GRIDSQUARE', qso.grid);
+  append('CONTEST_ID', qso.contestId);
   appendNumber('DXCC', qso.dxccId);
   append('COUNTRY', qso.dxccEntity);
   appendNumber('CQZ', qso.cqZone);

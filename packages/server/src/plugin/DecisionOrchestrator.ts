@@ -21,11 +21,13 @@ import {
   type StrategyDecision,
   type StrategyDecisionResult,
   type StrategyDecisionSource,
+  type StrategyTransmission,
 } from '@tx5dr/plugin-api';
 import type { AutoCallProposalResult } from './PluginHookDispatcher.js';
 import { evaluateAutomaticTargetEligibility } from './AutoTargetEligibility.js';
 import type { DecisionOrchestratorDeps, OperatorDecisionState } from './types.js';
 import { createLogger } from '../utils/logger.js';
+import { LogManager } from '../log/LogManager.js';
 import { snapshotPluginData } from './plugin-data-boundary.js';
 import { FT8MessageParser, CycleUtils, isUndecodedCallsignPlaceholder } from '@tx5dr/core';
 import type { OperatorCommandToken } from '../transmission/OperatorIntentCoordinator.js';
@@ -76,6 +78,7 @@ function getScoredCandidateScore(message: ParsedFT8Message | undefined): number 
 export class DecisionOrchestrator {
   private decisionStates = new Map<string, OperatorDecisionState>();
   private silentDirectedCallGates = new Map<string, SilentDirectedCallGate>();
+  private qsoCompletionTails = new Map<string, Promise<void>>();
 
   constructor(private deps: DecisionOrchestratorDeps) {}
 
@@ -107,10 +110,13 @@ export class DecisionOrchestrator {
       // 决策分水岭：部分解码消息仅供广播/监控观察，绝不进入任何自动决策路径
       const actionableMessages = parsedMessages.filter((message) => !message.isPartialDecode);
       const hasTargetQueue = this.deps.hasTargetQueue?.(operatorId) === true;
+      const observationSlotInfo = slotPack
+        ? this.buildSlotInfoFromSlotPack(slotPack)
+        : slotInfo;
       this.deps.observeStrategyMessages?.(
         operatorId,
         actionableMessages,
-        slotInfo,
+        observationSlotInfo,
         'slot-auto',
         token,
         signal,
@@ -203,7 +209,9 @@ export class DecisionOrchestrator {
       if (slotPack) {
         session.lastDecisionMessageSet = this.buildDecisionMessageSet(slotPack, operatorId);
       }
-      session.lastDecisionTransmission = this.readCurrentTransmission(operatorId);
+      session.lastDecisionTransmission = this.getTransmissionSetSignature(
+        this.readCurrentTransmissions(operatorId),
+      );
       await this.notifyQSOFailIfPresent(operatorId, decision);
       this.updateSilentDirectedCallGate(operatorId, decision, slotInfo, slotPack);
 
@@ -250,20 +258,20 @@ export class DecisionOrchestrator {
       if (!isTransmitSlot) continue;
 
       try {
-        const transmission = this.deps.invokeStrategyRuntimeSync(
-          operator.config.id,
-          'getTransmitText:encode-start',
-          (runtime) => runtime.getTransmitText(),
-        );
-        if (!transmission) continue;
+        const transmissions = this.readCurrentTransmissions(operator.config.id);
+        if (transmissions.length === 0) continue;
 
         // 记录即将编码的内容，供 handleSlotStart 检测竞态
         const session = this.getOrCreateDecisionState(operator.config.id);
-        session.preDecisionEncodedTransmission = transmission;
+        session.preDecisionEncodedTransmission = this.getTransmissionSetSignature(transmissions) ?? undefined;
 
-        this.deps.eventEmitter.emit('requestTransmit', {
+        this.deps.eventEmitter.emit('requestTransmitBatch', {
           operatorId: operator.config.id,
-          transmission,
+          transmissions: transmissions.map((item) => ({
+            streamId: item.streamId,
+            transmission: item.text,
+            audioFrequencyHz: item.audioFrequencyHz,
+          })),
           decisionEpoch: this.deps.intentCoordinator.getCurrentEpoch(operator.config.id),
         });
       } catch (err) {
@@ -281,7 +289,7 @@ export class DecisionOrchestrator {
     return outcome.status === 'completed' ? outcome.value : false;
   }
 
-  async revalidateQueueExecution(operatorId: string): Promise<void> {
+  async revalidateQueueExecution(operatorId: string): Promise<StrategyDecisionResult | null> {
     const outcome = await this.deps.intentCoordinator.submit(
       operatorId,
       'assisted-queue',
@@ -289,7 +297,9 @@ export class DecisionOrchestrator {
     );
     if (outcome.status === 'superseded') {
       logger.debug('Queue execution resume was superseded', { operatorId });
+      return null;
     }
+    return outcome.status === 'completed' ? outcome.value : null;
   }
 
   async revalidateQueueExecutionInLane(
@@ -297,19 +307,40 @@ export class DecisionOrchestrator {
     token: OperatorCommandToken,
     signal: AbortSignal,
   ): Promise<StrategyDecisionResult | null> {
+    if (this.deps.hasTargetQueue?.(operatorId) !== true) return null;
+    return this.revalidateStrategyExecutionInLane(operatorId, token, signal);
+  }
+
+  async revalidateStrategyExecutionInLane(
+    operatorId: string,
+    token: OperatorCommandToken,
+    signal: AbortSignal,
+    options: { deferEffects?: boolean } = {},
+  ): Promise<StrategyDecisionResult | null> {
     const operator = this.deps.getOperatorById(operatorId);
-    if (!operator?.isTransmitting || this.deps.hasTargetQueue?.(operatorId) !== true) return null;
+    if (!operator?.isTransmitting) return null;
     const decision = await this.invokeStrategyDecision(
       operatorId,
       [],
       { isReDecision: true },
       token,
       signal,
+      { commitQsoCompletions: options.deferEffects !== true },
     );
     if (!this.isCommandCurrent(token, signal)) return null;
+    if (options.deferEffects) return decision;
     await this.notifyQSOFailIfPresent(operatorId, decision);
+    if (!this.isCommandCurrent(token, signal)) return null;
     if (decision?.stop) await this.applyStrategyStop(operatorId);
     return decision;
+  }
+
+  async applyRevalidatedStrategyEffects(
+    operatorId: string,
+    decision: StrategyDecisionResult | null,
+  ): Promise<void> {
+    if (decision?.stop) await this.applyStrategyStop(operatorId);
+    await this.notifyQSOFailIfPresent(operatorId, decision);
   }
 
   private async reDecideOperatorInLane(
@@ -403,7 +434,7 @@ export class DecisionOrchestrator {
     }
 
     session.lastDecisionMessageSet = newMessageSet;
-    const newTransmission = this.readCurrentTransmission(operatorId);
+    const newTransmission = this.getTransmissionSetSignature(this.readCurrentTransmissions(operatorId));
     if (newTransmission !== session.lastDecisionTransmission) {
       logger.info(`Late decode re-decision changed transmission: operator=${operatorId}`, {
         previousTransmission: session.lastDecisionTransmission,
@@ -417,16 +448,68 @@ export class DecisionOrchestrator {
   }
 
   readCurrentTransmission(operatorId: string): string | null {
+    const transmissions = this.readCurrentTransmissions(operatorId);
+    return transmissions.find((item) => item.streamId === 'default')?.text
+      ?? transmissions[0]?.text
+      ?? null;
+  }
+
+  readCurrentTransmissions(operatorId: string): StrategyTransmission[] {
     try {
-      return this.deps.invokeStrategyRuntimeSync(
+      const operator = this.deps.getOperatorById(operatorId);
+      if (!operator) return [];
+      const transmissions = this.deps.invokeStrategyRuntimeSync(
         operatorId,
-        'getTransmitText:read-current',
-        (runtime) => runtime.getTransmitText(),
-      ) ?? null;
+        'getTransmissions:read-current',
+        (runtime) => {
+          if (runtime.getTransmissions) return runtime.getTransmissions();
+          const text = runtime.getTransmitText();
+          return text ? [{
+            streamId: 'default',
+            text,
+            audioFrequencyHz: operator.config.frequency ?? 0,
+          }] : [];
+        },
+      ) ?? [];
+      const operatorMaxStreams = this.deps.getEffectiveOperatorMaxConcurrentStreams?.(operatorId)
+        ?? operator.config.maxConcurrentStreams
+        ?? 3;
+      const strategyMaxStreams = this.deps.getStrategyMaxConcurrentStreams?.(operatorId);
+      if (strategyMaxStreams !== undefined
+          && (!Number.isInteger(strategyMaxStreams) || strategyMaxStreams < 1)) {
+        throw new Error(`Strategy declared an invalid stream limit: ${strategyMaxStreams}`);
+      }
+      const maxStreams = Math.min(operatorMaxStreams, strategyMaxStreams ?? operatorMaxStreams);
+      if (transmissions.length > maxStreams) {
+        throw new Error(`Strategy returned ${transmissions.length} streams; operator limit is ${maxStreams}`);
+      }
+      const streamIds = new Set<string>();
+      return transmissions.map((transmission) => {
+        const streamId = transmission.streamId.trim();
+        const text = transmission.text.trim();
+        if (!streamId || streamIds.has(streamId)) throw new Error(`Invalid or duplicate stream id: ${streamId}`);
+        if (!text) throw new Error(`Empty transmission for stream ${streamId}`);
+        if (!Number.isFinite(transmission.audioFrequencyHz)
+            || transmission.audioFrequencyHz < 0
+            || transmission.audioFrequencyHz > 5000) {
+          throw new Error(`Invalid audio frequency for stream ${streamId}`);
+        }
+        streamIds.add(streamId);
+        return { streamId, text, audioFrequencyHz: transmission.audioFrequencyHz };
+      });
     } catch (err) {
-      logger.error(`Failed to read current transmission: operator=${operatorId}`, err);
-      return null;
+      logger.error(`Failed to read current transmissions: operator=${operatorId}`, err);
+      return [];
     }
+  }
+
+  readCurrentTransmissionSignature(operatorId: string): string | null {
+    return this.getTransmissionSetSignature(this.readCurrentTransmissions(operatorId));
+  }
+
+  private getTransmissionSetSignature(transmissions: StrategyTransmission[]): string | null {
+    if (transmissions.length === 0) return null;
+    return JSON.stringify([...transmissions].sort((a, b) => a.streamId.localeCompare(b.streamId)));
   }
 
   // ===== Decision state management =====
@@ -456,6 +539,21 @@ export class DecisionOrchestrator {
   invalidateDecisionMessageSet(operatorId: string): void {
     const state = this.getOrCreateDecisionState(operatorId);
     state.lastDecisionMessageSet = null;
+  }
+
+  commitQSOCompletionEffectsFromAction(
+    operatorId: string,
+    effects: import('@tx5dr/plugin-api').StrategyQSOCompletionEffect[],
+    sourcePluginName?: string,
+  ): void {
+    const runtimeGeneration = this.deps.getStrategyRuntimeGeneration(operatorId);
+    if (runtimeGeneration === undefined || effects.length === 0) return;
+    this.commitQSOCompletionEffects(
+      operatorId,
+      runtimeGeneration,
+      effects,
+      sourcePluginName ?? this.deps.getStrategyPluginName?.(operatorId),
+    );
   }
 
   hasActiveSilentDirectedCallGate(operatorId: string, slotPack?: SlotPack): boolean {
@@ -734,6 +832,7 @@ export class DecisionOrchestrator {
     meta: { isReDecision: boolean },
     token: OperatorCommandToken,
     signal: AbortSignal,
+    options: { commitQsoCompletions?: boolean } = {},
   ): Promise<StrategyDecisionResult | null> {
     if (!this.deps.getStrategyRuntime(operatorId)) {
       return null;
@@ -769,31 +868,34 @@ export class DecisionOrchestrator {
         );
         if (!result) return null;
         if (!this.isCommandCurrent(token, signal)) {
-          this.deps.invokeStrategyRuntimeSync(
-            operatorId,
-            'restore:superseded-decision',
-            (runtime) => {
-              runtime.restore(snapshotPluginData(checkpoint, 'structured'));
-            },
-          );
+          this.restoreDecisionCheckpoint(operatorId, checkpoint, token, 'superseded-decision');
           return null;
         }
 
+        const streamTargets = (result.snapshot.streams ?? []).flatMap((stream) => (
+          stream.targetCallsign?.trim()
+            ? [{ streamId: stream.streamId, targetCallsign: stream.targetCallsign.trim().toUpperCase() }]
+            : []
+        ));
         const nextTarget = result.snapshot.context?.targetCallsign?.trim().toUpperCase();
-        if (this.deps.transitionTargetReservation
-            && !this.deps.transitionTargetReservation(operatorId, token.epoch, nextTarget)) {
-          this.deps.invokeStrategyRuntimeSync(
+        const reservationAccepted = streamTargets.length > 0 && this.deps.transitionTargetReservations
+          ? this.deps.transitionTargetReservations(operatorId, token.epoch, streamTargets)
+          : this.deps.transitionTargetReservation
+            ? this.deps.transitionTargetReservation(operatorId, token.epoch, nextTarget)
+            : true;
+        if (!reservationAccepted) {
+          if (!this.restoreDecisionCheckpoint(
             operatorId,
-            'restore:target-reservation-conflict',
-            (runtime) => {
-              runtime.restore(snapshotPluginData(checkpoint, 'structured'));
-            },
-          );
-          if (!nextTarget || rejectedTargets.has(nextTarget)) {
+            checkpoint,
+            token,
+            'target-reservation-conflict',
+          )) return null;
+          if (streamTargets.length > 1 || !nextTarget || rejectedTargets.has(nextTarget)) {
             logger.warn('Strategy repeatedly selected a target reserved by another operator', {
               operatorId,
               epoch: token.epoch,
               targetCallsign: nextTarget ?? null,
+              streamTargets,
             });
             return null;
           }
@@ -818,25 +920,40 @@ export class DecisionOrchestrator {
           }
           operator.notifyStateChanged(result.snapshot.currentState);
         }
-        if (result.snapshot.qsoLifecycleEpoch !== undefined) {
+        if (result.snapshot.streams && result.snapshot.streams.length > 0) {
+          for (const stream of result.snapshot.streams) {
+            this.deps.eventEmitter.emit('qsoLifecycleChanged', {
+              operatorId,
+              streamId: stream.streamId,
+              lifecycleEpoch: stream.qsoLifecycleEpoch,
+              runtimeGeneration,
+            });
+          }
+        } else if (result.snapshot.qsoLifecycleEpoch !== undefined) {
           this.deps.eventEmitter.emit('qsoLifecycleChanged', {
             operatorId,
             lifecycleEpoch: result.snapshot.qsoLifecycleEpoch,
             runtimeGeneration,
           });
         }
-        if (result.qsoCompletion) {
-          this.commitQSOCompletionEffect(operatorId, runtimeGeneration, result.qsoCompletion);
+        const qsoCompletions = [
+          ...(result.qsoCompletion ? [result.qsoCompletion] : []),
+          ...(result.qsoCompletions ?? []),
+        ];
+        if (result.logbookSessionEffects?.length) {
+          await this.applyStrategyLogbookSessionEffects(operatorId, result.logbookSessionEffects);
+        }
+        if (qsoCompletions.length > 0 && options.commitQsoCompletions !== false) {
+          this.commitQSOCompletionEffects(
+            operatorId,
+            runtimeGeneration,
+            qsoCompletions,
+            this.deps.getStrategyPluginName?.(operatorId),
+          );
         }
         return result;
       } catch (error) {
-        this.deps.invokeStrategyRuntimeSync(
-          operatorId,
-          'restore:failed-decision',
-          (runtime) => {
-            runtime.restore(snapshotPluginData(checkpoint, 'structured'));
-          },
-        );
+        this.restoreDecisionCheckpoint(operatorId, checkpoint, token, 'failed-decision');
         if (signal.aborted || (error instanceof Error && error.name === 'AbortError')) {
           logger.debug('Discarded aborted strategy decision', { operatorId, epoch: token.epoch, source });
           return null;
@@ -847,30 +964,93 @@ export class DecisionOrchestrator {
     return null;
   }
 
-  private commitQSOCompletionEffect(
+  private restoreDecisionCheckpoint(
+    operatorId: string,
+    checkpoint: unknown,
+    token: OperatorCommandToken,
+    reason: string,
+  ): boolean {
+    if (!this.deps.intentCoordinator.ownsExecution(token)) return false;
+    this.deps.invokeStrategyRuntimeSync(
+      operatorId,
+      `restore:${reason}`,
+      (runtime) => {
+        runtime.restore(snapshotPluginData(checkpoint, 'structured'));
+      },
+    );
+    return true;
+  }
+
+  private commitQSOCompletionEffects(
+    operatorId: string,
+    runtimeGeneration: number,
+    effects: import('@tx5dr/plugin-api').StrategyQSOCompletionEffect[],
+    sourcePluginName?: string,
+  ): void {
+    const previous = this.qsoCompletionTails.get(operatorId) ?? Promise.resolve();
+    let tail = previous;
+    for (const effect of effects) {
+      tail = tail.then(() => this.commitQSOCompletionEffect(
+        operatorId,
+        runtimeGeneration,
+        effect,
+        sourcePluginName,
+      ));
+    }
+    this.qsoCompletionTails.set(operatorId, tail);
+    void tail.finally(() => {
+      if (this.qsoCompletionTails.get(operatorId) === tail) this.qsoCompletionTails.delete(operatorId);
+    });
+  }
+
+  private async applyStrategyLogbookSessionEffects(
+    operatorId: string,
+    effects: import('@tx5dr/plugin-api').StrategyLogbookSessionEffect[],
+  ): Promise<void> {
+    const pluginName = this.deps.getStrategyPluginName?.(operatorId);
+    const operator = this.deps.getOperatorById(operatorId);
+    if (!pluginName || !operator) throw new Error('strategy_logbook_session_unavailable');
+    await LogManager.getInstance().applyPluginSessionEffects(
+      pluginName,
+      operator.config.myCallsign,
+      effects,
+    );
+  }
+
+  private async commitQSOCompletionEffect(
     operatorId: string,
     runtimeGeneration: number,
     effect: import('@tx5dr/plugin-api').StrategyQSOCompletionEffect,
-  ): void {
+    sourcePluginName?: string,
+  ): Promise<void> {
     const { record: qsoRecord, lifecycleEpoch } = effect;
-    const qsoLifecycleId = `${operatorId}:runtime:${runtimeGeneration}:qso:${lifecycleEpoch}:${qsoRecord.id}`;
-    void new Promise<import('@tx5dr/contracts').QSORecord>((resolve, reject) => {
+    const streamSegment = effect.streamId
+      ? `:stream:${encodeURIComponent(effect.streamId)}`
+      : '';
+    const qsoLifecycleId = `${operatorId}:runtime:${runtimeGeneration}${streamSegment}:qso:${lifecycleEpoch}:${qsoRecord.id}`;
+    await new Promise<import('@tx5dr/contracts').QSORecord>((resolve, reject) => {
       this.deps.eventEmitter.emit('recordQSO', {
         operatorId,
+        streamId: effect.streamId,
         qsoLifecycleId,
         qsoLifecycleEpoch: lifecycleEpoch,
         qsoRuntimeGeneration: runtimeGeneration,
         qsoRecord,
+        persistencePolicy: effect.persistencePolicy,
+        destination: effect.destination,
+        sourcePluginName,
         resolve,
         reject,
       });
-    }).then(() => {
+    }).then((persistedRecord) => {
       this.settleStrategyQSOCompletion(
         operatorId,
         runtimeGeneration,
         lifecycleEpoch,
         qsoRecord.id,
         'committed',
+        effect.streamId,
+        persistedRecord.id,
       );
     }).catch((error) => {
       this.settleStrategyQSOCompletion(
@@ -879,6 +1059,7 @@ export class DecisionOrchestrator {
         lifecycleEpoch,
         qsoRecord.id,
         'failed',
+        effect.streamId,
       );
       logger.warn('Declarative QSO completion failed after decision commit', {
         operatorId,
@@ -894,6 +1075,8 @@ export class DecisionOrchestrator {
     lifecycleEpoch: number,
     recordId: string,
     status: 'committed' | 'failed',
+    streamId?: string,
+    persistedRecordId?: string,
   ): void {
     if (this.deps.getStrategyRuntimeGeneration(operatorId) !== runtimeGeneration) {
       logger.debug('Skipped QSO settlement for a replaced strategy runtime', {
@@ -915,7 +1098,13 @@ export class DecisionOrchestrator {
         operatorId,
         `settle-qso:${status}`,
         (runtime) => {
-          runtime.settleQSOCompletion?.({ lifecycleEpoch, recordId, status });
+          runtime.settleQSOCompletion?.({
+            lifecycleEpoch,
+            recordId,
+            status,
+            streamId,
+            ...(persistedRecordId ? { persistedRecordId } : {}),
+          });
         },
       );
       const afterQueueVersion = this.deps.invokeStrategyRuntimeSync(
@@ -941,18 +1130,20 @@ export class DecisionOrchestrator {
     operatorId: string,
     decision: StrategyDecision | null | undefined,
   ): Promise<void> {
-    const failure = decision?.qsoFailure;
-    if (!failure?.targetCallsign || !failure.reason) {
-      return;
-    }
-
-    try {
-      await this.deps.notifyQSOFail(operatorId, {
-        ...failure,
-        targetCallsign: failure.targetCallsign.trim().toUpperCase(),
-      });
-    } catch (error) {
-      logger.warn(`Failed to notify QSO failure for operator ${operatorId}`, error);
+    const failures = [
+      ...(decision?.qsoFailure ? [decision.qsoFailure] : []),
+      ...(decision?.qsoFailures ?? []),
+    ];
+    for (const failure of failures) {
+      if (!failure.targetCallsign || !failure.reason) continue;
+      try {
+        await this.deps.notifyQSOFail(operatorId, {
+          ...failure,
+          targetCallsign: failure.targetCallsign.trim().toUpperCase(),
+        });
+      } catch (error) {
+        logger.warn(`Failed to notify QSO failure for operator ${operatorId}`, error);
+      }
     }
   }
 

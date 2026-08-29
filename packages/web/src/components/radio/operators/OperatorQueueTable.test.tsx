@@ -18,9 +18,19 @@ vi.mock('react-i18next', () => ({
       'operator.queueStatus.noResponseCycles': 'Inactive · no reply for 5 cycles',
       'operator.queuePauseReason.stale': 'Not heard',
       'operator.queueMeta.cyclesAgo': '2 cycles ago',
+      'operator.queueMeta.lastHeardCycle': 'Last heard: Odd cycle',
+      'operator.queueMeta.currentCycleUnavailable': 'Last heard: Even cycle · not covered by the current cycle',
+      'operator.queueMeta.currentTransmitCycle': 'Current TX: Even cycle',
+      'operator.queueMeta.unknownCycle': 'Last-heard cycle unknown',
+      'operator.evenCycle': 'Even cycle',
+      'operator.oddCycle': 'Odd cycle',
       'operator.queue.emptyHint': 'Double-click a callsign on the left to add it',
     }[key] ?? key),
   }),
+}));
+
+vi.mock('../../../utils/pluginLocales', () => ({
+  resolvePluginLabel: (value: string) => value,
 }));
 
 vi.mock('../../../store/radioStore', () => ({
@@ -31,7 +41,7 @@ vi.mock('../../../store/radioStore', () => ({
   }),
   useCurrentOperatorId: () => ({ currentOperatorId: 'operator-1' }),
   useOperators: () => ({
-    operators: [{ id: 'operator-1', context: { myGrid: 'OL32' } }],
+    operators: [{ id: 'operator-1', context: { myGrid: 'OL32' }, transmitCycles: [0] }],
   }),
   useStationInfo: () => null,
 }));
@@ -78,6 +88,7 @@ describe('OperatorQueueTable', () => {
             targetGrid: 'PM95',
             lastSnr: -12,
             lastHeardCyclesAgo: 2,
+            lastHeardCycle: 1,
           }],
         }}
       />,
@@ -90,8 +101,36 @@ describe('OperatorQueueTable', () => {
     expect(html).toContain('km');
     expect(html).toContain('-12 dB');
     expect(html).toContain('2 cycles ago');
+    expect(html).toContain('data-cycle="1"');
+    expect(html).toContain('data-cycle-compatibility="compatible"');
     expect(html).toContain('ml-auto flex min-w-0');
     expect(html).toContain('aria-label="Remove"');
+  });
+
+  it('quietly marks a target heard in the current transmit cycle as unavailable', () => {
+    const html = renderToStaticMarkup(
+      <OperatorQueueTable
+        operatorId="operator-1"
+        queue={{
+          version: 4,
+          rows: [{
+            entryId: 'entry-1',
+            callsign: 'JA1AAA',
+            order: 0,
+            draggable: true,
+            displayState: 'authorized',
+            tone: 'success',
+            icon: 'check-circle',
+            lastHeardCycle: 0,
+          }],
+        }}
+      />,
+    );
+
+    expect(html).toContain('data-cycle-compatibility="incompatible"');
+    expect(html).toContain('opacity-60');
+    expect(html).toContain('Last heard: Even cycle · not covered by the current cycle');
+    expect(html).not.toContain('line-through');
   });
 
   it('shows retry only for an unanswered active attempt, not passive inactivity', () => {

@@ -59,6 +59,17 @@ export class PluginStorageProvider implements FlushableKVStore {
     this.scheduleSave();
   }
 
+  update<T = unknown>(
+    key: string,
+    reducer: (current: T | undefined) => T | undefined,
+  ): T | undefined {
+    PersistenceCoordinator.getInstance().assertMutationsAllowed(`plugin-storage:${this.filePath}`);
+    const current = this.get<T | undefined>(key);
+    const next = reducer(current);
+    this.set(key, next);
+    return this.get<T | undefined>(key);
+  }
+
   delete(key: string): void {
     PersistenceCoordinator.getInstance().assertMutationsAllowed(`plugin-storage:${this.filePath}`);
     delete this.data[key];
@@ -83,11 +94,83 @@ export class PluginStorageProvider implements FlushableKVStore {
       await this.store.set(this.data, { defer });
     } catch (err) {
       logger.error(`Failed to save plugin storage: ${this.filePath}`, err);
+      if (!defer) throw err;
     }
   }
 
   dispose(): void {
     this.unregisterPersistence?.();
     this.unregisterPersistence = null;
+  }
+}
+
+interface SharedStorageEntry {
+  provider: PluginStorageProvider;
+  ready: Promise<void>;
+  references: number;
+}
+
+const sharedStorageProviders = new Map<string, SharedStorageEntry>();
+
+class SharedPluginStorageLease implements FlushableKVStore {
+  private released = false;
+
+  constructor(
+    private readonly filePath: string,
+    private readonly provider: PluginStorageProvider,
+  ) {}
+
+  get<T = unknown>(key: string, defaultValue?: T): T {
+    return this.provider.get(key, defaultValue);
+  }
+
+  set(key: string, value: unknown): void {
+    this.provider.set(key, value);
+  }
+
+  update<T = unknown>(key: string, reducer: (current: T | undefined) => T | undefined): T | undefined {
+    return this.provider.update(key, reducer);
+  }
+
+  delete(key: string): void {
+    this.provider.delete(key);
+  }
+
+  getAll(): Record<string, unknown> {
+    return this.provider.getAll();
+  }
+
+  flush(): Promise<void> {
+    return this.provider.flush();
+  }
+
+  dispose(): void {
+    if (this.released) return;
+    this.released = true;
+    const entry = sharedStorageProviders.get(this.filePath);
+    if (!entry || entry.provider !== this.provider) return;
+    entry.references -= 1;
+    if (entry.references > 0) return;
+    entry.provider.dispose();
+    sharedStorageProviders.delete(this.filePath);
+  }
+}
+
+/** Acquires one process-wide store for a plugin global-storage file. */
+export async function acquireSharedPluginStorage(filePath: string): Promise<FlushableKVStore> {
+  let entry = sharedStorageProviders.get(filePath);
+  if (!entry) {
+    const provider = new PluginStorageProvider(filePath);
+    entry = { provider, ready: provider.init(), references: 0 };
+    sharedStorageProviders.set(filePath, entry);
+  }
+  entry.references += 1;
+  try {
+    await entry.ready;
+    return new SharedPluginStorageLease(filePath, entry.provider);
+  } catch (error) {
+    entry.references -= 1;
+    if (entry.references === 0) sharedStorageProviders.delete(filePath);
+    throw error;
   }
 }

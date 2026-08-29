@@ -46,6 +46,9 @@ export interface KVStore {
    */
   set(key: string, value: unknown): void;
 
+  /** Atomically updates one value shared by every instance of this plugin. */
+  update<T = unknown>(key: string, reducer: (current: T | undefined) => T | undefined): T | undefined;
+
   /**
    * Removes a stored key and its value.
    */
@@ -64,6 +67,31 @@ export interface KVStore {
    * crash or restart (e.g. during a migration sequence).
    */
   flush(): Promise<void>;
+}
+
+/** Read-only live view of one plugin storage scope. */
+export interface ReadonlyKVStore {
+  get<T = unknown>(key: string, defaultValue?: T): T;
+  has(key: string): boolean;
+  keys(): string[];
+}
+
+export interface DigitalMessagePreflightRequest {
+  mode: 'FT8' | 'FT4';
+  text: string;
+}
+
+export interface DigitalMessagePreflightResult {
+  encodable: boolean;
+  requestedText: string;
+  transmittedText?: string;
+  reason?: 'empty' | 'encoder_changed_text' | 'encode_failed';
+  error?: string;
+}
+
+/** Read-only digital-mode validation; no audio or encoder handle is exposed. */
+export interface DigitalMessagePreflight {
+  check(request: DigitalMessagePreflightRequest): Promise<DigitalMessagePreflightResult>;
 }
 
 /**
@@ -287,6 +315,8 @@ export interface OperatorSnapshot {
   readonly mode: ModeDescriptor;
   /** Current transmit cycle selection where `0` is even and `1` is odd. */
   readonly transmitCycles: number[];
+  /** Host-admitted stream ceiling after radio-frequency and operator safety policy. */
+  readonly maxConcurrentStreams: number;
   /** Current automation runtime snapshot visible to the operator UI. */
   readonly automation: StrategyRuntimeSnapshot | null;
 
@@ -405,6 +435,8 @@ export interface RadioView {
   readonly mode: RadioOperatingMode;
   /** Whether the radio transport is currently connected. */
   readonly isConnected: boolean;
+  /** Whether the active radio is a Host-provided simulation rather than physical RF. */
+  readonly isSimulation: boolean;
 
 }
 
@@ -536,6 +568,9 @@ export interface CallsignLogbookReadAccess {
   /** Returns the resolved logbook id, or null when no logbook is registered. */
   getLogBookId(): Promise<string | null>;
 
+  /** Waits until the Host has finished opening this logbook and it is readable. */
+  awaitReady(options?: { timeoutMs?: number }): Promise<void>;
+
   /** Queries QSO records matching the given filter. */
   queryQSOs(filter: QSOQueryFilter): Promise<import('@tx5dr/contracts').QSORecord[]>;
   /** Reads records and their content revision from one consistent logbook snapshot. */
@@ -569,6 +604,36 @@ export interface CallsignLogbookCommandPort {
 /** Combined read/write callsign-bound logbook capability. */
 export interface CallsignLogbookAccess
   extends CallsignLogbookReadAccess, CallsignLogbookCommandPort {}
+
+/** Stable descriptor for one Host-managed, plugin-owned logbook session. */
+export interface PluginLogbookSessionDescriptor {
+  /** Stable key within the owning plugin and station callsign. */
+  sessionKey: string;
+  /** Station callsign whose QSOs belong to this session. */
+  stationCallsign: string;
+  /** User-facing session title. */
+  title: string;
+  /** Durable by default; runtime sessions are deleted when explicitly destroyed or the Host exits. */
+  retention?: 'durable' | 'runtime';
+}
+
+/** Read/write access to one plugin-owned logbook session. */
+export interface PluginLogbookSessionAccess extends CallsignLogbookAccess {
+  /** Opaque Host-issued session logbook identifier. */
+  readonly id: string;
+  /** User-facing title supplied when the session was opened. */
+  readonly title: string;
+  /** Destroys a runtime-retained session. Durable sessions reject this operation. */
+  destroy(): Promise<void>;
+}
+
+/** Host-arbitrated access to logbook sessions owned by the current plugin. */
+export interface PluginLogbookSessions {
+  /** Opens or reuses a durable session without changing the station's primary logbook. */
+  open(descriptor: PluginLogbookSessionDescriptor): Promise<PluginLogbookSessionAccess>;
+  /** Destroys an existing runtime-retained session owned by this plugin and operator. */
+  destroy(sessionKey: string): Promise<void>;
+}
 
 /** Read-only worked-status and QSO query capability for `logbook:read`. */
 export interface LogbookReadAccess {
@@ -762,6 +827,9 @@ export interface UIBridge {
    * Clears a runtime-owned panel contribution group for this plugin instance.
    */
   clearPanelContributions(groupId: string): void;
+
+  /** Requests a fresh operator/runtime projection after plugin-owned state changes. */
+  refreshOperatorProjection(): void;
 
   /**
    * Registers a handler for custom messages sent from iframe UI pages via the

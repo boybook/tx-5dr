@@ -6,7 +6,14 @@ import {
   shouldRadioOperatorPropsBeEqual,
 } from '../radioOperatorProgress';
 import { pickManualIdleFrequency } from '../radioOperatorIdleFrequency';
-import { resolveRadioOperatorCyclePresentation } from '../radioOperatorPresentation';
+import {
+  resolveRadioOperatorCurrentTransmissions,
+  resolveRadioOperatorCyclePresentation,
+  resolveSingleControllableStream,
+  resolveRadioOperatorStreamPresentations,
+  shouldUseParallelQsoPresentation,
+  summarizeRadioOperatorTransmissions,
+} from '../radioOperatorPresentation';
 
 function createOperatorStatus(overrides: Partial<OperatorStatus> = {}): OperatorStatus {
   return {
@@ -153,9 +160,234 @@ describe('RadioOperator memo comparison', () => {
 
     expect(shouldRadioOperatorPropsBeEqual(prev, next)).toBe(false);
   });
+
+  it('treats current transmission changes as a meaningful update', () => {
+    const prev = createOperatorStatus({
+      currentTransmissions: [{
+        streamId: 'stream-1',
+        text: 'JA1AAA BG5DRB PM01',
+        audioFrequencyHz: 1200,
+      }],
+    });
+    const next = createOperatorStatus({
+      currentTransmissions: [{
+        streamId: 'stream-1',
+        text: 'JA1AAA BG5DRB R-07',
+        audioFrequencyHz: 1200,
+      }],
+    });
+
+    expect(shouldRadioOperatorPropsBeEqual(prev, next)).toBe(false);
+  });
+
+  it('treats runtime stream changes as a meaningful update', () => {
+    const prev = createOperatorStatus({
+      runtime: {
+        currentState: 'parallel',
+        streams: [{
+          streamId: 'stream-1',
+          currentState: 'TX1',
+          targetCallsign: 'JA1AAA',
+          audioFrequencyHz: 1200,
+          qsoLifecycleEpoch: 1,
+          stateOptions: [{ id: 'TX1', label: 'TX1', transmitText: 'JA1AAA BG5DRB PM01' }],
+        }],
+      },
+    });
+    const next = createOperatorStatus({
+      runtime: {
+        currentState: 'parallel',
+        streams: [{
+          streamId: 'stream-1',
+          currentState: 'TX3',
+          targetCallsign: 'JA1AAA',
+          audioFrequencyHz: 1260,
+          qsoLifecycleEpoch: 1,
+        }],
+      },
+    });
+
+    expect(shouldRadioOperatorPropsBeEqual(prev, next)).toBe(false);
+  });
 });
 
 describe('RadioOperator transmit content', () => {
+  it('prefers the Host transmission set over stale legacy slot content', () => {
+    const operator = createOperatorStatus({
+      currentSlot: 'TX3',
+      slots: { TX3: 'JA1AAA BG5DRB R-12' },
+      currentTransmissions: [{
+        streamId: 'stream-1',
+        text: 'JA1AAA BG5DRB R-07',
+        audioFrequencyHz: 1260,
+      }],
+    });
+
+    expect(resolveRadioOperatorCurrentTransmissions(operator)).toEqual([{
+      streamId: 'stream-1',
+      text: 'JA1AAA BG5DRB R-07',
+      audioFrequencyHz: 1260,
+    }]);
+    expect(resolveRadioOperatorCyclePresentation(operator, createSlotInfo(), true).transmitContent)
+      .toBe('JA1AAA BG5DRB R-07');
+  });
+
+  it('presents an idle WW Digi CQ transmission without an active protocol stream', () => {
+    const operator = createOperatorStatus({
+      strategy: {
+        name: 'ww-digi',
+        state: 'TX6',
+        availableSlots: ['TX6'],
+      },
+      slots: undefined,
+      runtime: {
+        currentState: 'TX6',
+        streams: [],
+      },
+      currentTransmissions: [{
+        streamId: 'cq',
+        text: 'CQ WW BG5DRB PM01',
+        audioFrequencyHz: 1500,
+      }],
+    });
+
+    expect(resolveRadioOperatorStreamPresentations(operator)).toEqual([{
+      streamId: 'cq',
+      text: 'CQ WW BG5DRB PM01',
+      audioFrequencyHz: 1500,
+    }]);
+    expect(resolveRadioOperatorCyclePresentation(operator, createSlotInfo(), true)).toMatchObject({
+      isTransmit: true,
+      transmitContent: 'CQ WW BG5DRB PM01',
+    });
+  });
+
+  it('summarizes three transmissions and joins each lane with its protocol state', () => {
+    const currentTransmissions = [{
+      streamId: 'stream-1',
+      text: 'JA1AAA BG5DRB PM01',
+      audioFrequencyHz: 1200,
+    }, {
+      streamId: 'stream-2',
+      text: 'JA2BBB BG5DRB R-09',
+      audioFrequencyHz: 1560,
+    }, {
+      streamId: 'stream-3',
+      text: 'JA3CCC BG5DRB RR73',
+      audioFrequencyHz: 1800,
+    }];
+    const operator = createOperatorStatus({
+      currentSlot: 'parallel',
+      currentTransmissions,
+      runtime: {
+        currentState: 'parallel',
+        streams: [{
+          streamId: 'stream-1',
+          currentState: 'TX1',
+          targetCallsign: 'JA1AAA',
+          audioFrequencyHz: 1200,
+          qsoLifecycleEpoch: 1,
+          stateOptions: [{ id: 'TX1', label: 'TX1', transmitText: 'JA1AAA BG5DRB PM01' }],
+        }, {
+          streamId: 'stream-2',
+          currentState: 'TX3',
+          targetCallsign: 'JA2BBB',
+          audioFrequencyHz: 1560,
+          qsoLifecycleEpoch: 2,
+        }, {
+          streamId: 'stream-3',
+          currentState: 'send-rr73',
+          targetCallsign: 'JA3CCC',
+          audioFrequencyHz: 1800,
+          qsoLifecycleEpoch: 3,
+        }],
+      },
+    });
+
+    expect(summarizeRadioOperatorTransmissions(currentTransmissions)).toBe(
+      'JA1AAA BG5DRB PM01 · JA2BBB BG5DRB R-09 · JA3CCC BG5DRB RR73',
+    );
+    expect(resolveRadioOperatorStreamPresentations(operator)).toEqual([{
+      streamId: 'stream-1',
+      currentState: 'TX1',
+      qsoLifecycleEpoch: 1,
+      stateOptions: [{ id: 'TX1', label: 'TX1', transmitText: 'JA1AAA BG5DRB PM01' }],
+      targetCallsign: 'JA1AAA',
+      audioFrequencyHz: 1200,
+      text: 'JA1AAA BG5DRB PM01',
+    }, {
+      streamId: 'stream-2',
+      currentState: 'TX3',
+      qsoLifecycleEpoch: 2,
+      targetCallsign: 'JA2BBB',
+      audioFrequencyHz: 1560,
+      text: 'JA2BBB BG5DRB R-09',
+    }, {
+      streamId: 'stream-3',
+      currentState: 'send-rr73',
+      qsoLifecycleEpoch: 3,
+      targetCallsign: 'JA3CCC',
+      audioFrequencyHz: 1800,
+      text: 'JA3CCC BG5DRB RR73',
+    }]);
+
+    const streams = resolveRadioOperatorStreamPresentations(operator);
+    expect(resolveSingleControllableStream(streams, 1)?.streamId).toBe('stream-1');
+    expect(resolveSingleControllableStream(streams, 3)).toBeUndefined();
+  });
+
+  it('uses the original single-QSO presentation when a queue mode is limited to one QSO', () => {
+    expect(shouldUseParallelQsoPresentation(1, true)).toBe(false);
+    expect(shouldUseParallelQsoPresentation(3, true)).toBe(true);
+    expect(shouldUseParallelQsoPresentation(undefined, true)).toBe(true);
+    expect(shouldUseParallelQsoPresentation(undefined, false)).toBe(false);
+  });
+
+  it('keeps a closing stream visible after its transmission has cleared', () => {
+    const operator = createOperatorStatus({
+      currentTransmissions: [],
+      runtime: {
+        currentState: 'parallel',
+        streams: [{
+          streamId: 'stream-2',
+          currentState: 'closing',
+          targetCallsign: 'JA2BBB',
+          audioFrequencyHz: 1560,
+          qsoLifecycleEpoch: 2,
+        }],
+      },
+    });
+
+    expect(resolveRadioOperatorStreamPresentations(operator)).toEqual([{
+      streamId: 'stream-2',
+      currentState: 'closing',
+      qsoLifecycleEpoch: 2,
+      targetCallsign: 'JA2BBB',
+      audioFrequencyHz: 1560,
+    }]);
+  });
+
+  it('falls back to the selected legacy TX slot when the Host field is absent', () => {
+    const operator = createOperatorStatus({
+      currentSlot: 'TX4',
+      context: { ...createOperatorStatus().context, frequency: 1750 },
+      slots: {
+        TX1: 'JA1AAA BG5DRB PM01',
+        TX2: 'BG5DRB JA1AAA -10',
+        TX3: 'JA1AAA BG5DRB R-07',
+        TX4: 'BG5DRB JA1AAA RR73',
+        TX5: 'JA1AAA BG5DRB 73',
+        TX6: 'CQ BG5DRB PM01',
+      },
+    });
+
+    expect(resolveRadioOperatorCurrentTransmissions(operator)).toEqual([{
+      streamId: 'default',
+      text: 'BG5DRB JA1AAA RR73',
+      audioFrequencyHz: 1750,
+    }]);
+  });
+
   it('uses one TX presentation before physical PTT becomes active', () => {
     const operator = createOperatorStatus({
       isTransmitting: true,

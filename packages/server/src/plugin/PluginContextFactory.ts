@@ -4,10 +4,11 @@ import * as hostHamlib from 'hamlib';
 import type { RemoteInfo, Socket, SocketType } from 'node:dgram';
 import {
   getBandFromFrequency,
+  getStandardDigitalFrequencyMatch,
   LogbookOperationError,
   toAdifMode,
 } from '@tx5dr/core';
-import { getPluginContextCapabilityKeys } from '@tx5dr/plugin-api';
+import { getPluginContextCapabilityKeys, normalizeCallsign } from '@tx5dr/plugin-api';
 import type {
   HostSettingsControl,
   HamlibHostDependency,
@@ -37,7 +38,7 @@ import {
 import { ConfigManager } from '../config/config-manager.js';
 import { LogManager } from '../log/LogManager.js';
 import type { LogBookInstance } from '../log/LogManager.js';
-import { PluginStorageProvider } from './PluginStorageProvider.js';
+import { acquireSharedPluginStorage, PluginStorageProvider } from './PluginStorageProvider.js';
 import { PluginFileStoreProvider } from './PluginFileStoreProvider.js';
 import { PluginTimerManager } from './PluginTimerManager.js';
 import { PluginUIBridge } from './PluginUIBridge.js';
@@ -139,11 +140,10 @@ export class PluginContextFactory {
     updatePluginSettings?: (patch: Record<string, unknown>) => Promise<void>,
     invokeResourceCallback?: <T>(operation: string, callback: () => T | Promise<T>) => Promise<T>,
   ): Promise<RuntimePluginContext> {
-    const globalStorage = new PluginStorageProvider(`${pluginStorageDir}/global.json`);
+    const globalStorage = await acquireSharedPluginStorage(`${pluginStorageDir}/global.json`);
     const operatorStorageName = operatorId ? `operator-${operatorId}.json` : 'instance-global.json';
     const operatorStorage = new PluginStorageProvider(`${pluginStorageDir}/${operatorStorageName}`);
 
-    await globalStorage.init();
     await operatorStorage.init();
 
     const timerManager = new PluginTimerManager(plugin.definition.name, onTimer);
@@ -157,6 +157,7 @@ export class PluginContextFactory {
         this.deps.listPluginPageSessions?.(pluginName, instanceTarget, pageId) ?? [],
       this.onPanelMeta,
       this.onPanelContributions,
+      (id) => this.deps.notifyOperatorStatusChanged?.(id),
     );
     const contextRef: { current?: RuntimePluginContext } = {};
     const pluginLogger = this.createLogger(plugin.definition.name);
@@ -168,7 +169,7 @@ export class PluginContextFactory {
       () => contextRef.current,
     );
     const radioContext = this.createRadioContext(plugin);
-    const logbookAccess = this.createLogbookAccess(operatorId, instanceScope);
+    const logbookAccess = this.createLogbookAccess(plugin, operatorId, instanceScope);
     const bandAccess = this.createBandAccess(operatorId);
     const settingsControl = this.createSettingsControl(plugin);
     const fileStore = new PluginFileStoreProvider(
@@ -196,6 +197,19 @@ export class PluginContextFactory {
         global: globalStorage,
         operator: operatorStorage,
       },
+      digitalMessagePreflight: {
+        check: async (request) => {
+          if (!this.deps.preflightDigitalMessage) {
+            return {
+              encodable: false,
+              requestedText: request.text.trim().toUpperCase().replace(/\s+/g, ' '),
+              reason: 'encode_failed' as const,
+              error: 'preflight_unavailable',
+            };
+          }
+          return this.deps.preflightDigitalMessage(request);
+        },
+      },
       log: pluginLogger,
       timers: timerManager,
       operator: operatorSnapshot,
@@ -213,9 +227,14 @@ export class PluginContextFactory {
         fetch: (url: string, init?: RequestInit) => globalThis.fetch(url, init),
       } : {}),
       ...(eventBusControl ? { eventBus: eventBusControl } : {}),
-      logbook: plugin.definition.permissions?.includes('logbook:write')
-        ? logbookAccess.full
-        : logbookAccess.read,
+      logbook: {
+        ...(plugin.definition.permissions?.includes('logbook:write')
+          ? logbookAccess.full
+          : plugin.definition.permissions?.includes('logbook:read') ? logbookAccess.read : {}),
+        ...(plugin.definition.permissions?.includes('logbook:session')
+          ? { sessions: logbookAccess.sessions }
+          : {}),
+      } as NonNullable<RuntimePluginContext['logbook']>,
       settings: settingsControl,
       logbookSync: {
         register: (provider: LogbookSyncProvider) => {
@@ -678,6 +697,7 @@ export class PluginContextFactory {
         get frequency() { return 0; },
         get mode(): ModeDescriptor { return MODES.FT8; },
         get transmitCycles() { return []; },
+        get maxConcurrentStreams() { return 1; },
         get automation() { return null; },
         getOtherOperators: () => this.createOtherOperatorSnapshots(undefined),
         async hasWorkedCallsign(_callsign: string, _options?: { anyBand?: boolean }) { return false; },
@@ -704,6 +724,14 @@ export class PluginContextFactory {
       },
       get transmitCycles() {
         return deps.getOperatorById(operatorId)?.getTransmitCycles() ?? [];
+      },
+      get maxConcurrentStreams() {
+        const configured = deps.getOperatorById(operatorId)?.config.maxConcurrentStreams ?? 3;
+        const standardFrequency = getStandardDigitalFrequencyMatch(
+          deps.getCurrentMode().name,
+          deps.getKnownRadioFrequency?.() ?? null,
+        );
+        return standardFrequency ? 1 : configured;
       },
       get automation() {
         return deps.getOperatorAutomationSnapshot(operatorId);
@@ -913,6 +941,9 @@ export class PluginContextFactory {
       get isConnected() {
         return deps.getRadioConnected();
       },
+      get isSimulation() {
+        return configManager.getActiveVirtualRadioProfile() !== null;
+      },
     };
 
     const capabilities: Omit<RuntimePluginContext, keyof PluginContextBase> = {};
@@ -979,19 +1010,19 @@ export class PluginContextFactory {
   }
 
   private createLogbookAccess(
+    plugin: LoadedPlugin,
     operatorId: string | undefined,
     instanceScope: 'operator' | 'global',
   ) {
     const deps = this.deps;
     const logManager = LogManager.getInstance();
 
-    const createCallsignAccess = (callsign: string) => {
+    const createResolvedAccess = (
+      callsign: string,
+      resolveLogBook: () => LogBookInstance | null,
+    ) => {
       const normalizedCallsign = callsign.trim().toUpperCase();
-
-      const getExistingLogBook = () => {
-        const logBookId = logManager.resolveLogBookId(normalizedCallsign);
-        return logBookId ? logManager.getLogBook(logBookId) : null;
-      };
+      const getExistingLogBook = resolveLogBook;
 
       const getRequiredLogBook = (): LogBookInstance => {
         const logBook = getExistingLogBook();
@@ -1033,6 +1064,63 @@ export class PluginContextFactory {
         };
       };
 
+      const awaitLogBookReady = async (options?: { timeoutMs?: number }): Promise<void> => {
+        const logBook = getRequiredLogBook();
+        const requestedTimeoutMs = options?.timeoutMs;
+        const timeoutMs = typeof requestedTimeoutMs === 'number'
+            && Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0
+          ? Math.trunc(requestedTimeoutMs)
+          : 30_000;
+        const assertReadable = (health: ReturnType<typeof logBook.provider.getHealth>) => {
+          if (health.readable) return;
+          if (health.state === 'loading') {
+            throw new LogbookOperationError('LOGBOOK_LOADING', 'The logbook is still loading');
+          }
+          throw new LogbookOperationError(
+            'LOGBOOK_UNAVAILABLE',
+            `Logbook for ${normalizedCallsign} is not readable (${health.state})`,
+          );
+        };
+        const initial = logBook.provider.getHealth();
+        if (initial.state !== 'loading') {
+          assertReadable(initial);
+          return;
+        }
+
+        await new Promise<void>((resolve, reject) => {
+          let settled = false;
+          let unsubscribe = () => {};
+          const finish = (error?: unknown) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeoutHandle);
+            unsubscribe();
+            if (error) reject(error);
+            else resolve();
+          };
+          const observe = (health: ReturnType<typeof logBook.provider.getHealth>) => {
+            if (health.state === 'loading') return;
+            try {
+              assertReadable(health);
+              finish();
+            } catch (error) {
+              finish(error);
+            }
+          };
+          const timeoutHandle = setTimeout(() => finish(new LogbookOperationError(
+            'LOGBOOK_LOADING',
+            `Logbook for ${normalizedCallsign} did not become ready within ${timeoutMs}ms`,
+          )), timeoutMs);
+          const registeredUnsubscribe = logBook.provider.onHealthChanged(observe);
+          unsubscribe = registeredUnsubscribe;
+          if (settled) {
+            registeredUnsubscribe();
+            return;
+          }
+          observe(logBook.provider.getHealth());
+        });
+      };
+
       return {
         get callsign() {
           return normalizedCallsign;
@@ -1040,6 +1128,7 @@ export class PluginContextFactory {
         async getLogBookId() {
           return getExistingLogBook()?.id ?? null;
         },
+        awaitReady: awaitLogBookReady,
         async queryQSOs(filter: QSOQueryFilter) {
           const logBook = getExistingLogBook();
           if (!logBook) return [];
@@ -1096,6 +1185,14 @@ export class PluginContextFactory {
           });
         },
       };
+    };
+
+    const createCallsignAccess = (callsign: string) => {
+      const normalizedCallsign = callsign.trim().toUpperCase();
+      return createResolvedAccess(normalizedCallsign, () => {
+        const logBookId = logManager.resolveLogBookId(normalizedCallsign);
+        return logBookId ? logManager.getLogBook(logBookId) : null;
+      });
     };
 
     const getBoundCallsign = () => {
@@ -1188,8 +1285,84 @@ export class PluginContextFactory {
       },
     };
 
+    const sessions = {
+      async open(descriptor: import('@tx5dr/plugin-api').PluginLogbookSessionDescriptor) {
+        if (instanceScope !== 'operator' || !operatorId) {
+          throw new LogbookOperationError(
+            'LOGBOOK_UNAVAILABLE',
+            'Plugin logbook sessions require an operator-scoped plugin instance',
+          );
+        }
+        const boundCallsign = getBoundCallsign();
+        const requestedCallsign = descriptor.stationCallsign.trim().toUpperCase();
+        if (!boundCallsign || normalizeCallsign(boundCallsign) !== normalizeCallsign(requestedCallsign)) {
+          throw new LogbookOperationError(
+            'LOGBOOK_UNAVAILABLE',
+            'Plugin logbook session callsign must match the current operator',
+          );
+        }
+        const logBook = await logManager.getOrCreatePluginSessionLogBook({
+          pluginName: plugin.definition.name,
+          stationCallsign: requestedCallsign,
+          sessionKey: descriptor.sessionKey,
+          title: descriptor.title,
+          retention: descriptor.retention,
+        });
+        const access = createResolvedAccess(requestedCallsign, () => (
+          logManager.getPluginSessionLogBook(
+            logBook.id,
+            plugin.definition.name,
+            requestedCallsign,
+          )
+        ));
+        return {
+          ...access,
+          async awaitReady(options?: { timeoutMs?: number }) {
+            await access.awaitReady(options);
+            const current = logManager.getPluginSessionLogBook(
+              logBook.id,
+              plugin.definition.name,
+              requestedCallsign,
+            );
+            const health = current?.provider.getHealth();
+            if (!health?.writable) {
+              throw new LogbookOperationError(
+                'LOGBOOK_UNAVAILABLE',
+                `Plugin logbook session is not writable (${health?.state ?? 'unavailable'})`,
+              );
+            }
+          },
+          id: logBook.id,
+          title: logBook.name,
+          async destroy() {
+            await logManager.destroyRuntimePluginSessionLogBook(
+              logBook.id,
+              plugin.definition.name,
+              requestedCallsign,
+            );
+          },
+        };
+      },
+      async destroy(sessionKey: string) {
+        if (instanceScope !== 'operator' || !operatorId) {
+          throw new LogbookOperationError(
+            'LOGBOOK_UNAVAILABLE',
+            'Plugin logbook sessions require an operator-scoped plugin instance',
+          );
+        }
+        const boundCallsign = getBoundCallsign();
+        if (!boundCallsign) throw new LogbookOperationError('LOGBOOK_UNAVAILABLE', 'Operator logbook is unavailable');
+        await logManager.destroyRuntimePluginSessionLogBookByKey(
+          plugin.definition.name,
+          boundCallsign,
+          sessionKey,
+        );
+      },
+    };
+
     return {
       full: fullAccess,
+      sessions,
       read: {
         hasWorked: fullAccess.hasWorked,
         hasWorkedDXCC: fullAccess.hasWorkedDXCC,
@@ -1202,6 +1375,7 @@ export class PluginContextFactory {
           return {
             callsign: access.callsign,
             getLogBookId: access.getLogBookId,
+            awaitReady: access.awaitReady,
             queryQSOs: access.queryQSOs,
             readQsoSnapshot: access.readQsoSnapshot,
             countQSOs: access.countQSOs,

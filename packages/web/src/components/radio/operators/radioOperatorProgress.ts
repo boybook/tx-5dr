@@ -1,5 +1,6 @@
 import type React from 'react';
 import type { OperatorStatus, SlotInfo } from '@tx5dr/contracts';
+import { resolveRadioOperatorCurrentTransmissions } from './radioOperatorPresentation';
 
 export function getRadioOperatorProgressAnimation(
   slotInfo: SlotInfo | null | undefined,
@@ -47,6 +48,15 @@ export function shouldRadioOperatorPropsBeEqual(prev: OperatorStatus, next: Oper
   }
 
   if (JSON.stringify(prev.runtime?.queue) !== JSON.stringify(next.runtime?.queue)) {
+    return false;
+  }
+
+  if (JSON.stringify(prev.runtime?.streams) !== JSON.stringify(next.runtime?.streams)) {
+    return false;
+  }
+
+  if (JSON.stringify(resolveRadioOperatorCurrentTransmissions(prev))
+      !== JSON.stringify(resolveRadioOperatorCurrentTransmissions(next))) {
     return false;
   }
 

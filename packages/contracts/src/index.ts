@@ -42,6 +42,7 @@ export type {
   WSOperatorStatusUpdateMessage,
   WSSetOperatorContextMessage,
   WSSetOperatorRuntimeStateMessage,
+  WSSetOperatorStreamStateMessage,
   WSSetOperatorRuntimeSlotContentMessage,
   WSSetOperatorTransmitCyclesMessage,
   // ... 其他websocket相关类型

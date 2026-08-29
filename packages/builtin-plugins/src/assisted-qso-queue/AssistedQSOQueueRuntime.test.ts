@@ -60,16 +60,24 @@ function createLogger(): PluginLogger {
 function createRuntime(options: {
   transmitting?: boolean;
   operator?: StandardQSOPluginOperator;
+  maxStreams?: number;
+  streamLimit?: number;
 } = {}) {
   let transmitting = options.transmitting ?? false;
+  let maxStreams = options.maxStreams ?? 1;
+  let streamLimit = options.streamLimit ?? 3;
   const runtimeOptions: AssistedQSOQueueRuntimeOptions = {
     operator: options.operator ?? createOperator(),
     isTransmitting: () => transmitting,
     logger: createLogger(),
+    getMaxStreams: () => maxStreams,
+    getStreamLimit: () => streamLimit,
   };
   return {
     runtime: new AssistedQSOQueueRuntime(runtimeOptions),
     setTransmitting(value: boolean) { transmitting = value; },
+    setMaxStreams(value: number) { maxStreams = value; },
+    setStreamLimit(value: number) { streamLimit = value; },
     logger: runtimeOptions.logger,
   };
 }
@@ -181,6 +189,127 @@ describe('AssistedQSOQueueRuntime queue capability', () => {
     expect(runtime.getQueueSnapshot().version).toBe(activeVersion);
   });
 
+  it('runs two or three stable protocol lanes when configured while defaulting to one', async () => {
+    const defaultRuntime = createRuntime({ transmitting: true }).runtime;
+    defaultRuntime.enqueueTarget({ callsign: 'JA1AAA' });
+    defaultRuntime.enqueueTarget({ callsign: 'JA2BBB' });
+    const defaultDecision = await defaultRuntime.decide([], decision());
+    expect(defaultDecision.transmissions).toHaveLength(1);
+    expect(defaultRuntime.getQueueSnapshot()).toMatchObject({
+      maxActiveStreams: 1,
+      activeEntryIds: [defaultRuntime.getQueueSnapshot().rows[0]?.entryId],
+    });
+
+    const parallel = createRuntime({ transmitting: true, maxStreams: 3 }).runtime;
+    parallel.enqueueTarget({ callsign: 'JA1AAA' });
+    parallel.enqueueTarget({ callsign: 'JA2BBB' });
+    parallel.enqueueTarget({ callsign: 'JA3CCC' });
+    const parallelDecision = await parallel.decide([], decision());
+
+    expect(parallelDecision.transmissions).toMatchObject([
+      { streamId: 'stream-1', text: expect.stringContaining('JA1AAA') },
+      { streamId: 'stream-2', text: expect.stringContaining('JA2BBB') },
+      { streamId: 'stream-3', text: expect.stringContaining('JA3CCC') },
+    ]);
+    expect(parallelDecision.transmissions!.map((item) => item.audioFrequencyHz)).toEqual([
+      1_500,
+      1_560,
+      1_620,
+    ]);
+    expect(parallelDecision.snapshot.streams).toHaveLength(3);
+    expect(parallel.getQueueSnapshot().activeEntryIds).toHaveLength(3);
+  });
+
+  it('preempts excess lanes on shrink and uses a newly raised limit on the next decision', async () => {
+    const { runtime, setMaxStreams } = createRuntime({ transmitting: true, maxStreams: 2 });
+    runtime.enqueueTarget({ callsign: 'JA1AAA' });
+    runtime.enqueueTarget({ callsign: 'JA2BBB' });
+    runtime.enqueueTarget({ callsign: 'JA3CCC' });
+    await runtime.decide([], decision());
+    expect(runtime.getQueueSnapshot().activeEntryIds).toHaveLength(2);
+
+    setMaxStreams(3);
+    await runtime.decide([], decision(2));
+    expect(runtime.getQueueSnapshot()).toMatchObject({ maxActiveStreams: 3 });
+    expect(runtime.getQueueSnapshot().activeEntryIds).toHaveLength(3);
+
+    setMaxStreams(1);
+    await runtime.decide([], decision(3));
+    expect(runtime.getQueueSnapshot()).toMatchObject({ maxActiveStreams: 1 });
+    expect(runtime.getQueueSnapshot().activeEntryIds).toHaveLength(1);
+    expect(runtime.getQueueSnapshot().rows.slice(1).map((row) => row.displayState)).toEqual(['TX1', 'TX1']);
+  });
+
+  it('reports the requested count while a Host safety limit forces one active stream', async () => {
+    const { runtime, setStreamLimit } = createRuntime({ transmitting: true, maxStreams: 3, streamLimit: 1 });
+    for (const callsign of ['JA1AAA', 'JA2BBB', 'JA3CCC']) runtime.enqueueTarget({ callsign });
+
+    expect((await runtime.decide([], decision())).transmissions).toHaveLength(1);
+    expect(runtime.getQueueSnapshot()).toMatchObject({
+      maxActiveStreams: 1,
+      requestedMaxActiveStreams: 3,
+    });
+
+    setStreamLimit(3);
+    expect((await runtime.decide([], decision(2))).transmissions).toHaveLength(3);
+  });
+
+  it('routes decoded replies to one standard protocol lane without advancing its peers', async () => {
+    const { runtime } = createRuntime({ transmitting: true, maxStreams: 3 });
+    runtime.enqueueTarget({ callsign: 'JA1AAA', lastMessage: selected('CQ JA1AAA PM95') });
+    runtime.enqueueTarget({ callsign: 'JA2BBB', lastMessage: selected('CQ JA2BBB PM95') });
+    runtime.enqueueTarget({ callsign: 'JA3CCC', lastMessage: selected('CQ JA3CCC PM95') });
+    const initial = await runtime.decide([], decision());
+    runtime.onTransmissionsCompleted(initial.transmissions!.map((transmission) => ({
+      ...transmission,
+      frameId: 'frame-1',
+      revision: 1,
+      physicalConfirmed: true as const,
+    })));
+
+    const replyAt = BASE_TIME + MODES.FT8.slotMs;
+    const reply = parsed('BG5DRB JA1AAA -05', replyAt, { snr: -7 });
+    runtime.observeDecodedMessages([reply], observation(replyAt));
+    const advanced = await runtime.decide([reply], decision(2));
+
+    expect(advanced.transmissions).toMatchObject([
+      { streamId: 'stream-1', text: expect.stringContaining('R-07') },
+      { streamId: 'stream-2', text: expect.stringContaining('JA2BBB') },
+      { streamId: 'stream-3', text: expect.stringContaining('JA3CCC') },
+    ]);
+    expect(advanced.snapshot.streams).toMatchObject([
+      { streamId: 'stream-1', currentState: 'TX3', targetCallsign: 'JA1AAA' },
+      { streamId: 'stream-2', currentState: 'TX1', targetCallsign: 'JA2BBB' },
+      { streamId: 'stream-3', currentState: 'TX1', targetCallsign: 'JA3CCC' },
+    ]);
+  });
+
+  it('hot-updates protocol and physical lane frequencies through one bounded resolver', async () => {
+    const source = createOperator();
+    const config = { ...source.config, frequency: 299 };
+    const operator: StandardQSOPluginOperator = {
+      get config() { return config; },
+      hasWorkedCallsign: (callsign, options) => source.hasWorkedCallsign(callsign, options),
+      isTargetBeingWorkedByOthers: (callsign) => source.isTargetBeingWorkedByOthers(callsign),
+    };
+    const { runtime } = createRuntime({ transmitting: true, maxStreams: 3, operator });
+    runtime.enqueueTarget({ callsign: 'JA1AAA' });
+    runtime.enqueueTarget({ callsign: 'JA2BBB' });
+    runtime.enqueueTarget({ callsign: 'JA3CCC' });
+    await runtime.decide([], decision());
+    expect(runtime.getTransmissions().map((item) => item.audioFrequencyHz)).toEqual([1_500, 1_560, 1_620]);
+
+    config.frequency = 4_700;
+    expect(runtime.getTransmissions().map((item) => item.audioFrequencyHz)).toEqual([4_700, 4_760, 4_820]);
+    expect(runtime.getSnapshot().context?.actualFrequency).toBeUndefined();
+
+    config.frequency = 4_701;
+    expect(runtime.getTransmissions().map((item) => item.audioFrequencyHz)).toEqual([1_500, 1_560, 1_620]);
+
+    config.mode = MODES.FT4;
+    expect(runtime.getTransmissions().map((item) => item.audioFrequencyHz)).toEqual([1_500, 1_600, 1_700]);
+  });
+
   it('uses standard TX6 CQ only when no queue target is executable', async () => {
     const { runtime, setTransmitting } = createRuntime();
     expect(runtime.getTransmitText()).toBeNull();
@@ -194,6 +323,25 @@ describe('AssistedQSOQueueRuntime queue capability', () => {
     expect((await runtime.decide([], decision(2))).transmission).toContain('JA1AAA');
   });
 
+  it('resets a single active QSO to TX6 through the stream state API', async () => {
+    const { runtime } = createRuntime({ transmitting: true });
+    runtime.enqueueTarget({ callsign: 'JA1AAA' });
+    const active = await runtime.decide([], decision());
+    const stream = active.snapshot.streams?.[0];
+    expect(stream?.stateOptions?.some((option) => option.id === 'TX6')).toBe(true);
+
+    runtime.setStreamState({
+      streamId: stream!.streamId,
+      stateId: 'TX6',
+      expectedLifecycleEpoch: stream!.qsoLifecycleEpoch,
+    });
+    const reset = await runtime.decide([], decision(2));
+
+    expect(reset.snapshot.streams).toEqual([]);
+    expect(runtime.getQueueSnapshot().rows).toEqual([]);
+    expect(reset.transmission).toBe('CQ BG5DRB OL32');
+  });
+
   it('falls back to CQ when every queued target is paused or inactive', async () => {
     const { runtime } = createRuntime({ transmitting: true });
     runtime.enqueueTarget({ callsign: 'JA1AAA', lastMessage: selected('CQ JA1AAA PM95') });
@@ -204,6 +352,7 @@ describe('AssistedQSOQueueRuntime queue capability', () => {
     expect(runtime.getQueueSnapshot().rows[0]).toMatchObject({
       displayState: 'paused',
       pauseReason: 'target-busy',
+      lastHeardCycle: slotInfo(BASE_TIME + MODES.FT8.slotMs).cycleNumber,
     });
     expect((await runtime.decide([], decision())).transmission).toBe('CQ BG5DRB OL32');
   });
@@ -212,9 +361,14 @@ describe('AssistedQSOQueueRuntime queue capability', () => {
     const { runtime, setTransmitting } = createRuntime();
     runtime.enqueueTarget({ callsign: 'JA1AAA', lastMessage: selected('CQ JA1AAA PM95') });
     const report = parsed('BG5DRB JA1AAA -08', BASE_TIME + MODES.FT8.slotMs);
+    const reportObservation = observation(report.timestamp);
+    reportObservation.slotInfo.cycleNumber = Math.floor(report.timestamp / MODES.FT8.slotMs);
 
-    expect(runtime.observeDecodedMessages([report], observation(report.timestamp))).toBe(true);
-    expect(runtime.getQueueSnapshot().rows[0]?.displayState).toBe('TX3');
+    expect(runtime.observeDecodedMessages([report], reportObservation)).toBe(true);
+    expect(runtime.getQueueSnapshot().rows[0]).toMatchObject({
+      displayState: 'TX3',
+      lastHeardCycle: reportObservation.slotInfo.cycleNumber % 2,
+    });
     expect((await runtime.decide([report], decision())).transmission).toBeNull();
 
     setTransmitting(true);
@@ -454,6 +608,35 @@ describe('AssistedQSOQueueRuntime queue capability', () => {
       .toEqual(['JA1AAA', 'JA2BBB', 'JA3CCC']);
   });
 
+  it('gives a preempted lane to the direct opportunity that triggered preemption', async () => {
+    const { runtime } = createRuntime({ transmitting: true, maxStreams: 3 });
+    runtime.enqueueTarget({ callsign: 'JA1AAA' });
+    runtime.enqueueTarget({ callsign: 'JA2BBB' });
+    runtime.enqueueTarget({ callsign: 'JA3CCC' });
+    await runtime.decide([], decision());
+    runtime.enqueueTarget({ callsign: 'JA4DDD' });
+    const directAt = BASE_TIME;
+    runtime.observeDecodedMessages([
+      parsed('BG5DRB JA5EEE PM95', directAt),
+    ], observation(directAt));
+    const promoted = runtime.getQueueSnapshot();
+    const direct = promoted.rows.find((row) => row.callsign === 'JA5EEE')!;
+    expect(runtime.reorderTarget(direct.entryId, null, promoted.version).snapshot.rows.map((row) => row.callsign))
+      .toEqual(['JA1AAA', 'JA2BBB', 'JA3CCC', 'JA4DDD', 'JA5EEE']);
+
+    const preempted = await runtime.decide([], decision(2));
+
+    expect(preempted.transmissions).toMatchObject([
+      { streamId: 'stream-1', text: expect.stringContaining('JA5EEE') },
+      { streamId: 'stream-2', text: expect.stringContaining('JA2BBB') },
+      { streamId: 'stream-3', text: expect.stringContaining('JA3CCC') },
+    ]);
+    expect(runtime.getQueueSnapshot().rows.slice(0, 3).map((row) => row.callsign))
+      .toEqual(['JA5EEE', 'JA2BBB', 'JA3CCC']);
+    expect(runtime.getQueueSnapshot().rows.slice(3).map((row) => row.callsign))
+      .toEqual(['JA4DDD', 'JA1AAA']);
+  });
+
   it('releases an unengaged active target when it starts working another station', async () => {
     const { runtime } = createRuntime({ transmitting: true });
     runtime.enqueueTarget({ callsign: 'JA1AAA', lastMessage: selected('CQ JA1AAA PM95') });
@@ -687,6 +870,11 @@ describe('AssistedQSOQueueRuntime queue capability', () => {
       currentState: 'TX5',
       context: { targetCallsign: 'JA1AAA' },
     });
+    expect(retry.snapshot.streams).toMatchObject([{
+      streamId: 'stream-1',
+      currentState: 'TX1',
+      targetCallsign: 'JA2BBB',
+    }]);
     expect(retry.qsoCompletion).toBeUndefined();
     expect(runtime.getQueueSnapshot()).toMatchObject({
       activeEntryId: nextEntryId,
@@ -699,6 +887,38 @@ describe('AssistedQSOQueueRuntime queue capability', () => {
     const resumed = await runtime.decide([], decision(5));
     expect(resumed.transmission).toContain('JA2BBB');
     expect(runtime.getQueueSnapshot().activeEntryId).toBe(nextEntryId);
+  });
+
+  it('clears an unscheduled final-73 lease after the completed row is gone', async () => {
+    const { runtime } = createRuntime({ transmitting: true });
+    runtime.enqueueTarget({
+      callsign: 'JA1AAA',
+      lastMessage: selected('BG5DRB JA1AAA -08'),
+    });
+    const first = await runtime.decide([], decision());
+    runtime.onTransmissionQueued(first.transmission!);
+    const rrr = parsed('BG5DRB JA1AAA RR73', BASE_TIME + MODES.FT8.slotMs);
+    runtime.observeDecodedMessages([rrr], observation(rrr.timestamp));
+    const completion = await runtime.decide([rrr], decision(2));
+    runtime.settleQSOCompletion({
+      lifecycleEpoch: completion.qsoCompletion!.lifecycleEpoch,
+      recordId: completion.qsoCompletion!.record.id,
+      status: 'committed',
+    });
+    runtime.onTransmissionQueued(completion.transmission!);
+    const releaseAt = BASE_TIME + MODES.FT8.slotMs * 2;
+    runtime.observeDecodedMessages([], observation(releaseAt));
+    await runtime.decide([], decision(3));
+    expect(runtime.getQueueSnapshot().rows).toHaveLength(0);
+
+    const beforeClear = runtime.getQueueSnapshot();
+    const cleared = runtime.clearTargets(beforeClear.version);
+    expect(cleared.snapshot.version).toBe(beforeClear.version + 1);
+    const repeated = parsed('BG5DRB JA1AAA RR73', releaseAt);
+    runtime.observeDecodedMessages([repeated], observation(releaseAt));
+    const afterClear = await runtime.decide([repeated], decision(4));
+    expect(afterClear.transmission).toBe('CQ BG5DRB OL32');
+    expect(afterClear.transmission).not.toBe('JA1AAA BG5DRB 73');
   });
 
   it('does not let a completed target retry preempt an engaged next QSO', async () => {
@@ -720,7 +940,7 @@ describe('AssistedQSOQueueRuntime queue capability', () => {
     });
   });
 
-  it('holds a delegate-released completion until asynchronous log settlement arrives', async () => {
+  it('releases a delegate completion when durable persistence merged to a different record id', async () => {
     const { runtime } = createRuntime({ transmitting: true });
     runtime.enqueueTarget({
       callsign: 'JA1AAA',
@@ -742,6 +962,7 @@ describe('AssistedQSOQueueRuntime queue capability', () => {
     runtime.settleQSOCompletion({
       lifecycleEpoch: completion.qsoCompletion!.lifecycleEpoch,
       recordId: completion.qsoCompletion!.record.id,
+      persistedRecordId: 'existing-merged-qso',
       status: 'committed',
     });
     expect(runtime.getQueueSnapshot()).toMatchObject({

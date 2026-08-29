@@ -8,8 +8,10 @@ import { useSplitLayoutActions } from '../../common/SplitLayout';
 import { useTranslation } from 'react-i18next';
 import { useCallsignFilterRules } from '../../../hooks/useCallsignFilterRules';
 import { usePluginSnapshot } from '../../../hooks/usePluginSnapshot';
+import { resolveOperatorTargetCallsigns } from '../../../utils/operatorTargets';
 import {
   buildQueueCallsignOrder,
+  isQueueTargetAction,
   resolveOperatorTargetAction,
   submitOperatorTarget,
 } from '../operators/operatorQueuePresentation';
@@ -40,7 +42,7 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
     [pluginSnapshot.plugins, selectedOperator],
   );
   const queueCallsignOrder = useMemo(
-    () => targetAction === 'enqueue'
+    () => isQueueTargetAction(targetAction)
       ? buildQueueCallsignOrder(selectedOperator?.runtime?.queue)
       : {},
     [selectedOperator?.runtime?.queue, targetAction],
@@ -76,16 +78,20 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
       .filter(call => call.trim() !== ''); // 过滤掉空呼号
   };
 
-  // 获取当前操作员的目标呼号
-  const getTargetCallsign = (): string => {
-    if (!currentOperatorId) return '';
-    const currentOperator = radio.state.operators.find(op => op.id === currentOperatorId);
-    return currentOperator?.context?.targetCall || '';
-  };
+  const targetCallsigns = useMemo(
+    () => resolveOperatorTargetCallsigns(selectedOperator),
+    [selectedOperator],
+  );
 
   // 处理SlotPack数据转换为FT8Group格式
   useEffect(() => {
-    const groupsMap = new Map<string, { messages: FrameDisplayMessage[], cycle: 'even' | 'odd', hasTransmission: boolean, alignedMs: number }>();
+    const groupsMap = new Map<string, {
+      messages: FrameDisplayMessage[];
+      cycle: 'even' | 'odd';
+      hasTransmission: boolean;
+      alignedMs: number;
+      frequencyContext?: FrameGroup['frequencyContext'];
+    }>();
     const currentMode = radio.state.currentMode;
     
     if (!currentMode) {
@@ -137,7 +143,8 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
             messages: [],
             cycle: isEvenCycle ? 'even' : 'odd',
             hasTransmission: false,
-            alignedMs
+            alignedMs,
+            frequencyContext: slotPack.frequencyContext,
           });
         }
         
@@ -177,12 +184,13 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
 
     // 转换为FT8Group数组并按时间排序
     const groups: FrameGroup[] = Array.from(groupsMap.entries())
-      .map(([time, { messages, cycle, hasTransmission: _hasTransmission, alignedMs }]) => ({
+      .map(([time, { messages, cycle, hasTransmission: _hasTransmission, alignedMs, frequencyContext }]) => ({
         time,
         startMs: alignedMs,
         messages: messages.sort((a, b) => a.utc.localeCompare(b.utc)),
         type: 'receive' as const,
-        cycle
+        cycle,
+        frequencyContext,
       }))
       .sort((a, b) => a.startMs - b.startMs);
 
@@ -251,8 +259,10 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
       groups={frameGroups}
       className={className}
       myCallsigns={getMyCallsigns()}
-      targetCallsign={getTargetCallsign()}
+      targetCallsigns={targetCallsigns}
       queueCallsignOrder={queueCallsignOrder}
+      strategyName={selectedOperator?.strategy.name}
+      strategyMessagePresentation={selectedOperator?.runtime?.messagePresentation}
       onRowDoubleClick={handleRowDoubleClick}
       onMessageHover={onMessageHover}
       enableCallsignPopover
