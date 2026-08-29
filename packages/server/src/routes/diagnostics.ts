@@ -47,6 +47,25 @@ function serializeError(error: unknown, depth = 0): unknown {
   });
 }
 
+function safeFileSystemContext(error: unknown) {
+  if (!(error instanceof Error)) return {};
+  const candidate = error as Error & { code?: unknown; errno?: unknown; syscall?: unknown };
+  const code = typeof candidate.code === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(candidate.code)
+    ? candidate.code
+    : undefined;
+  const syscall = typeof candidate.syscall === 'string' && /^[a-z][a-z0-9_]{0,31}$/i.test(candidate.syscall)
+    ? candidate.syscall
+    : undefined;
+  const errno = typeof candidate.errno === 'number' && Number.isSafeInteger(candidate.errno)
+    ? candidate.errno
+    : undefined;
+  return {
+    ...(code ? { localErrorCode: code } : {}),
+    ...(errno !== undefined ? { localErrno: errno } : {}),
+    ...(syscall ? { localErrorOperation: syscall } : {}),
+  };
+}
+
 function sendDiagnosticError(
   request: { id: string; method: string; url: string },
   reply: FastifyReply,
@@ -55,10 +74,14 @@ function sendDiagnosticError(
   const copy = ERROR_COPY[error.code];
   const errorId = randomUUID();
   const localRequestUrl = sanitizeDiagnosticRequestUrl(request.url);
+  const userMessageKey = error.stage === 'temporary_file'
+    ? 'settings:helpImprove.status.localFileFailed'
+    : copy.userMessageKey;
   const context = {
     errorId,
     stage: error.stage ?? 'unknown',
     localRequestUrl,
+    ...safeFileSystemContext(error.cause),
     ...(error.requestUrl ? { downstreamRequestUrl: error.requestUrl } : {}),
     ...(error.upstreamStatus !== undefined ? { upstreamStatus: error.upstreamStatus } : {}),
     technicalMessage: redactSensitiveText(error.message),
@@ -80,7 +103,7 @@ function sendDiagnosticError(
       code: error.code,
       message: error.message,
       userMessage: copy.message,
-      userMessageKey: copy.userMessageKey,
+      userMessageKey,
       severity: error.code === 'DIAGNOSTIC_NO_LOGS' ? 'warning' : 'error',
       suggestions: [],
       context,

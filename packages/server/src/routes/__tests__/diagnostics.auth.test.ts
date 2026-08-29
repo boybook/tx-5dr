@@ -115,4 +115,44 @@ describe('diagnostic routes authorization', () => {
       }),
     );
   });
+
+  it('returns safe local file details without exposing the affected path', async () => {
+    const { DiagnosticUploadError } = await import('../../diagnostics/DiagnosticLogUploadService.js');
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    mocks.upload.mockRejectedValueOnce(new DiagnosticUploadError(
+      'DIAGNOSTIC_UPLOAD_FAILED',
+      'Diagnostic upload failed during temporary_file',
+      500,
+      {
+        stage: 'temporary_file',
+        cause: Object.assign(new Error("EROFS: read-only file system, mkdtemp '/private/user/path'"), {
+          code: 'EROFS',
+          errno: -30,
+          syscall: 'mkdtemp',
+        }),
+      },
+    ));
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/diagnostics/uploads',
+      payload: {
+        sourceId: 'server',
+        fromMs: Date.parse('2026-08-21T00:00:00.000Z'),
+        toMs: Date.parse('2026-08-21T01:00:00.000Z'),
+      },
+    });
+
+    expect(response.statusCode).toBe(500);
+    const body = response.json();
+    expect(body.error.userMessageKey).toBe('settings:helpImprove.status.localFileFailed');
+    expect(body.error.context).toMatchObject({
+      stage: 'temporary_file',
+      localErrorCode: 'EROFS',
+      localErrno: -30,
+      localErrorOperation: 'mkdtemp',
+    });
+    expect(JSON.stringify(body)).not.toContain('/private/user/path');
+    expect(consoleError).toHaveBeenCalled();
+  });
 });

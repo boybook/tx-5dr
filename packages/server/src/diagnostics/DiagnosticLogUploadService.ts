@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { open, readFile, readdir, rm, stat, writeFile, mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, mkdtemp, open, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { gzip as gzipCallback } from 'node:zlib';
@@ -74,9 +73,9 @@ interface SelectedLog {
 
 interface DiagnosticServiceOptions {
   getLogsDir: () => Promise<string>;
+  getTemporaryRoot: () => Promise<string>;
   getGatewayContext: () => Promise<DiagnosticGatewayContext>;
   fetch: typeof fetch;
-  temporaryRoot: string;
   maxUncompressedBytes: number;
   maxCompressedBytes: number;
 }
@@ -263,10 +262,11 @@ export class DiagnosticLogUploadService {
   constructor(options: Partial<DiagnosticServiceOptions> = {}) {
     this.options = {
       getLogsDir: options.getLogsDir ?? (() => tx5drPaths.getLogsDir()),
+      getTemporaryRoot: options.getTemporaryRoot
+        ?? (async () => join(await tx5drPaths.getCacheDir(), 'diagnostic-uploads')),
       getGatewayContext: options.getGatewayContext
         ?? (() => TelemetryService.getInstance().getDiagnosticGatewayContext()),
       fetch: options.fetch ?? fetch,
-      temporaryRoot: options.temporaryRoot ?? tmpdir(),
       maxUncompressedBytes: options.maxUncompressedBytes ?? DIAGNOSTIC_MAX_UNCOMPRESSED_BYTES,
       maxCompressedBytes: options.maxCompressedBytes ?? DIAGNOSTIC_MAX_COMPRESSED_BYTES,
     };
@@ -348,7 +348,9 @@ export class DiagnosticLogUploadService {
       }
 
       stage = 'temporary_file';
-      const temporaryDir = await mkdtemp(join(this.options.temporaryRoot, 'tx5dr-diagnostic-'));
+      const temporaryRoot = await this.options.getTemporaryRoot();
+      await mkdir(temporaryRoot, { recursive: true, mode: 0o700 });
+      const temporaryDir = await mkdtemp(join(temporaryRoot, 'tx5dr-diagnostic-'));
       const temporaryFile = join(temporaryDir, `${randomUUID()}.log.gz`);
       try {
         await writeFile(temporaryFile, compressed, { mode: 0o600 });
