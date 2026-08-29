@@ -47,13 +47,14 @@ export interface MyRelatedTimelineState {
   liveRxEntries: Map<string, MyRelatedTimelineLiveRxEntry>;
   liveTxLogs: Map<string, MyRelatedTransmissionLog>;
   liveVisibleOperatorCallsigns: string[];
-  liveTargetCallsign: string;
+  liveTargetCallsigns: string[];
   pendingRestore: boolean;
   lastProcessedSlotPackSeq: Map<string, number>;
 }
 
 export interface MyRelatedTransmissionLog {
   operatorId: string;
+  streamId?: string;
   frameId?: string;
   revision?: number;
   playbackGeneration?: number;
@@ -76,7 +77,9 @@ export type MyRelatedTimelineAction =
         currentMode: ModeDescriptor;
         liveSlotStartMs: number | null;
         visibleOperatorCallsigns: string[];
-        targetCallsign: string;
+        targetCallsigns?: string[];
+        /** Compatibility input for older callers. */
+        targetCallsign?: string;
       };
     }
   | {
@@ -96,7 +99,9 @@ export type MyRelatedTimelineAction =
         currentMode: ModeDescriptor;
         liveSlotStartMs: number | null;
         visibleOperatorCallsigns: string[];
-        targetCallsign: string;
+        targetCallsigns?: string[];
+        /** Compatibility input for older callers. */
+        targetCallsign?: string;
       };
     }
   | {
@@ -115,7 +120,9 @@ export type MyRelatedTimelineAction =
         currentMode: ModeDescriptor;
         liveSlotStartMs: number | null;
         visibleOperatorCallsigns: string[];
-        targetCallsign: string;
+        targetCallsigns?: string[];
+        /** Compatibility input for older callers. */
+        targetCallsign?: string;
         operatorCallsignsById: Record<string, string>;
       };
     }
@@ -129,7 +136,7 @@ export const initialMyRelatedTimelineState: MyRelatedTimelineState = {
   liveRxEntries: new Map<string, MyRelatedTimelineLiveRxEntry>(),
   liveTxLogs: new Map<string, MyRelatedTransmissionLog>(),
   liveVisibleOperatorCallsigns: [],
-  liveTargetCallsign: '',
+  liveTargetCallsigns: [],
   pendingRestore: false,
   lastProcessedSlotPackSeq: new Map<string, number>(),
 };
@@ -140,12 +147,13 @@ export function myRelatedTimelineReducer(
 ): MyRelatedTimelineState {
   switch (action.type) {
     case 'syncLiveContext': {
-      const { currentMode, liveSlotStartMs, visibleOperatorCallsigns, targetCallsign } = action.payload;
+      const { currentMode, liveSlotStartMs, visibleOperatorCallsigns } = action.payload;
+      const targetCallsigns = normalizeTargetCallsigns(action.payload);
       if (!isValidMode(currentMode)) {
         return state;
       }
       const nextState = rolloverLiveCycle(state, currentMode, sanitizeLiveSlotStartMs(liveSlotStartMs));
-      return reprojectLiveGroups(nextState, currentMode, visibleOperatorCallsigns, targetCallsign);
+      return reprojectLiveGroups(nextState, currentMode, visibleOperatorCallsigns, targetCallsigns);
     }
 
     case 'seedSelectedRx': {
@@ -173,12 +181,13 @@ export function myRelatedTimelineReducer(
         },
         currentMode,
         nextState.liveVisibleOperatorCallsigns,
-        nextState.liveTargetCallsign,
+        nextState.liveTargetCallsigns,
       );
     }
 
     case 'ingestSlotPack': {
-      const { slotPack, currentMode, liveSlotStartMs, visibleOperatorCallsigns, targetCallsign } = action.payload;
+      const { slotPack, currentMode, liveSlotStartMs, visibleOperatorCallsigns } = action.payload;
+      const targetCallsigns = normalizeTargetCallsigns(action.payload);
       if (!isValidMode(currentMode) || !isValidSlotPack(slotPack)) {
         return state;
       }
@@ -212,7 +221,7 @@ export function myRelatedTimelineReducer(
         const message = frameToDisplayMessage(frame, slotPack.startMs);
 
         if (nextState.currentLiveSlotStartMs !== null && slotPack.startMs < nextState.currentLiveSlotStartMs) {
-          if (!matchesVisibleOperators(frame.message, visibleOperatorCallsigns) && !containsCallsign(frame.message, targetCallsign)) {
+          if (!matchesVisibleOperators(frame.message, visibleOperatorCallsigns) && !containsAnyCallsign(frame.message, targetCallsigns)) {
             continue;
           }
 
@@ -244,7 +253,7 @@ export function myRelatedTimelineReducer(
         liveRxEntries,
       };
 
-      return reprojectLiveGroups(nextState, currentMode, visibleOperatorCallsigns, targetCallsign);
+      return reprojectLiveGroups(nextState, currentMode, visibleOperatorCallsigns, targetCallsigns);
     }
 
     case 'ingestTransmissionLog': {
@@ -267,7 +276,7 @@ export function myRelatedTimelineReducer(
       }
 
       const liveTxLogs = new Map(nextState.liveTxLogs);
-      liveTxLogs.set(buildLiveTxKey(log.operatorId, log.slotStartMs), log);
+      liveTxLogs.set(buildLiveTxKey(log.operatorId, log.slotStartMs, log.streamId), log);
       return reprojectLiveGroups(
         {
           ...nextState,
@@ -275,7 +284,7 @@ export function myRelatedTimelineReducer(
         },
         currentMode,
         nextState.liveVisibleOperatorCallsigns,
-        nextState.liveTargetCallsign,
+        nextState.liveTargetCallsigns,
       );
     }
 
@@ -291,9 +300,9 @@ export function myRelatedTimelineReducer(
         currentMode,
         liveSlotStartMs,
         visibleOperatorCallsigns,
-        targetCallsign,
         operatorCallsignsById,
       } = action.payload;
+      const targetCallsigns = normalizeTargetCallsigns(action.payload);
       if (!state.pendingRestore) {
         return state;
       }
@@ -315,7 +324,7 @@ export function myRelatedTimelineReducer(
         liveRxEntries: new Map<string, MyRelatedTimelineLiveRxEntry>(),
         liveTxLogs: new Map<string, MyRelatedTransmissionLog>(),
         liveVisibleOperatorCallsigns: visibleOperatorCallsigns,
-        liveTargetCallsign: targetCallsign,
+        liveTargetCallsigns: targetCallsigns,
         pendingRestore: false,
         lastProcessedSlotPackSeq: createProcessedSeqMap(state.lastProcessedSlotPackSeq, validSlotPacks),
       };
@@ -328,6 +337,7 @@ export function myRelatedTimelineReducer(
           if (frame.snr === -999 && frame.operatorId) {
             const log: MyRelatedTransmissionLog = {
               operatorId: frame.operatorId,
+              streamId: frame.streamId,
               myCallsign: operatorCallsignsById[frame.operatorId] || undefined,
               headerContextKey: buildHeaderContextKey(slotPack.frequencyContext),
               time: new Date(slotPack.startMs).toISOString().slice(11, 19).replace(/:/g, ''),
@@ -339,7 +349,7 @@ export function myRelatedTimelineReducer(
             };
 
             if (isLiveSlot) {
-              nextState.liveTxLogs.set(buildLiveTxKey(log.operatorId, log.slotStartMs), log);
+              nextState.liveTxLogs.set(buildLiveTxKey(log.operatorId, log.slotStartMs, log.streamId), log);
             } else {
               nextState = appendFrozenTransmission(nextState, log, currentMode);
             }
@@ -364,7 +374,7 @@ export function myRelatedTimelineReducer(
             continue;
           }
 
-          if (!matchesVisibleOperators(frame.message, visibleOperatorCallsigns) && !containsCallsign(frame.message, targetCallsign)) {
+          if (!matchesVisibleOperators(frame.message, visibleOperatorCallsigns) && !containsAnyCallsign(frame.message, targetCallsigns)) {
             continue;
           }
 
@@ -380,7 +390,7 @@ export function myRelatedTimelineReducer(
         }
       }
 
-      return reprojectLiveGroups(nextState, currentMode, visibleOperatorCallsigns, targetCallsign);
+      return reprojectLiveGroups(nextState, currentMode, visibleOperatorCallsigns, targetCallsigns);
     }
 
     case 'clearTimeline':
@@ -444,7 +454,7 @@ function reprojectLiveGroups(
   state: MyRelatedTimelineState,
   currentMode: ModeDescriptor,
   visibleOperatorCallsigns: string[],
-  targetCallsign: string,
+  targetCallsigns: string[],
 ): MyRelatedTimelineState {
   let liveGroups: FrameGroup[] = [];
 
@@ -453,7 +463,7 @@ function reprojectLiveGroups(
   }
 
   for (const entry of state.liveRxEntries.values()) {
-    if (!entry.manualSeed && !matchesVisibleOperators(entry.message.message, visibleOperatorCallsigns) && !containsCallsign(entry.message.message, targetCallsign)) {
+    if (!entry.manualSeed && !matchesVisibleOperators(entry.message.message, visibleOperatorCallsigns) && !containsAnyCallsign(entry.message.message, targetCallsigns)) {
       continue;
     }
 
@@ -471,7 +481,7 @@ function reprojectLiveGroups(
     ...state,
     liveGroups: trimGroups(liveGroups),
     liveVisibleOperatorCallsigns: [...visibleOperatorCallsigns],
-    liveTargetCallsign: targetCallsign,
+    liveTargetCallsigns: [...targetCallsigns],
   };
 }
 
@@ -488,7 +498,11 @@ function freezeLiveGroups(
       }
 
       if (message.db === 'TX') {
-        const log = state.liveTxLogs.get(buildLiveTxKey(message.operatorId ?? '', group.startMs));
+        const log = state.liveTxLogs.get(buildLiveTxKey(
+          message.operatorId ?? '',
+          group.startMs,
+          message.streamId,
+        ));
         if (log) {
           nextState = appendFrozenTransmission(nextState, log, currentMode);
         }
@@ -717,7 +731,7 @@ function mergeMessages(existing: FrameDisplayMessage[], incoming: FrameDisplayMe
 
 function buildInlineMessageKey(message: FrameDisplayMessage): string {
   if (message.db === 'TX') {
-    return `TX:${message.operatorId ?? message.message}`;
+    return `TX:${message.operatorId ?? ''}:${message.streamId ?? message.message}`;
   }
 
   return [
@@ -728,6 +742,17 @@ function buildInlineMessageKey(message: FrameDisplayMessage): string {
 
 function matchesVisibleOperators(message: string, visibleOperatorCallsigns: string[]): boolean {
   return visibleOperatorCallsigns.some(callsign => containsCallsign(message, callsign));
+}
+
+function normalizeTargetCallsigns(input: { targetCallsigns?: string[]; targetCallsign?: string }): string[] {
+  return Array.from(new Set([
+    ...(input.targetCallsigns ?? []),
+    input.targetCallsign ?? '',
+  ].map((callsign) => callsign.trim().toUpperCase()).filter(Boolean)));
+}
+
+function containsAnyCallsign(message: string, callsigns: string[]): boolean {
+  return callsigns.some((callsign) => containsCallsign(message, callsign));
 }
 
 function containsCallsign(message: string, callsign: string): boolean {
@@ -761,14 +786,14 @@ function buildRxDisplayMessageKey(slotStartMs: number, message: FrameDisplayMess
 
 function buildFrozenMessageKey(slotStartMs: number, message: FrameDisplayMessage): string {
   if (message.db === 'TX') {
-    return `TX:${slotStartMs}:${message.operatorId ?? message.message}`;
+    return `TX:${slotStartMs}:${message.operatorId ?? ''}:${message.streamId ?? message.message}`;
   }
 
   return buildRxDisplayMessageKey(slotStartMs, message);
 }
 
-function buildLiveTxKey(operatorId: string, slotStartMs: number): string {
-  return `${operatorId}:${slotStartMs}`;
+function buildLiveTxKey(operatorId: string, slotStartMs: number, streamId?: string): string {
+  return `${operatorId}:${slotStartMs}:${streamId ?? 'default'}`;
 }
 
 function getGroupIdentityKey(startMs: number, frequencyContext?: SlotPackFrequencyContext): string {
@@ -871,6 +896,7 @@ function transmissionLogToDisplayMessage(log: MyRelatedTransmissionLog): FrameDi
     freq: log.frequency,
     message: log.message,
     operatorId: log.operatorId,
+    streamId: log.streamId,
     ...(log.myCallsign ? { emphasisCallsigns: [log.myCallsign] } : {}),
   };
 }

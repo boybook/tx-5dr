@@ -5,12 +5,34 @@ describe('PluginPanelSlotSchema', () => {
   it('accepts every supported plugin panel slot', () => {
     expect(PluginPanelSlotSchema.parse('operator')).toBe('operator');
     expect(PluginPanelSlotSchema.parse('automation')).toBe('automation');
+    expect(PluginPanelSlotSchema.parse('operator-action')).toBe('operator-action');
     expect(PluginPanelSlotSchema.parse('main-right')).toBe('main-right');
     expect(PluginPanelSlotSchema.parse('voice-left-top')).toBe('voice-left-top');
     expect(PluginPanelSlotSchema.parse('voice-right-top')).toBe('voice-right-top');
     expect(PluginPanelSlotSchema.parse('cw-left-top')).toBe('cw-left-top');
     expect(PluginPanelSlotSchema.parse('cw-right-top')).toBe('cw-right-top');
     expect(PluginPanelSlotSchema.parse('radio-control-toolbar')).toBe('radio-control-toolbar');
+  });
+
+  it('requires operator action entries to open an iframe page', () => {
+    expect(PluginPanelDescriptorSchema.parse({
+      id: 'contest-log',
+      title: 'Contest log',
+      component: 'iframe',
+      pageId: 'contest-log',
+      slot: 'operator-action',
+      openMode: 'page',
+      icon: 'file-lines',
+    })).toMatchObject({ slot: 'operator-action', openMode: 'page' });
+
+    expect(() => PluginPanelDescriptorSchema.parse({
+      id: 'embedded-action',
+      title: 'Embedded',
+      component: 'iframe',
+      pageId: 'embedded',
+      slot: 'operator-action',
+      openMode: 'modal',
+    })).toThrow('operator-action panels must use page openMode');
   });
 
   it('validates iframe panels declared in the new host slots', () => {
@@ -55,6 +77,15 @@ describe('PluginPanelSlotSchema', () => {
       openMode: 'modal',
       uiSize: 'lg',
     });
+
+    expect(PluginPanelDescriptorSchema.parse({
+      id: 'standalone-log',
+      title: 'Log',
+      component: 'iframe',
+      pageId: 'log',
+      slot: 'radio-control-toolbar',
+      openMode: 'page',
+    })).toMatchObject({ openMode: 'page' });
 
     expect(() => PluginPanelDescriptorSchema.parse({
       id: 'bad-toolbar',

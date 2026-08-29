@@ -16,6 +16,7 @@ import type {
 } from './context.js';
 import type { PluginHooks } from './hooks.js';
 import type { StrategyRuntime } from './runtime.js';
+import type { SimulationScenarioDescriptor } from './simulation.js';
 
 /**
  * Describes a TX-5DR plugin module.
@@ -133,7 +134,18 @@ export interface PluginDefinition<
   strategyFeatures?: {
     /** Declares the `QueuedStrategyRuntime` assisted-target queue contract. */
     targetQueue?: 1;
+    /** Declares support for more than one active target lane. */
+    parallelTargetQueue?: 1;
+    /** Controls whether enqueueing may start a stopped operator. */
+    queueActivation?: 'immediate' | 'operator-toggle';
+    /** Blocks unscoped plugin commands; the strategy may consume its own audited operator authorization. */
+    manualInitiation?: 1;
+    /** Strategy-specific cap applied in addition to the operator cap. */
+    maxConcurrentStreams?: number;
   };
+
+  /** Development-only virtual-radio peer scenarios. The Host owns execution and RF safety. */
+  simulationScenarios?: SimulationScenarioDescriptor[];
 
   /**
    * Controls whether the host creates one instance per operator or a single
@@ -202,12 +214,16 @@ export interface PluginDefinition<
    *
    * Each panel has a `slot` that controls where it renders: `'operator'` (the
    * default, shown in the operator card), `'automation'` (shown in the
-   * top-right automation popover), `'main-right'` (the optional far-right main
+   * top-right automation popover), `'operator-action'` (an icon-and-text page
+   * action beside the operator logbook button), `'main-right'` (the optional far-right main
    * pane), `'voice-left-top'` (above the voice frequency card),
    * `'voice-right-top'` (the tabbed top area of the voice right panel),
    * `'cw-left-top'` (above the CW frequency card),
    * `'cw-right-top'` (the tabbed top area of the CW right panel), or
    * `'radio-control-toolbar'` (a global utility iframe button in RadioControl).
+   * An `operator-action` panel must use `component: 'iframe'` and
+   * `openMode: 'page'`; the Host binds it to that operator and opens the
+   * referenced custom UI as a standalone page.
    * Panels may also declare a preferred `width`, such as `'full'`, so hosts can
    * promote more important live panels.
    */

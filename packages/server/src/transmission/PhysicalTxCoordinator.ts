@@ -90,6 +90,7 @@ export interface PhysicalAudioReplacementRequest {
   expectedLeaseEpoch: number;
   expectedPlaybackGeneration: number;
   expectedFrameId?: string;
+  validateStart?: () => void | Promise<void>;
   onHandoverCommitted?: () => PhysicalAudioHandoverCommitResult;
   onPlaybackStarted?: () => void;
 }
@@ -553,6 +554,9 @@ export class PhysicalTxCoordinator extends EventEmitter<PhysicalTxCoordinatorEve
             'complete replacement no longer fits after audio output drain',
           );
         }
+
+        await request.validateStart?.();
+        this.assertLeaseCanContinue(lease, 'interrupted after replacement start validation');
 
         const started = await this.startPlaybackGenerationLocked(lease, {
           audioData: resynchronizedAudio,

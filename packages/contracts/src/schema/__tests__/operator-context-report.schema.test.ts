@@ -36,4 +36,42 @@ describe('operator context report contracts', () => {
       },
     }).success).toBe(true);
   });
+
+  it('accepts protocol-neutral history presentation, navigation and transmit gates', () => {
+    expect(StrategyRuntimeSnapshotSchema.safeParse({
+      currentState: 'idle',
+      actions: [{
+        id: 'open-settings',
+        label: 'openSettings',
+        navigation: { kind: 'plugin-page', pageId: 'settings' },
+      }],
+      messagePresentation: {
+        revision: 2,
+        mode: 'replace-logbook',
+        subject: 'sender-callsign',
+        partitionBy: 'band',
+        eligiblePartitions: ['20M'],
+        defaultClass: 'new',
+        classes: {
+          new: {
+            badges: [{ label: 'newCall', tone: 'secondary' }],
+            row: { tone: 'secondary', background: 'soft', accent: true },
+            emphasisWhen: [
+              { firstTokenIn: ['CQ'] },
+              { anyTokenIn: ['RR73', 'RRR', '73'] },
+            ],
+          },
+          worked: { textDecoration: 'line-through', opacity: 'muted' },
+        },
+        assignments: [{ subject: 'JA1AAA', partition: '20M', classId: 'worked' }],
+        noveltyRules: [{
+          fact: 'grid-field-2', knownValuesByPartition: { '20M': ['PM'] }, classId: 'new',
+        }],
+        tagRules: [{
+          id: 'cq', match: { firstTokenIn: ['CQ'] }, badge: { label: 'CQ', tone: 'primary' },
+        }],
+      },
+      transmitGate: { allowed: false, reason: 'confirmSettings', actionId: 'open-settings' },
+    }).success).toBe(true);
+  });
 });

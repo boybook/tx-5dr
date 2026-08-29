@@ -60,6 +60,7 @@ export const OperatorConfigSchema = z.object({
   maxQSOTimeoutCycles: z.number(),
   maxCallAttempts: z.number(),
   frequency: z.number(),
+  maxConcurrentStreams: z.number().int().min(1).max(5).optional(),
   autoResumeCQAfterFail: z.boolean().default(false),
   autoResumeCQAfterSuccess: z.boolean().default(false),
   replyToWorkedStations: z.boolean().default(false),
@@ -112,6 +113,7 @@ export const QSORecordSchema = z.object({
   reportReceived: z.string().optional(), // 接收的信号报告
   messageHistory: z.array(z.string()), // 内部消息历史（FT8 等数字模式）
   comment: z.string().optional(), // 标准 ADIF COMMENT 字段
+  contestId: z.string().optional(), // ADIF CONTEST_ID
   myCallsign: z.string().optional(), // 我的呼号（操作员呼号）
   myGrid: z.string().optional(), // 我的网格定位（操作员网格）
   qth: z.string().optional(), // 对方 QTH（地点，语音通联常用）
@@ -150,6 +152,9 @@ export const QSORecordSchema = z.object({
   notes: z.string().optional(),
 });
 
+/** Host persistence behavior for an automatically completed QSO. */
+export const QSOPersistencePolicySchema = z.enum(['merge-nearby', 'preserve-distinct']);
+
 // 策略执行结果
 export const StrategiesResultSchema = z.object({
   stop: z.boolean().optional(),
@@ -177,4 +182,5 @@ export type QSOContext = z.infer<typeof QSOContextSchema>;
  * logbook queries.
  */
 export type QSORecord = z.infer<typeof QSORecordSchema>;
+export type QSOPersistencePolicy = z.infer<typeof QSOPersistencePolicySchema>;
 export type StrategiesResult = z.infer<typeof StrategiesResultSchema>; 

@@ -116,7 +116,7 @@
     "subtitle": "数字电台远程控制"
   },
   "automation": {
-    "title": "自动化程序"
+    "title": "通联机制"
   },
   "theme": {
     "toggle": "切换主题",
@@ -805,6 +805,13 @@
   "voice": {
     "qsoTab": "通联"
   },
+  "pluginPage": {
+    "title": "通联扩展页面",
+    "invalidRoute": "通联扩展页面地址不完整。",
+    "unavailable": "此通联扩展页面当前不可用。",
+    "operatorRequired": "请先选择操作员，再打开此通联扩展页面。",
+    "loadFailed": "无法加载通联扩展页面。"
+  },
   "bootstrapStatus": {
     "chip": {
       "failed": "部分功能未准备好",
@@ -843,7 +850,7 @@
       },
       "plugin-bootstrap": {
         "label": "插件",
-        "description": "加载插件和自动化策略"
+        "description": "加载插件和通联机制"
       },
       "ntp-initial-check": {
         "label": "时间校准",

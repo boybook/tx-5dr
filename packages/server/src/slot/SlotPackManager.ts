@@ -120,7 +120,15 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
    * 添加发射帧到指定时隙包
    * 将发射的消息作为特殊的帧添加到SlotPack中
    */
-  addTransmissionFrame(slotId: string, operatorId: string, message: string, frequency: number, timestamp: number, replaceExisting?: boolean): void {
+  addTransmissionFrame(
+    slotId: string,
+    operatorId: string,
+    message: string,
+    frequency: number,
+    timestamp: number,
+    replaceExisting?: boolean,
+    streamId = 'default',
+  ): void {
     try {
       const slotStartMs = this.resolveSlotStartMs(slotId, timestamp);
       if (slotStartMs === null) {
@@ -159,13 +167,14 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
         freq: frequency, // 使用操作员配置的频率
         confidence: 1.0, // 发射消息置信度为1.0
         operatorId, // 存储操作员ID，用于多操作员覆盖识别
+        streamId,
         // 不设置logbookAnalysis，发射消息不需要分析
       };
 
       if (replaceExisting) {
         // 覆盖模式（自动重决策）：替换同一操作员的现有 TX 帧
         const existingIdx = slotPack.frames.findIndex(frame =>
-          frame.snr === -999 && frame.operatorId === operatorId
+          frame.snr === -999 && frame.operatorId === operatorId && (frame.streamId ?? 'default') === streamId
         );
         if (existingIdx >= 0) {
           slotPack.frames[existingIdx] = transmissionFrame;

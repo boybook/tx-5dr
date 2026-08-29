@@ -12,6 +12,13 @@ interface LogbookWindowOptions {
   logBookId?: string;
 }
 
+export interface PluginPageWindowOptions {
+  pluginName: string;
+  pageId: string;
+  operatorId?: string;
+  params?: Record<string, string>;
+}
+
 /**
  * 检查是否在Electron环境中运行
  */
@@ -19,6 +26,59 @@ function isElectron(): boolean {
   return typeof window !== 'undefined' && 
          window.navigator && 
          window.navigator.userAgent.toLowerCase().indexOf('electron') > -1;
+}
+
+function isAndroid(): boolean {
+  return typeof window !== 'undefined'
+    && /Android/i.test(window.navigator.userAgent);
+}
+
+export function getPluginPageUrl(
+  options: PluginPageWindowOptions,
+  baseHref: string = document.baseURI,
+): string {
+  const url = new URL('plugin-page.html', baseHref);
+  const params = new URLSearchParams(options.params);
+  params.set('pluginName', options.pluginName);
+  params.set('pageId', options.pageId);
+  if (options.operatorId) {
+    params.set('operatorId', options.operatorId);
+  } else {
+    params.delete('operatorId');
+  }
+  url.search = params.toString();
+  return url.toString();
+}
+
+/**
+ * Opens a plugin-owned custom UI in the standalone host page.
+ *
+ * Electron uses an authenticated application window, browsers use a new tab,
+ * and Android navigates the existing WebView so the native Back action returns
+ * to the radio workspace.
+ */
+export function openPluginPageWindow(options: PluginPageWindowOptions): void {
+  const url = getPluginPageUrl(options);
+  const queryString = new URL(url).searchParams.toString();
+
+  if (isElectron() && window.electronAPI?.window?.openPluginPageWindow) {
+    void window.electronAPI.window.openPluginPageWindow(queryString);
+    return;
+  }
+
+  if (isAndroid()) {
+    window.location.assign(url);
+    return;
+  }
+
+  const newWindow = window.open(url, '_blank');
+  if (newWindow) {
+    newWindow.focus();
+    return;
+  }
+
+  logger.warn('Plugin page popup was blocked; opening in the current tab');
+  window.location.assign(url);
 }
 
 /**

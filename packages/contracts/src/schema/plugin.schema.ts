@@ -19,6 +19,10 @@ export type PluginType = z.infer<typeof PluginTypeSchema>;
 
 export const StrategyFeaturesSchema = z.object({
   targetQueue: z.literal(1).optional(),
+  parallelTargetQueue: z.literal(1).optional(),
+  queueActivation: z.enum(['immediate', 'operator-toggle']).optional(),
+  manualInitiation: z.literal(1).optional(),
+  maxConcurrentStreams: z.number().int().min(1).max(5).optional(),
 }).optional();
 export type StrategyFeatures = z.infer<typeof StrategyFeaturesSchema>;
 
@@ -52,6 +56,7 @@ export const PluginPermissionSchema = z.enum([
   'radio:power',
   'logbook:read',
   'logbook:write',
+  'logbook:session',
   'logbook:sync',
   'settings:ft8',
   'settings:decode-windows',
@@ -299,6 +304,7 @@ export type PluginCapability = z.infer<typeof PluginCapabilitySchema>;
  *
  * - `operator`: shown in the expanded operator card's live-panel area (default).
  * - `automation`: shown inside the top-right automation quick-action popover.
+ * - `operator-action`: shown beside the built-in logbook action on an operator card.
  * - `main-right`: shown in the optional main layout plugin pane on the far right.
  * - `voice-left-top`: shown above the voice frequency control card.
  * - `voice-right-top`: shown in the tabbed top area of the voice right panel.
@@ -308,6 +314,7 @@ export type PluginCapability = z.infer<typeof PluginCapabilitySchema>;
 export const PluginPanelSlotSchema = z.enum([
   'operator',
   'automation',
+  'operator-action',
   'main-right',
   'voice-left-top',
   'voice-right-top',
@@ -336,12 +343,15 @@ export const PluginPanelWidthSchema = z.enum(['half', 'full']);
 export type PluginPanelWidth = z.infer<typeof PluginPanelWidthSchema>;
 
 /**
- * How an iframe panel is opened when rendered as a toolbar entry.
+ * How an iframe panel is opened when rendered as an action entry.
+ *
+ * `page` opens the referenced custom UI in the host's standalone plugin-page
+ * route instead of embedding it in the radio workspace.
  */
-export const PluginPanelOpenModeSchema = z.enum(['popover', 'modal']);
+export const PluginPanelOpenModeSchema = z.enum(['popover', 'modal', 'page']);
 
 /**
- * How an iframe panel is opened when rendered as a toolbar entry.
+ * How an iframe panel is opened when rendered as an action entry.
  */
 export type PluginPanelOpenMode = z.infer<typeof PluginPanelOpenModeSchema>;
 
@@ -382,21 +392,28 @@ export const PluginPanelDescriptorSchema = z.object({
   /** Optional controlled UI size hint for toolbar popovers/modals. */
   uiSize: PluginPanelUISizeSchema.optional(),
 }).superRefine((panel, ctx) => {
-  if (panel.slot !== 'radio-control-toolbar') {
+  if (panel.slot !== 'radio-control-toolbar' && panel.slot !== 'operator-action') {
     return;
   }
   if (panel.component !== 'iframe') {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['component'],
-      message: 'radio-control-toolbar panels must use iframe component',
+      message: `${panel.slot} panels must use iframe component`,
     });
   }
   if (!panel.pageId) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['pageId'],
-      message: 'radio-control-toolbar panels must declare pageId',
+      message: `${panel.slot} panels must declare pageId`,
+    });
+  }
+  if (panel.slot === 'operator-action' && panel.openMode !== 'page') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['openMode'],
+      message: 'operator-action panels must use page openMode',
     });
   }
 });

@@ -1,23 +1,29 @@
 import * as React from 'react';
-import { Select, SelectItem, Input, Button, Switch, Selection, Tooltip, Popover, PopoverTrigger, PopoverContent } from "@heroui/react";
+import { Input, Button, Switch, Selection, Tooltip, Popover, PopoverTrigger, PopoverContent } from "@heroui/react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faWandMagicSparkles, faRepeat, faBook, faRotateLeft, faPause, faPlay } from '@fortawesome/free-solid-svg-icons';
+import { faChevronRight, faWandMagicSparkles, faRepeat, faBook, faRotateLeft, faPause, faPlay } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useCurrentOperatorId, useOperators, useRadioState, useSlotPacks } from '../../../store/radioStore';
 import type { OperatorRuntimeSlot, OperatorStatus, PluginStatus, WSSetOperatorContextMessage } from '@tx5dr/contracts';
 import { CycleUtils } from '@tx5dr/core';
-import { openLogbookWindow } from '../../../utils/windowManager';
+import { openLogbookWindow, openPluginPageWindow } from '../../../utils/windowManager';
 import { addToast } from '@heroui/toast';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../../utils/logger';
 import { OperatorPluginPanels } from '../../plugins/OperatorPluginPanels';
 import { AutomationSettingsPanel } from '../automation/AutomationSettingsPanel';
-import { resolvePluginName } from '../../../utils/pluginLocales';
+import { resolvePluginLabel, resolvePluginLabelWithValues, resolvePluginName } from '../../../utils/pluginLocales';
 import {
   getRadioOperatorProgressAnimation,
   shouldRadioOperatorPropsBeEqual,
 } from './radioOperatorProgress';
 import { applyOperatorContextDraft } from './operatorContextDraft';
-import { resolveRadioOperatorCyclePresentation } from './radioOperatorPresentation';
+import {
+  resolveRadioOperatorCurrentTransmissions,
+  resolveRadioOperatorCyclePresentation,
+  resolveSingleControllableStream,
+  resolveRadioOperatorStreamPresentations,
+  shouldUseParallelQsoPresentation,
+} from './radioOperatorPresentation';
 import {
   OPERATOR_FORCE_STOP_REQUESTED_EVENT,
   type OperatorForceStopRequestedDetail,
@@ -31,12 +37,27 @@ import { getActiveTransmitControlPlugins, getPausedTransmitControlPlugins } from
 import { pluginApi } from '../../../utils/pluginApi';
 import { OperatorQueueTable } from './OperatorQueueTable';
 import { shouldRenderOperatorQueue } from './operatorQueuePresentation';
+import {
+  OperatorStateList,
+  OperatorStateSelect,
+  type OperatorStateChoice,
+} from './OperatorStateControl';
+import {
+  OperatorActionButton,
+  OperatorPluginPageActions,
+  type OperatorPluginPageActionEntry,
+} from './OperatorPluginPageActions';
+import { OperatorStrategyActions } from './OperatorStrategyActions';
+import { OperatorStrategyAttention, resolveStandaloneActions } from './OperatorStrategyAttention';
+import { requestStrategyFrequencyPick } from '../../../utils/strategyFrequencyPick';
+import { OperatorTransmissionStack } from './OperatorTransmissionStack';
 
 const logger = createLogger('RadioOperator');
 
 interface RadioOperatorProps {
   operatorStatus: OperatorStatus;
   pluginStatuses: PluginStatus[];
+  pluginPageActions: OperatorPluginPageActionEntry[];
 }
 
 type RuntimeSlotContents = Partial<Record<OperatorRuntimeSlot, string>>;
@@ -61,7 +82,11 @@ function createRuntimeSlotContents(slots: OperatorStatus['slots']): RuntimeSlotC
   };
 }
 
-export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operatorStatus, pluginStatuses }) => {
+export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
+  operatorStatus,
+  pluginStatuses,
+  pluginPageActions,
+}) => {
   const { t } = useTranslation('radio');
   const connection = useConnection();
   const radio = useRadioState();
@@ -155,6 +180,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
 
   // 展开/收起时隙内容的状态
   const [isSlotContentExpanded, setIsSlotContentExpanded] = React.useState(false);
+  const [expandedStreamId, setExpandedStreamId] = React.useState<string | null>(null);
   const [shortcutSelectHighlightToken, setShortcutSelectHighlightToken] = React.useState<number | null>(null);
   const shortcutHighlightTokenRef = React.useRef(0);
   const expandedContentRef = React.useRef<HTMLDivElement | null>(null);
@@ -464,6 +490,19 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     connection.state.radioService?.setOperatorRuntimeState(operatorStatus.id, state);
   }, [connection.state.radioService, operatorStatus.id]);
 
+  const setOperatorStreamState = React.useCallback((
+    streamId: string,
+    stateId: string,
+    expectedLifecycleEpoch: number,
+  ) => {
+    connection.state.radioService?.setOperatorStreamState(
+      operatorStatus.id,
+      streamId,
+      stateId,
+      expectedLifecycleEpoch,
+    );
+  }, [connection.state.radioService, operatorStatus.id]);
+
   const setOperatorRuntimeSlotContent = React.useCallback((slot: OperatorRuntimeSlot, content: string) => {
     connection.state.radioService?.setOperatorRuntimeSlotContent(operatorStatus.id, slot, content);
   }, [connection.state.radioService, operatorStatus.id]);
@@ -713,6 +752,194 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
     currentSlotInfo,
     isCurrentTransmitCycle,
   );
+  const currentTransmissions = resolveRadioOperatorCurrentTransmissions(operatorStatus);
+  const streamPresentations = resolveRadioOperatorStreamPresentations(operatorStatus);
+  const runtimeActions = operatorStatus.runtime?.actions ?? [];
+  const runtimeAttentions = operatorStatus.runtime?.attentions ?? [];
+  const standaloneRuntimeActions = resolveStandaloneActions(runtimeAttentions, runtimeActions);
+  const currentTransmissionLineCount = currentTransmissions.filter((transmission) => Boolean(transmission.text)).length;
+  const usesStackedHeaderLayout = cyclePresentation.isTransmit && currentTransmissionLineCount > 1;
+  const activeStrategyStatus = pluginStatuses.find((plugin) => plugin.name === operatorStatus.strategy.name);
+  const transmitGate = operatorStatus.runtime?.transmitGate;
+  const configuredStreamCount = operatorStatus.runtime?.queue?.maxActiveStreams;
+  const usesParallelQsoPresentation = shouldUseParallelQsoPresentation(
+    configuredStreamCount,
+    activeStrategyStatus?.strategyFeatures?.parallelTargetQueue === 1,
+  );
+  const streamStateChoices = React.useCallback((stream: typeof streamPresentations[number]): OperatorStateChoice[] => (
+    (stream.stateOptions ?? []).map((option) => ({
+      id: option.id,
+      label: resolvePluginLabel(option.label ?? option.id, operatorStatus.strategy.name),
+      content: option.transmitText,
+    }))
+  ), [operatorStatus.strategy.name]);
+  const strategyLabel = React.useCallback(
+    (value: string) => resolvePluginLabel(value, operatorStatus.strategy.name),
+    [operatorStatus.strategy.name],
+  );
+  const strategyText = React.useCallback(
+    (value: string, params?: Record<string, string | number>) => (
+      resolvePluginLabelWithValues(value, operatorStatus.strategy.name, params)
+    ),
+    [operatorStatus.strategy.name],
+  );
+  const notifiedAttentionIdsRef = React.useRef(new Set<string>());
+  React.useEffect(() => {
+    const current = new Set((operatorStatus.runtime?.attentions ?? []).map((attention) => attention.id));
+    for (const attention of operatorStatus.runtime?.attentions ?? []) {
+      if (!attention.notify || notifiedAttentionIdsRef.current.has(attention.id)) continue;
+      addToast({
+        title: strategyText(attention.title, attention.params),
+        description: attention.description ? strategyText(attention.description, attention.params) : undefined,
+        color: attention.tone === 'danger' ? 'danger'
+          : attention.tone === 'warning' ? 'warning'
+            : attention.tone === 'success' ? 'success' : 'primary',
+      });
+    }
+    notifiedAttentionIdsRef.current = current;
+  }, [operatorStatus.runtime?.attentions, strategyText]);
+  const invokeStrategyAction = React.useCallback((
+    target: import('@tx5dr/contracts').StrategyActionTarget,
+    action: import('@tx5dr/contracts').StrategyActionDescriptor,
+    payload?: unknown,
+  ) => {
+    connection.state.radioService?.invokeOperatorStrategyAction(
+      operatorStatus.id,
+      target,
+      action.id,
+      payload,
+    );
+  }, [connection.state.radioService, operatorStatus.id]);
+  const navigateStrategyAction = React.useCallback((
+    action: import('@tx5dr/contracts').StrategyActionDescriptor,
+  ) => {
+    const pageId = action.navigation?.kind === 'plugin-page' ? action.navigation.pageId : undefined;
+    const page = pageId ? activeStrategyStatus?.ui?.pages?.find((candidate) => candidate.id === pageId) : undefined;
+    if (!page || page.resourceBinding !== 'operator') return;
+    openPluginPageWindow({
+      pluginName: operatorStatus.strategy.name,
+      pageId: page.id,
+      operatorId: operatorStatus.id,
+    });
+  }, [activeStrategyStatus?.ui?.pages, operatorStatus.id, operatorStatus.strategy.name]);
+  const singleStateStream = resolveSingleControllableStream(streamPresentations, configuredStreamCount);
+  const singleStateCanResetToCQ = singleStateStream?.stateOptions?.some((option) => option.id === 'TX6') === true;
+  const legacyStateChoices: OperatorStateChoice[] = operatorStatus.strategy.availableSlots.map((slot) => ({
+    id: slot,
+    label: slot,
+    content: localSlotContents[slot as OperatorRuntimeSlot] ?? operatorStatus.slots?.[slot as OperatorRuntimeSlot],
+  }));
+  const resetLegacyStateToCQ = React.useCallback(() => {
+    setOperatorContext({
+      targetCallsign: '',
+      targetGrid: '',
+      reportSent: null,
+      reportReceived: null,
+    });
+    setOperatorRuntimeState('TX6');
+  }, [setOperatorContext, setOperatorRuntimeState]);
+  const resetSingleStreamToCQ = React.useCallback(() => {
+    if (!singleStateStream || singleStateStream.qsoLifecycleEpoch === undefined) return;
+    setOperatorStreamState(
+      singleStateStream.streamId,
+      'TX6',
+      singleStateStream.qsoLifecycleEpoch,
+    );
+  }, [
+    setOperatorStreamState,
+    singleStateStream,
+  ]);
+  const resetToCqButton = (onReset: () => void) => (
+    <Tooltip content={t('operator.resetToCQ')} placement="top" offset={6}>
+      <Button
+        size="sm"
+        variant="light"
+        isIconOnly
+        onPress={onReset}
+        className="h-auto p-2 min-w-0 w-auto"
+        aria-label={t('operator.resetToCQ')}
+        isDisabled={!connection.state.isConnected}
+      >
+        <FontAwesomeIcon icon={faRotateLeft} className="text-default-400" />
+      </Button>
+    </Tooltip>
+  );
+  const singleStreamDetailPanel = singleStateStream?.currentState
+      && singleStateStream.qsoLifecycleEpoch !== undefined ? (
+    <div className="overflow-hidden rounded-lg bg-content2 text-xs">
+      <OperatorStateList
+        choices={streamStateChoices(singleStateStream)}
+        currentState={singleStateStream.currentState}
+        onSelect={(stateId) => setOperatorStreamState(
+          singleStateStream.streamId,
+          stateId,
+          singleStateStream.qsoLifecycleEpoch!,
+        )}
+        disabled={!connection.state.isConnected}
+        selectLabel={(choice) => t('operator.switchToState', { state: choice.label })}
+      />
+      {(singleStateStream.attentions ?? []).map((attention) => (
+        <OperatorStrategyAttention
+          key={attention.id}
+          attention={attention}
+          actions={singleStateStream.actions ?? []}
+          resolveText={strategyText}
+          className="mx-2 mb-1"
+          onInvoke={(action, payload) => invokeStrategyAction({
+            kind: 'stream',
+            streamId: singleStateStream.streamId,
+            lifecycleEpoch: singleStateStream.qsoLifecycleEpoch!,
+          }, action, payload)}
+          onNavigate={navigateStrategyAction}
+          onRequestSpectrumPick={(action) => requestStrategyFrequencyPick({
+            operatorId: operatorStatus.id,
+            target: {
+              kind: 'stream',
+              streamId: singleStateStream.streamId,
+              lifecycleEpoch: singleStateStream.qsoLifecycleEpoch!,
+            },
+            actionId: action.id,
+          })}
+        />
+      ))}
+      {resolveStandaloneActions(
+        singleStateStream.attentions ?? [],
+        singleStateStream.actions ?? [],
+      ).length > 0 && (
+        <div className="border-t border-divider px-2 py-1.5">
+          <OperatorStrategyActions
+            actions={resolveStandaloneActions(
+              singleStateStream.attentions ?? [],
+              singleStateStream.actions ?? [],
+            )}
+            resolveLabel={strategyLabel}
+            onInvoke={(action, payload) => invokeStrategyAction({
+              kind: 'stream',
+              streamId: singleStateStream.streamId,
+              lifecycleEpoch: singleStateStream.qsoLifecycleEpoch!,
+            }, action, payload)}
+            onNavigate={navigateStrategyAction}
+            onRequestSpectrumPick={(action) => requestStrategyFrequencyPick({
+              operatorId: operatorStatus.id,
+              target: {
+                kind: 'stream',
+                streamId: singleStateStream.streamId,
+                lifecycleEpoch: singleStateStream.qsoLifecycleEpoch!,
+              },
+              actionId: action.id,
+            })}
+          />
+        </div>
+      )}
+    </div>
+  ) : null;
+
+  React.useEffect(() => {
+    if (singleStateStream || !expandedStreamId
+        || !streamPresentations.some((stream) => stream.streamId === expandedStreamId)) {
+      setExpandedStreamId(null);
+    }
+  }, [expandedStreamId, singleStateStream?.streamId, streamPresentations]);
 
   // 处理立即停止发射：移除当前操作员的音频并重混音
   const handleForceStop = () => {
@@ -930,7 +1157,12 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
       }}
     >
       {/* 上半部分 - 进度条背景 */}
-      <div className="relative h-12 p-4">
+      <div
+        className={`relative px-4 ${usesStackedHeaderLayout ? 'py-2' : 'h-12 py-4'}`}
+        style={usesStackedHeaderLayout
+          ? { minHeight: `${Math.max(48, currentTransmissionLineCount * 14 + 16)}px` }
+          : undefined}
+      >
         {/* 进度条颜色层 - 仅在解码时显示 */}
         {radio.state.isDecoding && (
           <div
@@ -948,7 +1180,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
         )}
         <div className="relative flex items-center justify-between h-full">
           {/* 左侧 - 发射内容或监听状态 */}
-          <div className="flex-1">
+          <div className="min-w-0 flex-1">
             {(() => {
               // 未在解码时，显示操作员呼号
               if (!radio.state.isDecoding) {
@@ -969,9 +1201,11 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
               }
 
               return cyclePresentation.isTransmit ? (
-                <div className="font-bold font-mono text-lg text-danger">
-                  {cyclePresentation.transmitContent || t('operator.preparingTx')}
-                </div>
+                <OperatorTransmissionStack
+                  transmissions={currentTransmissions}
+                  fallbackText={cyclePresentation.transmitContent || t('operator.preparingTx')}
+                  variant="header"
+                />
               ) : (
                 <div className="text-foreground opacity-65 font-bold font-mono text-lg">
                   {t('operator.listening', { callsign: operatorCallsign })}
@@ -980,22 +1214,22 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
             })()}
           </div>
           
-          {/* 右侧 - 通联日志按钮和发射开关 */}
-          <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="flat"
-              onPress={() => openLogbookWindow({
-                operatorId: operatorStatus.id,
-                logBookId: operatorStatus.context.myCall
-              })}
-              className="h-8 min-w-0 w-8 px-0 sm:w-auto sm:px-2"
-              title={t('operator.viewLog')}
-              aria-label={t('operator.viewLog')}
-              startContent={<FontAwesomeIcon icon={faBook} />}
-            >
-              <span className="hidden sm:inline">{t('operator.log')}</span>
-            </Button>
+          {/* 右侧 - 操作员页面入口和发射开关 */}
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="flex min-w-0 max-w-[52vw] items-center gap-1 overflow-x-auto sm:max-w-md">
+              <OperatorActionButton
+                icon={faBook}
+                label={t('operator.log')}
+                onPress={() => openLogbookWindow({
+                  operatorId: operatorStatus.id,
+                  logBookId: operatorStatus.context.myCall,
+                })}
+              />
+              <OperatorPluginPageActions
+                entries={pluginPageActions}
+                operatorId={operatorStatus.id}
+              />
+            </div>
             <span className="text-sm text-default-600">{t('control.ptt')}</span>
             <Popover
               isOpen={isPttPopoverOpen}
@@ -1030,8 +1264,9 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
                     size="sm"
                     color="danger"
                     classNames={pttSwitchClassNames}
-                    isDisabled={!connection.state.isConnected}
+                    isDisabled={!connection.state.isConnected || (!operatorStatus.isTransmitting && Boolean(transmitGate))}
                     aria-label={t('operator.toggleTx')}
+                    title={transmitGate ? strategyLabel(transmitGate.reason) : undefined}
                   />
                 </div>
               </PopoverTrigger>
@@ -1168,7 +1403,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
           transitionTimingFunction: 'cubic-bezier(0.23, 1, 0.32, 1)',
         }}
       >
-        <div ref={expandedContentRef} className="p-4 flex flex-col gap-3">
+        <div ref={expandedContentRef} className="flex flex-col gap-2 p-4">
         {/* 第一行 - 发射周期和发射槽位选择 */}
         <div className="flex min-w-0 gap-2 -my-1">
           <div className="flex shrink-0 items-center gap-0">
@@ -1252,77 +1487,56 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
             </Button>
           </div>
           
-          <div className="flex items-center gap-0">
-            <Select
-              key={`slot-select-${shortcutSelectHighlightToken ?? 'idle'}`}
-              selectedKeys={[operatorStatus.currentSlot || 'TX6']}
-              onSelectionChange={(keys) => {
-                const slot = Array.from(keys)[0] as OperatorRuntimeSlot | undefined;
-                if (slot) {
-                  setOperatorRuntimeState(slot);
-                }
-              }}
-              size="sm"
-              variant="bordered"
-              className="w-auto min-w-[200px]"
-              classNames={{
-                trigger: `bg-transparent border-none shadow-none p-1 pl-2 h-auto min-h-0 rounded-md data-[hover=true]:bg-content2 ${shortcutSelectHighlightToken ? 'tx-slot-shortcut-select-glow' : ''}`,
-                value: "text-sm font-mono text-foreground p-0",
-                selectorIcon: "text-default-400 text-xs",
-                popoverContent: "min-w-[260px]",
-              }}
-              isDisabled={!connection.state.isConnected}
-              aria-label={t('operator.selectSlot')}
-              renderValue={(items) => {
-                const item = items[0];
-                if (!item || !operatorStatus.slots) return String(item?.key || 'TX6');
-
-                // 显示为"TXN: 内容"格式
-                const slotKey = String(item.key);
-                const slotContent = operatorStatus.slots[item.key as keyof typeof operatorStatus.slots];
-                return slotContent ? slotContent : slotKey;
-              }}
+          {usesParallelQsoPresentation ? (
+            <div
+              className="flex min-w-0 flex-1 items-center gap-2 px-2 text-sm"
+              aria-label={t('operator.transmitStreams')}
             >
-              {operatorStatus.strategy.availableSlots.map((slot) => {
-                const runtimeSlot = slot as OperatorRuntimeSlot;
-                const slotContent = operatorStatus.slots?.[slot as keyof typeof operatorStatus.slots];
-                const displayText = slotContent ? `${slot}: ${slotContent}` : slot;
-                return (
-                  <SelectItem key={runtimeSlot}>
-                    {displayText}
-                  </SelectItem>
-                );
-              })}
-            </Select>
+              <span className="shrink-0 text-default-500">
+                {t('operator.transmitStreamsCount', { count: streamPresentations.length })}
+              </span>
+              <OperatorTransmissionStack
+                transmissions={currentTransmissions}
+                fallbackText={t('operator.noCurrentTransmission')}
+                variant="detail"
+              />
+            </div>
+          ) : singleStateStream && singleStateStream.currentState
+              && singleStateStream.qsoLifecycleEpoch !== undefined ? (
+              <div className="flex min-w-0 flex-1 items-center gap-0 px-2">
+                <OperatorStateSelect
+                  choices={streamStateChoices(singleStateStream)}
+                  currentState={singleStateStream.currentState}
+                  onSelect={(stateId) => setOperatorStreamState(
+                    singleStateStream.streamId,
+                    stateId,
+                    singleStateStream.qsoLifecycleEpoch!,
+                  )}
+                  disabled={!connection.state.isConnected}
+                  ariaLabel={t('operator.selectStreamState', { callsign: singleStateStream.targetCallsign ?? '' })}
+                  standardSingleQso
+                />
+                {singleStateStream.currentState !== 'TX6'
+                  && singleStateCanResetToCQ
+                  && resetToCqButton(resetSingleStreamToCQ)}
+              </div>
+          ) : (
+          <div className="flex items-center gap-0">
+            <OperatorStateSelect
+              key={`slot-select-${shortcutSelectHighlightToken ?? 'idle'}`}
+              choices={legacyStateChoices}
+              currentState={operatorStatus.currentSlot || 'TX6'}
+              onSelect={(stateId) => setOperatorRuntimeState(stateId as OperatorRuntimeSlot)}
+              disabled={!connection.state.isConnected}
+              ariaLabel={t('operator.selectSlot')}
+              standardSingleQso
+              highlighted={Boolean(shortcutSelectHighlightToken)}
+            />
 
             {/* 重置按钮 - 仅在非TX6状态下显示 */}
-            {operatorStatus.currentSlot !== 'TX6' && (
-              <Tooltip content={t('operator.resetToCQ')} placement="top" offset={6}>
-                <Button
-                  size="sm"
-                  variant="light"
-                  isIconOnly
-                  onPress={() => {
-                    // 第1步：清理通联上下文
-                    setOperatorContext({
-                      targetCallsign: '',
-                      targetGrid: '',
-                      reportSent: null,
-                      reportReceived: null,
-                    });
-
-                    // 第2步：切换到 TX6 槽位
-                    setOperatorRuntimeState('TX6');
-                  }}
-                  className="h-auto p-2 min-w-0 w-auto"
-                  aria-label={t('operator.resetToCQ')}
-                  isDisabled={!connection.state.isConnected}
-                >
-                  <FontAwesomeIcon icon={faRotateLeft} className="text-default-400" />
-                </Button>
-              </Tooltip>
-            )}
+            {operatorStatus.currentSlot !== 'TX6' && resetToCqButton(resetLegacyStateToCQ)}
           </div>
+          )}
         </div>
         
         {/* 第二行 - Context输入和展开按钮 */}
@@ -1463,79 +1677,230 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
           </Button>
         </div>
 
+        {standaloneRuntimeActions.length > 0 && (
+          <div className="rounded-md bg-default-100 px-2 py-1.5">
+            <OperatorStrategyActions
+              actions={standaloneRuntimeActions}
+              resolveLabel={strategyLabel}
+              onInvoke={(action, payload) => invokeStrategyAction({ kind: 'runtime' }, action, payload)}
+              onNavigate={navigateStrategyAction}
+            />
+          </div>
+        )}
+
+        {runtimeAttentions.length > 0 && (
+          <div className="space-y-1">
+            {runtimeAttentions.map((attention) => (
+              <OperatorStrategyAttention
+                key={attention.id}
+                attention={attention}
+                actions={runtimeActions}
+                resolveText={strategyText}
+                onInvoke={(action, payload) => invokeStrategyAction({ kind: 'runtime' }, action, payload)}
+                onNavigate={navigateStrategyAction}
+              />
+            ))}
+          </div>
+        )}
+
         {shouldRenderOperatorQueue(operatorStatus, pluginStatuses) && (
           <OperatorQueueTable operatorId={operatorStatus.id} queue={operatorStatus.runtime.queue} />
         )}
         
         {/* 时隙内容（展开时显示） */}
         <div 
-          className={`overflow-hidden transition-all duration-[400ms] ${
-            isSlotContentExpanded ? 'max-h-[230px] opacity-100' : 'max-h-0 opacity-0 -mb-3'
+          className={`overflow-y-auto overflow-x-hidden transition-all duration-[400ms] ${
+            isSlotContentExpanded ? 'max-h-[min(420px,55vh)] opacity-100' : 'max-h-0 opacity-0 -mb-3'
           }`}
           style={{
             transitionTimingFunction: 'cubic-bezier(0.23, 1, 0.32, 1)'
           }}
         >
-          {operatorStatus.slots && (
-            <div className="space-y-2 py-1 bg-content2 overflow-hidden rounded-lg">
-              <div className="grid grid-cols-1 gap-0 text-xs">
-                {Object.entries(operatorStatus.slots).map(([slot, content]) => {
-                  const runtimeSlot = slot as OperatorRuntimeSlot;
-                  const displayedContent = localSlotContents[runtimeSlot] ?? content ?? '';
-                  return (
-                  <div 
-                    key={runtimeSlot}
-                    className={`p-2 py-1 transition-colors duration-200 ${
-                      operatorStatus.currentSlot === runtimeSlot 
-                        ? 'bg-primary-50 border-primary-200' 
-                        : 'bg-content2 border-divider'
-                    }`}
-                    style={{
-                      transitionTimingFunction: 'cubic-bezier(0.4, 0, 0.2, 1)'
-                    }}
-                  >
-                    <div className="flex px-1 items-center gap-2">
-                      <span className="text-sm font-medium text-default-600 min-w-[30px]">{runtimeSlot}:</span>
-                      <Input
-                        value={displayedContent}
-                        onFocus={() => handleSlotContentFocus(runtimeSlot)}
-                        onBlur={() => handleSlotContentBlur(runtimeSlot)}
-                        onKeyDown={handleInputKeyDown}
-                        onChange={(e) => handleSlotContentChange(runtimeSlot, e.target.value)}
-                        size="sm"
-                        variant="bordered"
-                        className="flex-1 text-sm"
-                        classNames={{
-                          input: "font-mono text-sm",
-                          inputWrapper: "h-7 min-h-7"
-                        }}
-                        placeholder={t('operator.emptySlot')}
-                        isDisabled={!connection.state.isConnected}
-                        aria-label={t('operator.slotContent', { slot: runtimeSlot })}
-                      />
-                      <Button
-                        size="sm"
-                        color={operatorStatus.currentSlot === runtimeSlot ? "primary" : "default"}
-                        variant={operatorStatus.currentSlot === runtimeSlot ? "solid" : "bordered"}
-                        isIconOnly
-                        onClick={() => handleQuickStateChange(runtimeSlot)}
-                        className="h-7 w-7 min-w-7 transition-all duration-200"
-                        style={{
-                          transitionTimingFunction: 'cubic-bezier(0.4, 0, 0.2, 1)'
-                        }}
-                        isDisabled={!connection.state.isConnected}
-                        title={t('operator.switchToSlot', { slot: runtimeSlot })}
-                        aria-label={t('operator.switchToSlot', { slot: runtimeSlot })}
-                      >
-                        {operatorStatus.currentSlot === runtimeSlot ? "●" : "○"}
-                      </Button>
-                    </div>
-                  </div>
-                  );
-                })}
+          {usesParallelQsoPresentation ? (
+            <div
+              role="list"
+              aria-label={t('operator.transmitStreams')}
+              className="overflow-hidden rounded-lg bg-content2 text-xs"
+            >
+              <div className="flex h-6 items-center justify-between bg-default-200/70 px-3 text-[10px] font-medium text-default-500">
+                <span>{t('operator.transmitStreams')}</span>
+                <span>{t('operator.transmitStreamsCount', { count: streamPresentations.length })}</span>
               </div>
+              {streamPresentations.length === 0 ? (
+                <div className="flex h-16 items-center justify-center px-3 text-center text-default-400">
+                  {t('operator.noTransmitStreams')}
+                </div>
+              ) : streamPresentations.map((stream, streamIndex) => {
+                const metadata = [
+                  stream.targetCallsign,
+                  stream.audioFrequencyHz === undefined ? undefined : `${Math.round(stream.audioFrequencyHz)} Hz`,
+                ].filter((value): value is string => Boolean(value));
+                const stateChoices = streamStateChoices(stream);
+                const canControlState = stateChoices.length > 0
+                  && stream.currentState !== undefined
+                  && stream.qsoLifecycleEpoch !== undefined;
+                const isStreamExpanded = canControlState && expandedStreamId === stream.streamId;
+                const currentStateLabel = stateChoices.find((choice) => choice.id === stream.currentState)?.label
+                  ?? (stream.currentState ? strategyLabel(stream.currentState) : undefined);
+                return (
+                  <div
+                    key={stream.streamId}
+                    role="listitem"
+                    className="border-b border-divider last:border-b-0"
+                  >
+                    <div className="px-3 py-2">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span
+                          className="shrink-0 font-medium text-default-600"
+                          title={stream.streamId}
+                        >
+                          {t('operator.transmitStreamLabel', { index: streamIndex + 1 })}
+                        </span>
+                        {currentStateLabel && (
+                          <span className="min-w-0 truncate text-default-500" title={currentStateLabel}>
+                            {currentStateLabel}
+                          </span>
+                        )}
+                        {metadata.length > 0 && (
+                          <span className="ml-auto min-w-0 truncate text-right text-[10px] text-default-400" title={metadata.join(' · ')}>
+                            {metadata.join(' · ')}
+                          </span>
+                        )}
+                        {canControlState && (
+                          <Tooltip
+                            content={isStreamExpanded ? t('operator.collapseStreamStates') : t('operator.expandStreamStates')}
+                            placement="top"
+                            offset={4}
+                          >
+                            <Button
+                              isIconOnly
+                              size="sm"
+                              variant="light"
+                              className="h-6 w-6 min-w-6 text-default-400"
+                              onPress={() => setExpandedStreamId(isStreamExpanded ? null : stream.streamId)}
+                              aria-label={isStreamExpanded ? t('operator.collapseStreamStates') : t('operator.expandStreamStates')}
+                            >
+                              <FontAwesomeIcon
+                                icon={faChevronRight}
+                                className={`text-[9px] transition-transform duration-200 ${isStreamExpanded ? 'rotate-90' : ''}`}
+                              />
+                            </Button>
+                          </Tooltip>
+                        )}
+                      </div>
+                      <div
+                        className={`mt-1 truncate font-mono text-sm ${
+                          stream.text ? 'text-foreground' : 'text-default-400'
+                        }`}
+                        title={stream.text || t('operator.noCurrentTransmission')}
+                      >
+                        {stream.text || t('operator.noCurrentTransmission')}
+                      </div>
+                      {stream.completion && (
+                        <div className="mt-1 text-[10px] text-default-500">
+                          {stream.completion.label ? strategyLabel(stream.completion.label) : stream.completion.state}
+                        </div>
+                      )}
+                      {(stream.attentions ?? []).map((attention) => (
+                        <OperatorStrategyAttention
+                          key={attention.id}
+                          attention={attention}
+                          actions={stream.actions ?? []}
+                          resolveText={strategyText}
+                          className="mt-1"
+                          onInvoke={(action, payload) => invokeStrategyAction({
+                            kind: 'stream',
+                            streamId: stream.streamId,
+                            lifecycleEpoch: stream.qsoLifecycleEpoch!,
+                          }, action, payload)}
+                          onNavigate={navigateStrategyAction}
+                          onRequestSpectrumPick={(action) => requestStrategyFrequencyPick({
+                            operatorId: operatorStatus.id,
+                            target: {
+                              kind: 'stream',
+                              streamId: stream.streamId,
+                              lifecycleEpoch: stream.qsoLifecycleEpoch!,
+                            },
+                            actionId: action.id,
+                          })}
+                        />
+                      ))}
+                      {resolveStandaloneActions(stream.attentions ?? [], stream.actions ?? []).length > 0
+                          && stream.qsoLifecycleEpoch !== undefined && (
+                        <div className="mt-1.5">
+                          <OperatorStrategyActions
+                            compact
+                            actions={resolveStandaloneActions(stream.attentions ?? [], stream.actions ?? [])}
+                            resolveLabel={strategyLabel}
+                            onInvoke={(action, payload) => invokeStrategyAction({
+                              kind: 'stream',
+                              streamId: stream.streamId,
+                              lifecycleEpoch: stream.qsoLifecycleEpoch!,
+                            }, action, payload)}
+                            onNavigate={navigateStrategyAction}
+                            onRequestSpectrumPick={(action) => requestStrategyFrequencyPick({
+                              operatorId: operatorStatus.id,
+                              target: {
+                                kind: 'stream',
+                                streamId: stream.streamId,
+                                lifecycleEpoch: stream.qsoLifecycleEpoch!,
+                              },
+                              actionId: action.id,
+                            })}
+                          />
+                        </div>
+                      )}
+                    </div>
+                    {isStreamExpanded && stream.currentState && stream.qsoLifecycleEpoch !== undefined && (
+                      <div className="border-t border-divider bg-default-100/70">
+                        <OperatorStateList
+                          compact
+                          choices={stateChoices}
+                          currentState={stream.currentState}
+                          onSelect={(stateId) => setOperatorStreamState(
+                            stream.streamId,
+                            stateId,
+                            stream.qsoLifecycleEpoch!,
+                          )}
+                          disabled={!connection.state.isConnected}
+                          selectLabel={(choice) => t('operator.switchToState', { state: choice.label })}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-          )}
+          ) : singleStreamDetailPanel ? singleStreamDetailPanel : operatorStatus.slots ? (
+            <div className="overflow-hidden rounded-lg bg-content2 text-xs">
+              <OperatorStateList
+                choices={legacyStateChoices}
+                currentState={operatorStatus.currentSlot ?? 'TX6'}
+                onSelect={(stateId) => handleQuickStateChange(stateId as OperatorRuntimeSlot)}
+                disabled={!connection.state.isConnected}
+                selectLabel={(choice) => t('operator.switchToSlot', { slot: choice.label })}
+                renderContent={(choice) => {
+                  const runtimeSlot = choice.id as OperatorRuntimeSlot;
+                  return (
+                    <Input
+                      value={localSlotContents[runtimeSlot] ?? choice.content ?? ''}
+                      onFocus={() => handleSlotContentFocus(runtimeSlot)}
+                      onBlur={() => handleSlotContentBlur(runtimeSlot)}
+                      onKeyDown={handleInputKeyDown}
+                      onChange={(event) => handleSlotContentChange(runtimeSlot, event.target.value)}
+                      size="sm"
+                      variant="bordered"
+                      className="text-sm"
+                      classNames={{ input: 'font-mono text-sm', inputWrapper: 'h-7 min-h-7' }}
+                      placeholder={t('operator.emptySlot')}
+                      isDisabled={!connection.state.isConnected}
+                      aria-label={t('operator.slotContent', { slot: runtimeSlot })}
+                    />
+                  );
+                }}
+              />
+            </div>
+          ) : null}
         </div>
 
         {isSelected && <OperatorPluginPanels operatorId={operatorStatus.id} />}
@@ -1546,4 +1911,5 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({ operato
 }, (prevProps, nextProps) => (
   shouldRadioOperatorPropsBeEqual(prevProps.operatorStatus, nextProps.operatorStatus)
   && prevProps.pluginStatuses === nextProps.pluginStatuses
+  && prevProps.pluginPageActions === nextProps.pluginPageActions
 )); 

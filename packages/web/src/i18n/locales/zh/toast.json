@@ -51,6 +51,10 @@
       "title": "已停发：重复消息",
       "description": "操作员 {{operatorId}} 第 {{attemptedCount}} 次尝试发送相同消息时已自动停发（上限 {{maxCount}} 次），避免重复占用频率：{{transmission}}"
     },
+    "standardFrequencyMultiStreamFallback": {
+      "title": "标准频率下一次只呼叫一个电台",
+      "description": "{{mode}} 标准通联频率 {{frequency}} MHz 不允许同一操作员同时发送多条信号；本次发射已改为一次处理一个 QSO。"
+    },
     "repeaterDuplexUnsupported": {
       "title": "中继频偏未生效",
       "description": "已切换到 {{frequency}} MHz，但当前电台不支持或未能设置中继频偏。{{reason}}"

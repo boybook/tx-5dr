@@ -90,6 +90,21 @@ describe('RadioControlPluginToolbar helpers', () => {
     expect(entries[0]?.panelId).toBe('rotator-button');
   });
 
+  it('does not expose operator-scoped entries in the global toolbar', () => {
+    const operatorPlugin = buildPlugin({
+      instanceScope: 'operator',
+      panels: [{
+        id: 'operator-action',
+        title: 'Operator action',
+        component: 'iframe',
+        pageId: 'rotator',
+        slot: 'operator-action',
+        openMode: 'page',
+      }],
+    });
+    expect(getEntries({ plugins: [operatorPlugin] })).toHaveLength(0);
+  });
+
   it('keeps plugin and panel declaration order', () => {
     const entries = getEntries({
       plugins: [

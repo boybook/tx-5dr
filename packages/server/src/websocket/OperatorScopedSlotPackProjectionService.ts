@@ -16,8 +16,9 @@ export class OperatorScopedSlotPackProjectionService {
   constructor(private readonly deps: OperatorScopedSlotPackProjectionServiceDeps) {}
 
   async projectSlotPack(slotPack: SlotPack, operatorId: string | null): Promise<SlotPack> {
+    const band = this.getSlotPackBand(slotPack);
     const projectedFrames = operatorId
-      ? await Promise.all(slotPack.frames.map(async (frame) => this.projectFrame(frame, operatorId)))
+      ? await Promise.all(slotPack.frames.map(async (frame) => this.projectFrame(frame, operatorId, band)))
       : slotPack.frames.map((frame) => this.cloneFrameWithoutAnalysis(frame));
 
     return {
@@ -28,7 +29,7 @@ export class OperatorScopedSlotPackProjectionService {
     };
   }
 
-  private async projectFrame(frame: FrameMessage, operatorId: string): Promise<FrameMessage> {
+  private async projectFrame(frame: FrameMessage, operatorId: string, band: string): Promise<FrameMessage> {
     const nextFrame = this.cloneFrameWithoutAnalysis(frame);
 
     if (frame.snr === -999) {
@@ -36,7 +37,7 @@ export class OperatorScopedSlotPackProjectionService {
     }
 
     try {
-      const analysis = await this.analyzeFrameForOperator(frame, operatorId);
+      const analysis = await this.analyzeFrameForOperator(frame, operatorId, band);
       if (analysis) {
         nextFrame.logbookAnalysis = analysis;
       }
@@ -55,6 +56,7 @@ export class OperatorScopedSlotPackProjectionService {
   private async analyzeFrameForOperator(
     frame: FrameMessage,
     operatorId: string,
+    band: string,
   ): Promise<LogbookAnalysis | undefined> {
     const parsedMessage = FT8MessageParser.parseMessage(frame.message);
 
@@ -82,7 +84,6 @@ export class OperatorScopedSlotPackProjectionService {
       return undefined;
     }
 
-    const band = this.getCurrentBand();
     const canAnalyzeGridByBand = Boolean(grid && band && band !== 'Unknown');
     const analysis = await logBook.provider.analyzeCallsign(callsign, grid, { band });
 
@@ -114,5 +115,15 @@ export class OperatorScopedSlotPackProjectionService {
     }
 
     return 'Unknown';
+  }
+
+  private getSlotPackBand(slotPack: SlotPack): string {
+    const capturedBand = slotPack.frequencyContext?.band?.trim();
+    if (capturedBand) return capturedBand;
+    const capturedFrequency = slotPack.frequencyContext?.frequency;
+    if (capturedFrequency && capturedFrequency > 1_000_000) {
+      return getBandFromFrequency(capturedFrequency);
+    }
+    return this.getCurrentBand();
   }
 }

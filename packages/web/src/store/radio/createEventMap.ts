@@ -613,6 +613,7 @@ export function createRadioEventMap({
           payload: {
             profiles: profilesResponse.profiles,
             activeProfileId: profilesResponse.activeProfileId,
+            hasConfiguredProfiles: profilesResponse.hasConfiguredProfiles,
           },
         });
         spectrumNegotiation.applyProfileDrivenSpectrumNegotiation(
@@ -735,7 +736,7 @@ export function createRadioEventMap({
       spectrumNegotiation.applyProfileDrivenSpectrumNegotiation(profileData.profileId, true);
     },
     profileListUpdated: (data: unknown) => {
-      const listData = data as { profiles: RadioProfile[]; activeProfileId: string | null };
+      const listData = data as { profiles: RadioProfile[]; activeProfileId: string | null; hasConfiguredProfiles?: boolean };
       logger.info('Profile list updated', { count: listData.profiles.length });
       radioDispatch({ type: 'profileListUpdated', payload: listData });
       if (listData.activeProfileId !== activeProfileIdRef.current) {

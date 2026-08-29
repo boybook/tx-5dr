@@ -17,6 +17,8 @@ export const RadioProfileSchema = z.object({
   createdAt: z.number(),
   updatedAt: z.number(),
   description: z.string().optional(),
+  isVirtual: z.boolean().optional(),
+  readOnly: z.boolean().optional(),
 });
 
 export type RadioProfile = z.infer<typeof RadioProfileSchema>;
@@ -52,6 +54,7 @@ export type UpdateProfileRequest = z.infer<typeof UpdateProfileRequestSchema>;
 export const ProfileListResponseSchema = z.object({
   profiles: z.array(RadioProfileSchema),
   activeProfileId: z.string().nullable(),
+  hasConfiguredProfiles: z.boolean().optional().default(false),
 });
 
 export type ProfileListResponse = z.infer<typeof ProfileListResponseSchema>;

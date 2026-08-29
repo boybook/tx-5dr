@@ -3,7 +3,10 @@ import { EventEmitter } from 'eventemitter3';
 import { EngineLifecycle } from '../EngineLifecycle.js';
 import { ConfigManager } from '../../config/config-manager.js';
 
-function createLifecycle(initialModeName: 'FT8' | 'VOICE' | 'CW' | 'SSTV' | 'FAX' = 'FT8') {
+function createLifecycle(
+  initialModeName: 'FT8' | 'VOICE' | 'CW' | 'SSTV' | 'FAX' = 'FT8',
+  options: { virtual?: boolean } = {},
+) {
   let currentModeName = initialModeName;
   const resourceManager = {
     stopAll: vi.fn(async () => undefined),
@@ -47,6 +50,7 @@ function createLifecycle(initialModeName: 'FT8' | 'VOICE' | 'CW' | 'SSTV' | 'FAX
 
   vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
     getCWDecoderConfig: vi.fn(() => ({ enabled: false })),
+    getRadioConfig: vi.fn(() => ({ type: 'none' })),
   } as unknown as ConfigManager);
 
   const lifecycle = new EngineLifecycle({
@@ -76,6 +80,7 @@ function createLifecycle(initialModeName: 'FT8' | 'VOICE' | 'CW' | 'SSTV' | 'FAX
     getCWDecoderManager: () => ({ start: vi.fn(), stop: vi.fn(), getConfig: () => ({}) } as any),
     getAudioVolumeController: () => ({ restoreGainForCurrentSlot: vi.fn() } as any),
     getAudioSidecar: () => audioSidecar as any,
+    isVirtualRadioActive: () => options.virtual === true,
     getImageRadioService: () => imageRadioService as any,
     getStatus: () => ({}),
   });
@@ -86,6 +91,7 @@ function createLifecycle(initialModeName: 'FT8' | 'VOICE' | 'CW' | 'SSTV' | 'FAX
     decodeQueue,
     radioManager,
     physicalTxCoordinator,
+    audioSidecar,
     setModeName: (modeName: 'FT8' | 'VOICE' | 'CW' | 'SSTV' | 'FAX') => {
       currentModeName = modeName;
     },
@@ -163,6 +169,14 @@ describe('EngineLifecycle', () => {
 
     expect(decodeQueue.start).toHaveBeenCalledWith('digital-engine-start');
     expect(decodeQueue.stop).toHaveBeenCalledWith('digital-engine-stop');
+  });
+
+  it('does not start a physical audio sidecar for a virtual radio session', async () => {
+    const { lifecycle, audioSidecar } = createLifecycle('FT8', { virtual: true });
+
+    await (lifecycle as any).doStart();
+
+    expect(audioSidecar.start).not.toHaveBeenCalled();
   });
 
   it('does not include decode workers in the voice resource plan', async () => {

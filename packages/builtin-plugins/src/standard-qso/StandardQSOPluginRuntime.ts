@@ -29,6 +29,7 @@ import {
     QSOFailureInfo,
 } from '@tx5dr/plugin-api';
 import { FT8MessageParser, isUndecodedCallsignPlaceholder } from '@tx5dr/core';
+import { randomUUID } from 'node:crypto';
 
 export const STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING = 'tx6MessageOverride';
 
@@ -1193,7 +1194,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
             ? this.context.actualFrequency
             : (this.context.config.frequency || 0);
         const record: QSORecord = {
-            id: now.toString(),
+            id: randomUUID(),
             callsign: this.context.targetCallsign,
             grid: this.context.targetGrid,
             frequency,

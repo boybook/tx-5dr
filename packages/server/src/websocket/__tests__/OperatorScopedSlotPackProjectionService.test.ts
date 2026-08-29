@@ -3,7 +3,7 @@ import type { SlotPack } from '@tx5dr/contracts';
 import { ConfigManager } from '../../config/config-manager.js';
 import { OperatorScopedSlotPackProjectionService } from '../OperatorScopedSlotPackProjectionService.js';
 
-function createSlotPack(message: string): SlotPack {
+function createSlotPack(message: string, frequencyContext?: SlotPack['frequencyContext']): SlotPack {
   return {
     slotId: 'slot-1',
     startMs: 1_710_000_000_000,
@@ -25,6 +25,7 @@ function createSlotPack(message: string): SlotPack {
       lastUpdated: 1_710_000_000_100,
     },
     decodeHistory: [],
+    frequencyContext,
   };
 }
 
@@ -102,6 +103,27 @@ describe('OperatorScopedSlotPackProjectionService', () => {
 
     expect(projected.frames[0]).not.toHaveProperty('logbookAnalysis');
     expect(analyzeCallsign).not.toHaveBeenCalled();
+  });
+
+  it('uses the slot pack band for historical analysis before the current radio band', async () => {
+    vi.spyOn(ConfigManager.getInstance(), 'getLastSelectedFrequency').mockReturnValue({
+      frequency: 14_074_000, band: '20m', mode: 'FT8', description: '20m FT8',
+    } as any);
+    const analyzeCallsign = vi.fn().mockResolvedValue({
+      isNewCallsign: true, isNewDxccEntity: false, isNewBandDxccEntity: false,
+      isConfirmedDxcc: false, isNewGrid: false,
+    });
+    const service = new OperatorScopedSlotPackProjectionService({
+      callsignTracker: { getGrid: vi.fn() } as any,
+      logManager: {
+        getOperatorLogBook: vi.fn().mockResolvedValue({ provider: { analyzeCallsign } }),
+      } as any,
+    });
+
+    await service.projectSlotPack(createSlotPack('CQ K1ABC FN42', {
+      frequency: 7_091_000, band: '40m', mode: 'FT8',
+    }), 'op-1');
+    expect(analyzeCallsign).toHaveBeenCalledWith('K1ABC', 'FN42', { band: '40m' });
   });
 
   it('projects special event long callsigns parsed from CQ messages', async () => {

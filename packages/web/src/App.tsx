@@ -38,7 +38,7 @@ function AppContent() {
   const { t } = useTranslation('image');
   const { state } = useRadioState();
   const { pttStatus, engineMode, currentMode } = state;
-  const { profiles, profilesLoaded } = useProfiles();
+  const { profiles, profilesLoaded, hasConfiguredProfiles } = useProfiles();
   const { state: connectionState } = useConnection();
   const { currentOperatorId } = useCurrentOperatorId();
   const { operators } = useOperators();
@@ -58,7 +58,7 @@ function AppContent() {
     );
   }
 
-  const noProfiles = connectionState.isConnected && profilesLoaded && profiles.length === 0;
+  const noProfiles = connectionState.isConnected && profilesLoaded && profiles.length === 0 && !hasConfiguredProfiles;
   // 首次使用引导：仅 Admin 可配置电台
   const showSetupOverlay = isAdmin && noProfiles;
   // 观看者欢迎蒙层：非 Admin 用户在无 Profile 时显示

@@ -496,10 +496,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 所以在 onError 回调中先保存错误，供 waitForConnected 使用
    */
   private pendingConnectionError: Error | undefined;
+  private readonly connectionFactory: (config: HamlibConfig) => IRadioConnection;
 
-  constructor() {
+  constructor(options: { connectionFactory?: (config: HamlibConfig) => IRadioConnection } = {}) {
     super();
     this.configManager = ConfigManager.getInstance();
+    this.connectionFactory = options.connectionFactory ?? ((config) => RadioConnectionFactory.create(config));
     this.setupCapabilityManagerForwarding();
   }
 
@@ -627,7 +629,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       this.currentConfig = config;
       this.resetConnectionSessionState();
 
-      const connection = RadioConnectionFactory.create(config);
+      const connection = this.connectionFactory(config);
       this.connection = connection;
       this.setupConnectionEventForwarding();
 
@@ -2370,7 +2372,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   }
 
   private createConnectionSession(config: HamlibConfig): IRadioConnection {
-    const connection = RadioConnectionFactory.create(config);
+    const connection = this.connectionFactory(config);
     this.connection = connection;
     this.setupConnectionEventForwarding();
     return connection;

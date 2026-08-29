@@ -14,6 +14,7 @@ describe('assisted QSO queue plugin metadata', () => {
       'skipTx1',
       'maxQSOTimeoutCycles',
       'maxCallAttempts',
+      'parallelStreams',
     ]);
   });
 
@@ -22,6 +23,7 @@ describe('assisted QSO queue plugin metadata', () => {
       'replyToWorkedStations',
       'distinguishWorkedStationsByBand',
       'skipTx1',
+      'parallelStreams',
     ]);
   });
 

@@ -273,6 +273,8 @@ describe('WSServer security filtering', () => {
     const commandAccess = (WSServer as any).COMMAND_ACCESS;
     const operatorCommands = (WSServer as any).OPERATOR_DATA_COMMANDS as Set<WSMessageType>;
     for (const type of [
+      WSMessageType.SET_OPERATOR_STREAM_STATE,
+      WSMessageType.INVOKE_OPERATOR_STRATEGY_ACTION,
       WSMessageType.OPERATOR_QUEUE_ENQUEUE,
       WSMessageType.OPERATOR_QUEUE_REORDER,
       WSMessageType.OPERATOR_QUEUE_RETRY,
@@ -282,6 +284,47 @@ describe('WSServer security filtering', () => {
       expect(commandAccess[type]).toMatchObject({ ability: { action: 'manage', subject: 'Operator' } });
       expect(operatorCommands.has(type)).toBe(true);
     }
+  });
+
+  it('returns an actionable error when a stream lifecycle changed before selection', async () => {
+    const sendToConnection = vi.fn();
+    const server = Object.create(WSServer.prototype) as any;
+    server.sendToConnection = sendToConnection;
+    server.logOperatorCommand = vi.fn();
+    server.digitalRadioEngine = {
+      operatorManager: {
+        setOperatorStreamState: () => { throw new Error('stream_lifecycle_conflict'); },
+      },
+    };
+
+    await server.handleSetOperatorStreamState({
+      operatorId: 'op1',
+      streamId: 'stream-1',
+      stateId: 'send-final',
+      expectedLifecycleEpoch: 2,
+    }, 'conn-1');
+
+    expect(sendToConnection).toHaveBeenCalledWith('conn-1', WSMessageType.ERROR, expect.objectContaining({
+      userMessageKey: 'radio:operator.streamStateErrors.qsoChanged',
+      context: { command: 'setOperatorStreamState' },
+    }));
+  });
+
+  it('forwards a lifecycle-scoped strategy action without interpreting its action id', async () => {
+    const invokeOperatorStrategyAction = vi.fn(async () => {});
+    const server = Object.create(WSServer.prototype) as any;
+    server.logOperatorCommand = vi.fn();
+    server.handleCommandError = vi.fn();
+    server.digitalRadioEngine = { operatorManager: { invokeOperatorStrategyAction } };
+    const target = { kind: 'stream', streamId: 'stream-1', lifecycleEpoch: 3 };
+
+    await server.handleInvokeOperatorStrategyAction({
+      operatorId: 'operator-1', target, actionId: 'plugin-owned-action', payload: { value: 1700 },
+    }, 'conn-1');
+
+    expect(invokeOperatorStrategyAction).toHaveBeenCalledWith('operator-1', {
+      target, actionId: 'plugin-owned-action', payload: { value: 1700 },
+    });
   });
 
   it('returns the latest authoritative queue snapshot on a version conflict', () => {

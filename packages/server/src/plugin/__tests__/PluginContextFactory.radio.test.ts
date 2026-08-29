@@ -58,6 +58,16 @@ async function createContext(plugin: LoadedPlugin, deps: PluginManagerDeps) {
 }
 
 describe('PluginContextFactory radio access', () => {
+  it('projects the active virtual profile as a generic simulation fact', async () => {
+    const virtual = vi.spyOn(ConfigManager.getInstance(), 'getActiveVirtualRadioProfile');
+    virtual.mockReturnValue({ id: 'virtual-dev' } as never);
+    const ctx = await createContext(createPlugin(), createDeps());
+    expect(ctx.radio.isSimulation).toBe(true);
+
+    virtual.mockReturnValue(null);
+    expect(ctx.radio.isSimulation).toBe(false);
+  });
+
   it('prefers the host known radio frequency cache over saved presets', async () => {
     vi.spyOn(ConfigManager.getInstance(), 'getLastSelectedFrequency').mockReturnValue({
       frequency: 14_074_000,

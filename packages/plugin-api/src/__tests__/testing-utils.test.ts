@@ -222,6 +222,23 @@ describe('plugin-api testing utilities', () => {
       expect(ctx.log._calls).toHaveLength(1);
     });
 
+    it('exposes only plugin-owned sessions for the session permission', async () => {
+      const ctx = createMockContext({
+        permissions: ['logbook:session'],
+        callsign: 'BG4IAJ',
+      });
+      expect('queryQSOs' in ctx.logbook).toBe(false);
+      const session = await ctx.logbook.sessions.open({
+        sessionKey: 'contest:2026',
+        stationCallsign: 'BG4IAJ',
+        title: 'Contest 2026',
+      });
+      expect(session).toMatchObject({
+        id: 'plugin-session-contest:2026',
+        title: 'Contest 2026',
+      });
+    });
+
     it('includes host settings mocks', async () => {
       const ctx = createMockContext({ permissions: ['settings:ft8'] });
       await expect(ctx.settings.ft8.update({ maxSameTransmissionCount: 0 })).resolves.toMatchObject({

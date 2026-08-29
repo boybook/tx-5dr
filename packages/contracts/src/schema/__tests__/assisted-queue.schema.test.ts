@@ -31,6 +31,7 @@ describe('assisted queue contracts', () => {
         targetGrid: 'PM95',
         lastSnr: -12,
         lastHeardCyclesAgo: 6,
+        lastHeardCycle: 1,
       }],
     };
     expect(AssistedQueueSnapshotSchema.parse(snapshot)).toEqual(snapshot);

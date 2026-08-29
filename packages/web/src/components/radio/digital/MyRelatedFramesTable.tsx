@@ -10,8 +10,10 @@ import {
   useOperators,
 } from '../../../store/radioStore';
 import { usePluginSnapshot } from '../../../hooks/usePluginSnapshot';
+import { resolveOperatorTargetCallsigns } from '../../../utils/operatorTargets';
 import {
   buildQueueCallsignOrder,
+  isQueueTargetAction,
   resolveOperatorTargetAction,
   submitOperatorTarget,
 } from '../operators/operatorQueuePresentation';
@@ -57,7 +59,7 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
     [pluginSnapshot.plugins, selectedOperator],
   );
   const queueCallsignOrder = useMemo(
-    () => targetAction === 'enqueue'
+    () => isQueueTargetAction(targetAction)
       ? buildQueueCallsignOrder(selectedOperator?.runtime?.queue)
       : {},
     [selectedOperator?.runtime?.queue, targetAction],
@@ -81,13 +83,10 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
     return callsign ? [callsign] : [];
   }, [currentOperatorId, operators]);
 
-  const targetCallsign = useMemo(() => {
-    if (!currentOperatorId) {
-      return '';
-    }
-    const operator = operators.find(item => item.id === currentOperatorId);
-    return operator?.context?.targetCall || '';
-  }, [currentOperatorId, operators]);
+  const targetCallsigns = useMemo(
+    () => resolveOperatorTargetCallsigns(selectedOperator),
+    [selectedOperator],
+  );
 
   const buildSelectedFrame = (message: FrameDisplayMessage, group: FrameGroup): WSSelectedFrame | undefined => {
     if (typeof message.db !== 'number' || typeof message.dt !== 'number') {
@@ -138,8 +137,10 @@ export const MyRelatedFramesTable: React.FC<MyRelatedFT8TableProps> = ({ classNa
           groups={groups}
           className="h-full"
           myCallsigns={selectedOperatorCallsigns}
-          targetCallsign={targetCallsign}
+          targetCallsigns={targetCallsigns}
           queueCallsignOrder={queueCallsignOrder}
+          strategyName={selectedOperator?.strategy.name}
+          strategyMessagePresentation={selectedOperator?.runtime?.messagePresentation}
           showLogbookAnalysisVisuals={false}
           onRowDoubleClick={handleRowDoubleClick}
           showGroupHeader

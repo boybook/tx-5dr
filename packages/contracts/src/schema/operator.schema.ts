@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { ModeDescriptorSchema } from './mode.schema.js';
 import { sanitizeCallsignInput } from '../utils/callsign.js';
 import { sanitizeGridInput } from '../utils/grid.js';
+import { StrategyRuntimeSnapshotSchema } from './websocket.schema.js';
 
 const OperatorCallsignSchema = z
   .string()
@@ -20,6 +21,7 @@ export const RadioOperatorConfigSchema = z.object({
   myCallsign: OperatorCallsignSchema,
   myGrid: OperatorGridSchema.optional(),
   frequency: z.number().min(0).max(1000000000, '频率必须在0-1GHz之间').default(1000), // 音频偏移频率（Hz），默认1000Hz，创建时自动分配不重复值
+  maxConcurrentStreams: z.number().int().min(1).max(5).optional(),
   transmitCycles: z.array(z.number().min(0).max(1)).default([0]), // 0=偶数周期，1=奇数周期
   mode: ModeDescriptorSchema.optional(),
   logBookId: z.string().optional(), // 连接的日志本ID，如果未指定则使用默认日志本
@@ -67,6 +69,7 @@ export const RadioOperatorStatusResponseSchema = z.object({
     context: z.object({
       myCall: z.string(),
       myGrid: z.string(),
+      targetCalls: z.array(z.string()).optional(),
       targetCall: z.string(),
       targetGrid: z.string().optional(),
       frequency: z.number().optional(),
@@ -78,25 +81,7 @@ export const RadioOperatorStatusResponseSchema = z.object({
       state: z.string(),
       availableSlots: z.array(z.string()),
     }),
-    runtime: z.object({
-      currentState: z.string(),
-      slots: z.object({
-        TX1: z.string().optional(),
-        TX2: z.string().optional(),
-        TX3: z.string().optional(),
-        TX4: z.string().optional(),
-        TX5: z.string().optional(),
-        TX6: z.string().optional(),
-      }).optional(),
-      context: z.object({
-        targetCallsign: z.string().optional(),
-        targetGrid: z.string().optional(),
-        reportSent: z.number().optional(),
-        reportReceived: z.number().optional(),
-        actualFrequency: z.number().optional(),
-      }).optional(),
-      availableSlots: z.array(z.string()).optional(),
-    }).optional(),
+    runtime: StrategyRuntimeSnapshotSchema.optional(),
     slots: z.object({
       TX1: z.string().optional(),
       TX2: z.string().optional(),

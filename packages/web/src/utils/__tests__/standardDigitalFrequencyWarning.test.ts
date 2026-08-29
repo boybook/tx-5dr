@@ -2,6 +2,7 @@ import type { OperatorStatus } from '@tx5dr/contracts';
 import { describe, expect, it } from 'vitest';
 import {
   deriveSameCallsignStandardFrequencyWarning,
+  deriveMultiStreamStandardFrequencyRestriction,
   getStandardDigitalFrequencyMatch,
 } from '../standardDigitalFrequencyWarning';
 
@@ -91,5 +92,51 @@ describe('standardDigitalFrequencyWarning utils', () => {
     expect(warning?.groups).toEqual([
       { callsign: 'BI7ALG', cycles: [1], operatorIds: ['operator-a', 'operator-b'] },
     ]);
+  });
+
+  it('warns when any queue strategy requests multiple streams on a standard frequency', () => {
+    expect(deriveMultiStreamStandardFrequencyRestriction([
+      createOperator({
+        id: 'ww-digi-operator',
+        isTransmitting: false,
+        strategy: { name: 'ww-digi', state: 'TX6', availableSlots: ['TX6'] },
+        runtime: {
+          currentState: 'TX6',
+          queue: { version: 1, rows: [], maxActiveStreams: 1, requestedMaxActiveStreams: 3 },
+        },
+      }),
+      createOperator({
+        id: 'assisted-operator',
+        strategy: { name: 'assisted-qso-queue', state: 'TX6', availableSlots: ['TX6'] },
+        runtime: {
+          currentState: 'TX6',
+          queue: { version: 1, rows: [], maxActiveStreams: 1, requestedMaxActiveStreams: 2 },
+        },
+      }),
+    ], 'FT8', 14_074_000)).toEqual({
+      modeName: 'FT8',
+      standardFrequency: 14_074_000,
+      operatorIds: ['ww-digi-operator', 'assisted-operator'],
+    });
+  });
+
+  it('does not warn for single-stream strategies or away from standard frequencies', () => {
+    const operator = createOperator({
+      strategy: { name: 'ww-digi', state: 'TX6', availableSlots: ['TX6'] },
+      runtime: {
+        currentState: 'TX6',
+        queue: { version: 1, rows: [], maxActiveStreams: 1, requestedMaxActiveStreams: 3 },
+      },
+    });
+
+    expect(deriveMultiStreamStandardFrequencyRestriction([operator], 'FT8', 14_090_000)).toBeNull();
+    expect(deriveMultiStreamStandardFrequencyRestriction([
+      createOperator({
+        runtime: {
+          currentState: 'TX6',
+          queue: { version: 1, rows: [], maxActiveStreams: 1, requestedMaxActiveStreams: 1 },
+        },
+      }),
+    ], 'FT8', 14_074_000)).toBeNull();
   });
 });

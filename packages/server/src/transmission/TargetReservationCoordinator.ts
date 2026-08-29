@@ -5,6 +5,7 @@ interface TargetReservation {
   targetCallsign: string;
   operatorId: string;
   epoch: number;
+  streamId: string;
 }
 
 function normalize(value: string): string {
@@ -27,12 +28,39 @@ export class TargetReservationCoordinator {
     operatorId: string;
     epoch: number;
   }): boolean {
-    const stationCallsign = normalize(input.stationCallsign);
-    const targetCallsign = input.targetCallsign ? normalize(input.targetCallsign) : '';
-    if (!stationCallsign) return false;
+    return this.tryReplaceOperatorTargets({
+      stationCallsign: input.stationCallsign,
+      targets: input.targetCallsign ? [{ streamId: 'default', targetCallsign: input.targetCallsign }] : [],
+      operatorId: input.operatorId,
+      epoch: input.epoch,
+    });
+  }
 
-    if (targetCallsign) {
-      const targetKey = this.key(stationCallsign, targetCallsign);
+  tryReplaceOperatorTargets(input: {
+    stationCallsign: string;
+    targets: Array<{ streamId: string; targetCallsign: string }>;
+    operatorId: string;
+    epoch: number;
+  }): boolean {
+    const stationCallsign = normalize(input.stationCallsign);
+    if (!stationCallsign) return false;
+    const targets = input.targets.map((target) => ({
+      streamId: target.streamId.trim(),
+      targetCallsign: normalize(target.targetCallsign),
+    }));
+    if (targets.some((target) => !target.streamId || !target.targetCallsign)) return false;
+    const targetKeys = new Set(targets.map((target) => this.key(stationCallsign, target.targetCallsign)));
+    if (targetKeys.size !== targets.length) return false;
+
+    for (const reservation of this.reservations.values()) {
+      if (reservation.stationCallsign === stationCallsign
+          && reservation.operatorId === input.operatorId
+          && reservation.epoch > input.epoch) {
+        return false;
+      }
+    }
+
+    for (const targetKey of targetKeys) {
       const current = this.reservations.get(targetKey);
       if (current && current.operatorId !== input.operatorId) return false;
     }
@@ -43,17 +71,18 @@ export class TargetReservationCoordinator {
           || reservation.epoch > input.epoch) {
         continue;
       }
-      if (!targetCallsign || reservation.targetCallsign !== targetCallsign) {
+      if (!targetKeys.has(key)) {
         this.reservations.delete(key);
       }
     }
 
-    if (targetCallsign) {
-      this.reservations.set(this.key(stationCallsign, targetCallsign), {
+    for (const target of targets) {
+      this.reservations.set(this.key(stationCallsign, target.targetCallsign), {
         stationCallsign,
-        targetCallsign,
+        targetCallsign: target.targetCallsign,
         operatorId: input.operatorId,
         epoch: input.epoch,
+        streamId: target.streamId,
       });
     }
     return true;

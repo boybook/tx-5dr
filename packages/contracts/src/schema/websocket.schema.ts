@@ -20,7 +20,11 @@ import type {
   PluginSystemSnapshot,
 } from './plugin.schema.js';
 import { ModeDescriptorSchema } from './mode.schema.js';
-import { QSORecordSchema, TargetSelectionPriorityModeSchema } from './qso.schema.js';
+import {
+  QSORecordSchema,
+  QSOPersistencePolicySchema,
+  TargetSelectionPriorityModeSchema,
+} from './qso.schema.js';
 import {
   LogBookStatisticsSchema,
   LogbookHealthSchema,
@@ -107,6 +111,8 @@ export enum WSMessageType {
   OPERATOR_STATUS_UPDATE = 'operatorStatusUpdate',
   SET_OPERATOR_CONTEXT = 'setOperatorContext',
   SET_OPERATOR_RUNTIME_STATE = 'setOperatorRuntimeState',
+  SET_OPERATOR_STREAM_STATE = 'setOperatorStreamState',
+  INVOKE_OPERATOR_STRATEGY_ACTION = 'invokeOperatorStrategyAction',
   SET_OPERATOR_RUNTIME_SLOT_CONTENT = 'setOperatorRuntimeSlotContent',
   SET_OPERATOR_TRANSMIT_CYCLES = 'setOperatorTransmitCycles',
   START_OPERATOR = 'startOperator',
@@ -436,8 +442,103 @@ export const StrategyRuntimeContextSchema = z.object({
 });
 export type StrategyRuntimeContext = z.infer<typeof StrategyRuntimeContextSchema>;
 
+export const StrategyStateOptionSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1).optional(),
+  transmitText: z.string().optional(),
+});
+export type StrategyStateOption = z.infer<typeof StrategyStateOptionSchema>;
+
+export const StrategyActionInputSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('text'),
+    label: z.string().optional(),
+    value: z.string().optional(),
+    placeholder: z.string().optional(),
+    maxLength: z.number().int().positive().optional(),
+  }),
+  z.object({
+    kind: z.enum(['number', 'audio-frequency']),
+    label: z.string().optional(),
+    value: z.number().optional(),
+    min: z.number().optional(),
+    max: z.number().optional(),
+    step: z.number().positive().optional(),
+    unit: z.string().optional(),
+    spectrumPick: z.boolean().optional(),
+  }),
+]);
+
+export const StrategyActionDescriptorSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  description: z.string().optional(),
+  icon: z.string().optional(),
+  tone: z.enum(['default', 'primary', 'success', 'warning', 'danger']).optional(),
+  presentation: z.enum(['primary', 'secondary', 'menu', 'segmented']).optional(),
+  groupId: z.string().optional(),
+  selected: z.boolean().optional(),
+  disabledReason: z.string().optional(),
+  previewText: z.string().optional(),
+  confirmation: z.object({
+    title: z.string().min(1),
+    description: z.string().optional(),
+    confirmLabel: z.string().optional(),
+    cancelLabel: z.string().optional(),
+  }).optional(),
+  input: StrategyActionInputSchema.optional(),
+  navigation: z.object({
+    kind: z.literal('plugin-page'),
+    pageId: z.string().min(1),
+  }).optional(),
+});
+export type StrategyActionDescriptor = z.infer<typeof StrategyActionDescriptorSchema>;
+
+export const StrategyAttentionSchema = z.object({
+  id: z.string().min(1),
+  tone: z.enum(['info', 'warning', 'danger', 'success']),
+  title: z.string().min(1),
+  description: z.string().optional(),
+  params: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
+  notify: z.boolean().optional(),
+  expiresAt: z.number().optional(),
+  actionIds: z.array(z.string()).optional(),
+});
+export type StrategyAttention = z.infer<typeof StrategyAttentionSchema>;
+
+export const StrategyCompletionProjectionSchema = z.object({
+  state: z.enum(['not-ready', 'ready', 'committing', 'committed', 'failed']),
+  label: z.string().optional(),
+  recordId: z.string().optional(),
+});
+export type StrategyCompletionProjection = z.infer<typeof StrategyCompletionProjectionSchema>;
+
+export const StrategyStreamSnapshotSchema = z.object({
+  streamId: z.string().min(1),
+  currentState: z.string(),
+  targetCallsign: z.string().optional(),
+  targetGrid: z.string().optional(),
+  audioFrequencyHz: z.number().min(0).max(5000),
+  qsoLifecycleEpoch: z.number().int().nonnegative(),
+  stateOptions: z.array(StrategyStateOptionSchema).optional(),
+  actions: z.array(StrategyActionDescriptorSchema).optional(),
+  attentions: z.array(StrategyAttentionSchema).optional(),
+  completion: StrategyCompletionProjectionSchema.optional(),
+  lastReceivedText: z.string().optional(),
+  nextTransmitText: z.string().optional(),
+});
+export type StrategyStreamSnapshot = z.infer<typeof StrategyStreamSnapshotSchema>;
+
+export const StrategyTransmissionSchema = z.object({
+  streamId: z.string().min(1),
+  text: z.string().min(1),
+  audioFrequencyHz: z.number().min(0).max(5000),
+});
+export type StrategyTransmission = z.infer<typeof StrategyTransmissionSchema>;
+
 export const AssistedQueueDisplayStateSchema = z.enum([
   'TX1', 'TX2', 'TX3', 'TX4', 'TX5', 'engaged', 'closing', 'paused', 'no-response', 'later', 'review',
+  'candidate', 'authorized', 'dupe',
 ]);
 export const AssistedQueuePauseReasonSchema = z.enum(['target-busy', 'stale']);
 export const AssistedQueueToneSchema = z.enum(['neutral', 'active', 'success', 'warning', 'danger']);
@@ -457,10 +558,18 @@ export const AssistedQueueRowSchema = z.object({
   targetGrid: z.string().optional(),
   lastSnr: z.number().optional(),
   lastHeardCyclesAgo: z.number().int().nonnegative().optional(),
+  lastHeardCycle: z.union([z.literal(0), z.literal(1)]).optional(),
+  streamId: z.string().optional(),
+  audioFrequencyHz: z.number().optional(),
+  authorizationId: z.string().optional(),
+  actions: z.array(StrategyActionDescriptorSchema).optional(),
 });
 export const AssistedQueueSnapshotSchema = z.object({
   version: z.number().int().nonnegative(),
   activeEntryId: z.string().optional(),
+  activeEntryIds: z.array(z.string()).optional(),
+  maxActiveStreams: z.number().int().min(1).max(5).optional(),
+  requestedMaxActiveStreams: z.number().int().min(1).max(5).optional(),
   rows: z.array(AssistedQueueRowSchema),
 });
 export type AssistedQueueDisplayState = z.infer<typeof AssistedQueueDisplayStateSchema>;
@@ -472,6 +581,60 @@ export type AssistedQueueSnapshot = z.infer<typeof AssistedQueueSnapshotSchema>;
 
 /** Null clears an unsettable runtime report field over JSON/WebSocket. */
 export const OperatorContextReportFieldSchema = z.number().nullish();
+
+export const StrategyMessagePresentationToneSchema = z.enum([
+  'neutral', 'primary', 'secondary', 'success', 'warning', 'danger',
+]);
+export const StrategyMessagePresentationBadgeSchema = z.object({
+  label: z.string().min(1),
+  tone: StrategyMessagePresentationToneSchema,
+});
+export const StrategyMessagePresentationTokenMatchSchema = z.object({
+  firstTokenIn: z.array(z.string().min(1)).optional(),
+  anyTokenIn: z.array(z.string().min(1)).optional(),
+});
+export const StrategyMessagePresentationClassSchema = z.object({
+  badge: StrategyMessagePresentationBadgeSchema.optional(),
+  badges: z.array(StrategyMessagePresentationBadgeSchema).optional(),
+  row: z.object({
+    tone: StrategyMessagePresentationToneSchema,
+    background: z.enum(['none', 'soft']).optional(),
+    accent: z.boolean().optional(),
+  }).optional(),
+  emphasisWhen: z.array(StrategyMessagePresentationTokenMatchSchema).min(1).optional(),
+  textDecoration: z.literal('line-through').optional(),
+  opacity: z.enum(['normal', 'muted']).optional(),
+});
+export const StrategyMessagePresentationProjectionSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  mode: z.enum(['replace-logbook', 'augment']),
+  subject: z.literal('sender-callsign'),
+  partitionBy: z.enum(['band', 'mode', 'none']),
+  eligiblePartitions: z.array(z.string()).optional(),
+  defaultClass: z.string().optional(),
+  classes: z.record(z.string(), StrategyMessagePresentationClassSchema),
+  assignments: z.array(z.object({
+    subject: z.string().min(1),
+    partition: z.string().optional(),
+    classId: z.string().min(1),
+  })),
+  noveltyRules: z.array(z.object({
+    fact: z.literal('grid-field-2'),
+    knownValuesByPartition: z.record(z.string(), z.array(z.string().min(1))),
+    classId: z.string().min(1),
+  })).optional(),
+  tagRules: z.array(z.object({
+    id: z.string().min(1),
+    match: StrategyMessagePresentationTokenMatchSchema,
+    badge: StrategyMessagePresentationBadgeSchema,
+  })).optional(),
+});
+
+export type StrategyMessagePresentationTone = z.infer<typeof StrategyMessagePresentationToneSchema>;
+export type StrategyMessagePresentationBadge = z.infer<typeof StrategyMessagePresentationBadgeSchema>;
+export type StrategyMessagePresentationTokenMatch = z.infer<typeof StrategyMessagePresentationTokenMatchSchema>;
+export type StrategyMessagePresentationClass = z.infer<typeof StrategyMessagePresentationClassSchema>;
+export type StrategyMessagePresentationProjection = z.infer<typeof StrategyMessagePresentationProjectionSchema>;
 
 export const StrategyRuntimeSnapshotSchema = z.object({
   currentState: z.string(),
@@ -486,8 +649,32 @@ export const StrategyRuntimeSnapshotSchema = z.object({
   context: StrategyRuntimeContextSchema.optional(),
   availableSlots: z.array(z.string()).optional(),
   qsoLifecycleEpoch: z.number().int().nonnegative().optional(),
+  streams: z.array(StrategyStreamSnapshotSchema).optional(),
   queue: AssistedQueueSnapshotSchema.optional(),
+  actions: z.array(StrategyActionDescriptorSchema).optional(),
+  attentions: z.array(StrategyAttentionSchema).optional(),
+  messagePresentation: StrategyMessagePresentationProjectionSchema.optional(),
+  transmitGate: z.object({
+    allowed: z.literal(false),
+    reason: z.string().min(1),
+    actionId: z.string().optional(),
+  }).optional(),
 });
+
+export const StrategyActionTargetSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('runtime') }),
+  z.object({
+    kind: z.literal('stream'),
+    streamId: z.string().min(1),
+    lifecycleEpoch: z.number().int().nonnegative(),
+  }),
+  z.object({
+    kind: z.literal('queue-entry'),
+    entryId: z.string().min(1),
+    queueVersion: z.number().int().nonnegative(),
+  }),
+]);
+export type StrategyActionTarget = z.infer<typeof StrategyActionTargetSchema>;
 export type StrategyRuntimeSnapshot = z.infer<typeof StrategyRuntimeSnapshotSchema>;
 
 export const LevelMeterDisplayStyleSchema = z.enum([
@@ -787,10 +974,13 @@ export const OperatorStatusSchema = z.object({
   isTransmitting: z.boolean(), // 是否已授予策略自动发射许可（发射开关状态）
   isInActivePTT: z.boolean().optional(), // 该操作员的音频是否正在被实际播放
   hasTransmitIntent: z.boolean().optional(), // 当前策略是否有可在合法周期发射的有效内容
+  currentTransmissions: z.array(StrategyTransmissionSchema).optional(),
   currentSlot: z.string().optional(),
   context: z.object({
     myCall: z.string(),
     myGrid: z.string(),
+    /** Canonical active target set; `targetCall` remains the primary compatibility field. */
+    targetCalls: z.array(z.string()).optional(),
     targetCall: z.string(),
     targetGrid: z.string().optional(),
     frequency: z.number().optional(),
@@ -870,6 +1060,27 @@ export const WSSetOperatorRuntimeStateMessageSchema = WSBaseMessageSchema.extend
   data: z.object({
     operatorId: z.string(),
     state: OperatorRuntimeSlotSchema,
+  }),
+});
+
+/** Sets one strategy-owned stream to a protocol-approved state. */
+export const WSSetOperatorStreamStateMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SET_OPERATOR_STREAM_STATE),
+  data: z.object({
+    operatorId: z.string(),
+    streamId: z.string().min(1),
+    stateId: z.string().min(1),
+    expectedLifecycleEpoch: z.number().int().nonnegative(),
+  }),
+});
+
+export const WSInvokeOperatorStrategyActionMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.INVOKE_OPERATOR_STRATEGY_ACTION),
+  data: z.object({
+    operatorId: z.string().min(1),
+    target: StrategyActionTargetSchema,
+    actionId: z.string().min(1),
+    payload: z.unknown().optional(),
   }),
 });
 
@@ -1045,6 +1256,8 @@ export type WSOperatorsListMessage = z.infer<typeof WSOperatorsListMessageSchema
 export type WSOperatorStatusUpdateMessage = z.infer<typeof WSOperatorStatusUpdateMessageSchema>;
 export type WSSetOperatorContextMessage = z.infer<typeof WSSetOperatorContextMessageSchema>;
 export type WSSetOperatorRuntimeStateMessage = z.infer<typeof WSSetOperatorRuntimeStateMessageSchema>;
+export type WSSetOperatorStreamStateMessage = z.infer<typeof WSSetOperatorStreamStateMessageSchema>;
+export type WSInvokeOperatorStrategyActionMessage = z.infer<typeof WSInvokeOperatorStrategyActionMessageSchema>;
 export type WSSetOperatorRuntimeSlotContentMessage = z.infer<typeof WSSetOperatorRuntimeSlotContentMessageSchema>;
 export type WSSetOperatorTransmitCyclesMessage = z.infer<typeof WSSetOperatorTransmitCyclesMessageSchema>;
 export type WSStartOperatorMessage = z.infer<typeof WSStartOperatorMessageSchema>;
@@ -1671,6 +1884,8 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSOperatorStatusUpdateMessageSchema,
   WSSetOperatorContextMessageSchema,
   WSSetOperatorRuntimeStateMessageSchema,
+  WSSetOperatorStreamStateMessageSchema,
+  WSInvokeOperatorStrategyActionMessageSchema,
   WSSetOperatorRuntimeSlotContentMessageSchema,
   WSSetOperatorTransmitCyclesMessageSchema,
   WSStartOperatorMessageSchema,
@@ -1786,7 +2001,9 @@ export type WSGetStatusMessage = z.infer<typeof WSGetStatusMessageSchema>;
 
 export const TransmitRequestSchema = z.object({
   operatorId: z.string(),
+  streamId: z.string().min(1).optional(),
   transmission: z.string(),
+  audioFrequencyHz: z.number().min(0).max(5000).optional(),
   /** 是否覆盖同一操作员在同一时隙的现有 TX 帧（自动重决策时为 true） */
   replaceExisting: z.boolean().optional(),
   source: z.enum(['standard-qso', 'plugin', 'late-decode', 'operator-edit', 'manual']).optional(),
@@ -1797,6 +2014,20 @@ export const TransmitRequestSchema = z.object({
 
 export type TransmitRequest = z.infer<typeof TransmitRequestSchema>;
 
+export const TransmitBatchRequestSchema = z.object({
+  operatorId: z.string(),
+  transmissions: z.array(z.object({
+    streamId: z.string().min(1),
+    transmission: z.string(),
+    audioFrequencyHz: z.number().min(0).max(5000),
+  })).max(5),
+  replaceExisting: z.boolean().optional(),
+  source: z.enum(['standard-qso', 'plugin', 'late-decode', 'operator-edit', 'manual']).optional(),
+  reason: z.string().optional(),
+  decisionEpoch: z.number().int().nonnegative().optional(),
+});
+export type TransmitBatchRequest = z.infer<typeof TransmitBatchRequestSchema>;
+
 // ===== 前端应用事件接口 =====
 
 /**
@@ -1804,6 +2035,8 @@ export type TransmitRequest = z.infer<typeof TransmitRequestSchema>;
  */
 export const TransmissionCompleteInfoSchema = z.object({
   operatorId: z.string(),
+  streamId: z.string().optional(),
+  trackId: z.string().optional(),
   success: z.boolean(),
   frameId: z.string().optional(),
   physicalConfirmed: z.boolean().optional(),
@@ -1837,9 +2070,11 @@ export interface DigitalRadioEngineEvents {
 
   // 发射相关事件
   requestTransmit: (request: TransmitRequest) => void;
+  requestTransmitBatch: (request: TransmitBatchRequest) => void;
   transmissionComplete: (info: TransmissionCompleteInfo) => void;
   transmissionLog: (data: {
     operatorId: string;
+    streamId: string;
     frameId: string;
     revision: number;
     playbackGeneration: number;
@@ -1919,7 +2154,7 @@ export interface DigitalRadioEngineEvents {
 
   // Profile 管理事件
   profileChanged: (data: z.infer<typeof ProfileChangedEventSchema>) => void;
-  profileListUpdated: (data: { profiles: z.infer<typeof RadioProfileSchema>[]; activeProfileId: string | null }) => void;
+  profileListUpdated: (data: { profiles: z.infer<typeof RadioProfileSchema>[]; activeProfileId: string | null; hasConfiguredProfiles?: boolean }) => void;
   realtimeSettingsChanged: (data: RealtimeSettingsResponseData) => void;
 
   // 认证事件
@@ -1985,10 +2220,18 @@ export interface DigitalRadioEngineEvents {
   transmitStart: (slotInfo: z.infer<typeof SlotInfoSchema>) => void;
   timingWarning: (data: { title: string; text: string }) => void;
   operatorSlotChanged: (data: { operatorId: string; slot: string }) => void;
+  operatorStreamStateChanged: (data: {
+    operatorId: string;
+    streamId: string;
+    state: string;
+    commandEpoch?: number;
+    source?: 'manual' | 'plugin' | 'late-decode' | 'slot-auto';
+  }) => void;
   operatorSlotContentChanged: (data: { operatorId: string; slot: string; content: string }) => void;
   operatorFrequencyChanged: (data: { operatorId: string; frequency: number }) => void;
   operatorTransmitCyclesChanged: (data: {
     operatorId: string;
+    previousTransmitCycles?: number[];
     transmitCycles: number[];
     commandEpoch?: number;
     source?: 'manual' | 'plugin' | 'late-decode' | 'slot-auto';
@@ -1996,15 +2239,22 @@ export interface DigitalRadioEngineEvents {
   }) => void;
   qsoLifecycleChanged: (data: {
     operatorId: string;
+    streamId?: string;
     lifecycleEpoch: number;
     runtimeGeneration?: number;
   }) => void;
   recordQSO: (data: {
     operatorId: string;
+    streamId?: string;
     qsoLifecycleId?: string;
     qsoLifecycleEpoch?: number;
     qsoRuntimeGeneration?: number;
     qsoRecord: z.infer<typeof QSORecordSchema>;
+    persistencePolicy?: z.infer<typeof QSOPersistencePolicySchema>;
+    destination?:
+      | { kind: 'plugin-session'; sessionId: string }
+      | { kind: 'plugin-session-key'; sessionKey: string };
+    sourcePluginName?: string;
     retryAttemptId?: string;
     resolve?: (record: z.infer<typeof QSORecordSchema>) => void;
     reject?: (error: unknown) => void;

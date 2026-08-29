@@ -191,7 +191,7 @@ function toLogBookInfo(logBook: NonNullable<FastifyRequest['logBookInstance']>):
     name: logBook.name,
     description: logBook.description,
     fileName: path.basename(logBook.filePath),
-    storageKind: logBook.storageKind,
+    storageKind: logBook.storageKind === 'ephemeral' ? 'managed' : logBook.storageKind,
     createdAt: logBook.createdAt,
     lastUsed: logBook.lastUsed,
     isActive: logBook.isActive,

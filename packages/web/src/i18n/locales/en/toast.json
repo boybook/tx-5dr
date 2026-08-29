@@ -51,6 +51,10 @@
       "title": "Stopped: repeated message",
       "description": "Operator {{operatorId}} was stopped before sending the same message again (attempt {{attemptedCount}}, limit {{maxCount}}) to avoid repeatedly occupying the frequency: {{transmission}}"
     },
+    "standardFrequencyMultiStreamFallback": {
+      "title": "Work one station at a time on standard frequencies",
+      "description": "An operator cannot send multiple simultaneous signals on the standard {{mode}} calling frequency, {{frequency}} MHz. This transmission was reduced to one QSO."
+    },
     "repeaterDuplexUnsupported": {
       "title": "Repeater DUP not applied",
       "description": "Switched to {{frequency}} MHz, but this radio does not support repeater DUP control or the DUP setting failed. {{reason}}"

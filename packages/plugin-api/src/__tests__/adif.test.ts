@@ -38,6 +38,17 @@ describe('ADIF QSO mode projection', () => {
     expect(parsed?.mode).toBe('SSB');
     expect(parsed?.submode).toBe('USB');
   });
+
+  it('round-trips the contest identifier used for WW Digi recovery', () => {
+    const adif = convertQSOToADIF(createQso({
+      mode: 'FT8',
+      submode: undefined,
+      contestId: 'WW-DIGI',
+    }));
+
+    expect(adif).toContain('<contest_id:7>WW-DIGI');
+    expect(parseADIFRecord(adif, 'test')?.contestId).toBe('WW-DIGI');
+  });
 });
 
 describe('ADIF QSO comments', () => {

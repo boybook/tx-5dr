@@ -40,6 +40,7 @@ export class PluginUIBridge implements UIBridge {
       groupId: string,
       panels: PluginPanelDescriptor[],
     ) => void,
+    private readonly onRefreshOperatorProjection?: (operatorId: string) => void,
   ) {
     this.operatorId = instanceTarget.kind === 'operator'
       ? instanceTarget.operatorId
@@ -81,6 +82,13 @@ export class PluginUIBridge implements UIBridge {
 
   clearPanelContributions(groupId: string): void {
     this.setPanelContributions(groupId, []);
+  }
+
+  refreshOperatorProjection(): void {
+    if (this.instanceTarget.kind !== 'operator') {
+      throw new Error('operator_projection_requires_operator_instance');
+    }
+    this.onRefreshOperatorProjection?.(this.instanceTarget.operatorId);
   }
 
   registerPageHandler(handler: PluginUIHandler): void {

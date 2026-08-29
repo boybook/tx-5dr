@@ -10,9 +10,7 @@ import {
   PopoverTrigger,
 } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import type { IconDefinition, IconPack } from '@fortawesome/fontawesome-svg-core';
-import { faPuzzlePiece, fas } from '@fortawesome/free-solid-svg-icons';
-import { fab } from '@fortawesome/free-brands-svg-icons';
+import type { IconDefinition } from '@fortawesome/fontawesome-svg-core';
 import type {
   PluginPanelDescriptor,
   PluginPanelMetaPayload,
@@ -26,7 +24,9 @@ import { usePluginSnapshot } from '../../../hooks/usePluginSnapshot';
 import { usePluginPanelMeta, type PanelMeta } from '../../../hooks/usePluginPanelMeta';
 import { useHasMinRole } from '../../../store/authStore';
 import { resolvePluginLabel, resolvePluginLabelWithValues, resolvePluginName } from '../../../utils/pluginLocales';
+import { openPluginPageWindow } from '../../../utils/windowManager';
 import { PluginIframeHost } from '../../plugins/PluginIframeHost';
+import { resolvePluginIcon } from '../../plugins/pluginIcons';
 
 const GLOBAL_PLUGIN_OPERATOR_ID = '__global__';
 const RADIO_CONTROL_TOOLBAR_SLOT = 'radio-control-toolbar';
@@ -87,60 +87,15 @@ export interface RadioControlToolbarEntry {
   pageId: string;
   resolvedTitle: string;
   icon: string | undefined;
-  openMode: 'popover' | 'modal';
+  openMode: 'popover' | 'modal' | 'page';
   uiSize: 'sm' | 'md' | 'lg';
   pluginGeneration: number;
   initialPanelMeta: PluginPanelMetaPayload[];
   meta: PanelMeta;
 }
 
-function toFontAwesomeExportKey(iconName: string): string {
-  if (/^fa[A-Z0-9]/.test(iconName)) {
-    return iconName;
-  }
-  const pascal = iconName
-    .split(/[-_\s]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join('');
-  return `fa${pascal}`;
-}
-
-function getIconFromPack(pack: IconPack, rawName: string): IconDefinition | null {
-  const normalized = rawName.trim();
-  if (!normalized) {
-    return null;
-  }
-  const direct = pack[normalized] ?? pack[toFontAwesomeExportKey(normalized)];
-  if (direct) {
-    return direct;
-  }
-  const normalizedLower = normalized.toLowerCase();
-  return Object.values(pack).find((icon) =>
-    icon.iconName.toLowerCase() === normalizedLower
-    || icon.iconName.toLowerCase() === normalizedLower.replace(/^fa-/, '')
-  ) ?? null;
-}
-
 export function resolveRadioToolbarIcon(rawIcon: string | undefined): IconDefinition {
-  const icon = rawIcon?.trim();
-  if (!icon) {
-    return faPuzzlePiece;
-  }
-
-  const [prefix, ...rest] = icon.split(':');
-  const hasPrefix = rest.length > 0;
-  const name = hasPrefix ? rest.join(':') : icon;
-  const normalizedPrefix = prefix.toLowerCase();
-
-  if (hasPrefix && (normalizedPrefix === 'brand' || normalizedPrefix === 'brands' || normalizedPrefix === 'fab')) {
-    return getIconFromPack(fab, name) ?? faPuzzlePiece;
-  }
-  if (hasPrefix && (normalizedPrefix === 'solid' || normalizedPrefix === 'fas')) {
-    return getIconFromPack(fas, name) ?? faPuzzlePiece;
-  }
-
-  return getIconFromPack(fas, icon) ?? getIconFromPack(fab, icon) ?? faPuzzlePiece;
+  return resolvePluginIcon(rawIcon);
 }
 
 function pluginMatchesToolbar(plugin: PluginStatus): boolean {
@@ -264,11 +219,27 @@ const RadioControlToolbarButton: React.FC<{ entry: RadioControlToolbarEntry }> =
       size="sm"
       className={TOOLBAR_BUTTON_CLASS}
       aria-label={entry.resolvedTitle}
-      onPress={entry.openMode === 'modal' ? () => setIsModalOpen(true) : undefined}
+      onPress={entry.openMode === 'modal'
+        ? () => setIsModalOpen(true)
+        : entry.openMode === 'page'
+          ? () => openPluginPageWindow({
+            pluginName: entry.pluginName,
+            pageId: entry.pageId,
+            params: { panelId: entry.panelId, ...(entry.panel.params ?? {}) },
+          })
+          : undefined}
     >
       <FontAwesomeIcon icon={icon} className={TOOLBAR_ICON_CLASS} />
     </Button>
   );
+
+  if (entry.openMode === 'page') {
+    return (
+      <ToolbarIconTooltip label={entry.resolvedTitle}>
+        {commonButton}
+      </ToolbarIconTooltip>
+    );
+  }
 
   if (entry.openMode === 'modal') {
     return (

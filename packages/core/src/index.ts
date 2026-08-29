@@ -26,6 +26,7 @@ export * from './callsign/callsign.js';
 export * from './callsign/grid-location.js';
 export * from './callsign/dxcc-online-validator.js';
 export * from './utils/cycleUtils.js';
+export * from './utils/standardDigitalFrequency.js';
 
 // 类型导出
 export * from './types/index.js';
