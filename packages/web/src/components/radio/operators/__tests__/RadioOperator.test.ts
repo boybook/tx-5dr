@@ -9,6 +9,7 @@ import { pickManualIdleFrequency } from '../radioOperatorIdleFrequency';
 import {
   resolveRadioOperatorCurrentTransmissions,
   resolveRadioOperatorCyclePresentation,
+  resolveRadioOperatorStateContent,
   resolveSingleControllableStream,
   resolveRadioOperatorStreamPresentations,
   shouldUseParallelQsoPresentation,
@@ -260,6 +261,20 @@ describe('RadioOperator transmit content', () => {
       isTransmit: true,
       transmitContent: 'CQ WW BG5DRB PM01',
     });
+    expect(resolveRadioOperatorStateContent(operator, 'TX6')).toBe('CQ WW BG5DRB PM01');
+  });
+
+  it('keeps explicit slot content ahead of the Host single-transmission fallback', () => {
+    const operator = createOperatorStatus({
+      currentSlot: 'TX6',
+      slots: { TX6: 'CQ BG5DRB PM01' },
+      currentTransmissions: [{
+        streamId: 'cq', text: 'CQ WW BG5DRB PM01', audioFrequencyHz: 1500,
+      }],
+    });
+
+    expect(resolveRadioOperatorStateContent(operator, 'TX6', operator.slots?.TX6))
+      .toBe('CQ BG5DRB PM01');
   });
 
   it('summarizes three transmissions and joins each lane with its protocol state', () => {
