@@ -231,6 +231,41 @@ export class PhysicalTxCoordinator extends EventEmitter<PhysicalTxCoordinatorEve
     return this.staleCallbackDiscardCount;
   }
 
+  /** Runs a non-radio operation after the physical lease is idle. */
+  async runWhenIdle<T>(reason: string, operation: () => T | Promise<T>): Promise<T> {
+    await this.acquireIdleFence(reason);
+    try {
+      return await operation();
+    } finally {
+      if (this.maintenanceReason === reason) this.maintenanceReason = null;
+    }
+  }
+
+  private async acquireIdleFence(reason: string): Promise<void> {
+    if (!this.activeLease) {
+      if (this.maintenanceReason || this.pendingOperationFences.size > 0) {
+        throw new PhysicalTxBusyError('physical transmitter cleanup is still settling');
+      }
+      this.maintenanceReason = reason;
+      return;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const onPhaseChanged = () => {
+        if (this.activeLease) return;
+        this.off('phaseChanged', onPhaseChanged);
+        if (this.maintenanceReason || this.pendingOperationFences.size > 0) {
+          reject(new PhysicalTxBusyError('physical transmitter cleanup is still settling'));
+          return;
+        }
+        this.maintenanceReason = reason;
+        resolve();
+      };
+      this.on('phaseChanged', onPhaseChanged);
+      onPhaseChanged();
+    });
+  }
+
   /**
    * Runs a hardware mutation while the transmitter is confirmed idle. The
    * fence is installed synchronously, before user code runs, so digital,

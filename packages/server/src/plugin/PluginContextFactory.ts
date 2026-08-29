@@ -1150,20 +1150,26 @@ export class PluginContextFactory {
           return logBook.provider.addQSO(snapshotPluginData(record, 'structured'), operatorId);
         },
         async updateQSO(qsoId: string, updates: Partial<import('@tx5dr/contracts').QSORecord>) {
-          const logBook = getRequiredLogBook();
-          return logBook.provider.updateQSO(qsoId, snapshotPluginData(updates, 'structured'));
+          const write = () => {
+            const logBook = getRequiredLogBook();
+            return logBook.provider.updateQSO(qsoId, snapshotPluginData(updates, 'structured'));
+          };
+          return deps.runWhenPhysicalTxIdle ? deps.runWhenPhysicalTxIdle(write) : write();
         },
         async applyQsoBatch(
           mutations: readonly import('@tx5dr/core').LogbookBatchMutation[],
           options: { expectedRevision: string },
         ) {
-          const logBook = getRequiredLogBook();
-          const result = await logBook.provider.applyQsoBatch(
-            snapshotPluginData(mutations, 'structured'),
-            snapshotPluginData(options, 'structured'),
-            operatorId,
-          );
-          return snapshotPluginData(result, 'structured');
+          const write = async () => {
+            const logBook = getRequiredLogBook();
+            const result = await logBook.provider.applyQsoBatch(
+              snapshotPluginData(mutations, 'structured'),
+              snapshotPluginData(options, 'structured'),
+              operatorId,
+            );
+            return snapshotPluginData(result, 'structured');
+          };
+          return deps.runWhenPhysicalTxIdle ? deps.runWhenPhysicalTxIdle(write) : write();
         },
         async getStatistics() {
           const logBook = getExistingLogBook();
