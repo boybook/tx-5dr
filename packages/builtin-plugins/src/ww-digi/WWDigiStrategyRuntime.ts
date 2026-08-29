@@ -27,7 +27,7 @@ import type {
   StrategyTransmitGate,
   StreamPhysicalReceipt,
 } from '@tx5dr/plugin-api';
-import { FT8MessageType, normalizeCallsign } from '@tx5dr/plugin-api';
+import { normalizeCallsign } from '@tx5dr/plugin-api';
 import {
   FT8MessageParser,
   CycleUtils,
@@ -44,6 +44,13 @@ import {
   type WWDigiEntryData,
   type WWDigiLaneConfig,
 } from './WWDigiProtocolLane.js';
+import {
+  buildWWDigiCompletionEffect,
+  isWWDigiProtocolContext,
+  reduceWWDigiInbound,
+} from './WWDigiProtocolContext.js';
+
+const MIN_PROTOCOL_CONTEXT_RECEIVE_CYCLES = 12;
 
 export interface WWDigiRuntimeConfig extends WWDigiLaneConfig {
   frequency: number;
@@ -82,17 +89,8 @@ interface RuntimeCheckpoint {
   allowQueuedCycleSelection: boolean;
   practiceEnabled?: boolean;
   practiceSessionDestroyPending?: boolean;
-  completionEvidence?: Array<[string, CompletionEvidence]>;
   detachedCompletions?: Array<[string, DetachedCompletion]>;
-  recoveredCompletionEpoch?: number;
-}
-
-interface CompletionEvidence {
-  callsign: string;
-  grid?: string;
-  startTime: number;
-  audioFrequencyHz: number;
-  messageHistory: string[];
+  detachedCompletionEpoch?: number;
 }
 
 interface DetachedCompletion {
@@ -106,10 +104,6 @@ interface DetachedCompletion {
 function targetKey(callsign: string): string {
   const upper = callsign.trim().toUpperCase();
   return normalizeCallsign(upper) || upper;
-}
-
-function callsignMatches(left: string | undefined, right: string | undefined): boolean {
-  return Boolean(left && right && targetKey(left) === targetKey(right));
 }
 
 function selectedSender(raw: string): { callsign?: string; grid?: string } {
@@ -144,9 +138,8 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   private allowQueuedCycleSelection = false;
   private practiceEnabled = false;
   private practiceSessionDestroyPending = false;
-  private readonly completionEvidence = new Map<string, CompletionEvidence>();
   private readonly detachedCompletions = new Map<string, DetachedCompletion>();
-  private recoveredCompletionEpoch = 0;
+  private detachedCompletionEpoch = 0;
 
   constructor(
     private readonly operator: WWDigiRuntimeOperator,
@@ -209,9 +202,8 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       allowQueuedCycleSelection: this.allowQueuedCycleSelection,
       practiceEnabled: this.practiceEnabled,
       practiceSessionDestroyPending: this.practiceSessionDestroyPending,
-      completionEvidence: Array.from(this.completionEvidence.entries()),
       detachedCompletions: Array.from(this.detachedCompletions.entries()),
-      recoveredCompletionEpoch: this.recoveredCompletionEpoch,
+      detachedCompletionEpoch: this.detachedCompletionEpoch,
     } satisfies RuntimeCheckpoint;
   }
 
@@ -230,26 +222,23 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     this.allowQueuedCycleSelection = state.allowQueuedCycleSelection === true;
     this.practiceEnabled = state.practiceEnabled === true;
     this.practiceSessionDestroyPending = state.practiceSessionDestroyPending === true;
-    this.completionEvidence.clear();
-    for (const [key, evidence] of state.completionEvidence ?? []) {
-      this.completionEvidence.set(key, structuredClone(evidence));
-    }
     this.detachedCompletions.clear();
     for (const [recordId, completion] of state.detachedCompletions ?? []) {
       this.detachedCompletions.set(recordId, structuredClone(completion));
     }
-    this.recoveredCompletionEpoch = state.recoveredCompletionEpoch ?? 0;
+    this.detachedCompletionEpoch = state.detachedCompletionEpoch ?? 0;
   }
 
   observeDecodedMessages(messages: ParsedFT8Message[], meta: QueuedStrategyObservationMeta): boolean {
     if (!this.operator.isTransmitting) this.previousTransmitting = false;
-    let changed = this.observeCompletionEvidence(messages);
+    let changed = false;
     const observedCycle = CycleUtils.isEvenCycle(meta.slotInfo.cycleNumber) ? 0 : 1;
     const isReceiveSlot = !this.operator.config.transmitCycles.includes(observedCycle);
     if (isReceiveSlot && (this.lastObservedReceiveSlotStartMs === undefined
         || meta.slotInfo.startMs > this.lastObservedReceiveSlotStartMs)) {
       this.lastObservedReceiveSlotStartMs = meta.slotInfo.startMs;
       this.receiveEpoch += 1;
+      changed = this.expireProtocolContexts() || changed;
       changed = this.expireAuthorizations() || changed;
     }
     let resumeSelectedCycle = false;
@@ -299,7 +288,9 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
         this.coordinator.setRequestedTransmitCycle(entry.entryId, requestedTransmitCycle);
       }
       if (!activeEntryIds.includes(entry.entryId)
-          && (entry.data.status === 'authorized' || entry.data.status === 'cycle-paused') && targetCallsign
+          && (entry.data.status === 'authorized'
+            || entry.data.status === 'cycle-paused'
+            || entry.data.status === 'no-response') && targetCallsign
           && targetKey(targetCallsign) !== targetKey(this.operator.config.myCallsign)) {
         if (this.coordinator.updateEntry(entry.entryId, (data) => {
           data.status = 'paused';
@@ -309,6 +300,53 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
           data.cycleResume = undefined;
           return true;
         })) changed = true;
+      }
+      if (!isActive && isWWDigiProtocolContext(entry.data.protocolContext)) {
+        const reduced = reduceWWDigiInbound(
+          entry.data.protocolContext,
+          message,
+          this.operator.config,
+        );
+        if (reduced.changed) {
+          if (reduced.completed) {
+            const streamId = `recovered-${entry.targetKey}`;
+            const effect = buildWWDigiCompletionEffect(reduced.context, {
+              streamId,
+              lifecycleEpoch: ++this.detachedCompletionEpoch,
+              endTime: message.timestamp,
+              authorizationId: entry.data.authorizationId,
+              recoveredFinalAcknowledgement: true,
+            }, this.operator.config);
+            if (!this.detachedCompletions.has(effect.record.id)) {
+              this.detachedCompletions.set(effect.record.id, {
+                callsign: entry.callsign,
+                entryId: entry.entryId,
+                effect,
+                emitted: false,
+              });
+            }
+            this.coordinator.updateEntry(entry.entryId, (data) => {
+              data.status = 'log-pending';
+              data.protocolContext = undefined;
+              data.protocolContextExpiresAtReceiveEpoch = undefined;
+              return true;
+            });
+          } else {
+            this.coordinator.updateEntry(entry.entryId, (data) => {
+              data.protocolContext = structuredClone(reduced.context);
+              data.protocolContextExpiresAtReceiveEpoch = this.protocolContextExpiryEpoch();
+              data.targetGrid = reduced.context.targetGrid;
+              if (data.status === 'no-response' && data.authorizationId) {
+                data.status = 'authorized';
+                data.authorizedAt = Date.now();
+                data.authorizedReceiveEpoch = this.receiveEpoch;
+                data.noResponseCycles = undefined;
+              }
+              return true;
+            });
+          }
+          changed = true;
+        }
       }
       let parkedMatchesSelectedCycle = false;
       if (this.coordinator.updateEntry(entry.entryId, (data) => {
@@ -513,14 +551,14 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
 
   async decide(messages: ParsedFT8Message[], meta: StrategyDecisionMetaV2): Promise<StrategyDecisionResult> {
     this.syncParallelStreams();
-    const recoveredCompletions = this.takeRecoveredCompletions();
+    const detachedCompletions = this.takeDetachedCompletions();
     if (this.snapshotExtension().transmitGate) {
       this.previousTransmitting = false;
-      return this.result({ qsoCompletions: recoveredCompletions, stop: this.operator.isTransmitting });
+      return this.result({ qsoCompletions: detachedCompletions, stop: this.operator.isTransmitting });
     }
     if (!this.operator.isTransmitting) {
       this.previousTransmitting = false;
-      return this.result({ qsoCompletions: recoveredCompletions });
+      return this.result({ qsoCompletions: detachedCompletions });
     }
     if (!this.previousTransmitting) {
       this.previousTransmitting = true;
@@ -538,7 +576,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     const parkedCompletions = this.collectParkedCompletions();
     const protocolCompletions = [...decision.qsoCompletions, ...parkedCompletions];
     const completedTargetKeys = new Set(protocolCompletions.map((effect) => targetKey(effect.record.callsign)));
-    this.discardRecoveredDuplicates(completedTargetKeys);
+    this.discardDetachedDuplicates(completedTargetKeys);
     const releasedCompletionByStream = new Map(decision.qsoCompletions.flatMap((effect) => (
       effect.streamId ? [[effect.streamId, effect] as const] : []
     )));
@@ -560,6 +598,9 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       }
       this.coordinator.updateEntry(released.entryId, (data) => {
         data.status = 'no-response';
+        if (isWWDigiProtocolContext(data.protocolContext)) {
+          data.protocolContextExpiresAtReceiveEpoch = this.protocolContextExpiryEpoch();
+        }
         data.noResponseCycles = decision.qsoFailures
           .find((failure) => targetKey(failure.targetCallsign) === targetKey(
             this.coordinator.getEntry(released.entryId)?.callsign ?? '',
@@ -584,7 +625,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
         notify: true,
       };
       this.previousTransmitting = false;
-      return this.result({ qsoCompletions: recoveredCompletions, stop: true });
+      return this.result({ qsoCompletions: detachedCompletions, stop: true });
     }
     const configuredCycle = this.operator.config.transmitCycles[0] === 1 ? 1 : 0;
     const allowCycleSelection = this.allowQueuedCycleSelection;
@@ -600,7 +641,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     const projected = this.result({
       qsoCompletions: [
         ...protocolCompletions,
-        ...recoveredCompletions.filter((effect) => !completedTargetKeys.has(targetKey(effect.record.callsign))),
+        ...detachedCompletions.filter((effect) => !completedTargetKeys.has(targetKey(effect.record.callsign))),
       ],
       qsoFailures: decision.qsoFailures,
       requestedTransmitCycle: allowCycleSelection ? fill.requestedTransmitCycle : undefined,
@@ -890,7 +931,6 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       }
       if (settlement.status === 'committed') {
         this.detachedCompletions.delete(settlement.recordId);
-        this.completionEvidence.delete(targetKey(detached.callsign));
         const snapshot = this.coordinator.getQueueSnapshot();
         const row = snapshot.entries.find((candidate) => !candidate.active && (
           detached.entryId
@@ -935,7 +975,6 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   }
 
   onTransmissionsCompleted(receipts: StreamPhysicalReceipt[]): void {
-    this.observePhysicalCompletionEvidence(receipts);
     if (receipts.some((receipt) => receipt.streamId === 'cq')
         && this.callSession.onPhysicalCallSuccess()
         && this.callSession.attemptsExhausted) {
@@ -982,9 +1021,8 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     this.pendingManualCycleAuthorization = undefined;
     this.allowQueuedCycleSelection = false;
     this.revokePractice();
-    this.completionEvidence.clear();
     this.detachedCompletions.clear();
-    this.recoveredCompletionEpoch = 0;
+    this.detachedCompletionEpoch = 0;
   }
 
   private result(options: {
@@ -1201,98 +1239,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     };
   }
 
-  private observeCompletionEvidence(messages: ParsedFT8Message[]): boolean {
-    let changed = false;
-    for (const message of messages) {
-      if (message.isPartialDecode) continue;
-      const parsed = parseWWDigiMessage(message.rawMessage);
-      const standard = message.message;
-      const senderCallsign = 'senderCallsign' in parsed
-        ? parsed.senderCallsign
-        : 'senderCallsign' in standard ? standard.senderCallsign : undefined;
-      const targetCallsign = 'targetCallsign' in parsed
-        ? parsed.targetCallsign
-        : 'targetCallsign' in standard ? standard.targetCallsign : undefined;
-      if (!senderCallsign || !callsignMatches(targetCallsign, this.operator.config.myCallsign)) continue;
-
-      const key = targetKey(senderCallsign);
-      const isFinal = parsed.type === 'rr73'
-        || standard.type === FT8MessageType.RRR
-        || standard.type === FT8MessageType.SEVENTY_THREE;
-      const evidence = this.completionEvidence.get(key);
-      if (!isFinal || !evidence) continue;
-      if (Array.from(this.detachedCompletions.values()).some((item) => targetKey(item.callsign) === key)) continue;
-      this.appendEvidenceMessage(evidence, message.rawMessage);
-      const recordId = randomUUID();
-      const streamId = `recovered-${key}`;
-      const effect: StrategyQSOCompletionEffect = {
-        streamId,
-        lifecycleEpoch: ++this.recoveredCompletionEpoch,
-        persistencePolicy: 'preserve-distinct',
-        metadata: { recoveredFinalAcknowledgement: true, streamId },
-        record: {
-          id: recordId,
-          callsign: evidence.callsign,
-          grid: evidence.grid,
-          frequency: evidence.audioFrequencyHz,
-          mode: this.operator.config.modeName,
-          startTime: evidence.startTime,
-          endTime: message.timestamp,
-          messageHistory: [...evidence.messageHistory],
-          myCallsign: this.operator.config.myCallsign,
-          myGrid: this.operator.config.myGrid,
-          contestId: 'WW-DIGI',
-        },
-      };
-      const entryId = this.coordinator.findEntryByTargetKey(key)?.entryId;
-      this.detachedCompletions.set(recordId, {
-        callsign: evidence.callsign,
-        entryId,
-        effect,
-        emitted: false,
-      });
-      changed = true;
-    }
-    return changed;
-  }
-
-  private observePhysicalCompletionEvidence(receipts: StreamPhysicalReceipt[]): void {
-    for (const receipt of receipts) {
-      if (receipt.streamId === 'cq') continue;
-      const parsed = parseWWDigiMessage(receipt.text);
-      const standard = FT8MessageParser.parseMessage(receipt.text);
-      const senderCallsign = 'senderCallsign' in parsed
-        ? parsed.senderCallsign
-        : 'senderCallsign' in standard ? standard.senderCallsign : undefined;
-      const targetCallsign = 'targetCallsign' in parsed
-        ? parsed.targetCallsign
-        : 'targetCallsign' in standard ? standard.targetCallsign : undefined;
-      const isRoger = parsed.type === 'roger-grid' || standard.type === FT8MessageType.ROGER_REPORT;
-      if (!isRoger
-          || !callsignMatches(senderCallsign, this.operator.config.myCallsign)
-          || !targetCallsign) continue;
-
-      const key = targetKey(targetCallsign);
-      const row = this.coordinator.findEntryByTargetKey(key);
-      const existing = this.completionEvidence.get(key);
-      const evidence = existing ?? {
-        callsign: targetCallsign.trim().toUpperCase(),
-        grid: row?.data.targetGrid,
-        startTime: row?.data.firstHeardAt ?? Date.now(),
-        audioFrequencyHz: receipt.audioFrequencyHz,
-        messageHistory: [],
-      };
-      if (evidence.messageHistory.length === 0 && row?.data.lastMessageRaw) {
-        this.appendEvidenceMessage(evidence, row.data.lastMessageRaw);
-      }
-      evidence.grid ??= row?.data.targetGrid;
-      evidence.audioFrequencyHz = receipt.audioFrequencyHz;
-      this.appendEvidenceMessage(evidence, receipt.text);
-      this.completionEvidence.set(key, evidence);
-    }
-  }
-
-  private takeRecoveredCompletions(): StrategyQSOCompletionEffect[] {
+  private takeDetachedCompletions(): StrategyQSOCompletionEffect[] {
     const effects: StrategyQSOCompletionEffect[] = [];
     for (const completion of this.detachedCompletions.values()) {
       if (completion.emitted || completion.settled) continue;
@@ -1302,23 +1249,15 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     return effects;
   }
 
-  private discardRecoveredDuplicates(completedTargetKeys: ReadonlySet<string>): void {
+  private discardDetachedDuplicates(completedTargetKeys: ReadonlySet<string>): void {
     for (const [recordId, completion] of this.detachedCompletions) {
       if (!completedTargetKeys.has(targetKey(completion.callsign))) continue;
       this.detachedCompletions.delete(recordId);
-      this.completionEvidence.delete(targetKey(completion.callsign));
-    }
-  }
-
-  private appendEvidenceMessage(evidence: CompletionEvidence, message: string): void {
-    if (evidence.messageHistory[evidence.messageHistory.length - 1] !== message) {
-      evidence.messageHistory.push(message);
     }
   }
 
   private clearCompletionRecovery(callsign: string): void {
     const key = targetKey(callsign);
-    this.completionEvidence.delete(key);
     for (const [recordId, completion] of this.detachedCompletions) {
       if (targetKey(completion.callsign) === key) this.detachedCompletions.delete(recordId);
     }
@@ -1518,6 +1457,30 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     return Array.from(this.detachedCompletions.values()).some((completion) => (
       completion.entryId === entryId && completion.settled === 'failed'
     ));
+  }
+
+  private protocolContextExpiryEpoch(): number {
+    const configured = Math.max(
+      1,
+      Math.min(60, Math.trunc(this.operator.config.authorizedStaleReceiveCycles ?? 12)),
+    );
+    return this.receiveEpoch + Math.max(MIN_PROTOCOL_CONTEXT_RECEIVE_CYCLES, configured);
+  }
+
+  private expireProtocolContexts(): boolean {
+    let changed = false;
+    for (const row of this.coordinator.getQueueSnapshot().entries) {
+      if (row.active || !isWWDigiProtocolContext(row.entry.data.protocolContext)) continue;
+      const expiresAt = row.entry.data.protocolContextExpiresAtReceiveEpoch;
+      if (expiresAt === undefined || this.receiveEpoch < expiresAt) continue;
+      if (this.coordinator.updateEntry(row.entry.entryId, (data) => {
+        data.protocolContext = undefined;
+        data.protocolContextExpiresAtReceiveEpoch = undefined;
+        data.lastMessageRaw = undefined;
+        return true;
+      })) changed = true;
+    }
+    return changed;
   }
 
   private expireAuthorizations(): boolean {

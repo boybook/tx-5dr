@@ -1055,6 +1055,115 @@ describe('WWDigiStrategyRuntime protocol flows', () => {
     }]);
   });
 
+  it('continues with RR73 when R-grid arrives after the fifth unanswered grid', async () => {
+    const { runtime } = createRuntime({ transmitting: true, maxAttempts: 5 });
+    runtime.enqueueTarget({ callsign: 'JA1AAA' });
+    let outgoing = await runtime.decide([], decision());
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      expect(outgoing.transmissions?.[0]?.text).toBe('JA1AAA BG5DRB OL32');
+      confirmTransmissions(runtime, outgoing);
+      if (attempt < 4) outgoing = await runtime.decide([], decision(attempt + 2));
+    }
+
+    const timedOut = await runtime.decide([], decision(6));
+    expect(timedOut.qsoFailures).toHaveLength(1);
+    expect(runtime.getQueueSnapshot().rows[0]?.displayState).toBe('no-response');
+
+    const lateRogerGrid = parsed('BG5DRB JA1AAA R PM95', BASE_TIME + MODES.FT8.slotMs);
+    expect(runtime.observeDecodedMessages(
+      [lateRogerGrid],
+      observation(lateRogerGrid.timestamp),
+    )).toBe(true);
+    const resumed = await runtime.decide([lateRogerGrid], decision(7));
+
+    expect(resumed.transmissions).toEqual([{
+      streamId: 'stream-1', text: 'JA1AAA BG5DRB RR73', audioFrequencyHz: 1_200,
+    }]);
+    expect(resumed.snapshot.streams?.[0]).toMatchObject({
+      targetCallsign: 'JA1AAA',
+      currentState: 'send-rr73',
+    });
+  });
+
+  it('keeps late R-grid progress while TX is off and resumes when the operator starts TX', async () => {
+    const { runtime, setTransmitting } = createRuntime({ transmitting: true, maxAttempts: 1 });
+    runtime.enqueueTarget({ callsign: 'JA1AAA' });
+    const first = await runtime.decide([], decision());
+    confirmTransmissions(runtime, first);
+    await runtime.decide([], decision(2));
+    setTransmitting(false);
+
+    const lateRogerGrid = parsed('BG5DRB JA1AAA R PM95', BASE_TIME + MODES.FT8.slotMs);
+    runtime.observeDecodedMessages([lateRogerGrid], observation(lateRogerGrid.timestamp));
+    expect((await runtime.decide([], decision(3))).transmissions).toEqual([]);
+    expect(runtime.getQueueSnapshot().rows[0]?.displayState).toBe('authorized');
+
+    setTransmitting(true);
+    expect((await runtime.decide([], decision(4))).transmissions).toEqual([{
+      streamId: 'stream-1', text: 'JA1AAA BG5DRB RR73', audioFrequencyHz: 1_200,
+    }]);
+  });
+
+  it('retains late R-grid progress while the only lane is serving another target', async () => {
+    const { runtime } = createRuntime({ transmitting: true, maxAttempts: 1 });
+    runtime.enqueueTarget({ callsign: 'JA1AAA' });
+    const first = await runtime.decide([], decision());
+    confirmTransmissions(runtime, first);
+    await runtime.decide([], decision(2));
+
+    runtime.enqueueTarget({ callsign: 'JA2BBB' });
+    const second = await runtime.decide([], decision(3));
+    expect(second.transmissions?.[0]?.text).toBe('JA2BBB BG5DRB OL32');
+
+    const lateRogerGrid = parsed('BG5DRB JA1AAA R PM95', BASE_TIME + MODES.FT8.slotMs);
+    runtime.observeDecodedMessages([lateRogerGrid], observation(lateRogerGrid.timestamp));
+    const waiting = await runtime.decide([lateRogerGrid], decision(4));
+    expect(waiting.transmissions?.[0]?.text).toBe('JA2BBB BG5DRB OL32');
+    expect(runtime.getQueueSnapshot().rows.find((row) => row.callsign === 'JA1AAA'))
+      .toMatchObject({ displayState: 'authorized' });
+
+    const active = runtime.getSnapshot().streams![0]!;
+    await runtime.invokeAction({
+      target: { kind: 'stream', streamId: active.streamId, lifecycleEpoch: active.qsoLifecycleEpoch },
+      actionId: 'end-qso',
+    });
+    expect((await runtime.decide([], decision(5))).transmissions).toEqual([{
+      streamId: 'stream-1', text: 'JA1AAA BG5DRB RR73', audioFrequencyHz: 1_200,
+    }]);
+  });
+
+  it('starts a fresh grid exchange after an inactive protocol context expires', async () => {
+    const { runtime, setTransmitting } = createRuntime({
+      transmitting: true,
+      maxAttempts: 1,
+      authorizedStaleReceiveCycles: 1,
+    });
+    runtime.enqueueTarget({ callsign: 'JA1AAA' });
+    const first = await runtime.decide([], decision());
+    confirmTransmissions(runtime, first);
+    await runtime.decide([], decision(2));
+    setTransmitting(false);
+
+    const lateRogerGrid = parsed('BG5DRB JA1AAA R PM95', BASE_TIME + MODES.FT8.slotMs);
+    runtime.observeDecodedMessages([lateRogerGrid], observation(lateRogerGrid.timestamp));
+
+    for (let receiveCycle = 2; receiveCycle <= 13; receiveCycle += 1) {
+      runtime.observeDecodedMessages([], observation(
+        BASE_TIME + MODES.FT8.slotMs * (receiveCycle * 2 - 1),
+      ));
+    }
+    const queue = runtime.getQueueSnapshot();
+    await runtime.invokeAction({
+      target: { kind: 'queue-entry', entryId: queue.rows[0]!.entryId, queueVersion: queue.version },
+      actionId: 'reauthorize-target',
+    });
+    setTransmitting(true);
+
+    expect((await runtime.decide([], decision(3))).transmissions).toEqual([{
+      streamId: 'stream-1', text: 'JA1AAA BG5DRB OL32', audioFrequencyHz: 1_200,
+    }]);
+  });
+
   it('logs a late final acknowledgement after its lane has moved to another target', async () => {
     const { runtime } = createRuntime({ transmitting: true, maxAttempts: 1 });
     const first = await activateInbound(runtime, 'JA1AAA', 'PM95');
