@@ -3,6 +3,8 @@ import {
   Chip,
   ScrollShadow
 } from '@heroui/react';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faSortAmountDown } from '@fortawesome/free-solid-svg-icons';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useDisplayNotificationSettings } from '../../../hooks/useDisplayNotificationSettings';
 import { type FrameTableCycleBackgrounds, getHighlightTypeLabels, HighlightType } from '../../../utils/displayNotificationSettings';
@@ -12,7 +14,7 @@ import { FlagDisplay } from '../../common/FlagDisplay';
 import { ScrollToBottomButton } from '../../common/ScrollToBottomButton';
 import { CallsignInfoPopover } from './CallsignInfoPopover';
 import { BOTTOM_TOLERANCE_PX, TOP_TOLERANCE_PX, getBottomGroupSignature, shouldShowScrollToBottomButton } from './framesTableAutoScroll';
-import { extractBaseCallsign, FT8MessageParser, type GridLocation } from '@tx5dr/core';
+import { calculateGridDistance, extractBaseCallsign, FT8MessageParser, type GridLocation } from '@tx5dr/core';
 import { FT8MessageType, type StrategyMessagePresentationProjection } from '@tx5dr/contracts';
 import { resolvePluginLabel } from '../../../utils/pluginLocales';
 import { resolveFrameCallsign } from './frameCallsign';
@@ -95,9 +97,62 @@ interface FramesTableProps {
   queueCallsignOrder?: Readonly<Record<string, number>>; // 服务端队列投影中的呼号顺序
   strategyName?: string;
   strategyMessagePresentation?: StrategyMessagePresentationProjection;
+  enableSorting?: boolean;
+  distanceOriginGrid?: string;
 }
 
 const EMPTY_QUEUE_CALLSIGN_ORDER: Readonly<Record<string, number>> = {};
+
+export type FrameSortKey = 'db' | 'distance';
+export type FrameSortState = FrameSortKey | null;
+
+export const toggleFrameSort = (current: FrameSortState, key: FrameSortKey): FrameSortState => (
+  current === key ? null : key
+);
+
+export const getFrameSortValue = (
+  message: FrameDisplayMessage,
+  key: FrameSortKey,
+  distanceOriginGrid?: string,
+): number | null => {
+  if (key === 'db') {
+    return typeof message.db === 'number' && Number.isFinite(message.db) ? message.db : null;
+  }
+
+  if (!distanceOriginGrid) return null;
+  const grid = message.locationGrid ?? message.logbookAnalysis?.grid;
+  if (!grid) return null;
+  const distance = calculateGridDistance(distanceOriginGrid, grid);
+  return distance !== null && Number.isFinite(distance) ? distance : null;
+};
+
+export const sortFrameGroups = (
+  groups: FrameGroup[],
+  sortKey: FrameSortState,
+  distanceOriginGrid?: string,
+): FrameGroup[] => {
+  if (!sortKey) return groups;
+
+  return groups.map((group) => {
+    const rankedMessages = group.messages.map((message, index) => ({
+      message,
+      index,
+      value: getFrameSortValue(message, sortKey, distanceOriginGrid),
+    }));
+
+    rankedMessages.sort((left, right) => {
+      if (left.value === null && right.value === null) return left.index - right.index;
+      if (left.value === null) return 1;
+      if (right.value === null) return -1;
+      return right.value - left.value || left.index - right.index;
+    });
+
+    return {
+      ...group,
+      messages: rankedMessages.map(({ message }) => message),
+    };
+  });
+};
 
 // ─── 纯函数工具（提取到组件外避免重复创建）────────
 
@@ -478,7 +533,7 @@ MessageRow.displayName = 'MessageRow';
 
 // ─── 主组件 ─────────────────────────────────
 
-export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [], targetCallsigns = [], targetCallsign = '', onMessageHover, showLogbookAnalysisVisuals = true, enableCallsignPopover = false, scrollToBottomTrigger, showGroupHeader = false, shouldShowGroupHeader: shouldShowGroupHeaderPredicate, groupHeaderBand = null, groupHeaderMode = null, queueCallsignOrder = EMPTY_QUEUE_CALLSIGN_ORDER, strategyName, strategyMessagePresentation }) => {
+export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [], targetCallsigns = [], targetCallsign = '', onMessageHover, showLogbookAnalysisVisuals = true, enableCallsignPopover = false, scrollToBottomTrigger, showGroupHeader = false, shouldShowGroupHeader: shouldShowGroupHeaderPredicate, groupHeaderBand = null, groupHeaderMode = null, queueCallsignOrder = EMPTY_QUEUE_CALLSIGN_ORDER, strategyName, strategyMessagePresentation, enableSorting = false, distanceOriginGrid }) => {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language === 'zh';
   const highlightTypeLabels = useMemo(() => getHighlightTypeLabels(t), [t]);
@@ -490,6 +545,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
   const [wasAtBottom, setWasAtBottom] = useState(true);
   const [isAtTop, setIsAtTop] = useState(true);
   const [isNarrow, setIsNarrow] = useState(false);
+  const [sortKey, setSortKey] = useState<FrameSortState>(null);
   const activeTargetCallsigns = useMemo(
     () => Array.from(new Set([...targetCallsigns, targetCallsign].map((callsign) => callsign.trim()).filter(Boolean))),
     [targetCallsign, targetCallsigns],
@@ -500,18 +556,65 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
   const { settings, getHighestPriorityHighlight, getHighlightColor, isHighlightEnabled: _isHighlightEnabled } = useDisplayNotificationSettings();
   const cycleBackgrounds = settings.frameTableCycleBackgrounds[activeTheme];
   const shouldShowGroupHeader = showGroupHeader && settings.frameTableGroupHeaderEnabled;
-  const bottomGroupSignature = useMemo(() => getBottomGroupSignature(groups), [groups]);
+  const sortedGroups = useMemo(
+    () => enableSorting ? sortFrameGroups(groups, sortKey, distanceOriginGrid) : groups,
+    [distanceOriginGrid, enableSorting, groups, sortKey],
+  );
+  const bottomGroupSignature = useMemo(() => getBottomGroupSignature(sortedGroups), [sortedGroups]);
+
+  const handleSortClick = useCallback((key: FrameSortKey) => {
+    setSortKey((current) => enableSorting ? toggleFrameSort(current, key) : current);
+  }, [enableSorting]);
+
+  const getSortHeaderLabel = useCallback((key: FrameSortKey, label: string) => {
+    if (sortKey === key) {
+      return t('common:framesTable.sortReset', { field: label });
+    }
+    return t(key === 'db' ? 'common:framesTable.sortDbDescending' : 'common:framesTable.sortDistanceDescending');
+  }, [sortKey, t]);
+
+  const renderSortableHeader = useCallback((
+    key: FrameSortKey,
+    label: string,
+    className: string,
+  ) => {
+    if (!enableSorting) {
+      return <div className={className}>{label}</div>;
+    }
+
+    const isActive = sortKey === key;
+    const sortLabel = getSortHeaderLabel(key, label);
+    return (
+      <button
+        type="button"
+        className={`${className} relative w-full cursor-pointer rounded-sm text-default-400 outline-none transition-colors hover:text-default-600 focus-visible:bg-default-100 focus-visible:text-default-700`}
+        title={sortLabel}
+        aria-label={sortLabel}
+        aria-pressed={isActive}
+        onClick={() => handleSortClick(key)}
+      >
+        <span>{label}</span>
+        {isActive && (
+          <FontAwesomeIcon
+            icon={faSortAmountDown}
+            aria-hidden="true"
+            className="ml-1 text-[9px]"
+          />
+        )}
+      </button>
+    );
+  }, [enableSorting, getSortHeaderLabel, handleSortClick, sortKey]);
 
 
 
   // ─── 组级别虚拟化 ────────────────────────
   const virtualizer = useVirtualizer({
-    count: groups.length,
+    count: sortedGroups.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: (index) => {
       // 每组高度 ≈ py-1 (8px) + 每行约 24px + space-y-1 间距 (4px)
       const headerHeight = shouldShowGroupHeader ? 16 : 0;
-      return groups[index].messages.length * 24 + headerHeight + 8 + 4;
+      return sortedGroups[index].messages.length * 24 + headerHeight + 8 + 4;
     },
     overscan: 5,
   });
@@ -549,7 +652,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
       followBottomRef.current = true;
     }
     setScrollRequestVersion(prev => prev + 1);
-  }, [groups.length]);
+  }, [sortedGroups.length]);
 
   const handleScroll = useCallback(() => {
     syncScrollPositionState();
@@ -600,12 +703,12 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
   }, [scrollToBottomTrigger, requestScrollToBottom]);
 
   useLayoutEffect(() => {
-    if (scrollRequestVersion === 0 || groups.length === 0 || !followBottomRef.current) {
+    if (scrollRequestVersion === 0 || sortedGroups.length === 0 || !followBottomRef.current) {
       return;
     }
 
-    virtualizer.scrollToIndex(groups.length - 1, { align: 'end' });
-  }, [groups.length, scrollRequestVersion, virtualizer]);
+    virtualizer.scrollToIndex(sortedGroups.length - 1, { align: 'end' });
+  }, [scrollRequestVersion, sortedGroups.length, virtualizer]);
 
   // ─── 监听容器宽度变化 ─────────────────────
   useEffect(() => {
@@ -662,7 +765,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
   const gridCols = isNarrow
     ? 'grid-cols-[42px_36px_52px_minmax(0,1fr)_auto]'
     : 'grid-cols-[56px_40px_40px_64px_minmax(0,1fr)_auto]';
-  const showScrollToBottomButton = shouldShowScrollToBottomButton(groups, wasAtBottom);
+  const showScrollToBottomButton = shouldShowScrollToBottomButton(sortedGroups, wasAtBottom);
 
   if (groups.length === 0) {
     return null;
@@ -692,11 +795,15 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
         <div className="flex-shrink-0 cursor-default select-none">
           <div className={`grid ${gridCols} gap-0 ${isNarrow ? 'px-2' : 'px-3'} py-1`}>
             <div className={`text-left text-xs font-medium text-default-400 ${isNarrow ? '' : 'pl-1'}`}>UTC</div>
-            <div className="text-right text-xs font-medium text-default-400">dB</div>
+            {renderSortableHeader('db', 'dB', 'text-right text-xs font-medium text-default-400')}
             {!isNarrow && <div className="text-right text-xs font-medium text-default-400">DT</div>}
             <div className="text-center text-xs font-medium text-default-400">{t('common:framesTable.freq')}</div>
             <div className="text-left text-xs font-medium text-default-400">{t('common:framesTable.message')}</div>
-            <div className={`text-right text-xs font-medium text-default-400 ${isNarrow ? '' : 'pr-1'}`}>{t('common:framesTable.location')}</div>
+            {renderSortableHeader(
+              'distance',
+              t('common:framesTable.location'),
+              `text-right text-xs font-medium text-default-400 ${isNarrow ? '' : 'pr-1'}`,
+            )}
           </div>
         </div>
 
@@ -716,7 +823,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
           >
             {/* 与原始结构一致的 space-y-1 pt-1 通过 absolute 定位实现 */}
             {virtualItems.map((vItem) => {
-              const group = groups[vItem.index];
+              const group = sortedGroups[vItem.index];
 
               return (
                 <div
@@ -733,7 +840,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
                 >
                   {/* 组间距（对应原始的 space-y-1 pt-1） */}
                   <div className="pt-1">
-                    {shouldShowGroupHeader && (!shouldShowGroupHeaderPredicate || shouldShowGroupHeaderPredicate(group, vItem.index, groups)) && (
+                    {shouldShowGroupHeader && (!shouldShowGroupHeaderPredicate || shouldShowGroupHeaderPredicate(group, vItem.index, sortedGroups)) && (
                       <div className={`ml-1 truncate ${isNarrow ? 'px-2' : 'px-3'} pb-0.5 text-[10px] font-mono leading-4 tracking-[0.08em] text-default-400/80`}>
                         {formatGroupHeaderLabel(group, t, groupHeaderBand, groupHeaderMode)}
                       </div>

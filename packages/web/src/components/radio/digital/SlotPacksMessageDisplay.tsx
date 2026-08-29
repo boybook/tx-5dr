@@ -37,6 +37,10 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
     () => radio.state.operators.find((operator) => operator.id === currentOperatorId),
     [currentOperatorId, radio.state.operators],
   );
+  const distanceOriginGrid = useMemo(
+    () => selectedOperator?.context?.myGrid?.trim() || radio.state.stationInfo?.qth?.grid?.trim() || undefined,
+    [radio.state.stationInfo?.qth?.grid, selectedOperator?.context?.myGrid],
+  );
   const targetAction = useMemo(
     () => resolveOperatorTargetAction(selectedOperator, pluginSnapshot.plugins),
     [pluginSnapshot.plugins, selectedOperator],
@@ -270,6 +274,8 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
       showGroupHeader
       groupHeaderBand={groupHeaderBand}
       groupHeaderMode={radio.state.currentMode?.name ?? null}
+      enableSorting
+      distanceOriginGrid={distanceOriginGrid}
     />
   );
 }; 

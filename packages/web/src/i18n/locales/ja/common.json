@@ -144,6 +144,9 @@
     "freq": "周波数",
     "message": "情報",
     "location": "場所",
+    "sortDbDescending": "dB の降順で並べ替え",
+    "sortDistanceDescending": "距離の降順で並べ替え",
+    "sortReset": "{{field}} の並べ替えを解除",
     "scrollToBottom": "クリックして一番下までスクロールします",
     "startedAt": "{{context}} によって開始されました"
   },

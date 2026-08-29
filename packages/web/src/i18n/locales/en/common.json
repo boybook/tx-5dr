@@ -144,6 +144,9 @@
     "freq": "Freq",
     "message": "Message",
     "location": "Location",
+    "sortDbDescending": "Sort by dB descending",
+    "sortDistanceDescending": "Sort by distance descending",
+    "sortReset": "Clear {{field}} sorting",
     "scrollToBottom": "Scroll to bottom",
     "startedAt": "Started at {{context}}"
   },
