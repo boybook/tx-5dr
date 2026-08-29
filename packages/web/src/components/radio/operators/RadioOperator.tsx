@@ -20,6 +20,7 @@ import { applyOperatorContextDraft } from './operatorContextDraft';
 import {
   resolveRadioOperatorCurrentTransmissions,
   resolveRadioOperatorCyclePresentation,
+  resolveRadioOperatorStateContent,
   resolveSingleControllableStream,
   resolveRadioOperatorStreamPresentations,
   shouldUseParallelQsoPresentation,
@@ -827,7 +828,11 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
   const legacyStateChoices: OperatorStateChoice[] = operatorStatus.strategy.availableSlots.map((slot) => ({
     id: slot,
     label: slot,
-    content: localSlotContents[slot as OperatorRuntimeSlot] ?? operatorStatus.slots?.[slot as OperatorRuntimeSlot],
+    content: resolveRadioOperatorStateContent(
+      operatorStatus,
+      slot,
+      localSlotContents[slot as OperatorRuntimeSlot] ?? operatorStatus.slots?.[slot as OperatorRuntimeSlot],
+    ),
   }));
   const resetLegacyStateToCQ = React.useCallback(() => {
     setOperatorContext({

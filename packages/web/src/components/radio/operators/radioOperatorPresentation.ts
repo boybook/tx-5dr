@@ -54,6 +54,26 @@ export function summarizeRadioOperatorTransmissions(
 }
 
 /**
+ * Resolves one single-QSO state label without duplicating strategy semantics.
+ * Legacy slot text remains authoritative when present; strategy runtimes that
+ * expose only the Host transmission set can use its sole current transmission.
+ */
+export function resolveRadioOperatorStateContent(
+  operatorStatus: OperatorStatus,
+  stateId: string,
+  slotContent?: string,
+): string | undefined {
+  if (slotContent) return slotContent;
+  const isCurrentState = stateId === operatorStatus.currentSlot
+    || stateId === operatorStatus.runtime?.currentState
+    || stateId === operatorStatus.strategy.state;
+  if (!isCurrentState) return undefined;
+  const transmissions = resolveRadioOperatorCurrentTransmissions(operatorStatus)
+    .filter((transmission) => Boolean(transmission.text));
+  return transmissions.length === 1 ? transmissions[0]!.text : undefined;
+}
+
+/**
  * Joins the three public projections without inventing protocol data in the UI.
  * Runtime streams establish stable row order; current transmissions and active
  * queue rows fill any Host-only or strategy-only streams that remain.
