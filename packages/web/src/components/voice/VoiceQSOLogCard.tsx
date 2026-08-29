@@ -92,7 +92,8 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
   const [endTime, setEndTime] = useState<number | null>(null);
   const [currentFrequency, setCurrentFrequency] = useState(14270000);
   const prevTransmitting = useRef(false);
-  const previousEditingQSOIdRef = useRef<string | null>(null);
+  const previousEditingQSOIdRef = useRef<string | null | undefined>(undefined);
+  const expandedEditingQSOIdRef = useRef<string | null>(null);
   const liveFrequency = radioMode.currentRadioFrequency && radioMode.currentRadioFrequency > 0
     ? radioMode.currentRadioFrequency
     : null;
@@ -149,18 +150,22 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
     prevTransmitting.current = isTransmitting;
   }, [pttStatus.isTransmitting, startTime, editingQSO]);
 
-  // When editingQSO changes, pre-fill form and force expand; clear form when deselected
+  // Only synchronize form data when the selected QSO actually changes. Responsive
+  // layout callbacks can change identity when the mobile keyboard resizes the viewport.
   useEffect(() => {
+    const nextEditingQSOId = editingQSO?.id ?? null;
+    if (previousEditingQSOIdRef.current === nextEditingQSOId) {
+      return;
+    }
+    previousEditingQSOIdRef.current = nextEditingQSOId;
+
     if (!editingQSO) {
-      previousEditingQSOIdRef.current = null;
       resetForm();
       if (liveFrequencyRef.current !== null) {
         setCurrentFrequency(liveFrequencyRef.current);
       }
       return;
     }
-    const isNewEditingSelection = previousEditingQSOIdRef.current !== editingQSO.id;
-    previousEditingQSOIdRef.current = editingQSO.id;
 
     setFormData({
       callsign: editingQSO.callsign,
@@ -173,10 +178,18 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
     setStartTime(editingQSO.startTime);
     setEndTime(editingQSO.endTime ?? null);
     setCurrentFrequency(editingQSO.frequency);
-    if (isNewEditingSelection) {
-      setCollapsed(false);
+  }, [defaultReport, editingQSO]);
+
+  useEffect(() => {
+    if (!editingQSO) {
+      expandedEditingQSOIdRef.current = null;
+      return;
     }
-  }, [defaultReport, editingQSO, setCollapsed]);
+
+    if (expandedEditingQSOIdRef.current === editingQSO.id) return;
+    expandedEditingQSOIdRef.current = editingQSO.id;
+    setCollapsed(false);
+  }, [editingQSO, setCollapsed]);
 
   const updateField = (field: keyof QSOFormData, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
