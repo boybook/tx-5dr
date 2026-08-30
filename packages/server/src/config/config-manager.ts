@@ -34,6 +34,7 @@ import { JsonFileStore, PersistenceCoordinator } from '../utils/persistence/inde
 import {
   RuntimeStateManager,
   type ProfileOperatingMemory,
+  type ProfileVolumeGainSlot,
   type RuntimeState,
 } from './RuntimeStateManager.js';
 
@@ -454,6 +455,7 @@ export class ConfigManager {
 
       await this.loadConfig();
       await this.runtimeState.initialize(this.extractRuntimeSeed(this.config));
+      await this.migrateLegacyVolumeGainToActiveProfile();
       this.unregisterPersistence?.();
       this.unregisterPersistence = PersistenceCoordinator.getInstance().register({
         name: 'config',
@@ -607,6 +609,32 @@ export class ConfigManager {
       lastDigitalModeName: config.lastDigitalModeName,
       pskreporterStats: config.pskreporter?.stats,
     };
+  }
+
+  /**
+   * Move the pre-Profile gain map into exactly one existing Profile. The old
+   * map has no Profile identity, so it must never remain a fallback once a
+   * Profile is active; for TCI it is intentionally discarded because the
+   * protocol audio path requires a neutral 0 dB baseline.
+   */
+  private async migrateLegacyVolumeGainToActiveProfile(): Promise<void> {
+    const legacyMap = this.getRuntimeValue('volumeGainMap') ?? this.config.volumeGainMap;
+    const activeProfile = this.getActiveProfile();
+    if (!legacyMap || !activeProfile) return;
+
+    const profileId = activeProfile.id;
+    const current = this.getRuntimeValue('profileOperatingMemory')?.[profileId];
+    if (!current?.volumeGainMap && activeProfile.radio.type !== 'tci') {
+      const map = Object.fromEntries(Object.entries(legacyMap).map(([key, value]) => [key, { ...value }]));
+      await this.patchProfileOperatingMemory(profileId, { volumeGainMap: map });
+      logger.info('Migrated legacy volume gain map into active Profile', { profileId });
+    } else if (activeProfile.radio.type === 'tci') {
+      logger.info('Discarding legacy global volume gain for active TCI Profile; using 0 dB baseline', { profileId });
+    }
+
+    await this.setRuntimeValue('volumeGainMap', null);
+    this.config.volumeGainMap = null;
+    await this.saveConfig();
   }
 
   private getRuntimeValue<K extends keyof RuntimeState>(key: K): RuntimeState[K] | undefined {
@@ -1526,6 +1554,9 @@ export class ConfigManager {
       lastImageFrequency: memory.lastImageFrequency
         ? { ...memory.lastImageFrequency }
         : memory.lastImageFrequency,
+      volumeGainMap: memory.volumeGainMap
+        ? Object.fromEntries(Object.entries(memory.volumeGainMap).map(([key, value]) => [key, { ...value }]))
+        : memory.volumeGainMap,
     };
   }
 
@@ -1581,6 +1612,31 @@ export class ConfigManager {
         ? (memory.lastSelectedFrequency.frequency / 1_000_000).toFixed(3)
         : null,
     });
+  }
+
+  getVolumeGainForProfileSlot(
+    profileId: string,
+    modeCategory: string,
+    band: string,
+  ): ProfileVolumeGainSlot | null {
+    const map = this.getRuntimeValue('profileOperatingMemory')?.[profileId]?.volumeGainMap;
+    const value = map?.[`${modeCategory}_${band}`];
+    return value ? { ...value } : null;
+  }
+
+  async updateVolumeGainForProfileSlot(
+    profileId: string,
+    modeCategory: string,
+    band: string,
+    gain: number,
+    gainDb: number,
+  ): Promise<void> {
+    const key = `${modeCategory}_${band}`;
+    const profileMemory = this.getRuntimeValue('profileOperatingMemory')?.[profileId] ?? {};
+    const map = { ...(profileMemory.volumeGainMap ?? {}) };
+    map[key] = { gain, gainDb };
+    await this.patchProfileOperatingMemory(profileId, { volumeGainMap: map });
+    logger.debug(`Volume gain saved for profile ${profileId}, slot ${key}: ${gainDb.toFixed(1)}dB (${gain.toFixed(3)})`);
   }
 
   async deleteProfileOperatingMemory(profileId: string): Promise<void> {
@@ -1645,6 +1701,10 @@ export class ConfigManager {
    * 获取指定模式+频段的音量增益
    */
   getVolumeGainForSlot(modeCategory: string, band: string): { gain: number; gainDb: number } | null {
+    const profileId = this.getActiveProfileId();
+    if (profileId) {
+      return this.getVolumeGainForProfileSlot(profileId, modeCategory, band);
+    }
     const key = `${modeCategory}_${band}`;
     const map = this.getRuntimeValue('volumeGainMap') ?? this.config.volumeGainMap;
     if (!map || !map[key]) return null;
@@ -1655,6 +1715,11 @@ export class ConfigManager {
    * 更新指定模式+频段的音量增益
    */
   async updateVolumeGainForSlot(modeCategory: string, band: string, gain: number, gainDb: number): Promise<void> {
+    const profileId = this.getActiveProfileId();
+    if (profileId) {
+      await this.updateVolumeGainForProfileSlot(profileId, modeCategory, band, gain, gainDb);
+      return;
+    }
     const key = `${modeCategory}_${band}`;
     const map = { ...(this.getRuntimeValue('volumeGainMap') ?? this.config.volumeGainMap ?? {}) };
     map[key] = { gain, gainDb };

@@ -33,6 +33,11 @@ export interface LastCWFrequencyState {
 }
 export interface LastImageFrequencyState extends LastSelectedFrequencyState {}
 
+export interface ProfileVolumeGainSlot {
+  gain: number;
+  gainDb: number;
+}
+
 /** Per-radio-profile operating snapshot used when switching profiles. */
 export interface ProfileOperatingMemory {
   lastSelectedFrequency?: LastSelectedFrequencyState | null;
@@ -41,6 +46,8 @@ export interface ProfileOperatingMemory {
   lastImageFrequency?: LastImageFrequencyState | null;
   lastEngineMode?: 'digital' | 'voice' | 'cw' | 'image';
   lastDigitalModeName?: string;
+  /** Per-profile audio gain slots keyed by `${modeCategory}_${band}`. */
+  volumeGainMap?: Record<string, ProfileVolumeGainSlot> | null;
 }
 
 export interface RuntimeState {

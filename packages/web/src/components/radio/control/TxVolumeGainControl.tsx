@@ -21,6 +21,8 @@ interface TxVolumeGainControlProps {
 
 const MIN_DB = -60;
 const MAX_DB = 20;
+const DEFAULT_GAIN_DB = -10;
+const TCI_DEFAULT_GAIN_DB = 0;
 
 const dbToGain = (db: number): number => Math.pow(10, db / 20);
 
@@ -63,9 +65,18 @@ export const TxVolumeGainControl: React.FC<TxVolumeGainControlProps> = ({
   const { t } = useTranslation('radio');
   const connection = useConnection();
   const canControl = useCan('execute', 'RadioControl');
-  const [volumeGain, setVolumeGain] = React.useState(Math.pow(10, -10 / 20));
+  const isTciProfile = connection.state.radioConfig?.type === 'tci';
+  const [volumeGain, setVolumeGain] = React.useState(() => dbToGain(isTciProfile ? TCI_DEFAULT_GAIN_DB : DEFAULT_GAIN_DB));
   const pixelRemainderRef = React.useRef(0);
   const wheelEnabled = enableWheel ?? orientation === 'vertical';
+
+  // Before the first systemStatus frame arrives, reflect the active Profile's
+  // neutral TCI baseline instead of briefly showing the legacy -10 dB value.
+  React.useEffect(() => {
+    if (!connection.state.isReady) {
+      setVolumeGain(dbToGain(isTciProfile ? TCI_DEFAULT_GAIN_DB : DEFAULT_GAIN_DB));
+    }
+  }, [connection.state.isReady, isTciProfile]);
 
   const handleVolumeChange = React.useCallback((value: number | number[]) => {
     const dbValue = Array.isArray(value) ? value[0] : value;

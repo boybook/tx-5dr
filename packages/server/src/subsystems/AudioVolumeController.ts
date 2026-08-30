@@ -7,6 +7,7 @@ import { createLogger } from '../utils/logger.js';
 const logger = createLogger('AudioVolumeController');
 
 const DEFAULT_GAIN_DB = -10;
+const TCI_DEFAULT_GAIN_DB = 0;
 
 /**
  * 音量控制子系统
@@ -103,9 +104,16 @@ export class AudioVolumeController {
    */
   private applyGainForCurrentSlot(): void {
     const configManager = ConfigManager.getInstance();
-    const saved = configManager.getVolumeGainForSlot(this.currentModeCategory, this.currentBand);
-    const gainDb = saved ? saved.gainDb : DEFAULT_GAIN_DB;
-    logger.debug(`Applying gain for ${this.currentModeCategory}_${this.currentBand}: ${gainDb.toFixed(1)}dB`);
+    const profile = configManager.getActiveProfile();
+    const saved = profile
+      ? configManager.getVolumeGainForProfileSlot(profile.id, this.currentModeCategory, this.currentBand)
+      : configManager.getVolumeGainForSlot(this.currentModeCategory, this.currentBand);
+    const defaultGainDb = profile?.radio.type === 'tci' ? TCI_DEFAULT_GAIN_DB : DEFAULT_GAIN_DB;
+    const gainDb = saved ? saved.gainDb : defaultGainDb;
+    logger.debug(`Applying gain for profile ${profile?.id ?? 'none'} ${this.currentModeCategory}_${this.currentBand}: ${gainDb.toFixed(1)}dB`, {
+      profileType: profile?.radio.type ?? 'none',
+      source: saved ? 'profile-slot' : 'profile-default',
+    });
     this.audioStreamManager.setVolumeGainDb(gainDb);
 
     // 广播新增益值
@@ -118,10 +126,14 @@ export class AudioVolumeController {
   private persistAndBroadcast(): void {
     const currentGain = this.audioStreamManager.getVolumeGain();
     const currentGainDb = this.audioStreamManager.getVolumeGainDb();
+    const configManager = ConfigManager.getInstance();
+    const profileId = configManager.getActiveProfileId();
 
     // 持久化到按模式+频段的配置
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ConfigManager.getInstance().updateVolumeGainForSlot(this.currentModeCategory, this.currentBand, currentGain, currentGainDb).catch((error: any) => {
+    const persist = profileId
+      ? configManager.updateVolumeGainForProfileSlot(profileId, this.currentModeCategory, this.currentBand, currentGain, currentGainDb)
+      : configManager.updateVolumeGainForSlot(this.currentModeCategory, this.currentBand, currentGain, currentGainDb);
+    persist.catch((error: unknown) => {
       logger.warn('Failed to save volume gain config:', error);
     });
 
