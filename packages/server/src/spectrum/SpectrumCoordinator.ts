@@ -1,40 +1,26 @@
 import { EventEmitter } from 'eventemitter3';
 import type { SpectrumCapabilities, SpectrumFrame, SpectrumKind, SpectrumSourceAvailability, SupportedRig } from '@tx5dr/contracts';
-import type { ManagedSpectrumConfig, SpectrumLine, SpectrumSupportSummary } from 'hamlib/spectrum';
-import type { IRadioConnection } from '../radio/connections/IRadioConnection.js';
-import { RadioConnectionType } from '../radio/connections/IRadioConnection.js';
-import { HamlibConnection } from '../radio/connections/HamlibConnection.js';
 import { ConfigManager } from '../config/config-manager.js';
 import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import { createLogger } from '../utils/logger.js';
-import { SPECTRUM_DISPLAY_BIN_COUNT, createHamlibRadioSpectrumFrame, createOpenWebRXSpectrumFrame, createRadioSpectrumFrame, normalizeSpectrumFrame, resampleBins } from './spectrumUtils.js';
-import type { IcomScopeFrame } from 'icom-wlan-node';
+import { SPECTRUM_DISPLAY_BIN_COUNT, createOpenWebRXSpectrumFrame, normalizeSpectrumFrame, resampleBins } from './spectrumUtils.js';
 import type { OpenWebRXSpectrumFrame } from '@openwebrx-js/api';
 import type { OpenWebRXAudioAdapter } from '../openwebrx/OpenWebRXAudioAdapter.js';
-import { resolveHamlibSpectrumRuntimeConfig } from './hamlibSpectrumConfig.js';
+import { RadioSpectrumSourceRegistry, type RadioSpectrumSource } from './RadioSpectrumSource.js';
+import {
+  HamlibSpectrumSourceProvider,
+  IcomWlanSpectrumSourceProvider,
+  TciIqSpectrumSourceProvider,
+} from './BuiltInRadioSpectrumSources.js';
 
 const logger = createLogger('SpectrumCoordinator');
 
 const RADIO_SOURCE_STOP_DELAY_MS = 2000;
-const ICOM_WLAN_SCOPE_FRAME_MIN_INTERVAL_MS = 250;
 
 export interface SpectrumCoordinatorEvents {
   frame: (frame: SpectrumFrame) => void;
   capabilitiesChanged: (capabilities: SpectrumCapabilities) => void;
-}
-
-interface ScopeCapableConnection {
-  addScopeFrameListener(listener: (frame: IcomScopeFrame) => void): void;
-  removeScopeFrameListener(listener: (frame: IcomScopeFrame) => void): void;
-  enableScopeStream(): Promise<void>;
-  disableScopeStream(): Promise<void>;
-}
-
-interface OfficialSpectrumCapableHamlibConnection extends HamlibConnection {
-  getSpectrumSupportSummary(): Promise<SpectrumSupportSummary>;
-  startManagedSpectrum(listener: (line: SpectrumLine) => void, config?: ManagedSpectrumConfig): Promise<void>;
-  stopManagedSpectrum(): Promise<void>;
 }
 
 interface OpenWebRXSpectrumCapableAdapter extends Pick<OpenWebRXAudioAdapter,
@@ -43,33 +29,10 @@ interface OpenWebRXSpectrumCapableAdapter extends Pick<OpenWebRXAudioAdapter,
 
 export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents> {
   private readonly subscriptions = new Map<string, SpectrumKind | null>();
-  private cachedRadioSourceAvailability: {
-    connection: IRadioConnection;
-    rigModel?: number;
-    source: SpectrumSourceAvailability;
-  } | null = null;
   private radioStopTimer: NodeJS.Timeout | null = null;
-  private currentScopeConnection: ScopeCapableConnection | null = null;
-  private currentHamlibScopeConnection: OfficialSpectrumCapableHamlibConnection | null = null;
   private currentOpenWebRXAdapter: OpenWebRXSpectrumCapableAdapter | null = null;
-  private lastIcomScopeFrameEmittedAt = 0;
-  private readonly onScopeFrame = (frame: IcomScopeFrame) => {
-    const now = Date.now();
-    if (
-      this.lastIcomScopeFrameEmittedAt > 0
-      && now - this.lastIcomScopeFrameEmittedAt < ICOM_WLAN_SCOPE_FRAME_MIN_INTERVAL_MS
-    ) {
-      return;
-    }
-
-    this.lastIcomScopeFrameEmittedAt = now;
-    const profileId = ConfigManager.getInstance().getActiveProfileId();
-    this.emit('frame', createRadioSpectrumFrame(frame, profileId, 'ICOM WLAN'));
-  };
-  private readonly onHamlibSpectrumLine = (line: SpectrumLine) => {
-    const profileId = ConfigManager.getInstance().getActiveProfileId();
-    this.emit('frame', createHamlibRadioSpectrumFrame(line, profileId, 'ICOM Serial (Hamlib)'));
-  };
+  private currentRegisteredRadioSource: RadioSpectrumSource | null = null;
+  private readonly registeredSourceRegistry: RadioSpectrumSourceRegistry;
   private readonly onOpenWebRXSpectrumFrame = (frame: OpenWebRXSpectrumFrame) => {
     if (this.getSubscriberCount('openwebrx-sdr') === 0) {
       return;
@@ -81,9 +44,22 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
       this.emit('frame', normalizedFrame);
     }
   };
+  private readonly onRegisteredRadioFrame = (frame: SpectrumFrame) => {
+    this.emit('frame', {
+      ...frame,
+      meta: { ...frame.meta, profileId: ConfigManager.getInstance().getActiveProfileId() },
+    });
+  };
 
   constructor(private readonly engine: DigitalRadioEngine) {
     super();
+    this.registeredSourceRegistry = new RadioSpectrumSourceRegistry([
+      new IcomWlanSpectrumSourceProvider(),
+      new TciIqSpectrumSourceProvider(),
+      new HamlibSpectrumSourceProvider(
+        async () => PhysicalRadioManager.listSupportedRigs() as Promise<SupportedRig[]>,
+      ),
+    ]);
 
     const handleSourceTopologyChanged = () => {
       void this.emitCapabilitiesChanged();
@@ -167,6 +143,10 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
       .map(([connectionId]) => connectionId);
   }
 
+  getActiveRadioSpectrumSource(): RadioSpectrumSource | null {
+    return this.currentRegisteredRadioSource;
+  }
+
   private getSubscriberCount(kind: SpectrumKind): number {
     let count = 0;
     for (const selectedKind of this.subscriptions.values()) {
@@ -238,16 +218,14 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
 
   private async startRadioScopeIfNeeded(): Promise<void> {
     const radioManager = this.engine.getRadioManager();
-    const scopeConnection = radioManager.getIcomWlanManager() as ScopeCapableConnection | null;
-
-    if (scopeConnection) {
-      await this.startIcomScope(scopeConnection);
-      return;
-    }
-
-    const activeConnection = radioManager.getActiveConnection();
-    if (this.isHamlibSerialScopeConnection(activeConnection)) {
-      await this.startHamlibScope(activeConnection);
+    const resolution = await this.registeredSourceRegistry.resolve({
+      activeConnection: radioManager.getActiveConnection(),
+      icomWlanConnection: radioManager.getIcomWlanManager(),
+      connected: radioManager.isConnected(),
+      config: radioManager.getConfig(),
+    });
+    if (resolution?.source) {
+      await this.startRegisteredRadioSource(resolution.source);
       return;
     }
 
@@ -256,32 +234,13 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
   }
 
   private async stopRadioScope(): Promise<void> {
-    let changed = false;
-
-    if (this.currentScopeConnection) {
+    if (this.currentRegisteredRadioSource) {
       try {
-        await this.currentScopeConnection.disableScopeStream();
+        await this.currentRegisteredRadioSource.stop();
       } catch (error) {
-        logger.warn('Failed to disable ICOM WLAN scope stream', error);
+        logger.warn('Failed to stop registered radio spectrum source', error);
       }
-
-      this.currentScopeConnection.removeScopeFrameListener(this.onScopeFrame);
-      this.currentScopeConnection = null;
-      changed = true;
-    }
-
-    if (this.currentHamlibScopeConnection) {
-      try {
-        await this.currentHamlibScopeConnection.stopManagedSpectrum();
-      } catch (error) {
-        logger.warn('Failed to stop Hamlib official spectrum stream', error);
-      }
-
-      this.currentHamlibScopeConnection = null;
-      changed = true;
-    }
-
-    if (changed) {
+      this.currentRegisteredRadioSource = null;
       await this.emitCapabilitiesChanged();
     }
   }
@@ -308,95 +267,13 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
   private async getRadioSourceAvailability(): Promise<SpectrumSourceAvailability> {
     const radioManager = this.engine.getRadioManager();
     const config = radioManager.getConfig();
-
-    if (config.type === 'icom-wlan') {
-      const connected = radioManager.isConnected();
-      return {
-        kind: 'radio-sdr',
-        supported: true,
-        available: connected,
-        defaultSelected: false,
-        reason: connected ? undefined : 'radio_disconnected',
-        sourceBinCount: null,
-        displayBinCount: SPECTRUM_DISPLAY_BIN_COUNT,
-        supportsWaterfall: true,
-        frequencyRangeMode: 'absolute',
-      };
-    }
-
-    if (config.type === 'serial') {
-      const supportedRig = await this.lookupSupportedRig(config.serial?.rigModel);
-      const isIcom = supportedRig?.mfgName.toUpperCase() === 'ICOM';
-      const connected = radioManager.isConnected();
-      const activeConnection = radioManager.getActiveConnection();
-
-      if (!isIcom) {
-        return {
-          kind: 'radio-sdr',
-          supported: false,
-          available: false,
-          defaultSelected: false,
-          reason: 'radio_sdr_only_supported_for_icom_serial',
-          sourceBinCount: null,
-          displayBinCount: SPECTRUM_DISPLAY_BIN_COUNT,
-          supportsWaterfall: true,
-          frequencyRangeMode: 'absolute',
-        };
-      }
-
-      if (!connected || !this.isHamlibSerialScopeConnection(activeConnection)) {
-        return {
-          kind: 'radio-sdr',
-          supported: true,
-          available: false,
-          defaultSelected: false,
-          reason: connected ? 'hamlib_official_spectrum_api_unavailable' : 'radio_disconnected',
-          sourceBinCount: null,
-          displayBinCount: SPECTRUM_DISPLAY_BIN_COUNT,
-          supportsWaterfall: true,
-          frequencyRangeMode: 'absolute',
-        };
-      }
-
-      if (activeConnection.getRadioIoQueueSnapshot?.().backpressure) {
-        const cached = this.getCachedRadioSourceAvailability(activeConnection, config.serial?.rigModel);
-        if (cached) {
-          return cached;
-        }
-
-        return this.createRadioSourceAvailability({
-          supported: true,
-          available: true,
-        });
-      }
-
-      try {
-        const summary = await activeConnection.getSpectrumSupportSummary();
-        const source = this.createRadioSourceAvailability({
-          supported: summary.supported,
-          available: summary.supported,
-          reason: summary.supported ? undefined : 'hamlib_official_spectrum_not_supported',
-        });
-        this.cachedRadioSourceAvailability = {
-          connection: activeConnection,
-          rigModel: config.serial?.rigModel,
-          source,
-        };
-        return source;
-      } catch {
-        return {
-          kind: 'radio-sdr',
-          supported: false,
-          available: false,
-          defaultSelected: false,
-          reason: 'hamlib_official_spectrum_probe_failed',
-          sourceBinCount: null,
-          displayBinCount: SPECTRUM_DISPLAY_BIN_COUNT,
-          supportsWaterfall: true,
-          frequencyRangeMode: 'absolute',
-        };
-      }
-    }
+    const resolution = await this.registeredSourceRegistry.resolve({
+      activeConnection: radioManager.getActiveConnection(),
+      icomWlanConnection: radioManager.getIcomWlanManager(),
+      connected: radioManager.isConnected(),
+      config,
+    });
+    if (resolution) return resolution.availability;
 
     return {
       kind: 'radio-sdr',
@@ -411,51 +288,6 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
       supportsWaterfall: true,
       frequencyRangeMode: 'absolute',
     };
-  }
-
-  private createRadioSourceAvailability(options: {
-    supported: boolean;
-    available: boolean;
-    reason?: string;
-  }): SpectrumSourceAvailability {
-    return {
-      kind: 'radio-sdr',
-      supported: options.supported,
-      available: options.available,
-      defaultSelected: false,
-      reason: options.reason,
-      sourceBinCount: null,
-      displayBinCount: SPECTRUM_DISPLAY_BIN_COUNT,
-      supportsWaterfall: true,
-      frequencyRangeMode: 'absolute',
-    };
-  }
-
-  private getCachedRadioSourceAvailability(
-    connection: IRadioConnection,
-    rigModel?: number,
-  ): SpectrumSourceAvailability | null {
-    if (
-      !this.cachedRadioSourceAvailability
-      || this.cachedRadioSourceAvailability.connection !== connection
-      || this.cachedRadioSourceAvailability.rigModel !== rigModel
-    ) {
-      return null;
-    }
-
-    return {
-      ...this.cachedRadioSourceAvailability.source,
-      defaultSelected: false,
-    };
-  }
-
-  private async lookupSupportedRig(rigModel?: number): Promise<SupportedRig | null> {
-    if (!rigModel) {
-      return null;
-    }
-
-    const rigs = await PhysicalRadioManager.listSupportedRigs() as SupportedRig[];
-    return rigs.find(rig => rig.rigModel === rigModel) ?? null;
   }
 
   private async emitCapabilitiesChanged(): Promise<void> {
@@ -500,55 +332,17 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
     return 'audio';
   }
 
-  private isHamlibSerialScopeConnection(connection: IRadioConnection | null): connection is OfficialSpectrumCapableHamlibConnection {
-    return connection instanceof HamlibConnection
-      && this.engine.getRadioManager().getConfig().type === 'serial'
-      && connection.getType() === RadioConnectionType.HAMLIB;
-  }
-
-  private async startIcomScope(scopeConnection: ScopeCapableConnection): Promise<void> {
-    if (this.currentHamlibScopeConnection) {
-      await this.stopRadioScope();
-    }
-
-    if (this.currentScopeConnection !== scopeConnection) {
-      await this.stopRadioScope();
-      this.currentScopeConnection = scopeConnection;
-      this.lastIcomScopeFrameEmittedAt = 0;
-      this.currentScopeConnection.addScopeFrameListener(this.onScopeFrame);
-    }
-
-    try {
-      await this.currentScopeConnection.enableScopeStream();
-    } catch (error) {
-      logger.error('Failed to enable ICOM WLAN scope stream', error);
-    }
-
-    await this.emitCapabilitiesChanged();
-  }
-
-  private async startHamlibScope(connection: OfficialSpectrumCapableHamlibConnection): Promise<void> {
-    if (this.currentScopeConnection) {
-      await this.stopRadioScope();
-    }
-
-    if (this.currentHamlibScopeConnection === connection) {
-      return;
-    }
-
+  private async startRegisteredRadioSource(source: RadioSpectrumSource): Promise<void> {
+    if (this.currentRegisteredRadioSource === source) return;
     await this.stopRadioScope();
     try {
-      const runtimeConfig = resolveHamlibSpectrumRuntimeConfig(this.engine.getRadioManager().getConfig());
-      await connection.startManagedSpectrum(this.onHamlibSpectrumLine, runtimeConfig);
-      this.currentHamlibScopeConnection = connection;
+      await source.start(this.onRegisteredRadioFrame);
+      this.currentRegisteredRadioSource = source;
     } catch (error) {
-      logger.error('Failed to start Hamlib official spectrum stream', error);
-      try {
-        await connection.stopManagedSpectrum();
-      } catch {}
-      this.currentHamlibScopeConnection = null;
+      logger.error('Failed to start registered radio spectrum source', error);
+      await source.stop().catch(() => undefined);
+      this.currentRegisteredRadioSource = null;
     }
-
     await this.emitCapabilitiesChanged();
   }
 }

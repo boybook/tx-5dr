@@ -42,6 +42,7 @@ import { canReadFullProfiles, redactHamlibConfigForRead, redactProfileForRead, r
 const logger = createLogger('WSServer');
 const DECODE_WORKER_UNAVAILABLE_USER_MESSAGE_KEY = 'errors:code.DECODE_WORKER_UNAVAILABLE.userMessage';
 const SPECTRUM_CAPABILITIES_TIMEOUT_MS = 3000;
+const SPECTRUM_SLOW_CLIENT_BYTES = 256 * 1024;
 const IMAGE_RX_SLOW_CLIENT_BYTES = 256 * 1024;
 const DECODE_WORKER_UNAVAILABLE_SUGGESTION_KEYS = [
   'errors:code.DECODE_WORKER_UNAVAILABLE.suggestions.0',
@@ -2630,6 +2631,9 @@ export class WSServer extends WSMessageHandler {
     for (const connectionId of targetConnectionIds) {
       const connection = this.getConnection(connectionId);
       if (!connection?.isAlive || !connection.isHandshakeCompleted()) {
+        continue;
+      }
+      if (connection.getBufferedAmount() > SPECTRUM_SLOW_CLIENT_BYTES) {
         continue;
       }
       connection.send(WSMessageType.SPECTRUM_FRAME, frame);

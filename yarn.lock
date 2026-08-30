@@ -6584,9 +6584,9 @@ __metadata:
     onnxruntime-node: "npm:^1.26.0"
     pngjs: "npm:^7.0.0"
     rasterwave-node: "npm:0.5.0"
-    rubato-fft-node: "npm:^0.1.0"
+    rubato-fft-node: "npm:^0.2.0"
     serialport: "npm:^13.0.0"
-    tci-client-node: "npm:^0.2.0"
+    tci-client-node: "npm:^0.3.0"
     tsx: "npm:^4.0.0"
     typescript: "npm:^5.0.0"
     vitest: "npm:^1.0.0"
@@ -17307,50 +17307,50 @@ __metadata:
   languageName: node
   linkType: hard
 
-"rubato-fft-node-darwin-arm64@npm:0.1.0":
-  version: 0.1.0
-  resolution: "rubato-fft-node-darwin-arm64@npm:0.1.0"
+"rubato-fft-node-darwin-arm64@npm:0.2.0":
+  version: 0.2.0
+  resolution: "rubato-fft-node-darwin-arm64@npm:0.2.0"
   conditions: os=darwin & cpu=arm64
   languageName: node
   linkType: hard
 
-"rubato-fft-node-darwin-x64@npm:0.1.0":
-  version: 0.1.0
-  resolution: "rubato-fft-node-darwin-x64@npm:0.1.0"
+"rubato-fft-node-darwin-x64@npm:0.2.0":
+  version: 0.2.0
+  resolution: "rubato-fft-node-darwin-x64@npm:0.2.0"
   conditions: os=darwin & cpu=x64
   languageName: node
   linkType: hard
 
-"rubato-fft-node-linux-arm64-gnu@npm:0.1.0":
-  version: 0.1.0
-  resolution: "rubato-fft-node-linux-arm64-gnu@npm:0.1.0"
+"rubato-fft-node-linux-arm64-gnu@npm:0.2.0":
+  version: 0.2.0
+  resolution: "rubato-fft-node-linux-arm64-gnu@npm:0.2.0"
   conditions: os=linux & cpu=arm64 & libc=glibc
   languageName: node
   linkType: hard
 
-"rubato-fft-node-linux-x64-gnu@npm:0.1.0":
-  version: 0.1.0
-  resolution: "rubato-fft-node-linux-x64-gnu@npm:0.1.0"
+"rubato-fft-node-linux-x64-gnu@npm:0.2.0":
+  version: 0.2.0
+  resolution: "rubato-fft-node-linux-x64-gnu@npm:0.2.0"
   conditions: os=linux & cpu=x64 & libc=glibc
   languageName: node
   linkType: hard
 
-"rubato-fft-node-win32-x64-msvc@npm:0.1.0":
-  version: 0.1.0
-  resolution: "rubato-fft-node-win32-x64-msvc@npm:0.1.0"
+"rubato-fft-node-win32-x64-msvc@npm:0.2.0":
+  version: 0.2.0
+  resolution: "rubato-fft-node-win32-x64-msvc@npm:0.2.0"
   conditions: os=win32 & cpu=x64
   languageName: node
   linkType: hard
 
-"rubato-fft-node@npm:^0.1.0":
-  version: 0.1.0
-  resolution: "rubato-fft-node@npm:0.1.0"
+"rubato-fft-node@npm:^0.2.0":
+  version: 0.2.0
+  resolution: "rubato-fft-node@npm:0.2.0"
   dependencies:
-    rubato-fft-node-darwin-arm64: "npm:0.1.0"
-    rubato-fft-node-darwin-x64: "npm:0.1.0"
-    rubato-fft-node-linux-arm64-gnu: "npm:0.1.0"
-    rubato-fft-node-linux-x64-gnu: "npm:0.1.0"
-    rubato-fft-node-win32-x64-msvc: "npm:0.1.0"
+    rubato-fft-node-darwin-arm64: "npm:0.2.0"
+    rubato-fft-node-darwin-x64: "npm:0.2.0"
+    rubato-fft-node-linux-arm64-gnu: "npm:0.2.0"
+    rubato-fft-node-linux-x64-gnu: "npm:0.2.0"
+    rubato-fft-node-win32-x64-msvc: "npm:0.2.0"
   dependenciesMeta:
     rubato-fft-node-darwin-arm64:
       optional: true
@@ -17362,7 +17362,7 @@ __metadata:
       optional: true
     rubato-fft-node-win32-x64-msvc:
       optional: true
-  checksum: 10c0/f1a8f205c573a24925b4984c23fb0eec1d73215f89e2c1b4ef8a8188fd2d2bd88947b9c2e60e2f1342e0ebeaa93d91181b60b74f3a44be034ea65d0a7cd2a48b
+  checksum: 10c0/f990cd3e4929d61b472e2d9cabe1f0a4261c6efbeb70bf21e3ece12981ac23ea345e206d53351e680b3ccffbb2fb838c1ff866461eb659337da14e9a61925f41
   languageName: node
   linkType: hard
 
@@ -18572,13 +18572,13 @@ __metadata:
   languageName: node
   linkType: hard
 
-"tci-client-node@npm:^0.2.0":
-  version: 0.2.0
-  resolution: "tci-client-node@npm:0.2.0"
+"tci-client-node@npm:^0.3.0":
+  version: 0.3.0
+  resolution: "tci-client-node@npm:0.3.0"
   dependencies:
     eventemitter3: "npm:^5.0.1"
     ws: "npm:^8.18.3"
-  checksum: 10c0/7dd689f08fa26263077db40683b8b9a0d32d6a7756aaa688b4fdad31283bc0666f4d7f2cd2662de4df5168e30bd2e898fa8184a5d901dfb753c0b98bd19a0430
+  checksum: 10c0/229cf3a6882a7f451884f6b41a7f16d13a075adbf73a9d990fe4add53bbb92b4afdd893e20bfe16e0ce177cddc8972f97ce49a1d6dc5725d5ec14eec73ee85d6
   languageName: node
   linkType: hard
 

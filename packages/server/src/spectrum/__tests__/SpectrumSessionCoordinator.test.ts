@@ -1,7 +1,6 @@
 import { EventEmitter } from 'eventemitter3';
 import { describe, expect, it, vi } from 'vitest';
 import { SpectrumSessionCoordinator } from '../SpectrumSessionCoordinator.js';
-import { IcomWlanConnection } from '../../radio/connections/IcomWlanConnection.js';
 
 class MockEngine extends EventEmitter<Record<string, never>> {
   engineMode: 'digital' | 'voice' | 'cw' = 'digital';
@@ -108,16 +107,21 @@ describe('SpectrumSessionCoordinator', () => {
     const engine = new MockEngine();
     const spectrumCoordinator = new EventEmitter();
     const coordinator = new SpectrumSessionCoordinator(engine as any, spectrumCoordinator as any);
-    const connection = new IcomWlanConnection();
     const getCurrentSpectrumSpan = vi.fn().mockResolvedValue(25_000);
-    (connection as any).getCurrentSpectrumSpan = getCurrentSpectrumSpan;
+    const controller = {
+      frameSpanScale: 2,
+      preferFrameSpan: true,
+      getSupportedSpans: vi.fn().mockResolvedValue([25_000, 50_000]),
+      getCurrentSpan: getCurrentSpectrumSpan,
+      setSpan: vi.fn(),
+    };
     (coordinator as any).lastRadioFrame = {
       kind: 'radio-sdr',
       frequencyRange: { min: 7_050_000, max: 7_150_000 },
       meta: { spanHz: 100_000 },
     };
 
-    const span = await (coordinator as any).resolveCurrentSpan(connection, null);
+    const span = await (coordinator as any).resolveCurrentSpan(controller, null);
 
     expect(span).toBe(50_000);
     expect(getCurrentSpectrumSpan).not.toHaveBeenCalled();
@@ -265,8 +269,11 @@ describe('SpectrumSessionCoordinator', () => {
       getRadioIoQueueSnapshot: vi.fn(() => createBusySnapshot(busy)),
     };
     const zoomConnection = {
-      getSpectrumSpans: vi.fn().mockResolvedValue([20_000, 10_000, 5000]),
-      getCurrentSpectrumSpan: vi.fn().mockResolvedValue(10_000),
+      frameSpanScale: 1,
+      preferFrameSpan: false,
+      getSupportedSpans: vi.fn().mockResolvedValue([20_000, 10_000, 5000]),
+      getCurrentSpan: vi.fn().mockResolvedValue(10_000),
+      setSpan: vi.fn(),
     };
 
     engine.radioManager.isConnected.mockReturnValue(true);
@@ -281,15 +288,15 @@ describe('SpectrumSessionCoordinator', () => {
 
     busy = true;
     activeConnection.getSpectrumDisplayState.mockClear();
-    zoomConnection.getSpectrumSpans.mockClear();
-    zoomConnection.getCurrentSpectrumSpan.mockClear();
+    zoomConnection.getSupportedSpans.mockClear();
+    zoomConnection.getCurrentSpan.mockClear();
     (coordinator as any).markDirty();
     const second = await coordinator.refresh('radio-sdr');
     const secondZoomControls = second.controls.filter(control => control.id === 'zoom-step');
 
     expect(activeConnection.getSpectrumDisplayState).not.toHaveBeenCalled();
-    expect(zoomConnection.getSpectrumSpans).not.toHaveBeenCalled();
-    expect(zoomConnection.getCurrentSpectrumSpan).not.toHaveBeenCalled();
+    expect(zoomConnection.getSupportedSpans).not.toHaveBeenCalled();
+    expect(zoomConnection.getCurrentSpan).not.toHaveBeenCalled();
     expect(secondZoomControls).toEqual(firstZoomControls);
   });
 
@@ -372,6 +379,67 @@ describe('SpectrumSessionCoordinator', () => {
       frequencyGestureTarget: 'operator-tx',
       frequencyStepHz: 1,
     });
+  });
+
+  it('exposes TCI IQ sample-rate zoom without the unsupported digital window control', async () => {
+    const engine = new MockEngine();
+    engine.radioManager.isConnected.mockReturnValue(true);
+    engine.radioManager.getConfig.mockReturnValue({ type: 'tci' } as any);
+    engine.radioManager.getMode.mockResolvedValue({ mode: 'DIGU', bandwidth: 3000 });
+    const setSpan = vi.fn().mockResolvedValue(48_000);
+    const spanController = {
+      frameSpanScale: 1,
+      preferFrameSpan: false,
+      getSupportedSpans: vi.fn().mockResolvedValue([48_000, 96_000, 192_000, 384_000]),
+      getCurrentSpan: vi.fn().mockResolvedValue(96_000),
+      setSpan,
+    };
+    const spectrumCoordinator = Object.assign(new EventEmitter(), {
+      getActiveRadioSpectrumSource: () => ({ spanController }),
+    });
+    const coordinator = new SpectrumSessionCoordinator(engine as any, spectrumCoordinator as any);
+    seedRadioSdrFrame(coordinator, 14_074_000);
+    (coordinator as any).lastRadioFrame.frequencyRange = { min: 14_026_000, max: 14_122_000 };
+    (coordinator as any).lastRadioFrame.meta.spanHz = 96_000;
+
+    const state = await coordinator.refresh('radio-sdr');
+    expect(state.frequencyRangeMode).toBe('absolute-center');
+    expect(state.controls.filter(control => control.id === 'zoom-step')).toHaveLength(2);
+    expect(state.controls.some(control => control.id === 'digital-window-toggle')).toBe(false);
+    expect(state.interaction).toMatchObject({
+      showTxMarkers: true,
+      showRxMarkers: true,
+      canDragTx: true,
+      frequencyGestureTarget: 'operator-tx',
+    });
+
+    await coordinator.invokeControl('radio-sdr', 'zoom-step', 'in');
+    expect(setSpan).toHaveBeenCalledWith(48_000);
+  });
+
+  it('hides TCI zoom controls when all sample rates map to one IF window', async () => {
+    const engine = new MockEngine();
+    engine.radioManager.isConnected.mockReturnValue(true);
+    engine.radioManager.getConfig.mockReturnValue({ type: 'tci' } as any);
+    engine.radioManager.getMode.mockResolvedValue({ mode: 'DIGU', bandwidth: 3000 });
+    const spanController = {
+      frameSpanScale: 1,
+      preferFrameSpan: false,
+      getSupportedSpans: vi.fn().mockResolvedValue([48_000]),
+      getCurrentSpan: vi.fn().mockResolvedValue(48_000),
+      setSpan: vi.fn(),
+    };
+    const spectrumCoordinator = Object.assign(new EventEmitter(), {
+      getActiveRadioSpectrumSource: () => ({ spanController }),
+    });
+    const coordinator = new SpectrumSessionCoordinator(engine as any, spectrumCoordinator as any);
+    seedRadioSdrFrame(coordinator, 14_074_000);
+    (coordinator as any).lastRadioFrame.frequencyRange = { min: 14_054_469, max: 14_093_531 };
+    (coordinator as any).lastRadioFrame.meta.spanHz = 39_062;
+
+    const state = await coordinator.refresh('radio-sdr');
+
+    expect(state.controls.some(control => control.id === 'zoom-step')).toBe(false);
   });
 
   it('keeps voice radio SDR RF gestures and coarse step unchanged', async () => {

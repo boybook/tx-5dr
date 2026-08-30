@@ -42,6 +42,18 @@ describe('TciConnection', () => {
 
     expect(connection.getType()).toBe(RadioConnectionType.TCI);
     expect(connection.getState()).toBe(RadioConnectionState.CONNECTED);
+    expect(connection.getTciIqSupport()).toEqual({
+      supported: true,
+      currentSampleRate: 48_000,
+      supportedSampleRates: [48_000, 96_000, 192_000, 384_000],
+    });
+    expect(connection.getTciIqClientOptions()).toMatchObject({
+      url: new URL(server.url()).toString(),
+      receiver: 0,
+      trx: 1,
+      vfo: 0,
+      dialect: 'expertsdr-1.9-2.0',
+    });
 
     await connection.setFrequency(21_074_000);
     await connection.setMode('LSB', 'nochange', { intent: 'digital' });
