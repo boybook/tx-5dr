@@ -81,6 +81,15 @@ describe('ConfigManager profile operating memory', () => {
     });
   });
 
+  it('keeps volume gain slots isolated by Profile and band', async () => {
+    await configManager.updateVolumeGainForProfileSlot('profile-9700', 'digital', '20m', 1, 0);
+    await configManager.updateVolumeGainForProfileSlot('profile-7610', 'digital', '20m', 0.5623, -5);
+
+    expect(configManager.getVolumeGainForProfileSlot('profile-9700', 'digital', '20m')).toEqual({ gain: 1, gainDb: 0 });
+    expect(configManager.getVolumeGainForProfileSlot('profile-7610', 'digital', '20m')).toEqual({ gain: 0.5623, gainDb: -5 });
+    expect(configManager.getVolumeGainForProfileSlot('profile-9700', 'voice', '20m')).toBeNull();
+  });
+
   it('keeps previous profile memory and clears globals when loading an empty profile', async () => {
     await configManager.updateLastSelectedFrequency({
       frequency: 144_460_000,
