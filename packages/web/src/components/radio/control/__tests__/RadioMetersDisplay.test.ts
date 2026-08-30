@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  formatAlcMeterValue,
+  formatPowerMeterValue,
   getMeterSlotVisibility,
   isAlcAutoPromptSuppressedForSession,
   setAlcAutoPromptSuppressedForSession,
@@ -71,6 +73,30 @@ describe('RadioMetersDisplay', () => {
       false,
       true,
     )).toBe(true);
+  });
+
+  it('uses the backend alert flag for unit-aware ALC warnings', () => {
+    expect(shouldAutoOpenAlcWarning(
+      true,
+      true,
+      { raw: -2.5, percent: 87.5, alert: true, unit: 'dbfs' },
+      false,
+      true,
+    )).toBe(true);
+    expect(shouldAutoOpenAlcWarning(
+      true,
+      true,
+      { raw: 100, percent: 100, alert: false, unit: 'percent' },
+      false,
+      true,
+    )).toBe(false);
+  });
+
+  it('formats watts-only power and native dBFS ALC readings', () => {
+    expect(formatPowerMeterValue({ raw: 12.5, percent: null, watts: 12.5, maxWatts: null })).toBe('12.5');
+    expect(formatPowerMeterValue({ raw: 50, percent: 50, watts: 50, maxWatts: 100 })).toBe('50.0/100.0W');
+    expect(formatAlcMeterValue({ raw: -2.5, percent: 87.5, alert: true, unit: 'dbfs' })).toBe('-2.5dBFS');
+    expect(formatAlcMeterValue({ raw: 120, percent: 100, alert: true })).toBe('100.0');
   });
 
   it('keeps ALC over-limit detection independent from session suppression', () => {

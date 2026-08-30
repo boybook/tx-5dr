@@ -11,6 +11,9 @@ import {
   type TciHandshakeResult,
   type TciClientOptions,
   type TciIqCapabilities,
+  type TciMeterStreamSession,
+  type TciRxMeterFrame,
+  type TciTxMeterFrame,
 } from 'tci-client-node';
 import type { MeterCapabilities, TunerCapabilities, TunerStatus } from '@tx5dr/contracts';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
@@ -40,6 +43,8 @@ const TCI_CONNECT_TIMEOUT_MS = 6_000;
 const TCI_WRITE_TIMEOUT_MS = 3_000;
 const TCI_FREQUENCY_WRITE_SETTLE_MS = 250;
 const TCI_TX_STREAM_BUFFERING_MS = 150;
+const TCI_METER_INTERVAL_MS = 300;
+const TCI_METER_MIN_FRESHNESS_MS = 1_000;
 const TCI_AUDIO_NEGOTIATION_COMMANDS = new Set([
   'audio_samplerate',
   'audio_stream_sample_type',
@@ -85,10 +90,25 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
   // A state-ack timeout means the TRX command may already be in flight. Do
   // not allow a later lease to reuse this session and apply an old ON/OFF.
   private pttWriteUncertain = false;
+  private backgroundTasksStarted = false;
+  private meterSession: TciMeterStreamSession | null = null;
+  private meterFreshnessMs = Math.max(TCI_METER_MIN_FRESHNESS_MS, TCI_METER_INTERVAL_MS * 4);
+  private meterExpiryTimer: NodeJS.Timeout | null = null;
+  private meterCapabilities: MeterCapabilities = createEmptyMeterCapabilities();
+  private meterInvalidFrameCount = 0;
+  private meterExpiryCount = 0;
+  private lastRxMeterFrameAtMs = 0;
+  private lastTxMeterFrameAtMs = 0;
+  private rxMeterIntervalLogged = false;
+  private txMeterIntervalLogged = false;
   private lastRxLevelDbm: number | null = null;
+  private lastRxLevelAtMs = 0;
   private lastTxPowerW: number | null = null;
-  private lastTxPeakPowerW: number | null = null;
+  private lastTxPowerAtMs = 0;
   private lastSWR: number | null = null;
+  private lastSwrAtMs = 0;
+  private lastAlc: MeterData['alc'] = null;
+  private lastAlcAtMs = 0;
   private lastDrivePercent: number | null = null;
   private handshakeResult: TciHandshakeResult | null = null;
   private connectedUrl: string | null = null;
@@ -162,6 +182,8 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     this.lastKnownMode = null;
     this.lastKnownPtt = null;
     this.lastDrivePercent = null;
+    this.resetMeterState();
+    this.backgroundTasksStarted = false;
     this.handshakeResult = null;
     this.connectedUrl = null;
     this.pttWriteUncertain = false;
@@ -224,9 +246,6 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
         samplesPerFrame: 512,
         txBufferingMs: TCI_TX_STREAM_BUFFERING_MS,
       });
-      await client.setRxSensorsEnabled(true, 300).catch((error) => logger.debug('Failed to enable TCI RX sensors', error));
-      await client.setTxSensorsEnabled(true, 300).catch((error) => logger.debug('Failed to enable TCI TX sensors', error));
-
       const state = client.getState();
       this.lastKnownFrequency = state.frequencies[`${tci.receiver ?? 0}:${tci.vfo ?? 0}`] ?? null;
       this.lastKnownMode = state.modes[`${tci.receiver ?? 0}:${tci.vfo ?? 0}`] ?? null;
@@ -260,6 +279,16 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     this.pttWriteUncertain = false;
     this.setState(RadioConnectionState.DISCONNECTED);
     this.emit('disconnected', reason);
+  }
+
+  startBackgroundTasks(): void {
+    if (this.backgroundTasksStarted) return;
+    this.backgroundTasksStarted = true;
+    const sessionId = this.ioSessionId;
+    void this.startMeterStream(sessionId).catch((error) => {
+      if (sessionId !== this.ioSessionId) return;
+      logger.debug('TCI meter stream start failed', error);
+    });
   }
 
   async setFrequency(frequency: number): Promise<void> {
@@ -310,6 +339,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
       if (this.isPttAlreadyApplied(enabled)) {
         logger.debug('TCI state matched before write', { operation: 'setPTT', ptt: enabled });
         this.lastKnownPtt = enabled;
+        if (!enabled) this.clearTxMeterData(true);
         return;
       }
       try {
@@ -329,6 +359,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
       this.lastKnownPtt = enabled;
       if (!enabled) {
         this.clearTxAudioQueue();
+        this.clearTxMeterData(true);
       }
     }, { critical: true });
   }
@@ -339,6 +370,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
       const ptt = await this.client!.getPtt();
       if (typeof ptt === 'boolean') {
         this.lastKnownPtt = ptt;
+        if (!ptt) this.clearTxMeterData(true);
       }
       return this.lastKnownPtt ?? false;
     }, { id: 'getPTT' });
@@ -459,7 +491,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
   }
 
   getMeterCapabilities(): MeterCapabilities {
-    return { strength: true, swr: true, alc: false, power: true, powerWatts: true };
+    return { ...this.meterCapabilities };
   }
 
   async getTunerCapabilities(): Promise<TunerCapabilities> {
@@ -649,6 +681,8 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
   private setupClientListeners(client: TciClient): void {
     client.on('disconnected', (reason) => {
       if (this.client !== client) return;
+      this.backgroundTasksStarted = false;
+      this.resetMeterState();
       this.setState(RadioConnectionState.DISCONNECTED);
       this.emit('disconnected', reason instanceof Error ? reason.message : String(reason ?? 'TCI disconnected'));
     });
@@ -685,49 +719,128 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
       this.lastKnownMode = mode;
     }
     if (typeof state.ptt[trxKey] === 'boolean') {
-      this.lastKnownPtt = state.ptt[trxKey];
+      const nextPtt = state.ptt[trxKey];
+      const wasPtt = this.lastKnownPtt;
+      this.lastKnownPtt = nextPtt;
+      if (wasPtt !== false && !nextPtt) this.clearTxMeterData(true);
     }
     if (typeof state.drive[trxKey] === 'number') {
       this.lastDrivePercent = state.drive[trxKey];
     }
 
-    this.updateMetersFromState(state.rxSensors, state.txSensors);
   }
 
-  private updateMetersFromState(
-    rxSensors: Record<string, Record<string, number | string | boolean>>,
-    txSensors: Record<string, Record<string, number | string | boolean>>,
-  ): void {
+  private async startMeterStream(sessionId: number): Promise<void> {
+    const client = this.client;
     const tci = this.currentConfig?.tci;
-    const rxKey = `${tci?.receiver ?? 0}:${tci?.vfo ?? 0}`;
-    const rx = rxSensors[rxKey] ?? rxSensors[String(tci?.receiver ?? 0)];
-    const tx = txSensors[String(tci?.trx ?? 0)];
-    const levelDbm = toNumber(rx?.levelDbm);
-    const rmsPower = toNumber(tx?.rmsPowerW);
-    const peakPower = toNumber(tx?.peakPowerW);
-    const swr = toNumber(tx?.swr);
+    if (!client || !tci || sessionId !== this.ioSessionId || !client.isConnected()) return;
+    const session = await client.openMeterStream({
+      receiver: tci.receiver ?? 0,
+      channel: tci.vfo ?? 0,
+      trx: tci.trx ?? 0,
+      intervalMs: TCI_METER_INTERVAL_MS,
+    });
+    if (client !== this.client || sessionId !== this.ioSessionId) {
+      await session.close().catch(() => undefined);
+      return;
+    }
+
+    this.meterSession = session;
+    this.meterFreshnessMs = Math.max(
+      TCI_METER_MIN_FRESHNESS_MS,
+      (session.appliedIntervalMs ?? session.requestedIntervalMs) * 4,
+    );
+    session.on('rxFrame', (frame) => this.handleRxMeterFrame(frame));
+    session.on('txFrame', (frame) => this.handleTxMeterFrame(frame));
+    session.on('error', (error) => {
+      if (error.code === 'protocol-error') this.meterInvalidFrameCount += 1;
+    });
+    session.on('closed', () => {
+      if (this.meterSession !== session) return;
+      logger.info('TCI meter stream stopped', {
+        invalidFrameCount: this.meterInvalidFrameCount,
+        expiryCount: this.meterExpiryCount,
+      });
+      this.meterSession = null;
+    });
+    logger.info('TCI meter stream started', {
+      requestedIntervalMs: session.requestedIntervalMs,
+      appliedIntervalMs: session.appliedIntervalMs,
+      receiver: session.receiver,
+      channel: session.channel,
+      trx: session.trx,
+    });
+  }
+
+  private handleRxMeterFrame(frame: TciRxMeterFrame): void {
+    this.noteMeterInterval('rx', frame.receivedAtMs);
+    this.lastRxLevelDbm = frame.levelDbm;
+    this.lastRxLevelAtMs = frame.receivedAtMs;
+    this.observeMeterCapabilities({ strength: true });
+    this.emitMeterData();
+    this.scheduleMeterExpiry();
+  }
+
+  private handleTxMeterFrame(frame: TciTxMeterFrame): void {
+    this.noteMeterInterval('tx', frame.receivedAtMs);
     let changed = false;
-
-    if (levelDbm !== undefined) {
-      this.lastRxLevelDbm = levelDbm;
+    const powerWatts = frame.rmsPowerWatts ?? frame.peakPowerWatts;
+    if (powerWatts !== undefined) {
+      this.lastTxPowerW = powerWatts;
+      this.lastTxPowerAtMs = frame.receivedAtMs;
+      this.observeMeterCapabilities({ power: true, powerWatts: true });
       changed = true;
     }
-    if (rmsPower !== undefined) {
-      this.lastTxPowerW = rmsPower;
+    if (frame.swr !== undefined) {
+      this.lastSWR = frame.swr;
+      this.lastSwrAtMs = frame.receivedAtMs;
+      this.observeMeterCapabilities({ swr: true });
       changed = true;
     }
-    if (peakPower !== undefined) {
-      this.lastTxPeakPowerW = peakPower;
+    if (frame.alc) {
+      const raw = frame.alc.value;
+      const isDbfs = frame.alc.unit === 'dbfs';
+      const percent = isDbfs
+        ? clampPercent(((raw + 20) / 20) * 100)
+        : clampPercent(raw);
+      this.lastAlc = {
+        raw,
+        percent,
+        alert: isDbfs ? raw >= -3 : percent >= 100,
+        unit: frame.alc.unit,
+      };
+      this.lastAlcAtMs = frame.receivedAtMs;
+      this.observeMeterCapabilities({ alc: true });
       changed = true;
     }
-    if (swr !== undefined) {
-      this.lastSWR = swr;
-      changed = true;
-    }
-
     if (changed) {
-      this.emit('meterData', this.buildMeterData());
+      this.emitMeterData();
+      this.scheduleMeterExpiry();
     }
+  }
+
+  private observeMeterCapabilities(update: Partial<MeterCapabilities>): void {
+    const next = { ...this.meterCapabilities, ...update };
+    if (sameMeterCapabilities(next, this.meterCapabilities)) return;
+    this.meterCapabilities = next;
+    logger.info('TCI meter capabilities observed', next);
+    this.emit('meterCapabilitiesChanged', { ...next });
+  }
+
+  private noteMeterInterval(kind: 'rx' | 'tx', receivedAtMs: number): void {
+    const previous = kind === 'rx' ? this.lastRxMeterFrameAtMs : this.lastTxMeterFrameAtMs;
+    const alreadyLogged = kind === 'rx' ? this.rxMeterIntervalLogged : this.txMeterIntervalLogged;
+    if (previous > 0 && !alreadyLogged) {
+      logger.info('TCI meter interval observed', { kind, intervalMs: receivedAtMs - previous });
+      if (kind === 'rx') this.rxMeterIntervalLogged = true;
+      else this.txMeterIntervalLogged = true;
+    }
+    if (kind === 'rx') this.lastRxMeterFrameAtMs = receivedAtMs;
+    else this.lastTxMeterFrameAtMs = receivedAtMs;
+  }
+
+  private emitMeterData(): void {
+    this.emit('meterData', this.buildMeterData());
   }
 
   private buildMeterData(): MeterData {
@@ -737,16 +850,92 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     const level = this.lastRxLevelDbm === null
       ? null
       : buildLevelMeterReading(this.lastRxLevelDbm, dbOffset, frequency, 's-meter-dbm', formatSValue(dbOffset));
-    const powerWatts = this.lastTxPowerW ?? this.lastTxPeakPowerW;
-    const powerPercent = Math.max(0, Math.min(100, this.lastDrivePercent ?? 0));
+    const powerWatts = this.lastTxPowerW;
     return {
       swr: this.lastSWR === null ? null : { raw: this.lastSWR, swr: this.lastSWR, alert: this.lastSWR >= 2.5 },
-      alc: null,
+      alc: this.lastAlc,
       level,
       power: powerWatts === null || powerWatts === undefined
         ? null
-        : { raw: powerWatts, percent: powerPercent, watts: powerWatts, maxWatts: null },
+        : { raw: powerWatts, percent: null, watts: powerWatts, maxWatts: null },
     };
+  }
+
+  private scheduleMeterExpiry(): void {
+    if (this.meterExpiryTimer) clearTimeout(this.meterExpiryTimer);
+    const timestamps = [this.lastRxLevelAtMs, this.lastTxPowerAtMs, this.lastSwrAtMs, this.lastAlcAtMs]
+      .filter((value) => value > 0);
+    if (timestamps.length === 0) {
+      this.meterExpiryTimer = null;
+      return;
+    }
+    const nextExpiryAt = Math.min(...timestamps) + this.meterFreshnessMs;
+    this.meterExpiryTimer = setTimeout(() => this.expireMeterData(), Math.max(1, nextExpiryAt - Date.now()));
+  }
+
+  private expireMeterData(): void {
+    this.meterExpiryTimer = null;
+    const now = Date.now();
+    let changed = false;
+    if (this.lastRxLevelAtMs > 0 && now - this.lastRxLevelAtMs >= this.meterFreshnessMs) {
+      this.lastRxLevelDbm = null;
+      this.lastRxLevelAtMs = 0;
+      changed = true;
+    }
+    if (this.lastTxPowerAtMs > 0 && now - this.lastTxPowerAtMs >= this.meterFreshnessMs) {
+      this.lastTxPowerW = null;
+      this.lastTxPowerAtMs = 0;
+      changed = true;
+    }
+    if (this.lastSwrAtMs > 0 && now - this.lastSwrAtMs >= this.meterFreshnessMs) {
+      this.lastSWR = null;
+      this.lastSwrAtMs = 0;
+      changed = true;
+    }
+    if (this.lastAlcAtMs > 0 && now - this.lastAlcAtMs >= this.meterFreshnessMs) {
+      this.lastAlc = null;
+      this.lastAlcAtMs = 0;
+      changed = true;
+    }
+    if (changed) {
+      this.meterExpiryCount += 1;
+      this.emitMeterData();
+    }
+    this.scheduleMeterExpiry();
+  }
+
+  private clearTxMeterData(emit: boolean): void {
+    const changed = this.lastTxPowerW !== null || this.lastSWR !== null || this.lastAlc !== null;
+    this.lastTxPowerW = null;
+    this.lastTxPowerAtMs = 0;
+    this.lastSWR = null;
+    this.lastSwrAtMs = 0;
+    this.lastAlc = null;
+    this.lastAlcAtMs = 0;
+    if (changed && emit) this.emitMeterData();
+    this.scheduleMeterExpiry();
+  }
+
+  private resetMeterState(): void {
+    if (this.meterExpiryTimer) clearTimeout(this.meterExpiryTimer);
+    this.meterExpiryTimer = null;
+    this.meterSession = null;
+    this.meterFreshnessMs = Math.max(TCI_METER_MIN_FRESHNESS_MS, TCI_METER_INTERVAL_MS * 4);
+    this.meterCapabilities = createEmptyMeterCapabilities();
+    this.meterInvalidFrameCount = 0;
+    this.meterExpiryCount = 0;
+    this.lastRxMeterFrameAtMs = 0;
+    this.lastTxMeterFrameAtMs = 0;
+    this.rxMeterIntervalLogged = false;
+    this.txMeterIntervalLogged = false;
+    this.lastRxLevelDbm = null;
+    this.lastRxLevelAtMs = 0;
+    this.lastTxPowerW = null;
+    this.lastTxPowerAtMs = 0;
+    this.lastSWR = null;
+    this.lastSwrAtMs = 0;
+    this.lastAlc = null;
+    this.lastAlcAtMs = 0;
   }
 
   private handleRxAudioFrame(frame: TciStreamFrame): void {
@@ -890,16 +1079,20 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
 
   private async cleanup(): Promise<void> {
     const client = this.client;
+    const meterSession = this.meterSession;
     this.client = null;
+    this.backgroundTasksStarted = false;
     this.audioRunning = false;
     this.audioStreamOwners.clear();
     this.finishTxAudioDiagnostics('connection-cleanup');
     this.rejectTxDrainWaiters(new Error('TCI connection closed before TX audio drained'));
     this.clearTxAudioQueue();
+    await meterSession?.close().catch((error) => logger.debug('TCI meter stream cleanup failed', error));
     if (client) {
       client.removeAllListeners();
       await client.disconnect().catch((error) => logger.debug('TCI disconnect cleanup failed', error));
     }
+    this.resetMeterState();
   }
 
   private checkConnected(): void {
@@ -1041,10 +1234,18 @@ export function resolveTciEndpointCandidates(tci: NonNullable<RadioConnectionCon
   });
 }
 
-function toNumber(value: unknown): number | undefined {
-  if (value === undefined || value === null || value === '') {
-    return undefined;
-  }
-  const number = Number(value);
-  return Number.isFinite(number) ? number : undefined;
+function createEmptyMeterCapabilities(): MeterCapabilities {
+  return { strength: false, swr: false, alc: false, power: false, powerWatts: false };
+}
+
+function sameMeterCapabilities(left: MeterCapabilities, right: MeterCapabilities): boolean {
+  return left.strength === right.strength
+    && left.swr === right.swr
+    && left.alc === right.alc
+    && left.power === right.power
+    && left.powerWatts === right.powerWatts;
+}
+
+function clampPercent(value: number): number {
+  return Math.max(0, Math.min(100, value));
 }

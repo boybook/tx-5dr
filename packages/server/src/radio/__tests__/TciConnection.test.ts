@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { MockTciServer } from 'tci-client-node/testing';
 import { TciSampleType, payloadToFloat32 } from 'tci-client-node';
+import type { MeterCapabilities } from '@tx5dr/contracts';
 import { TciConnection, resolveTciEndpointCandidates } from '../connections/TciConnection.js';
 import { RadioConnectionState, RadioConnectionType, type MeterData } from '../connections/IRadioConnection.js';
 
@@ -39,6 +40,9 @@ describe('TciConnection', () => {
         audioSampleRate: 12000,
       },
     });
+    expect(server.receivedCommands.some((command) => command.name === 'rx_sensors_enable')).toBe(false);
+    connection.startBackgroundTasks();
+    await waitFor(() => server!.receivedCommands.some((command) => command.name === 'tx_sensors_enable'));
 
     expect(connection.getType()).toBe(RadioConnectionType.TCI);
     expect(connection.getState()).toBe(RadioConnectionState.CONNECTED);
@@ -100,6 +104,8 @@ describe('TciConnection', () => {
         audioSampleRate: 12000,
       },
     });
+    connection.startBackgroundTasks();
+    await waitFor(() => server!.receivedCommands.some((command) => command.name === 'rx_sensors_enable'));
 
     await connection.startAudioStream();
     server.sendRxAudioFrame({ sampleType: TciSampleType.FLOAT32, samples: new Float32Array([0, 0.5, -0.5]) });
@@ -116,10 +122,12 @@ describe('TciConnection', () => {
     connection.endTxAudio();
 
     server.broadcast('RX_CHANNEL_SENSORS:0,0,-71.5;TX_SENSORS:0,-20,12.5,18.25,1.4;');
-    await waitFor(() => meterFrames.some((data) => data.power?.watts === 12.5 && data.swr?.swr === 1.4));
+    await waitFor(() => meterFrames.some((data) => data.level?.raw === -71.5
+      && data.power?.watts === 12.5 && data.swr?.swr === 1.4));
     const meterData = meterFrames.at(-1)!;
     expect(meterData.level?.raw).toBe(-71.5);
     expect(meterData.power?.watts).toBe(12.5);
+    expect(meterData.power?.percent).toBeNull();
     expect(meterData.swr?.swr).toBe(1.4);
 
     await connection.stopAudioStream();
@@ -155,6 +163,96 @@ describe('TciConnection', () => {
     expect(Array.from(payloadToFloat32(server.receivedTxAudioFrames[0]!))).toEqual([expect.closeTo(0.5, 4), 0, 0, 0]);
 
     connection.endTxAudio();
+    await connection.disconnect('test complete');
+  });
+
+  it('discovers meter capabilities from real frames and clears stale or unkeyed readings', async () => {
+    server = new MockTciServer({ echoUnknown: false });
+    await server.start();
+    const endpoint = new URL(server.url());
+    const connection = new TciConnection();
+    const meterFrames: MeterData[] = [];
+    const capabilityFrames: MeterCapabilities[] = [];
+    connection.on('meterData', (data) => meterFrames.push(data));
+    connection.on('meterCapabilitiesChanged', (data) => capabilityFrames.push(data));
+
+    await connection.connect({
+      type: 'tci',
+      tci: {
+        host: endpoint.hostname,
+        port: Number(endpoint.port),
+        dialect: 'auto',
+        autoDiscoverPorts: true,
+        receiver: 0,
+        trx: 0,
+        vfo: 0,
+        audioEnabled: true,
+        audioSampleRate: 12000,
+      },
+    });
+    expect(connection.getMeterCapabilities()).toEqual({
+      strength: false, swr: false, alc: false, power: false, powerWatts: false,
+    });
+    connection.startBackgroundTasks();
+    await waitFor(() => server!.receivedCommands.some((command) => command.name === 'rx_sensors_enable'));
+
+    (connection as unknown as { meterFreshnessMs: number }).meterFreshnessMs = 30;
+    server.sendRxMeterFrame({ levelDbm: -88 });
+    await waitFor(() => meterFrames.some((data) => data.level?.raw === -88));
+    expect(capabilityFrames.at(-1)).toMatchObject({ strength: true, power: false });
+    await waitFor(() => meterFrames.some((data) => data.level === null), 500);
+
+    server.broadcast('TRX:0,true;');
+    server.sendTxMeterFrame({ rmsPowerWatts: 7.5, peakPowerWatts: 9, swr: 1.3 });
+    await waitFor(() => meterFrames.some((data) => data.power?.watts === 7.5));
+    expect(meterFrames.at(-1)?.power?.percent).toBeNull();
+    expect(capabilityFrames.at(-1)).toMatchObject({ power: true, powerWatts: true, swr: true });
+
+    server.broadcast('TRX:0,false;');
+    await waitFor(() => meterFrames.at(-1)?.power === null && meterFrames.at(-1)?.swr === null);
+    expect(meterFrames.at(-1)).toMatchObject({ power: null, swr: null, alc: null });
+    await connection.disconnect('test complete');
+  });
+
+  it('maps AetherSDR ALC dBFS without inventing a power percentage', async () => {
+    server = new MockTciServer({
+      startupCommands: [
+        'PROTOCOL:ExpertSDR3,1.5;',
+        'DEVICE:AetherSDR;',
+        'VFO:0,0,14074000;',
+        'TRX:0,false;',
+        'READY;',
+      ],
+    });
+    await server.start();
+    const endpoint = new URL(server.url());
+    const connection = new TciConnection();
+    const meterFrames: MeterData[] = [];
+    connection.on('meterData', (data) => meterFrames.push(data));
+    await connection.connect({
+      type: 'tci',
+      tci: {
+        host: endpoint.hostname,
+        port: Number(endpoint.port),
+        dialect: 'auto',
+        autoDiscoverPorts: true,
+        receiver: 0,
+        trx: 0,
+        vfo: 0,
+        audioEnabled: true,
+        audioSampleRate: 12000,
+      },
+    });
+    connection.startBackgroundTasks();
+    await waitFor(() => server!.receivedCommands.some((command) => command.name === 'tx_sensors_enable'));
+    server.sendTxMeterFrame({ rmsPowerWatts: 10, peakPowerWatts: 11, swr: 1.2, alc: -2.5 });
+    await waitFor(() => meterFrames.some((data) => data.alc?.raw === -2.5));
+
+    expect(meterFrames.at(-1)).toMatchObject({
+      power: { watts: 10, percent: null },
+      alc: { raw: -2.5, percent: 87.5, alert: true, unit: 'dbfs' },
+    });
+    expect(connection.getMeterCapabilities()).toMatchObject({ power: true, swr: true, alc: true });
     await connection.disconnect('test complete');
   });
 
