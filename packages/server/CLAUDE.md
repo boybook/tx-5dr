@@ -27,7 +27,7 @@ TX-5DR 数字电台核心后端：Fastify + 数字电台引擎 + 音频处理 + 
 
 - **永久监听器**（整个引擎生命周期）：RadioBridge（电台事件）、RadioOperatorManager（操作员事件）
 - **start/stop 循环监听器**：ClockCoordinator.setup/teardown()（时钟/解码/频谱）、TransmissionPipeline.setup/teardown()（编码/混音）
-- **高频数据**（spectrum/meter）：走 `globalEventBus` 直达 WSServer，不经过引擎
+- **高频数据**：spectrum 走专用协调器；meter 由 RadioBridge 统一投影为 engine 事件，再由 WSServer 广播
 
 #### 添加新功能指南
 

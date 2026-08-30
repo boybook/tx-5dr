@@ -1,5 +1,12 @@
 import type { EventEmitter } from 'eventemitter3';
-import type { CoreRadioCapabilities, DigitalRadioEngineEvents, EngineMode, PresetFrequency } from '@tx5dr/contracts';
+import type {
+  CoreRadioCapabilities,
+  DigitalRadioEngineEvents,
+  EngineMode,
+  MeterCapabilities,
+  MeterData,
+  PresetFrequency,
+} from '@tx5dr/contracts';
 import { RadioConnectionStatus } from '@tx5dr/contracts';
 import { getBandFromFrequency } from '@tx5dr/core';
 import { RadioError } from '../utils/errors/RadioError.js';
@@ -129,10 +136,16 @@ export class RadioBridge {
       this.handleRadioError(error);
     });
 
-    // 监听电台数值表数据
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    this.lm.listen(radioManager, 'meterData', (_data: any) => {
+    // 连接实现只发统一事件；由这里唯一投影到引擎和 WebSocket。
+    this.lm.listen(radioManager, 'meterData', (data: MeterData) => {
       this.onMeterEvent();
+      engineEmitter.emit('meterData', data);
+    });
+
+    this.lm.listen(radioManager, 'meterCapabilitiesChanged', (meterCapabilities) => {
+      void this.handleMeterCapabilitiesChanged(meterCapabilities).catch((error) => {
+        logger.error('Failed to handle meter capability change:', error);
+      });
     });
 
     // 监听统一能力系统事件，转发到引擎事件总线
@@ -546,6 +559,21 @@ export class RadioBridge {
       status: radioManager.getConnectionStatus(),
       radioInfo,
       coreCapabilities,
+      radioManager,
+    }));
+  }
+
+  private async handleMeterCapabilitiesChanged(meterCapabilities: MeterCapabilities): Promise<void> {
+    const radioManager = this.deps.radioManager;
+    const radioInfo = radioManager.isConnected()
+      ? await radioManager.getRadioInfo()
+      : null;
+
+    this.deps.engineEmitter.emit('radioStatusChanged', buildRadioStatusPayload({
+      connected: radioManager.isConnected(),
+      status: radioManager.getConnectionStatus(),
+      radioInfo,
+      meterCapabilities,
       radioManager,
     }));
   }

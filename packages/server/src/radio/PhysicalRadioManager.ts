@@ -165,6 +165,7 @@ interface PhysicalRadioManagerEvents {
   error: (error: Error) => void;
   radioFrequencyChanged: (frequency: number) => void;
   meterData: (data: MeterData) => void;
+  meterCapabilitiesChanged: (capabilities: MeterCapabilities) => void;
   tunerStatusChanged: (status: import('@tx5dr/contracts').TunerStatus) => void;
   coreCapabilitiesChanged: (capabilities: CoreRadioCapabilities) => void;
   /** 能力快照（连接/断开时触发） */
@@ -2556,6 +2557,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     };
     this.connection.on('meterData', onMeterData);
     this.connectionEventListeners.set('meterData', onMeterData);
+
+    const onMeterCapabilitiesChanged = (capabilities: MeterCapabilities) => {
+      this.emit('meterCapabilitiesChanged', capabilities);
+    };
+    this.connection.on('meterCapabilitiesChanged', onMeterCapabilitiesChanged);
+    this.connectionEventListeners.set('meterCapabilitiesChanged', onMeterCapabilitiesChanged);
   }
 
   /**

@@ -72,6 +72,54 @@ describe('RadioBridge', () => {
     }));
   });
 
+  it('projects each connection meter event once and refreshes observed meter capabilities', async () => {
+    const radioManager = createRadioManagerStub();
+    const engineEmitter = new EventEmitter();
+    const meterData = vi.fn();
+    const radioStatusChanged = vi.fn();
+    engineEmitter.on('meterData', meterData);
+    engineEmitter.on('radioStatusChanged', radioStatusChanged);
+    const bridge = new RadioBridge({
+      engineEmitter: engineEmitter as any,
+      radioManager: radioManager as any,
+      frequencyManager: { findMatchingPreset: vi.fn() } as any,
+      slotPackManager: { clearInMemory: vi.fn() } as any,
+      operatorManager: { stopAllOperators: vi.fn() } as any,
+      getTransmissionPipeline: () => ({ getIsPTTActive: vi.fn().mockReturnValue(false) } as any),
+      getEngineLifecycle: () => ({ getIsRunning: vi.fn().mockReturnValue(false) } as any),
+      getEngineMode: () => 'digital',
+    });
+    bridge.setupListeners();
+    const sample = {
+      swr: null,
+      alc: null,
+      level: null,
+      power: { raw: 10, percent: null, watts: 10, maxWatts: null },
+    };
+    radioManager.emit('meterData', sample);
+    expect(meterData).toHaveBeenCalledTimes(1);
+    expect(meterData).toHaveBeenCalledWith(sample);
+
+    radioManager.emit('meterCapabilitiesChanged', {
+      strength: true,
+      swr: true,
+      alc: false,
+      power: true,
+      powerWatts: true,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(radioStatusChanged).toHaveBeenCalledWith(expect.objectContaining({
+      connected: true,
+      meterCapabilities: {
+        strength: true,
+        swr: true,
+        alc: false,
+        power: true,
+        powerWatts: true,
+      },
+    }));
+  });
+
   it('retries an unknown physical TX release after the radio session reconnects', async () => {
     const radioManager = createRadioManagerStub();
     const retryUnknownStop = vi.fn().mockResolvedValue({

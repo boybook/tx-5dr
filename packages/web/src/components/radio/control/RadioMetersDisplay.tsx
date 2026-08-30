@@ -47,7 +47,7 @@ export function shouldAutoOpenAlcWarning(
     return false;
   }
 
-  return alc.percent >= 100;
+  return alc.alert;
 }
 
 export function shouldForceOpenAlcWarning(
@@ -55,6 +55,19 @@ export function shouldForceOpenAlcWarning(
   isSuppressedForSession: boolean
 ): boolean {
   return isAlcOverLimit && !isSuppressedForSession;
+}
+
+export function formatPowerMeterValue(power: MeterData['power']): string {
+  if (!power) return '--';
+  const { watts, percent, maxWatts } = power;
+  if (watts != null && maxWatts != null) return `${watts.toFixed(1)}/${maxWatts.toFixed(1)}W`;
+  if (watts != null) return watts.toFixed(1);
+  return percent != null ? percent.toFixed(1) : '--';
+}
+
+export function formatAlcMeterValue(alc: MeterData['alc']): string {
+  if (!alc) return '--';
+  return alc.unit === 'dbfs' ? `${alc.raw.toFixed(1)}dBFS` : alc.percent.toFixed(1);
 }
 
 export function isAlcAutoPromptSuppressedForSession(): boolean {
@@ -106,6 +119,7 @@ interface MeterProps {
   isTimeout?: boolean;
   formatValue?: (value: number) => string;
   renderDisplayValue?: () => React.ReactNode;
+  hasReading?: boolean;
 }
 
 function clampProgressValue(value: number): number {
@@ -122,11 +136,13 @@ const Meter: React.FC<MeterProps> = ({
   alert = false,
   isTimeout = false,
   formatValue,
-  renderDisplayValue
+  renderDisplayValue,
+  hasReading,
 }) => {
-  const displayValue = isTimeout || value === null
+  const readingAvailable = hasReading ?? value !== null;
+  const displayValue = isTimeout || !readingAvailable
     ? '--'
-    : formatValue ? formatValue(value) : value.toFixed(1);
+    : formatValue ? formatValue(value ?? 0) : (value ?? 0).toFixed(1);
 
   const progressValue = value === null || isTimeout ? 0 : clampProgressValue(value);
   const showUnit = displayValue !== '--';
@@ -163,7 +179,7 @@ const Meter: React.FC<MeterProps> = ({
             ? 'text-default-400 dark:text-default-500'
             : 'text-default-600 dark:text-default-400'
         }`}>
-          {(isTimeout || value === null) ? '--' : (renderDisplayValue ? renderDisplayValue() : <>{displayValue}{showUnit ? unit : ''}</>)}
+          {(isTimeout || !readingAvailable) ? '--' : (renderDisplayValue ? renderDisplayValue() : <>{displayValue}{showUnit ? unit : ''}</>)}
         </span>
       </div>
       <Progress
@@ -195,7 +211,7 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
   className = ''
 }) => {
   const { t } = useTranslation('radio');
-  const buffered = useBufferedMeterData(meterData);
+  const buffered = useBufferedMeterData(meterData, isPttActive);
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const [showLevelDbmDetail, setShowLevelDbmDetail] = React.useState(true);
   const [isAlcPopoverOpen, setIsAlcPopoverOpen] = React.useState(false);
@@ -252,6 +268,7 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
     enableAlcOverLimitPrompt
   );
   const shouldForceAlcPopoverOpen = shouldForceOpenAlcWarning(isAlcOverLimit, isAlcAutoPromptSuppressed);
+  const alcUsesDbfs = buffered.alc.value?.unit === 'dbfs';
 
   React.useEffect(() => {
     if (!showAlc || !enableAlcOverLimitPrompt) {
@@ -321,15 +338,10 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
           <Meter
             label="Power"
             value={powerValue?.percent ?? null}
+            hasReading={powerValue !== null}
             unit={powerValue?.watts != null && powerValue?.maxWatts != null ? '' : (powerValue?.watts != null ? 'W' : '%')}
             isTimeout={powerIsTimeout}
-            formatValue={(_value) => {
-              if (!powerValue) return '--';
-              const { watts, percent, maxWatts } = powerValue;
-              if (watts != null && maxWatts != null) return `${watts.toFixed(1)}/${maxWatts.toFixed(1)}W`;
-              if (watts != null) return watts.toFixed(1);
-              return percent.toFixed(1);
-            }}
+            formatValue={() => formatPowerMeterValue(powerValue)}
           />
         ) : (
           <Meter
@@ -380,9 +392,10 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
                 <Meter
                   label="ALC"
                   value={buffered.alc.value?.percent ?? null}
-                  unit="%"
+                  unit={alcUsesDbfs ? '' : '%'}
                   alert={buffered.alc.value?.alert}
                   isTimeout={buffered.alc.isTimeout || !isPttActive}
+                  formatValue={() => formatAlcMeterValue(buffered.alc.value)}
                 />
               </div>
             </div>
@@ -424,7 +437,7 @@ export const RadioMetersDisplay: React.FC<RadioMetersDisplayProps> = ({
                       )}
                     </div>
                     <div className="text-xs leading-relaxed text-default-600 dark:text-default-300">
-                      {t('alcWarning.description')}
+                      {t(alcUsesDbfs ? 'alcWarning.descriptionDbfs' : 'alcWarning.description')}
                     </div>
                   </div>
                   <TxVolumeGainControl

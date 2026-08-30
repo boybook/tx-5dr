@@ -23,7 +23,6 @@ import type { RigMetadata, MeterReadContext } from './meter/types.js';
 import { HamlibMeterReader } from './meter/HamlibMeterReader.js';
 import { resolveMeterProfile, defaultHamlibProfile } from './meter/profiles/index.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
-import { globalEventBus } from '../../utils/EventBus.js';
 import { createLogger } from '../../utils/logger.js';
 import { isProcessShuttingDown } from '../../utils/process-shutdown.js';
 import { isRecoverableOptionalRadioError } from '../optionalRadioError.js';
@@ -3628,7 +3627,6 @@ export class HamlibConnection
 
         this.lastSuccessfulOperation = Date.now();
         this.emit('meterData', meterData);
-        globalEventBus.emit('bus:meterData', meterData);
       });
 
       if (result === RADIO_IO_SKIPPED) {

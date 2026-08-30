@@ -100,9 +100,9 @@ export interface RadioConnectOptions {
  */
 export interface MeterData {
   swr: { raw: number; swr: number; alert: boolean } | null;
-  alc: { raw: number; percent: number; alert: boolean } | null;
+  alc: { raw: number; percent: number; alert: boolean; unit?: 'percent' | 'dbfs' } | null;
   level: LevelMeterReading | null;
-  power: { raw: number; percent: number; watts: number | null; maxWatts: number | null } | null;
+  power: { raw: number; percent: number | null; watts: number | null; maxWatts: number | null } | null;
 }
 
 export interface RadioWriteResult<T> {
@@ -186,6 +186,9 @@ export interface IRadioConnectionEvents {
    * 数值表数据
    */
   meterData: (data: MeterData) => void;
+
+  /** Observed meter fields changed for the active radio session. */
+  meterCapabilitiesChanged: (capabilities: MeterCapabilities) => void;
 }
 
 export type RadioModeIntent = 'voice' | 'digital' | 'cw';

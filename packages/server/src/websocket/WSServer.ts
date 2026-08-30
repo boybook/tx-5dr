@@ -25,7 +25,6 @@ import { getBandFromFrequency } from '@tx5dr/core';
 import type { QueuedStrategyMutationResult } from '@tx5dr/plugin-api';
 import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import type { ProcessMonitor } from '../services/ProcessMonitor.js';
-import { globalEventBus } from '../utils/EventBus.js';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 import { OpenWebRXStationManager } from '../openwebrx/OpenWebRXStationManager.js';
 import { AuthManager } from '../auth/AuthManager.js';
@@ -758,9 +757,7 @@ export class WSServer extends WSMessageHandler {
       this.broadcast(WSMessageType.SQUELCH_STATUS_CHANGED, data);
     });
 
-    // 监听电台数值表数据事件（通过事件总线，优化路径）
-    globalEventBus.on('bus:meterData', (data) => {
-      // 数值表数据频率较高，使用静默广播（不打印日志）
+    this.digitalRadioEngine.on('meterData', (data) => {
       this.broadcast(WSMessageType.METER_DATA, data);
     });
 

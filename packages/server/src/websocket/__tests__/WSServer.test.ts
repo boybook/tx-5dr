@@ -3,6 +3,7 @@ import { SLOT_PACK_HISTORY_LIMIT, UserRole, WSMessageType, type SlotPack, type S
 import { WSConnection, WSServer } from '../WSServer.js';
 import { ConfigManager } from '../../config/config-manager.js';
 import { AuthManager } from '../../auth/AuthManager.js';
+import { EventEmitter } from 'eventemitter3';
 
 function createStatus(overrides: Partial<SystemStatus> = {}): SystemStatus {
   return {
@@ -42,6 +43,32 @@ function createSlotPack(index: number, frames = true): SlotPack {
     decodeHistory: [],
   };
 }
+
+describe('WSServer meter projection', () => {
+  it('broadcasts one WebSocket meter message for one engine event', () => {
+    const engine = Object.assign(new EventEmitter(), {
+      getNtpCalibrationService: () => new EventEmitter(),
+    });
+    const server = Object.create(WSServer.prototype) as any;
+    server.digitalRadioEngine = engine;
+    server.spectrumCoordinator = new EventEmitter();
+    server.spectrumSessionCoordinator = new EventEmitter();
+    server.broadcast = vi.fn();
+    server.broadcastTextMessage = vi.fn();
+    (server as any).setupEngineEventListeners();
+    const sample = {
+      swr: null,
+      alc: null,
+      level: null,
+      power: { raw: 10, percent: null, watts: 10, maxWatts: null },
+    };
+
+    engine.emit('meterData', sample);
+
+    expect(server.broadcast).toHaveBeenCalledTimes(1);
+    expect(server.broadcast).toHaveBeenCalledWith(WSMessageType.METER_DATA, sample);
+  });
+});
 
 describe('WSServer initial frequency snapshot', () => {
   afterEach(() => {

@@ -24,7 +24,6 @@ import {
 import type { MeterCapabilities } from '@tx5dr/contracts';
 import { TunerCapabilities, TunerStatus } from '@tx5dr/contracts';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
-import { globalEventBus } from '../../utils/EventBus.js';
 import { createLogger } from '../../utils/logger.js';
 import { isProcessShuttingDown } from '../../utils/process-shutdown.js';
 import { isRecoverableOptionalRadioError } from '../optionalRadioError.js';
@@ -2019,7 +2018,6 @@ export class IcomWlanConnection
 
         this.logMeterSample(meterData, { txMetersReady });
         this.emit('meterData', meterData);
-        globalEventBus.emit('bus:meterData', meterData);
       });
 
       if (result === RADIO_IO_SKIPPED) {
