@@ -314,8 +314,8 @@ const AUDIO_RANGE_LIMITS = {
   max: 40,
 };
 
-const RADIO_SDR_RANGE_LIMITS = {
-  min: -64,
+export const RADIO_SDR_RANGE_LIMITS = {
+  min: -120,
   max: 255,
 };
 

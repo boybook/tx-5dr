@@ -19,6 +19,7 @@ import { HamlibConnection } from '../radio/connections/HamlibConnection.js';
 import { IcomWlanConnection } from '../radio/connections/IcomWlanConnection.js';
 import { createLogger } from '../utils/logger.js';
 import type { SpectrumCoordinator } from './SpectrumCoordinator.js';
+import type { RadioSpectrumSpanController } from './RadioSpectrumSource.js';
 
 const logger = createLogger('SpectrumSessionCoordinator');
 
@@ -127,7 +128,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
   } | null = null;
   private lastRadioFrameStateDirtyAt = 0;
   private pendingTargetSpanHz: number | null = null;
-  private pendingConnectionType: 'hamlib' | 'icom-wlan' | null = null;
+  private pendingExpectedFrameSpanHz: number | null = null;
   private pendingZoomTimer: NodeJS.Timeout | null = null;
   private pendingDigitalTransition: PendingDigitalTransition | null = null;
   private cachedRadioDisplayState: ResolvedRadioDisplayState | null = null;
@@ -866,7 +867,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     }
 
     const levels = await this.getZoomLevels(connection);
-    if (levels.length === 0) {
+    if (levels.length < 2) {
       const empty = this.createEmptyZoomState();
       this.cachedRadioZoomState = empty;
       return empty;
@@ -924,52 +925,71 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       return;
     }
 
-    const connection = this.getZoomCapableConnection();
-    if (!connection?.setSpectrumSpan) {
+    const controller = this.getZoomCapableConnection();
+    if (!controller) {
       return;
     }
 
     this.pendingTargetSpanHz = nextLevel.spanHz;
-    this.pendingConnectionType = connection instanceof HamlibConnection ? 'hamlib' : 'icom-wlan';
+    this.pendingExpectedFrameSpanHz = nextLevel.spanHz * controller.frameSpanScale;
     this.resetPendingZoomTimer();
-    await connection.setSpectrumSpan(nextLevel.spanHz);
+    const appliedSpanHz = await controller.setSpan(nextLevel.spanHz);
+    if (typeof appliedSpanHz === 'number') {
+      this.clearPendingZoom();
+    }
     this.clearSpectrumDisplayStateCache();
   }
 
-  private getZoomCapableConnection(): HamlibConnection | IcomWlanConnection | null {
+  private getZoomCapableConnection(): RadioSpectrumSpanController | null {
+    const registeredSource = this.spectrumCoordinator.getActiveRadioSpectrumSource?.();
+    if (registeredSource?.spanController) {
+      return registeredSource.spanController;
+    }
     const radioManager = this.engine.getRadioManager();
     const activeConnection = radioManager.getActiveConnection();
     if (activeConnection instanceof HamlibConnection && typeof activeConnection.getSpectrumSpans === 'function') {
-      return activeConnection;
+      return {
+        frameSpanScale: 1,
+        preferFrameSpan: false,
+        getSupportedSpans: () => activeConnection.getSpectrumSpans(),
+        getCurrentSpan: () => activeConnection.getCurrentSpectrumSpan(),
+        setSpan: (spanHz) => activeConnection.setSpectrumSpan(spanHz),
+      };
     }
 
     const wlanManager = radioManager.getIcomWlanManager();
     if (wlanManager instanceof IcomWlanConnection && typeof wlanManager.getSpectrumSpans === 'function') {
-      return wlanManager;
+      return {
+        frameSpanScale: 2,
+        preferFrameSpan: true,
+        getSupportedSpans: () => wlanManager.getSpectrumSpans(),
+        getCurrentSpan: () => wlanManager.getCurrentSpectrumSpan(),
+        setSpan: (spanHz) => wlanManager.setSpectrumSpan(spanHz),
+      };
     }
 
     return null;
   }
 
-  private async getZoomLevels(connection: HamlibConnection | IcomWlanConnection): Promise<Array<{ id: string; spanHz: number }>> {
-    const spans = await connection.getSpectrumSpans?.();
-    return Array.from(new Set((spans ?? []).filter((span): span is number => Number.isFinite(span) && span > 0)))
+  private async getZoomLevels(controller: RadioSpectrumSpanController): Promise<Array<{ id: string; spanHz: number }>> {
+    const spans = await controller.getSupportedSpans();
+    return Array.from(new Set(spans.filter((span): span is number => Number.isFinite(span) && span > 0)))
       .sort((left, right) => right - left)
       .map(spanHz => ({ id: String(spanHz), spanHz }));
   }
 
   private async resolveCurrentSpan(
-    connection: HamlibConnection | IcomWlanConnection,
+    controller: RadioSpectrumSpanController,
     displaySpanHz: number | null,
   ): Promise<number | null> {
-    if (connection instanceof IcomWlanConnection && this.lastRadioFrame) {
+    if (controller.preferFrameSpan && this.lastRadioFrame) {
       const frameSpanHz = this.lastRadioFrame.meta.spanHz ?? Math.abs(this.lastRadioFrame.frequencyRange.max - this.lastRadioFrame.frequencyRange.min);
       if (Number.isFinite(frameSpanHz) && frameSpanHz > 0) {
-        return Math.round(frameSpanHz / 2);
+        return Math.round(frameSpanHz / controller.frameSpanScale);
       }
     }
 
-    const queriedSpanHz = await connection.getCurrentSpectrumSpan?.();
+    const queriedSpanHz = await controller.getCurrentSpan();
     if (typeof queriedSpanHz === 'number' && Number.isFinite(queriedSpanHz) && queriedSpanHz > 0) {
       return queriedSpanHz;
     }
@@ -977,7 +997,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     if (this.lastRadioFrame) {
       const frameSpanHz = this.lastRadioFrame.meta.spanHz ?? Math.abs(this.lastRadioFrame.frequencyRange.max - this.lastRadioFrame.frequencyRange.min);
       if (Number.isFinite(frameSpanHz) && frameSpanHz > 0) {
-        return connection instanceof IcomWlanConnection ? Math.round(frameSpanHz / 2) : Math.round(frameSpanHz);
+        return Math.round(frameSpanHz / controller.frameSpanScale);
       }
     }
 
@@ -1017,7 +1037,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
   }
 
   private isPendingZoomConfirmed(frame: SpectrumFrame): boolean {
-    if (this.pendingTargetSpanHz === null || this.pendingConnectionType === null) {
+    if (this.pendingTargetSpanHz === null || this.pendingExpectedFrameSpanHz === null) {
       return false;
     }
 
@@ -1026,10 +1046,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       return false;
     }
 
-    if (this.pendingConnectionType === 'icom-wlan') {
-      return Math.abs(frameSpanHz - (this.pendingTargetSpanHz * 2)) <= 1;
-    }
-    return Math.abs(frameSpanHz - this.pendingTargetSpanHz) <= 1;
+    return Math.abs(frameSpanHz - this.pendingExpectedFrameSpanHz) <= 1;
   }
 
   private resetPendingZoomTimer(): void {
@@ -1045,7 +1062,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
 
   private clearPendingZoom(): void {
     this.pendingTargetSpanHz = null;
-    this.pendingConnectionType = null;
+    this.pendingExpectedFrameSpanHz = null;
     if (this.pendingZoomTimer) {
       clearTimeout(this.pendingZoomTimer);
       this.pendingZoomTimer = null;

@@ -10,6 +10,7 @@ import {
   getRadioSdrDragFrequencyStepHz,
   isSpectrumEngineNotStarted,
   normalizeRadioSdrCenterViewMode,
+  RADIO_SDR_RANGE_LIMITS,
   resolveAudioRangeSettingsForModeChange,
   resolveRadioSdrCenterViewContext,
   resolveSpectrumEmptyStatusKey,
@@ -21,6 +22,10 @@ import {
 } from './SpectrumDisplay';
 
 describe('spectrum recovery state helpers', () => {
+  it('allows the radio SDR floor to reach -120 dB', () => {
+    expect(RADIO_SDR_RANGE_LIMITS).toEqual({ min: -120, max: 255 });
+  });
+
   it('detects equivalent recovery states before scheduling React updates', () => {
     expect(areSpectrumRecoveryStatesEqual(
       { isStale: false, retryCount: 0, exhausted: false },

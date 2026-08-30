@@ -792,4 +792,43 @@ describe('WSServer spectrum subscriptions', () => {
       reason: 'capabilities_timeout',
     });
   });
+
+  it('drops only spectrum frames for a slow websocket client', () => {
+    const send = vi.fn();
+    let bufferedAmount = 256 * 1024 + 1;
+    const connection = {
+      isAlive: true,
+      isHandshakeCompleted: () => true,
+      getBufferedAmount: () => bufferedAmount,
+      send,
+    };
+    const server = Object.create(WSServer.prototype) as any;
+    server.spectrumCoordinator = {
+      getSubscribedConnectionIds: () => ['conn-1'],
+    };
+    server.getConnection = () => connection;
+    const frame = {
+      timestamp: Date.now(),
+      kind: 'radio-sdr',
+      frequencyRange: { min: 14_026_000, max: 14_122_000 },
+      binaryData: {
+        data: '',
+        format: { type: 'int16', length: 1024, scale: 0.01, offset: 0 },
+      },
+      meta: {
+        sourceBinCount: 4096,
+        displayBinCount: 1024,
+        centerFrequency: 14_074_000,
+        spanHz: 96_000,
+        profileId: null,
+      },
+    } as const;
+
+    server.broadcastSpectrumFrame(frame);
+    expect(send).not.toHaveBeenCalled();
+
+    bufferedAmount = 0;
+    server.broadcastSpectrumFrame(frame);
+    expect(send).toHaveBeenCalledWith(WSMessageType.SPECTRUM_FRAME, frame);
+  });
 });

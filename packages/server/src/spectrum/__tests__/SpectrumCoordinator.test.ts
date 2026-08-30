@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SpectrumCoordinator } from '../SpectrumCoordinator.js';
 import type { IcomScopeFrame } from 'icom-wlan-node';
 import { PhysicalRadioManager } from '../../radio/PhysicalRadioManager.js';
+import { HamlibConnection } from '../../radio/connections/HamlibConnection.js';
+import { IcomWlanConnection } from '../../radio/connections/IcomWlanConnection.js';
 
 class MockEngine extends EventEmitter {
   readonly spectrumScheduler = new EventEmitter() as EventEmitter & {
@@ -50,22 +52,33 @@ describe('SpectrumCoordinator', () => {
     vi.useRealTimers();
   });
 
-  it('throttles emitted ICOM WLAN scope frames before they reach websocket clients', () => {
+  it('throttles provider-emitted ICOM WLAN scope frames before they reach websocket clients', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-04-25T12:00:00.000Z'));
-    const coordinator = new SpectrumCoordinator(new MockEngine() as any);
+    const engine = new MockEngine();
+    const connection = new IcomWlanConnection();
+    let scopeListener: ((frame: IcomScopeFrame) => void) | null = null;
+    vi.spyOn(connection, 'addScopeFrameListener').mockImplementation((listener) => { scopeListener = listener; });
+    vi.spyOn(connection, 'removeScopeFrameListener').mockImplementation(() => { scopeListener = null; });
+    vi.spyOn(connection, 'enableScopeStream').mockResolvedValue();
+    vi.spyOn(connection, 'disableScopeStream').mockResolvedValue();
+    engine.radioManager.getIcomWlanManager.mockReturnValue(connection as any);
+    engine.radioManager.getActiveConnection.mockReturnValue(connection as any);
+    const coordinator = new SpectrumCoordinator(engine as any);
     const frames: unknown[] = [];
     coordinator.on('frame', (frame) => frames.push(frame));
+    await coordinator.setConnectionSubscription('test', 'radio-sdr');
 
-    (coordinator as any).onScopeFrame(createScopeFrame());
+    scopeListener!(createScopeFrame());
     vi.advanceTimersByTime(100);
-    (coordinator as any).onScopeFrame(createScopeFrame());
+    scopeListener!(createScopeFrame());
     vi.advanceTimersByTime(149);
-    (coordinator as any).onScopeFrame(createScopeFrame());
+    scopeListener!(createScopeFrame());
     vi.advanceTimersByTime(1);
-    (coordinator as any).onScopeFrame(createScopeFrame());
+    scopeListener!(createScopeFrame());
 
     expect(frames).toHaveLength(2);
+    await (coordinator as any).stopRadioScope();
   });
 
   it('keeps radio SDR available and skips Hamlib support probing while the CAT queue is busy', async () => {
@@ -73,14 +86,11 @@ describe('SpectrumCoordinator', () => {
       { rigModel: 3073, mfgName: 'Icom', modelName: 'IC-7300' },
     ] as any);
     const engine = new MockEngine();
-    const getSpectrumSupportSummary = vi.fn().mockResolvedValue({ supported: true });
+    const connection = new HamlibConnection();
+    const getSpectrumSupportSummary = vi.spyOn(connection, 'getSpectrumSupportSummary').mockResolvedValue({ supported: true } as any);
     (engine.radioManager.getConfig as any).mockReturnValue({ type: 'serial', serial: { rigModel: 3073 } });
     engine.radioManager.isConnected.mockReturnValue(true);
-    (engine.radioManager.getActiveConnection as any).mockReturnValue({
-      type: 'hamlib',
-      getConnectionInfo: () => ({ connectionType: 'serial' }),
-      getSpectrumSupportSummary,
-      getRadioIoQueueSnapshot: () => ({
+    vi.spyOn(connection, 'getRadioIoQueueSnapshot').mockReturnValue({
         busy: true,
         backpressure: true,
         criticalActive: false,
@@ -93,11 +103,10 @@ describe('SpectrumCoordinator', () => {
         oldestPendingTask: 'getLockMode',
         oldestPendingWaitMs: 1000,
         dedupedTaskCount: 0,
-      }),
-    });
+      } as any);
+    (engine.radioManager.getActiveConnection as any).mockReturnValue(connection);
 
     const coordinator = new SpectrumCoordinator(engine as any);
-    vi.spyOn(coordinator as any, 'isHamlibSerialScopeConnection').mockReturnValue(true);
 
     const capabilities = await coordinator.getCapabilities();
     const radioSource = capabilities.sources.find((source) => source.kind === 'radio-sdr');
@@ -116,12 +125,9 @@ describe('SpectrumCoordinator', () => {
     ] as any);
     const engine = new MockEngine();
     let busy = false;
-    const getSpectrumSupportSummary = vi.fn().mockResolvedValue({ supported: true });
-    const connection = {
-      type: 'hamlib',
-      getConnectionInfo: () => ({ connectionType: 'serial' }),
-      getSpectrumSupportSummary,
-      getRadioIoQueueSnapshot: () => ({
+    const connection = new HamlibConnection();
+    const getSpectrumSupportSummary = vi.spyOn(connection, 'getSpectrumSupportSummary').mockResolvedValue({ supported: true } as any);
+    vi.spyOn(connection, 'getRadioIoQueueSnapshot').mockImplementation(() => ({
         busy,
         backpressure: busy,
         criticalActive: false,
@@ -134,14 +140,12 @@ describe('SpectrumCoordinator', () => {
         oldestPendingTask: null,
         oldestPendingWaitMs: null,
         dedupedTaskCount: 0,
-      }),
-    };
+      } as any));
     (engine.radioManager.getConfig as any).mockReturnValue({ type: 'serial', serial: { rigModel: 3073 } });
     engine.radioManager.isConnected.mockReturnValue(true);
     (engine.radioManager.getActiveConnection as any).mockReturnValue(connection);
 
     const coordinator = new SpectrumCoordinator(engine as any);
-    vi.spyOn(coordinator as any, 'isHamlibSerialScopeConnection').mockReturnValue(true);
 
     const first = await coordinator.getCapabilities();
     busy = true;
@@ -153,5 +157,37 @@ describe('SpectrumCoordinator', () => {
     expect(firstRadioSource).toMatchObject({ supported: true, available: true });
     expect(secondRadioSource).toMatchObject({ supported: true, available: true });
     expect(secondRadioSource?.reason).toBeUndefined();
+  });
+
+  it('stops a registered radio source two seconds after the last subscriber leaves', async () => {
+    vi.useFakeTimers();
+    const coordinator = new SpectrumCoordinator(new MockEngine() as any);
+    const source = {
+      key: {},
+      getAvailability: vi.fn().mockResolvedValue({
+        kind: 'radio-sdr',
+        supported: true,
+        available: true,
+        defaultSelected: true,
+        sourceBinCount: 4096,
+        displayBinCount: 1024,
+        supportsWaterfall: true,
+        frequencyRangeMode: 'absolute',
+      }),
+      start: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.spyOn((coordinator as any).registeredSourceRegistry, 'resolve').mockResolvedValue({
+      source,
+      availability: await source.getAvailability(),
+    });
+
+    await coordinator.setConnectionSubscription('client', 'radio-sdr');
+    expect(source.start).toHaveBeenCalledTimes(1);
+    await coordinator.removeConnection('client');
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(source.stop).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(source.stop).toHaveBeenCalledTimes(1);
   });
 });
