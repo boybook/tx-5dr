@@ -6,7 +6,7 @@
  *   - Every write funnels through the manager's critical path (applyOperatingState
  *     for frequency/mode, setPTT for PTT, RadioPowerController for powerstat) so
  *     rigctld clients can never bypass the serialization / lifecycle guarantees
- *     documented in packages/server/CLAUDE.md.
+ *     documented in docs/architecture/server-startup.md.
  *   - Auxiliary getters (lock, RIT, XIT, tuning step, levels) are routed to the
  *     matching optional method on the active IRadioConnection. When the current
  *     connection doesn't implement a getter, reads fall back to a honest

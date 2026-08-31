@@ -178,6 +178,10 @@ Image release details: [GitHub nightly-docker](https://github.com/boybook/tx-5dr
 
 ## Development
 
+Repository setup, validation expectations, and contribution boundaries are in
+**[CONTRIBUTING.md](CONTRIBUTING.md)**. Maintained engineering contracts and
+research are indexed in **[docs/README.md](docs/README.md)**.
+
 ### Prerequisites
 
 - Node.js 22+, Yarn 4+ (Berry), Git

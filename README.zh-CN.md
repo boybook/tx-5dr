@@ -177,6 +177,10 @@ docker exec tx5dr cat /app/data/config/.admin-token
 
 ## 开发
 
+仓库安装、验证要求和贡献边界见
+**[CONTRIBUTING.md](CONTRIBUTING.md)**；当前维护的工程契约与研究索引见
+**[docs/README.md](docs/README.md)**。
+
 ### 前置要求
 
 - Node.js 22+、Yarn 4+（Berry）、Git

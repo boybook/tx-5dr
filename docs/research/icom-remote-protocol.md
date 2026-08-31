@@ -1,19 +1,24 @@
 # ICOM 现代电台远程连接开源软件与频谱数据获取整理
 
+> **Status:** historical protocol research based on the named upstream source
+> snapshots available in March 2026. Re-verify wire details against current
+> `icom-wlan-node`, radio firmware, and captures before changing production code.
+> This document is evidence, not the TX-5DR architecture source of truth.
+
 ## 结论先行
 
 结论需要先拆成三种“连接场景”，否则很容易把“有线”和“无线”混为一谈：
 
 1. **原生 ICOM LAN/WLAN 远程**
-   这里的“有线”和“无线”如果都是指电台自带的 **Ethernet / Wi-Fi 网络远程功能**，那么 **应用层协议本质上是同一套**。  
+   这里的“有线”和“无线”如果都是指电台自带的 **Ethernet / Wi-Fi 网络远程功能**，那么 **应用层协议本质上是同一套**。
    都是 ICOM/RS-BA1 风格的 UDP 多流协议：控制流、CI-V/串口流、音频流分开，登录、token、重传、心跳也一致。
 
 2. **USB/串口直连**
-   如果“有线”指的是 **USB 或串口线直连电脑**，那就 **不是同一套协议**。  
+   如果“有线”指的是 **USB 或串口线直连电脑**，那就 **不是同一套协议**。
    这时控制面是 **裸 CI-V 串口帧**，音频通常走 USB 声卡，频谱/瀑布图数据也是作为 **CI-V `0x27` 作用域数据**返回，而不是 LAN/WLAN 的 UDP 外层封装。
 
 3. **`wfview server` 转发 USB 电台**
-   `wfview` 还能把本地 USB 连接的电台重新包装成网络服务给远端 `wfview` 客户端使用。  
+   `wfview` 还能把本地 USB 连接的电台重新包装成网络服务给远端 `wfview` 客户端使用。
    这不是 ICOM 电台原生协议本体，而是 **`wfview` 自己实现的一层兼容服务器协议**，它在登录响应里直接把连接类型标记成 `"WFVIEW"`。
 
 一句话总结：
@@ -28,7 +33,7 @@
 
 ### 1. `wfview`
 
-- 上游仓库：GitLab，不在 GitHub  
+- 上游仓库：GitLab，不在 GitHub
 - 本地克隆路径：`~/Documents/coding/wfview`
 - 定位：当前最完整的 ICOM 现代机型开源实现之一，同时覆盖
   - USB/串口直连
@@ -226,7 +231,7 @@
 - `requesttype = 0x00`
 - `requestreply = 0x01`
 
-用户名/密码不是明文直接发送，而是先过一遍 `passcode()` 变换。  
+用户名/密码不是明文直接发送，而是先过一遍 `passcode()` 变换。
 `wfview/include/icomudpbase.h` 里有完整算法，`kappanhang/passcode.go` 也是同一套思路。
 
 ### 阶段 3：token 建立与续租
@@ -477,7 +482,7 @@
 
 ### 情况 3：`wfview server`
 
-这条路径要单独看。  
+这条路径要单独看。
 它对客户端暴露的是网络协议，但底层可以接 USB 电台，所以它本质上是：
 
 - 下层：串口/USB CI-V + 本地音频
@@ -656,7 +661,7 @@ export interface IcomScopeFrame {
 - `payloadIn[0]` = 当前分段序号，BCD
 - `payloadIn[1]` = 总分段数，BCD
 
-注意这是 **BCD 编码**，不是普通二进制整数。  
+注意这是 **BCD 编码**，不是普通二进制整数。
 例如：
 
 - `0x01` -> `1`
@@ -1178,17 +1183,17 @@ type IcomEvent =
 
 ### 3. center 模式下直接把两个频率字段当 start/end
 
-`mode == 0` 时不能这样做。  
+`mode == 0` 时不能这样做。
 要按 `wfview` 的逻辑把中心频率和 span 转成边界。
 
 ### 4. LAN 下直接把大包喂给 scope parser
 
-如果输入还是 aggregate 大包，而你的 parser 只会吃标准 segment，就一定会错。  
+如果输入还是 aggregate 大包，而你的 parser 只会吃标准 segment，就一定会错。
 LAN 模式往往需要先 `split`.
 
 ### 5. 不做 assembly timeout
 
-scope 是连续刷新的。  
+scope 是连续刷新的。
 如果不做超时与重置，很容易把上一帧残留和下一帧混在一起。
 
 ---
