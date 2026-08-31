@@ -108,6 +108,10 @@ export default composeFT8ContestPlugin({
 });
 ```
 
+对于固定分值短赛、前缀/DXCC/grid multiplier，或者需要“0 分但仍计 multiplier”的赛制，
+可以把 `fixedPoints()`、`scoreBy()` 和 `multiplierKeysFrom()` 组合起来，再接上自己的
+比赛元数据提取器。`distancePoints()` 只是距离赛的常见捷径，不是唯一写法。
+
 默认规则为 FT8、人工发起、单 QSO、单发射信号、呼号加波段判重。完成条件必须
 显式选择，因为它属于 RF fail-closed 边界。常见规则可使用构造器；特殊比赛可以
 直接实现 `FT8ExchangeModule`、`CompletionModule`、`DupeModule`、

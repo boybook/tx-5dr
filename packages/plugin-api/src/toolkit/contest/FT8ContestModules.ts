@@ -263,6 +263,67 @@ export function defineScoringModule<TQso>(module: ScoringModule<TQso>): ScoringM
   return module;
 }
 
+function aggregateContestScores(scores: readonly ContestQsoScore[]): ContestScoreSummary {
+  const eligible = scores.filter((score) => score.eligible);
+  const qsoPoints = eligible.reduce((sum, score) => sum + score.points, 0);
+  const multiplierCount = new Set(eligible.flatMap((score) => score.multiplierKeys)).size;
+  return {
+    qsoCount: eligible.length,
+    qsoPoints,
+    multiplierCount,
+    total: multiplierCount > 0 ? qsoPoints * multiplierCount : qsoPoints,
+  };
+}
+
+export interface ScoreByOptions<TQso> {
+  id: string;
+  points(qso: TQso): number;
+  eligible?(qso: TQso, points: number): boolean;
+  multiplierKeys?(qso: TQso): readonly string[];
+  aggregate?(scores: readonly ContestQsoScore[]): ContestScoreSummary;
+}
+
+/**
+ * Builds a scoring module from a point function and optional multiplier key extractor.
+ * Use this for contest families whose score is not covered by the canned distance helper.
+ */
+export function scoreBy<TQso>(
+  options: ScoreByOptions<TQso>,
+): ScoringModule<TQso> {
+  const aggregate = options.aggregate ?? aggregateContestScores;
+  return defineScoringModule({
+    id: options.id.trim(),
+    score(qso) {
+      const points = options.points(qso);
+      return {
+        points,
+        multiplierKeys: options.multiplierKeys?.(qso) ?? [],
+        eligible: options.eligible?.(qso, points) ?? points > 0,
+      };
+    },
+    aggregate,
+  });
+}
+
+export interface FixedPointsOptions<TQso> {
+  eligible?(qso: TQso): boolean;
+  multiplierKeys?(qso: TQso): readonly string[];
+}
+
+/** Convenience wrapper for contests that award a fixed number of points per QSO. */
+export function fixedPoints<TQso>(
+  points: number,
+  options: FixedPointsOptions<TQso> = {},
+): ScoringModule<TQso> {
+  if (!Number.isFinite(points)) throw new Error('contest_scoring_invalid_points');
+  return scoreBy({
+    id: `fixed-${points}`,
+    points: () => points,
+    eligible: options.eligible ?? (() => true),
+    multiplierKeys: options.multiplierKeys,
+  });
+}
+
 export interface DistancePointsOptions<TQso> {
   stepKm: number;
   rounding?: 'floor' | 'ceil';
@@ -289,33 +350,42 @@ export function distancePoints<
     throw new Error('contest_scoring_invalid_minimum_distance_steps');
   }
   const rounding = options.rounding ?? 'floor';
-  const usesMultipliers = options.multiplierKeys !== undefined;
   const round = rounding === 'ceil' ? Math.ceil : Math.floor;
-  return defineScoringModule({
+  return scoreBy({
     id: `distance-${rounding}-${options.stepKm}`,
-    score(qso) {
+    points(qso) {
       const distanceKm = options.distanceKm?.(qso) ?? qso.distanceKm;
-      const points = distanceKm === undefined || !Number.isFinite(distanceKm) || distanceKm < 0
+      return distanceKm === undefined || !Number.isFinite(distanceKm) || distanceKm < 0
         ? options.missingDistancePoints ?? 0
         : basePoints + Math.max(minimumDistanceSteps, round(distanceKm / options.stepKm));
-      return {
-        points,
-        multiplierKeys: options.multiplierKeys?.(qso) ?? [],
-        eligible: points > 0,
-      };
     },
-    aggregate(scores) {
-      const eligible = scores.filter((score) => score.eligible);
-      const qsoPoints = eligible.reduce((sum, score) => sum + score.points, 0);
-      const multiplierCount = new Set(eligible.flatMap((score) => score.multiplierKeys)).size;
-      return {
-        qsoCount: eligible.length,
-        qsoPoints,
-        multiplierCount,
-        total: usesMultipliers ? qsoPoints * multiplierCount : qsoPoints,
-      };
+    eligible(_qso, points) {
+      return points > 0;
     },
+    multiplierKeys: options.multiplierKeys,
   });
+}
+
+export interface MultiplierKeysFromOptions<TQso> {
+  key(qso: TQso): string | undefined;
+  band?: (qso: TQso) => string | undefined;
+  normalize?(key: string): string;
+}
+
+/**
+ * Builds multiplier keys from one normalized field. Scope the key by band when
+ * the contest counts per-band multipliers; omit band to count once per contest.
+ */
+export function multiplierKeysFrom<TQso>(
+  options: MultiplierKeysFromOptions<TQso>,
+): (qso: TQso) => readonly string[] {
+  return (qso) => {
+    const raw = options.key(qso)?.trim();
+    if (!raw) return [];
+    const key = (options.normalize ?? ((value: string) => value.toUpperCase()))(raw);
+    const band = options.band?.(qso)?.trim().toUpperCase();
+    return [band ? `${band}:${key}` : key];
+  };
 }
 
 export interface GridFieldMultiplierOptions<TQso> {
@@ -327,12 +397,14 @@ export interface GridFieldMultiplierOptions<TQso> {
 export function gridFieldMultiplier<TQso>(
   options: GridFieldMultiplierOptions<TQso>,
 ): (qso: TQso) => readonly string[] {
-  return (qso) => {
-    const grid = normalizeGrid(options.grid(qso) ?? '');
-    if (!/^[A-R]{2}[0-9]{2}$/.test(grid)) return [];
-    const band = options.band?.(qso)?.trim().toUpperCase();
-    return [band ? `${band}:${grid.slice(0, 2)}` : grid.slice(0, 2)];
-  };
+  return multiplierKeysFrom({
+    key(qso) {
+      const grid = normalizeGrid(options.grid(qso) ?? '');
+      return /^[A-R]{2}[0-9]{2}$/.test(grid) ? grid.slice(0, 2) : undefined;
+    },
+    band: options.band,
+    normalize: (value) => value.toUpperCase(),
+  });
 }
 
 export interface SubmissionModule<TQso, TOptions = void> {

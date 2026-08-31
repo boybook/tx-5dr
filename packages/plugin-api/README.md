@@ -120,6 +120,12 @@ export default composeFT8ContestPlugin({
 });
 ```
 
+For fixed-point sprints, prefix/DXCC/grid multipliers, or contests that need
+zero-point QSOs to remain multiplier-eligible, combine `fixedPoints()`,
+`scoreBy()` and `multiplierKeysFrom()` with your own contest metadata accessor.
+`distancePoints()` is the common shortcut for distance-based FT8/FT4 scoring,
+not the only way to compose a contest.
+
 The definition defaults to FT8, one QSO, one signal, human initiation and
 callsign-per-band duplicate checking. Completion remains mandatory because a
 plugin must choose its RF fail-closed evidence policy explicitly. The assembler

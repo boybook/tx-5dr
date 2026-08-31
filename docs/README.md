@@ -40,6 +40,7 @@ configuration.
 
 - [ICOM remote protocol and spectrum research](research/icom-remote-protocol.md)
 - [ICOM USB/ACC IF demodulation spike](research/icom-usb-if-demod-spike.md)
+- [FT8/FT4 contest framework coverage](research/ft8-contest-framework-coverage.md)
 
 Research files are dated evidence, not compatibility promises. Re-check their
 assumptions against current dependencies, hardware, firmware, and captures.
