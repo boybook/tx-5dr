@@ -27,6 +27,8 @@ function installInMemoryLogManager(): void {
     binding: { kind: 'plugin-session', pluginName: 'ww-digi', stationCallsign: 'BG5DRB', sessionKey: 'ww-digi:2026' },
     provider: {
       queryQSOs: vi.fn(async () => []),
+      readQsoSnapshot: vi.fn(async () => ({ revision: 'r0', records: [] })),
+      applyQsoBatch: vi.fn(async () => ({ revision: 'r0', outcomes: [] })),
       getHealth: vi.fn(() => ({ state: 'healthy', readable: true, writable: true, issues: [], updatedAt: 0 })),
       onHealthChanged: vi.fn(() => () => {}),
       getStatistics: vi.fn(async () => ({ totalQSOs: 0, uniqueCallsigns: 0 })),
@@ -118,6 +120,7 @@ async function writeUserPlugin(
 
 describe('PluginManager standard-qso late re-decision', () => {
   const tempDirs: string[] = [];
+  const managers: PluginManager[] = [];
 
   beforeEach(() => {
     // Plugin logbook queries must remain isolated from the user's real logbook directory.
@@ -125,6 +128,7 @@ describe('PluginManager standard-qso late re-decision', () => {
   });
 
   afterEach(async () => {
+    await Promise.all(managers.splice(0).map((manager) => manager.shutdown()));
     vi.restoreAllMocks();
     await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
@@ -242,6 +246,7 @@ describe('PluginManager standard-qso late re-decision', () => {
       triggerReEncode: options?.triggerReEncode,
       dataDir,
     });
+    managers.push(pluginManager);
     // This harness omits RadioOperatorManager, so emulate its post-validation acceptance callback.
     eventEmitter.on('requestTransmit', ({ operatorId, transmission }) => {
       if (!FT8MessageParser.rawContainsUndecodedCallsign(transmission)) {
@@ -511,6 +516,7 @@ describe('PluginManager standard-qso late re-decision', () => {
       resetOperatorRuntime: () => {},
       dataDir,
     });
+    managers.push(pluginManager);
 
     pluginManager.loadConfig({
       configs: {},

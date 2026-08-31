@@ -1,6 +1,6 @@
 {
   "name": "@tx5dr/plugin-api",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "type": "module",
   "description": "Public plugin API for TX-5DR digital radio engine",
   "license": "MIT",
@@ -39,6 +39,11 @@
       "require": "./dist/toolkit/index.js",
       "types": "./dist/toolkit/index.d.ts"
     },
+    "./contest": {
+      "import": "./dist/toolkit/contest/index.js",
+      "require": "./dist/toolkit/contest/index.js",
+      "types": "./dist/toolkit/contest/index.d.ts"
+    },
     "./bridge": {
       "types": "./src/bridge.d.ts"
     }
@@ -47,11 +52,13 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "lint": "eslint src/**/*.ts",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "smoke:pack": "node scripts/packed-consumer-smoke.mjs"
   },
   "dependencies": {
     "@tx5dr/contracts": "workspace:*",
-    "@tx5dr/core": "workspace:*"
+    "@tx5dr/core": "workspace:*",
+    "@types/node": "^20.11.24"
   },
   "devDependencies": {
     "@tx5dr/shared-config": "workspace:*",

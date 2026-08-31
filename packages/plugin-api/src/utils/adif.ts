@@ -5,7 +5,13 @@
  * Used by logbook sync plugins (WaveLog, QRZ, LoTW).
  */
 
-import type { QSORecord } from '@tx5dr/contracts';
+import { Buffer } from 'node:buffer';
+
+import {
+  parseContestQsoEnvelope,
+  serializeContestQsoEnvelope,
+  type QSORecord,
+} from '@tx5dr/contracts';
 import {
   getBandFromFrequency,
   normalizeQsoModeForStorage,
@@ -71,6 +77,10 @@ export function parseADIFDateTime(dateStr: string, timeStr: string): string {
   return new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}Z`).toISOString();
 }
 
+function adifField(name: string, value: string): string {
+  return `<${name}:${Buffer.byteLength(value, 'utf8')}>${value}`;
+}
+
 /**
  * Convert a QSORecord to a single ADIF record string.
  */
@@ -81,148 +91,156 @@ export function convertQSOToADIF(qso: QSORecord, options?: {
   const adifFields: string[] = [];
   const opts = { includeStationCallsign: false, includeMyGrid: true, ...options };
   const adifMode = toAdifMode(qso);
+  if (qso.contestId && qso.contestEntry && qso.contestId !== qso.contestEntry.contestId) {
+    throw new TypeError('contestEntry.contestId must match contestId');
+  }
+  const contestId = qso.contestId ?? qso.contestEntry?.contestId;
 
-  adifFields.push(`<call:${qso.callsign.length}>${qso.callsign}`);
+  adifFields.push(adifField('call', qso.callsign));
 
   const startTime = new Date(qso.startTime);
   const qsoDate = formatADIFDate(startTime);
   const qsoTime = formatADIFTime(startTime);
 
-  adifFields.push(`<qso_date:8>${qsoDate}`);
-  adifFields.push(`<time_on:6>${qsoTime}`);
+  adifFields.push(adifField('qso_date', qsoDate));
+  adifFields.push(adifField('time_on', qsoTime));
 
   if (qso.endTime) {
     const endTime = new Date(qso.endTime);
-    adifFields.push(`<qso_date_off:8>${formatADIFDate(endTime)}`);
-    adifFields.push(`<time_off:6>${formatADIFTime(endTime)}`);
+    adifFields.push(adifField('qso_date_off', formatADIFDate(endTime)));
+    adifFields.push(adifField('time_off', formatADIFTime(endTime)));
   } else {
-    adifFields.push(`<qso_date_off:8>${qsoDate}`);
-    adifFields.push(`<time_off:6>${qsoTime}`);
+    adifFields.push(adifField('qso_date_off', qsoDate));
+    adifFields.push(adifField('time_off', qsoTime));
   }
 
   if (adifMode.mode) {
-    adifFields.push(`<mode:${adifMode.mode.length}>${adifMode.mode}`);
+    adifFields.push(adifField('mode', adifMode.mode));
   }
   if (adifMode.submode) {
-    adifFields.push(`<submode:${adifMode.submode.length}>${adifMode.submode}`);
+    adifFields.push(adifField('submode', adifMode.submode));
   }
 
   const freqMHz = (qso.frequency / 1000000).toFixed(6);
-  adifFields.push(`<freq:${freqMHz.length}>${freqMHz}`);
+  adifFields.push(adifField('freq', freqMHz));
 
   const band = getBandFromFrequency(qso.frequency);
   if (band !== 'Unknown') {
-    adifFields.push(`<band:${band.length}>${band}`);
+    adifFields.push(adifField('band', band));
   }
 
   if (qso.grid) {
-    adifFields.push(`<gridsquare:${qso.grid.length}>${qso.grid}`);
+    adifFields.push(adifField('gridsquare', qso.grid));
   }
-  if (qso.contestId) {
-    adifFields.push(`<contest_id:${qso.contestId.length}>${qso.contestId}`);
+  if (contestId) {
+    adifFields.push(adifField('contest_id', contestId));
+  }
+  if (qso.contestEntry) {
+    const contestEntry = serializeContestQsoEnvelope(qso.contestEntry);
+    adifFields.push(adifField('app_tx5dr_contest_entry', contestEntry));
   }
   if (qso.dxccId) {
     const value = String(qso.dxccId);
-    adifFields.push(`<dxcc:${value.length}>${value}`);
+    adifFields.push(adifField('dxcc', value));
   }
   if (qso.dxccEntity) {
-    adifFields.push(`<country:${qso.dxccEntity.length}>${qso.dxccEntity}`);
+    adifFields.push(adifField('country', qso.dxccEntity));
   }
   if (qso.cqZone) {
     const value = String(qso.cqZone);
-    adifFields.push(`<cqz:${value.length}>${value}`);
+    adifFields.push(adifField('cqz', value));
   }
   if (qso.ituZone) {
     const value = String(qso.ituZone);
-    adifFields.push(`<ituz:${value.length}>${value}`);
+    adifFields.push(adifField('ituz', value));
   }
 
   if (qso.reportSent) {
-    adifFields.push(`<rst_sent:${qso.reportSent.length}>${qso.reportSent}`);
+    adifFields.push(adifField('rst_sent', qso.reportSent));
   }
   if (qso.reportReceived) {
-    adifFields.push(`<rst_rcvd:${qso.reportReceived.length}>${qso.reportReceived}`);
+    adifFields.push(adifField('rst_rcvd', qso.reportReceived));
   }
 
   if (opts.includeStationCallsign && qso.myCallsign) {
-    adifFields.push(`<station_callsign:${qso.myCallsign.length}>${qso.myCallsign}`);
+    adifFields.push(adifField('station_callsign', qso.myCallsign));
   }
   if (qso.myDxccId) {
     const value = String(qso.myDxccId);
-    adifFields.push(`<my_dxcc:${value.length}>${value}`);
+    adifFields.push(adifField('my_dxcc', value));
   }
   if (qso.myCqZone) {
     const value = String(qso.myCqZone);
-    adifFields.push(`<my_cq_zone:${value.length}>${value}`);
+    adifFields.push(adifField('my_cq_zone', value));
   }
   if (qso.myItuZone) {
     const value = String(qso.myItuZone);
-    adifFields.push(`<my_itu_zone:${value.length}>${value}`);
+    adifFields.push(adifField('my_itu_zone', value));
   }
   if (qso.myState) {
-    adifFields.push(`<my_state:${qso.myState.length}>${qso.myState}`);
+    adifFields.push(adifField('my_state', qso.myState));
   }
   if (qso.myCounty) {
-    adifFields.push(`<my_cnty:${qso.myCounty.length}>${qso.myCounty}`);
+    adifFields.push(adifField('my_cnty', qso.myCounty));
   }
   if (qso.myIota) {
-    adifFields.push(`<my_iota:${qso.myIota.length}>${qso.myIota}`);
+    adifFields.push(adifField('my_iota', qso.myIota));
   }
 
   if (opts.includeMyGrid && qso.myGrid) {
-    adifFields.push(`<my_gridsquare:${qso.myGrid.length}>${qso.myGrid}`);
+    adifFields.push(adifField('my_gridsquare', qso.myGrid));
   }
   if (qso.myCallsign) {
-    adifFields.push(`<operator:${qso.myCallsign.length}>${qso.myCallsign}`);
+    adifFields.push(adifField('operator', qso.myCallsign));
   }
 
   if (qso.lotwQslSent) {
-    adifFields.push(`<lotw_qsl_sent:${qso.lotwQslSent.length}>${qso.lotwQslSent}`);
+    adifFields.push(adifField('lotw_qsl_sent', qso.lotwQslSent));
   }
   if (qso.lotwQslReceived) {
-    adifFields.push(`<lotw_qsl_rcvd:${qso.lotwQslReceived.length}>${qso.lotwQslReceived}`);
+    adifFields.push(adifField('lotw_qsl_rcvd', qso.lotwQslReceived));
   }
   if (qso.lotwQslSentDate) {
     const dateStr = formatADIFDate(new Date(qso.lotwQslSentDate));
-    adifFields.push(`<lotw_qslsdate:8>${dateStr}`);
+    adifFields.push(adifField('lotw_qslsdate', dateStr));
   }
   if (qso.lotwQslReceivedDate) {
     const dateStr = formatADIFDate(new Date(qso.lotwQslReceivedDate));
-    adifFields.push(`<lotw_qslrdate:8>${dateStr}`);
+    adifFields.push(adifField('lotw_qslrdate', dateStr));
   }
   if (qso.dxccStatus) {
-    adifFields.push(`<app_tx5dr_dxcc_status:${qso.dxccStatus.length}>${qso.dxccStatus}`);
+    adifFields.push(adifField('app_tx5dr_dxcc_status', qso.dxccStatus));
   }
   if (qso.dxccSource) {
-    adifFields.push(`<app_tx5dr_dxcc_source:${qso.dxccSource.length}>${qso.dxccSource}`);
+    adifFields.push(adifField('app_tx5dr_dxcc_source', qso.dxccSource));
   }
   if (qso.dxccConfidence) {
-    adifFields.push(`<app_tx5dr_dxcc_confidence:${qso.dxccConfidence.length}>${qso.dxccConfidence}`);
+    adifFields.push(adifField('app_tx5dr_dxcc_confidence', qso.dxccConfidence));
   }
   if (qso.dxccNeedsReview !== undefined) {
-    adifFields.push(`<app_tx5dr_dxcc_needs_review:1>${qso.dxccNeedsReview ? 'Y' : 'N'}`);
+    adifFields.push(adifField('app_tx5dr_dxcc_needs_review', qso.dxccNeedsReview ? 'Y' : 'N'));
   }
   if (qso.stationLocationId) {
-    adifFields.push(`<app_tx5dr_station_location_id:${qso.stationLocationId.length}>${qso.stationLocationId}`);
+    adifFields.push(adifField('app_tx5dr_station_location_id', qso.stationLocationId));
   }
   const messageHistory = sanitizeAdifFieldValue(buildCommentFromMessageHistory(qso.messageHistory) ?? '') || undefined;
   if (messageHistory) {
-    adifFields.push(`<app_tx5dr_message_history:${messageHistory.length}>${messageHistory}`);
+    adifFields.push(adifField('app_tx5dr_message_history', messageHistory));
   }
   const comment = sanitizeAdifFieldValue(resolveQsoComment(qso) ?? '') || undefined;
   if (comment) {
-    adifFields.push(`<comment:${comment.length}>${comment}`);
+    adifFields.push(adifField('comment', comment));
   }
   if (qso.qth) {
     const qth = sanitizeAdifFieldValue(qso.qth);
     if (qth) {
-      adifFields.push(`<qth:${qth.length}>${qth}`);
+      adifFields.push(adifField('qth', qth));
     }
   }
   if (qso.notes) {
     const notes = sanitizeAdifFieldValue(qso.notes);
     if (notes) {
-      adifFields.push(`<notes:${notes.length}>${notes}`);
+      adifFields.push(adifField('notes', notes));
     }
   }
 
@@ -236,15 +254,26 @@ export function convertQSOToADIF(qso: QSORecord, options?: {
  */
 export function parseADIFFields(recordStr: string): Record<string, string> {
   const fields: Record<string, string> = {};
-  const fieldRegex = /<(\w+):(\d+)>/gi;
-  let match;
-
-  while ((match = fieldRegex.exec(recordStr)) !== null) {
-    const fieldName = match[1].toLowerCase();
-    const fieldLength = parseInt(match[2]);
-    const valueStart = match.index + match[0].length;
-    const fieldValue = recordStr.substring(valueStart, valueStart + fieldLength);
-    fields[fieldName] = fieldValue;
+  const source = Buffer.from(recordStr, 'utf8');
+  let cursor = 0;
+  while (cursor < source.length) {
+    const open = source.indexOf(0x3c, cursor);
+    if (open < 0) break;
+    const close = source.indexOf(0x3e, open + 1);
+    if (close < 0) break;
+    const header = source.subarray(open + 1, close).toString('ascii').trim();
+    if (/^eor$/i.test(header)) break;
+    const match = /^([A-Za-z0-9_]+):(\d+)(?::[^>]*)?$/.exec(header);
+    if (!match) {
+      cursor = close + 1;
+      continue;
+    }
+    const fieldLength = Number(match[2]);
+    const valueStart = close + 1;
+    const valueEnd = valueStart + fieldLength;
+    if (!Number.isSafeInteger(fieldLength) || valueEnd > source.length) break;
+    fields[match[1]!.toLowerCase()] = source.subarray(valueStart, valueEnd).toString('utf8');
+    cursor = valueEnd;
   }
 
   return fields;
@@ -276,6 +305,13 @@ export function parseADIFRecord(recordStr: string, source: string = 'adif'): QSO
       fields.comment,
       fields.app_tx5dr_message_history,
     );
+    const parsedContestEntry = fields.app_tx5dr_contest_entry
+      ? parseContestQsoEnvelope(fields.app_tx5dr_contest_entry)
+      : undefined;
+    const contestEntry = parsedContestEntry
+      && (!fields.contest_id || fields.contest_id === parsedContestEntry.contestId)
+      ? parsedContestEntry
+      : undefined;
 
     const record: QSORecord = {
       id: `${source}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -292,7 +328,8 @@ export function parseADIFRecord(recordStr: string, source: string = 'adif'): QSO
       myGrid: fields.my_gridsquare || '',
       qth: fields.qth || undefined,
       comment,
-      contestId: fields.contest_id || undefined,
+      contestId: fields.contest_id || contestEntry?.contestId,
+      contestEntry,
       notes: fields.notes || fields.note || undefined,
       messageHistory,
     };
@@ -470,8 +507,8 @@ export function generateADIFFile(qsos: QSORecord[], options?: {
 
   lines.push(`Generated by ${opts.programId} v${opts.programVersion}`);
   lines.push(`<adif_ver:5>3.1.4`);
-  lines.push(`<programid:${opts.programId.length}>${opts.programId}`);
-  lines.push(`<programversion:${opts.programVersion.length}>${opts.programVersion}`);
+  lines.push(adifField('programid', opts.programId));
+  lines.push(adifField('programversion', opts.programVersion));
   lines.push('<eoh>');
   lines.push('');
 

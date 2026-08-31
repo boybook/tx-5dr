@@ -11,6 +11,7 @@ import type {
   FaxCalibrationResetCommand,
 } from '@tx5dr/contracts';
 import { getApiBaseUrl, getWebSocketUrl } from '../utils/config';
+import { CLIENT_BUILD_VERSION } from '../utils/clientBuildVersion';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('RadioService');
@@ -38,7 +39,8 @@ export class RadioService {
     logger.info('WebSocket URL:', wsUrl);
     this.wsClient = new WSClient({
       url: wsUrl,
-      heartbeatInterval: 30000
+      heartbeatInterval: 30000,
+      clientVersion: CLIENT_BUILD_VERSION,
     });
 
     // 监听系统状态变化以更新内部解码状态

@@ -108,6 +108,14 @@ describe('WW Digi ADIF import', () => {
 
     expect(blocked).toMatchObject({ items: [], withheld: 1 });
     expect(confirmed.items).toHaveLength(1);
+    expect(confirmed.items[0]?.candidate).toMatchObject({
+      reviewIssues: [],
+      record: { contestEntry: { annotations: { status: 'included' } } },
+    });
+    expect(confirmed.items[0]?.mutation).toMatchObject({
+      type: 'add',
+      record: { contestEntry: { annotations: { status: 'included' } } },
+    });
     expect(summarizeWWDigiAdifImport(parsed, [])).toMatchObject({
       missingStationCallsign: 1,
       missingMyGrid: 1,
@@ -164,5 +172,9 @@ describe('WW Digi ADIF import', () => {
     expect(plan.duplicates).toBe(1);
     expect(plan.items).toHaveLength(1);
     expect(plan.items[0]?.candidate.reviewIssues).toContain('possible-duplicate');
+    expect(plan.items[0]?.mutation).toMatchObject({
+      type: 'add',
+      record: { contestEntry: { annotations: { status: 'review' } } },
+    });
   });
 });

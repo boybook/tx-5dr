@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 
 import fs from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ROOT_PACKAGE_PATH = path.join(PROJECT_ROOT, 'package.json');
 const ELECTRON_MAIN_PACKAGE_PATH = path.join(PROJECT_ROOT, 'packages', 'electron-main', 'package.json');
-const BUILD_INFO_PATH = path.join(PROJECT_ROOT, 'packages', 'electron-main', 'src', 'generated', 'buildInfo.ts');
+const BUILD_INFO_PATH = path.join(PROJECT_ROOT, 'packages', 'server', 'src', 'generated', 'buildInfo.json');
+const SERVER_BUILD_INFO_SCRIPT = path.join(PROJECT_ROOT, 'scripts', 'prepare-server-build-info.mjs');
 
 function parseArgs(argv) {
   const args = {};
@@ -34,24 +36,6 @@ function requireArg(args, key) {
   return value;
 }
 
-function stripLeadingV(value) {
-  return value.replace(/^v/i, '');
-}
-
-function normalizeBaseVersion(value) {
-  return stripLeadingV(value).split('-')[0].split('+')[0];
-}
-
-function formatNightlyVersion(baseVersion, buildStamp, shortSha) {
-  // Prefix commit metadata so installer tooling never treats a digit-led SHA
-  // like "0e87916" as a numeric build component.
-  return `${baseVersion}-nightly.${buildStamp}+g${shortSha}`;
-}
-
-function buildInfoSource(buildInfo) {
-  return `export interface BuildInfo {\n  channel: 'release' | 'nightly';\n  version: string;\n  commit: string;\n  commitShort: string;\n  tag: string;\n  buildTimestamp: string;\n}\n\nexport const BUILD_INFO: BuildInfo = ${JSON.stringify(buildInfo, null, 2)};\n`;
-}
-
 async function updatePackageVersion(filePath, version) {
   const raw = await fs.readFile(filePath, 'utf8');
   const parsed = JSON.parse(raw);
@@ -67,32 +51,26 @@ async function main() {
   }
 
   const commit = requireArg(args, 'commit');
-  const commitShort = commit.slice(0, 7);
   const buildTimestamp = requireArg(args, 'build-timestamp');
   const buildStamp = requireArg(args, 'build-stamp');
   const inputVersion = args['version'] || '';
 
-  const rootPackage = JSON.parse(await fs.readFile(ROOT_PACKAGE_PATH, 'utf8'));
-  const baseVersion = normalizeBaseVersion(rootPackage.version);
-  const effectiveVersion = channel === 'nightly'
-    ? formatNightlyVersion(baseVersion, buildStamp, commitShort)
-    : stripLeadingV(inputVersion || baseVersion);
-  const tag = channel === 'nightly' ? 'nightly-app' : (inputVersion || baseVersion);
+  const serverBuildInfoArgs = [
+    SERVER_BUILD_INFO_SCRIPT,
+    '--channel', channel,
+    '--commit', commit,
+    '--build-timestamp', buildTimestamp,
+    '--build-stamp', buildStamp,
+    '--distribution', 'electron',
+  ];
+  if (channel === 'release') {
+    serverBuildInfoArgs.push('--version', inputVersion);
+  }
+  execFileSync(process.execPath, serverBuildInfoArgs, { cwd: PROJECT_ROOT, stdio: 'inherit' });
 
-  await updatePackageVersion(ROOT_PACKAGE_PATH, effectiveVersion);
-  await updatePackageVersion(ELECTRON_MAIN_PACKAGE_PATH, effectiveVersion);
-
-  const buildInfo = {
-    channel,
-    version: effectiveVersion,
-    commit,
-    commitShort,
-    tag,
-    buildTimestamp,
-  };
-  await fs.mkdir(path.dirname(BUILD_INFO_PATH), { recursive: true });
-  await fs.writeFile(BUILD_INFO_PATH, buildInfoSource(buildInfo));
-
+  const buildInfo = JSON.parse(await fs.readFile(BUILD_INFO_PATH, 'utf8'));
+  await updatePackageVersion(ROOT_PACKAGE_PATH, buildInfo.version);
+  await updatePackageVersion(ELECTRON_MAIN_PACKAGE_PATH, buildInfo.version);
   process.stdout.write(`${JSON.stringify(buildInfo, null, 2)}\n`);
 }
 

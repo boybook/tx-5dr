@@ -8,6 +8,7 @@ import { MODES } from '@tx5dr/contracts';
 import { RadioOperator } from '@tx5dr/core';
 import type { RuntimePluginContext } from '@tx5dr/plugin-api';
 import { PluginManager } from '../PluginManager.js';
+import { LogManager } from '../../log/LogManager.js';
 
 const tempDirs: string[] = [];
 const lifecycleProbeKey = '__tx5drPluginLifecycleProbe';
@@ -118,6 +119,45 @@ function getProbeInstance(manager: PluginManager, operatorId: string): any {
 }
 
 describe('PluginManager instance lifecycle reconciliation', () => {
+  it('clears its own degraded session gate only after owner cleanup succeeds', async () => {
+    const { manager, operator } = await createManager();
+    const instance = getProbeInstance(manager, operator.config.id);
+    (manager as any).strategySessionEffectDegradedOperators.set(operator.config.id, {
+      pluginName: 'lifecycle-probe',
+      reason: 'owner cleanup required',
+    });
+    (manager as any).suspendedQueueExecutions.add(operator.config.id);
+
+    manager.setPluginEnabled('lifecycle-probe', true);
+    await instance.lifecycleTail;
+    manager.setPluginEnabled('lifecycle-probe', false);
+    await instance.lifecycleTail;
+
+    expect(manager.getOperatorTransmitGate(operator.config.id)).toBeUndefined();
+    expect(manager.isQueueExecutionSuspended(operator.config.id)).toBe(false);
+    await manager.shutdown();
+  });
+
+  it('does not clear another plugin\'s degraded session transmit gate on unload', async () => {
+    const { manager, operator } = await createManager();
+    const instance = getProbeInstance(manager, operator.config.id);
+    (manager as any).strategySessionEffectDegradedOperators.set(operator.config.id, {
+      pluginName: 'contest-owner',
+      reason: 'contest session recovery required',
+    });
+
+    manager.setPluginEnabled('lifecycle-probe', true);
+    await instance.lifecycleTail;
+    manager.setPluginEnabled('lifecycle-probe', false);
+    await instance.lifecycleTail;
+
+    expect(manager.getOperatorTransmitGate(operator.config.id)).toEqual({
+      allowed: false,
+      reason: 'contest session recovery required',
+    });
+    await manager.shutdown();
+  });
+
   it('tombstones an obsolete activation when enable and disable race in one turn', async () => {
     const { manager, operator } = await createManager();
     const instance = getProbeInstance(manager, operator.config.id);
@@ -222,6 +262,34 @@ describe('PluginManager instance lifecycle reconciliation', () => {
     expect(activeSessions).toBe(0);
     expect(cleanupOperatorId).toBe(operator.config.id);
     expect(commandError).toMatchObject({ code: 'PLUGIN_INVOCATION_EXPIRED' });
+    await manager.shutdown();
+  });
+
+  it('cleans Host-tracked runtime sessions when an instance deactivates', async () => {
+    const { manager, operator } = await createManager();
+    const instance = getProbeInstance(manager, operator.config.id);
+    const destroyRuntimePluginSessionLogBookByKey = vi.spyOn(
+      LogManager.getInstance(),
+      'destroyRuntimePluginSessionLogBookByKey',
+    ).mockResolvedValue(undefined);
+
+    manager.setPluginEnabled('lifecycle-probe', true);
+    await instance.lifecycleTail;
+    (manager as any).trackStrategyRuntimeSession(operator.config.id, {
+      pluginName: 'lifecycle-probe',
+      stationCallsign: operator.config.myCallsign,
+      sessionKey: 'runtime-test',
+    });
+
+    manager.setPluginEnabled('lifecycle-probe', false);
+    await instance.lifecycleTail;
+
+    expect(destroyRuntimePluginSessionLogBookByKey).toHaveBeenCalledWith(
+      'lifecycle-probe',
+      operator.config.myCallsign,
+      'runtime-test',
+    );
+    expect((manager as any).strategyRuntimeSessionsByOperator.has(operator.config.id)).toBe(false);
     await manager.shutdown();
   });
 });

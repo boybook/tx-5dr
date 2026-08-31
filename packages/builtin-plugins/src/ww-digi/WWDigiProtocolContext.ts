@@ -11,6 +11,7 @@ import {
   buildWWDigiRR73,
   parseWWDigiMessage,
 } from './protocol.js';
+import { createWWDigiContestEntry } from './contest-entry.js';
 
 export type WWDigiProtocolPhase =
   | 'wait-r-grid'
@@ -22,6 +23,9 @@ export interface WWDigiProtocolConfig {
   myCallsign: string;
   myGrid: string;
   modeName: 'FT8' | 'FT4';
+  contestYear?: number;
+  operatorId?: string;
+  transmitterId?: 0 | 1;
 }
 
 export interface WWDigiProtocolContext {
@@ -307,6 +311,15 @@ export function buildWWDigiCompletionEffect(
       myCallsign: config.myCallsign,
       myGrid: config.myGrid,
       contestId: 'WW-DIGI',
+      contestEntry: createWWDigiContestEntry({
+        contestYear: config.contestYear ?? new Date(context.startedAt).getUTCFullYear(),
+        sentGrid: config.myGrid,
+        receivedGrid: context.targetGrid,
+        streamId: input.streamId,
+        authorizationId: input.authorizationId,
+        operatorId: config.operatorId,
+        transmitterId: config.transmitterId,
+      }),
     },
   };
 }

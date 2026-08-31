@@ -76,7 +76,7 @@ const PROTECTED_CONTEXT_KEYS = new Set<keyof RuntimePluginContext>([
   'fetch',
   'hostDependencies',
 ]);
-const EVERGREEN_CONTEXT_KEYS = new Set<keyof RuntimePluginContext>(['log']);
+const EVERGREEN_CONTEXT_KEYS = new Set<keyof RuntimePluginContext>(['pluginApiVersion', 'log']);
 
 /** Revokes host capabilities when a hook/runtime continuation outlives its invocation. */
 export class PluginInvocationGuard {

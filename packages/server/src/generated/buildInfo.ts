@@ -1,6 +1,9 @@
+import buildInfo from './buildInfo.json' with { type: 'json' };
+
 export interface ServerBuildInfo {
   channel: 'release' | 'nightly';
   version: string;
+  pluginApiVersion: string;
   commit: string;
   commitShort: string;
   buildTimestamp: string;
@@ -8,10 +11,4 @@ export interface ServerBuildInfo {
   dockerDigest?: string;
 }
 
-export const SERVER_BUILD_INFO: ServerBuildInfo = {
-  channel: 'nightly',
-  version: '1.0.0',
-  commit: 'development',
-  commitShort: 'development',
-  buildTimestamp: 'development',
-};
+export const SERVER_BUILD_INFO = Object.freeze(buildInfo as ServerBuildInfo);

@@ -32,6 +32,14 @@ function createInstance(context: RuntimePluginContext): PluginInstance {
 }
 
 describe('PluginInvocationGuard', () => {
+  it('exposes the static Plugin API version without opening a Host capability', () => {
+    const raw = { pluginApiVersion: '2.1.0' } as unknown as RuntimePluginContext;
+    const instance = createInstance(raw);
+    const ctx = new PluginInvocationGuard().wrapContext(raw, instance);
+
+    expect(ctx.pluginApiVersion).toBe('2.1.0');
+  });
+
   it('rejects context roots without an explicit ownership policy', () => {
     const raw = { futureCapability: {} } as unknown as RuntimePluginContext;
     const instance = createInstance(raw);

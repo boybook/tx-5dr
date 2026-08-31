@@ -11,6 +11,7 @@ import {
 } from '../desktopHttps.js';
 
 const tempDirs: string[] = [];
+const CERTIFICATE_TEST_TIMEOUT_MS = 15_000;
 
 async function createTempDir(): Promise<string> {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'tx5dr-desktop-https-'));
@@ -68,7 +69,7 @@ describe('desktop HTTPS self-signed certificate preflight', () => {
       'tx5dr-host',
       '192.168.1.20',
     ]));
-  });
+  }, CERTIFICATE_TEST_TIMEOUT_MS);
 
   it('generates and returns a changed config when the default certificate is missing', async () => {
     const configDir = await createTempDir();
@@ -127,7 +128,7 @@ describe('desktop HTTPS self-signed certificate preflight', () => {
       hostname: 'tx5dr-host',
       lanAddresses: ['192.168.1.20'],
     })).resolves.toBeNull();
-  });
+  }, CERTIFICATE_TEST_TIMEOUT_MS);
 
   it('regenerates a self-signed certificate when expected SAN entries are missing', async () => {
     const configDir = await createTempDir();

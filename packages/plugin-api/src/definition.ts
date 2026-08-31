@@ -121,6 +121,14 @@ export interface PluginDefinition<
   version: string;
 
   /**
+   * Oldest bundled `@tx5dr/plugin-api` version that can safely load this plugin.
+   *
+   * This is independent from the TX-5DR product/nightly version. Marketplace
+   * artifacts must declare it and match their catalog entry.
+   */
+  minPluginApiVersion?: string;
+
+  /**
    * Declares how the host should schedule and combine this plugin.
    *
    * - `strategy` plugins provide a {@link StrategyRuntime} and are selected as
@@ -142,6 +150,8 @@ export interface PluginDefinition<
     manualInitiation?: 1;
     /** Strategy-specific cap applied in addition to the operator cap. */
     maxConcurrentStreams?: number;
+    /** Maximum signals that may be emitted in one physical frame. */
+    maxSimultaneousSignals?: number;
   };
 
   /** Development-only virtual-radio peer scenarios. The Host owns execution and RF safety. */

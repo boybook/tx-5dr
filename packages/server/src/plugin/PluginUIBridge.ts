@@ -2,6 +2,7 @@ import type {
   PluginUIRequestContext,
   UIBridge,
   PluginUIHandler,
+  PluginUIHandlerRegistration,
   PluginUIInstanceTarget,
   PluginUIPageSessionInfo,
 } from '@tx5dr/plugin-api';
@@ -22,6 +23,7 @@ const logger = createLogger('PluginUIBridge');
  */
 export class PluginUIBridge implements UIBridge {
   private pageHandler: PluginUIHandler | null = null;
+  private readonly scopedPageHandlers = new Map<string, PluginUIHandler>();
   private readonly operatorId: string;
 
   constructor(
@@ -91,9 +93,19 @@ export class PluginUIBridge implements UIBridge {
     this.onRefreshOperatorProjection?.(this.instanceTarget.operatorId);
   }
 
-  registerPageHandler(handler: PluginUIHandler): void {
+  registerPageHandler(
+    handler: PluginUIHandler,
+    registration?: PluginUIHandlerRegistration,
+  ): void {
+    if (registration?.pageIds !== undefined) {
+      const pageIds = [...new Set(registration.pageIds.map((pageId) => pageId.trim()).filter(Boolean))];
+      if (pageIds.length === 0) throw new Error('page_handler_page_ids_required');
+      for (const pageId of pageIds) this.scopedPageHandlers.set(pageId, handler);
+      logger.debug(`Scoped page handler registered for plugin=${this.pluginName}, pages=${pageIds.join(',')}`);
+      return;
+    }
     this.pageHandler = handler;
-    logger.debug(`Page handler registered for plugin=${this.pluginName}`);
+    logger.debug(`Fallback page handler registered for plugin=${this.pluginName}`);
   }
 
   pushToSession(pageSessionId: string, action: string, data?: unknown): void {
@@ -150,19 +162,21 @@ export class PluginUIBridge implements UIBridge {
     data: unknown,
     requestContext: PluginUIRequestContext,
   ): Promise<unknown> {
-    if (!this.pageHandler) {
+    const handler = this.scopedPageHandlers.get(pageId) ?? this.pageHandler;
+    if (!handler) {
       throw new Error(`No page handler registered for plugin ${this.pluginName}`);
     }
-    return this.pageHandler.onMessage(pageId, action, data, requestContext);
+    return handler.onMessage(pageId, action, data, requestContext);
   }
 
   /** @internal Check if a page handler has been registered. */
   hasPageHandler(): boolean {
-    return this.pageHandler !== null;
+    return this.pageHandler !== null || this.scopedPageHandlers.size > 0;
   }
 
   /** @internal Stops accepting page messages before plugin teardown begins. */
   clearPageHandler(): void {
     this.pageHandler = null;
+    this.scopedPageHandlers.clear();
   }
 }

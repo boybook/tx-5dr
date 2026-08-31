@@ -149,6 +149,7 @@ jobs:
         env:
           TZ: UTC
         run: |
+          yarn check:versions
           CHANNEL="release"
           if [ -z "${{ github.event.inputs.version }}" ]; then
             CHANNEL="nightly"
@@ -206,6 +207,9 @@ jobs:
         env:
           NODE_ENV: production
           TX5DR_CLUBLOG_API_KEY: ${{ secrets.CLUBLOG_API_KEY }}
+
+      - name: Verify packaged build identity inputs
+        run: node scripts/verify-electron-build-identity.mjs --distribution electron
 
       - name: Prepare portable Node runtime
         shell: bash
@@ -969,14 +973,14 @@ jobs:
           echo "short_sha=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
           echo "commit_title=$(git show -s --format=%s "${{ github.sha }}")" >> $GITHUB_OUTPUT
           echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
-          BASE_VERSION=$(node -p "require('./package.json').version.split('-')[0].split('+')[0]")
           COMMIT_STAMP=$(git show -s --date=format-local:%Y%m%d%H%M --format=%cd "${{ github.sha }}")
           if [ -z "${{ github.event.inputs.version }}" ]; then
             echo "tag=nightly-app" >> $GITHUB_OUTPUT
             echo "version=nightly" >> $GITHUB_OUTPUT
             echo "channel=nightly" >> $GITHUB_OUTPUT
             echo "channel_path=nightly" >> $GITHUB_OUTPUT
-            echo "app_version=${BASE_VERSION}-nightly.${COMMIT_STAMP}+g$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+            HOST_VERSION=$(node scripts/host-version.mjs --channel nightly --build-stamp "$COMMIT_STAMP" --commit "${{ github.sha }}")
+            echo "app_version=${HOST_VERSION}" >> $GITHUB_OUTPUT
           else
             echo "tag=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
             echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT

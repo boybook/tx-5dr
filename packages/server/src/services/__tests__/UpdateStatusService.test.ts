@@ -34,7 +34,7 @@ describe('UpdateStatusService', () => {
     vi.doMock('../../generated/buildInfo.js', () => ({
       SERVER_BUILD_INFO: {
         channel: 'nightly',
-        version: '1.0.0-nightly.202605181200+abcdef1',
+        version: '1.0.0-nightly.202605181200+gabcdef1',
         commit: 'abcdef1234567890',
         commitShort: 'abcdef1',
         buildTimestamp: '2026-05-18T12:00:00Z',
@@ -79,7 +79,7 @@ describe('UpdateStatusService', () => {
     vi.doMock('../../generated/buildInfo.js', () => ({
       SERVER_BUILD_INFO: {
         channel: 'nightly',
-        version: '1.0.0-nightly.202605181200+abcdef1',
+        version: '1.0.0-nightly.202605181200+gabcdef1',
         commit: 'abcdef1234567890',
         commitShort: 'abcdef1',
         buildTimestamp: '2026-05-18T12:00:00Z',

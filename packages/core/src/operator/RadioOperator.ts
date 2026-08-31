@@ -39,6 +39,7 @@ interface RadioOperatorEvents extends DigitalRadioEngineEvents {
             | { kind: 'plugin-session'; sessionId: string }
             | { kind: 'plugin-session-key'; sessionKey: string };
         sourcePluginName?: string;
+        metadata?: Record<string, unknown>;
         retryAttemptId?: string;
         resolve?: (record: QSORecord) => void;
         reject?: (error: unknown) => void;
@@ -168,6 +169,7 @@ export class RadioOperator {
             | { kind: 'plugin-session'; sessionId: string }
             | { kind: 'plugin-session-key'; sessionKey: string };
         sourcePluginName?: string;
+        metadata?: Record<string, unknown>;
     }): Promise<QSORecord> {
         return new Promise<QSORecord>((resolve, reject) => {
             this._eventEmitter.emit('recordQSO', {
@@ -179,6 +181,7 @@ export class RadioOperator {
                 persistencePolicy: options?.persistencePolicy,
                 destination: options?.destination,
                 sourcePluginName: options?.sourcePluginName,
+                metadata: options?.metadata,
                 qsoRecord,
                 retryAttemptId: options?.retryAttemptId,
                 resolve,

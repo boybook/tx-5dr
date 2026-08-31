@@ -4,11 +4,13 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
-import type {
-  PluginMarketCatalogEntry,
-  PluginMarketChannel,
-  PluginMarketInstallRecord,
-  PluginMarketInstallResult,
+import {
+  PluginArtifactManifestSchema,
+  type PluginArtifactManifest,
+  type PluginMarketCatalogEntry,
+  type PluginMarketChannel,
+  type PluginMarketInstallRecord,
+  type PluginMarketInstallResult,
 } from '@tx5dr/contracts';
 import { canonicalizePluginDefinition } from './PluginLoader.js';
 import { fetchPluginMarketCatalog } from './marketplace.js';
@@ -19,10 +21,13 @@ import {
   validateExtractedTree,
 } from './path-security.js';
 import { createLogger } from '../utils/logger.js';
+import { assertPluginApiCompatible } from './runtime-info.js';
+import { SERVER_BUILD_INFO } from '../generated/buildInfo.js';
 
 const logger = createLogger('PluginMarketplaceInstaller');
 const execFileAsync = promisify(execFile);
 const ENTRY_FILE_CANDIDATES = ['plugin.js', 'plugin.mjs', 'index.js', 'index.mjs'] as const;
+const ARTIFACT_MANIFEST_FILE = 'tx5dr-plugin.json';
 const MARKETPLACE_TEMP_DIR_NAME = '.plugin-market-tmp';
 const MARKETPLACE_TEMP_DIR_PREFIX = 'install-';
 
@@ -125,25 +130,102 @@ async function resolvePluginEntryPath(pluginRoot: string): Promise<string> {
   throw new Error(`Plugin archive is missing an entry file (${ENTRY_FILE_CANDIDATES.join(', ')})`);
 }
 
+async function readArtifactManifest(pluginRoot: string): Promise<PluginArtifactManifest | undefined> {
+  const manifestPath = path.join(pluginRoot, ARTIFACT_MANIFEST_FILE);
+  try {
+    return PluginArtifactManifestSchema.parse(JSON.parse(await fs.readFile(manifestPath, 'utf8')));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') return undefined;
+    throw new Error(
+      `Plugin archive manifest is invalid: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+function assertArtifactMetadata(
+  manifest: PluginArtifactManifest,
+  expected: Pick<
+    PluginMarketCatalogEntry,
+    'name' | 'latestVersion' | 'minPluginApiVersion' | 'permissions'
+  >,
+  expectedPermissions: readonly string[],
+  pluginApiVersion: string,
+): void {
+  if (manifest.name !== expected.name) {
+    throw new Error(`Plugin archive name mismatch: expected ${expected.name}, received ${manifest.name}`);
+  }
+  if (manifest.version !== expected.latestVersion) {
+    throw new Error(
+      `Plugin archive version mismatch: expected ${expected.latestVersion}, received ${manifest.version}`,
+    );
+  }
+  if (manifest.minPluginApiVersion !== expected.minPluginApiVersion) {
+    throw new Error(
+      `Plugin archive Plugin API requirement mismatch: expected ${expected.minPluginApiVersion}, `
+      + `received ${manifest.minPluginApiVersion}`,
+    );
+  }
+  assertPluginApiCompatible(manifest.minPluginApiVersion, manifest.name, pluginApiVersion);
+  const actualPermissions = [...manifest.permissions].sort();
+  const catalogPermissions = [...expectedPermissions].sort();
+  if (JSON.stringify(actualPermissions) !== JSON.stringify(catalogPermissions)) {
+    throw new Error(
+      `Plugin archive permission mismatch for ${expected.name}: catalog and archive declarations differ`,
+    );
+  }
+}
+
 async function validateExtractedPlugin(
   pluginRoot: string,
-  expectedPluginName: string,
+  expected: Pick<
+    PluginMarketCatalogEntry,
+    | 'name'
+    | 'latestVersion'
+    | 'minPluginApiVersion'
+    | 'permissions'
+    | 'artifactManifestVersion'
+  >,
   expectedPermissions: readonly string[],
+  pluginApiVersion: string,
 ): Promise<void> {
   const entryPath = await resolvePluginEntryPath(pluginRoot);
+  const manifest = await readArtifactManifest(pluginRoot);
+  if (manifest) {
+    assertArtifactMetadata(manifest, expected, expectedPermissions, pluginApiVersion);
+    return;
+  }
+  if (expected.artifactManifestVersion === 1) {
+    throw new Error(`Plugin archive is missing ${ARTIFACT_MANIFEST_FILE}`);
+  }
+
+  // Catalog schema v1 fallback. New artifacts must use the static manifest so
+  // installer validation never executes plugin code before installation.
   const entryUrl = pathToFileURL(path.resolve(entryPath));
   entryUrl.searchParams.set('tx5dr_market_validate', `${Date.now()}`);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mod: any = await import(entryUrl.href);
   const definition = canonicalizePluginDefinition(mod.default ?? mod);
-  if (definition.name !== expectedPluginName) {
-    throw new Error(`Plugin archive name mismatch: expected ${expectedPluginName}, received ${definition.name}`);
+  if (definition.name !== expected.name) {
+    throw new Error(`Plugin archive name mismatch: expected ${expected.name}, received ${definition.name}`);
   }
+  if (definition.version !== expected.latestVersion) {
+    throw new Error(
+      `Plugin archive version mismatch: expected ${expected.latestVersion}, received ${definition.version}`,
+    );
+  }
+  if (definition.minPluginApiVersion !== undefined
+      && definition.minPluginApiVersion !== expected.minPluginApiVersion) {
+    throw new Error(
+      `Plugin archive Plugin API requirement mismatch: expected ${expected.minPluginApiVersion}, `
+      + `received ${definition.minPluginApiVersion}`,
+    );
+  }
+  assertPluginApiCompatible(expected.minPluginApiVersion, definition.name, pluginApiVersion);
   const actualPermissions = [...(definition.permissions ?? [])].sort();
   const catalogPermissions = [...expectedPermissions].sort();
   if (JSON.stringify(actualPermissions) !== JSON.stringify(catalogPermissions)) {
     throw new Error(
-      `Plugin archive permission mismatch for ${expectedPluginName}: catalog and archive declarations differ`,
+      `Plugin archive permission mismatch for ${expected.name}: catalog and archive declarations differ`,
     );
   }
 }
@@ -222,9 +304,16 @@ export async function installPluginFromMarketplace(
   options: {
     fetchImpl?: typeof fetch;
     env?: NodeJS.ProcessEnv;
+    pluginApiVersion?: string;
   } = {},
 ): Promise<PluginMarketInstallResult> {
   const artifact = await fetchMarketPluginEntry(pluginName, channel, options);
+  const pluginApiVersion = options.pluginApiVersion ?? SERVER_BUILD_INFO.pluginApiVersion;
+  assertPluginApiCompatible(
+    artifact.minPluginApiVersion,
+    artifact.name,
+    pluginApiVersion,
+  );
   const { archivePath, checksum, tempRoot } = await downloadArchiveToTempFile(artifact, pluginDir, options);
 
   try {
@@ -235,7 +324,7 @@ export async function installPluginFromMarketplace(
     const extractDir = path.join(tempRoot, 'extract');
     await extractZipArchive(archivePath, extractDir);
     const extractedRoot = await resolveExtractedPluginRoot(extractDir);
-    await validateExtractedPlugin(extractedRoot, pluginName, artifact.permissions);
+    await validateExtractedPlugin(extractedRoot, artifact, artifact.permissions, pluginApiVersion);
 
     const destinationDir = resolveSafeRelativePath(pluginDir, pluginName);
     if (!destinationDir) {
@@ -277,6 +366,7 @@ export async function updatePluginFromMarketplace(
   options: {
     fetchImpl?: typeof fetch;
     env?: NodeJS.ProcessEnv;
+    pluginApiVersion?: string;
   } = {},
 ): Promise<PluginMarketInstallResult> {
   const result = await installPluginFromMarketplace(pluginName, pluginDir, channel, options);

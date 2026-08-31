@@ -73,6 +73,28 @@ const logger = createLogger('PluginManager');
 const GLOBAL_PLUGIN_SCOPE_ID = '__global__';
 const PLUGIN_RUNTIME_LOG_HISTORY_LIMIT = 1000;
 
+type StrategyLogbookSessionEffects = NonNullable<
+  import('@tx5dr/plugin-api').StrategyActionResult['logbookSessionEffects']
+>;
+
+interface PreparedStrategyLogbookSessionTransaction {
+  readonly pluginName: string;
+  commit(): Promise<void>;
+  compensate(): Promise<void>;
+  finalize(): void;
+}
+
+interface TrackedStrategyRuntimeSession {
+  pluginName: string;
+  stationCallsign: string;
+  sessionKey: string;
+}
+
+interface StrategySessionEffectDegradedState {
+  pluginName: string;
+  reason: string;
+}
+
 /**
  * 插件管理器 — 中央编排器
  *
@@ -113,6 +135,15 @@ export class PluginManager {
   }>>();
   private readonly panelMetaState = new Map<string, PluginPanelMetaPayload>();
   private readonly runtimePanelContributions = new Map<string, PluginUIPanelContributionGroup>();
+  private readonly strategySessionEffectDegradedOperators = new Map<
+    string,
+    StrategySessionEffectDegradedState
+  >();
+  private readonly strategyRuntimeSessionsByOperator = new Map<
+    string,
+    Map<string, TrackedStrategyRuntimeSession>
+  >();
+  private strategyRuntimeSessionTransactionTails = new Map<string, Promise<void>>();
   private readonly pluginEventBusHost: PluginEventBusHost;
   private pluginRuntimeLogHistory: PluginLogHistoryEntry[] = [];
   private readonly recordPluginLogHistory = (entry: PluginLogEntry) => {
@@ -225,6 +256,8 @@ export class PluginManager {
       getStrategyRuntimeGeneration: (operatorId) => this.getStrategyInstance(operatorId)?.generation,
       getStrategyMaxConcurrentStreams: (operatorId) => this.getStrategyInstance(operatorId)
         ?.plugin.definition.strategyFeatures?.maxConcurrentStreams,
+      getStrategyMaxSimultaneousSignals: (operatorId) => this.getStrategyInstance(operatorId)
+        ?.plugin.definition.strategyFeatures?.maxSimultaneousSignals,
       getEffectiveOperatorMaxConcurrentStreams: (operatorId) => (
         this.getEffectiveOperatorMaxConcurrentStreams(operatorId)
       ),
@@ -437,7 +470,11 @@ export class PluginManager {
               const candidate = plugin.definition.createStrategyRuntime?.(
                 this.createStrategyPluginContext(instance),
               );
-              this.assertStrategyRuntimeV2(pluginName, candidate);
+              this.assertStrategyRuntimeV2(
+                pluginName,
+                candidate,
+                plugin.definition.strategyFeatures,
+              );
               return candidate;
             },
           );
@@ -601,6 +638,7 @@ export class PluginManager {
       },
     });
     return Object.freeze({
+      pluginApiVersion: ctx.pluginApiVersion,
       get config() {
         return ctx.config;
       },
@@ -651,6 +689,8 @@ export class PluginManager {
   }
 
   getOperatorTransmitGate(operatorId: string): StrategyRuntimeSnapshot['transmitGate'] | undefined {
+    const degraded = this.strategySessionEffectDegradedOperators.get(operatorId);
+    if (degraded) return { allowed: false, reason: degraded.reason };
     return this.getOperatorAutomationSnapshot(operatorId)?.transmitGate;
   }
 
@@ -1039,6 +1079,8 @@ export class PluginManager {
     const beforeTransmissionSignature = this.orchestrator.readCurrentTransmissionSignature(operatorId);
     let preparedStart = false;
     let runtimeCommitted = false;
+    let sessionCommitted = false;
+    let sessionTransaction: PreparedStrategyLogbookSessionTransaction | undefined;
     try {
       const result = await this.invokeStrategyRuntime(
         operatorId,
@@ -1050,11 +1092,6 @@ export class PluginManager {
         { signal },
       );
       this.assertIntentTransactionCurrent(token, signal, 'strategy_action_superseded');
-
-      if (result?.logbookSessionEffects?.length) {
-        await this.applyStrategyLogbookSessionEffects(operatorId, result.logbookSessionEffects);
-        this.assertIntentTransactionCurrent(token, signal, 'strategy_action_superseded');
-      }
 
       if (result?.requestOperatorStart) {
         if (!this.deps.prepareOperatorStrategyStart || !this.deps.cancelPreparedOperatorStrategyStart) {
@@ -1079,8 +1116,25 @@ export class PluginManager {
         this.assertIntentTransactionCurrent(token, signal, 'strategy_action_superseded');
       }
 
-      // All reversible work is complete. Persist action and decision effects
-      // together before applying post-decision stop/failure notifications.
+      const sessionEffects = [
+        ...(result?.logbookSessionEffects ?? []),
+        ...(decision?.logbookSessionEffects ?? []),
+      ];
+      if (sessionEffects.length > 0) {
+        sessionTransaction = await this.prepareStrategyLogbookSessionEffects(
+          operatorId,
+          sessionEffects,
+        );
+        this.assertIntentTransactionCurrent(token, signal, 'strategy_action_superseded');
+      }
+
+      // The action and re-decision remain speculative until the external
+      // session transaction reaches its commit point.
+      await sessionTransaction?.commit();
+      sessionCommitted = Boolean(sessionTransaction);
+      this.assertIntentTransactionCurrent(token, signal, 'strategy_action_superseded');
+      await this.orchestrator.applyRevalidatedStrategyEffects(operatorId, decision);
+      this.assertIntentTransactionCurrent(token, signal, 'strategy_action_superseded');
       runtimeCommitted = true;
       const completionEffects = [
         ...(result?.qsoCompletions ?? []),
@@ -1090,7 +1144,6 @@ export class PluginManager {
       if (completionEffects.length > 0) {
         this.orchestrator.commitQSOCompletionEffectsFromAction(operatorId, completionEffects);
       }
-      await this.orchestrator.applyRevalidatedStrategyEffects(operatorId, decision);
 
       const afterTransmissionSignature = this.orchestrator.readCurrentTransmissionSignature(operatorId);
       if (!decision?.stop
@@ -1118,6 +1171,32 @@ export class PluginManager {
     } catch (error) {
       if (!runtimeCommitted) {
         const ownsExecution = this.intentCoordinator.ownsExecution(token);
+        if (sessionCommitted) {
+          if (ownsExecution) {
+            try {
+              await sessionTransaction?.compensate();
+            } catch (compensationError) {
+              logger.error('Failed to compensate a committed strategy session transaction', {
+                operatorId,
+                actionId: invocation.actionId,
+                error: compensationError instanceof Error
+                  ? compensationError.message
+                  : String(compensationError),
+              });
+            }
+          } else {
+            // A successor may already depend on the committed session. Reversing
+            // it here would let stale work mutate the new owner, so fail closed.
+            this.markStrategySessionEffectDegraded(
+              operatorId,
+              sessionTransaction!.pluginName,
+              new Error(
+                `intent ownership was lost after strategy session commit: `
+                + `action=${invocation.actionId}, epoch=${token.epoch}`,
+              ),
+            );
+          }
+        }
         this.restoreUncommittedRuntime(operatorId, checkpoint, token, 'failed-strategy-action');
         if (preparedStart && ownsExecution) {
           try {
@@ -1135,6 +1214,8 @@ export class PluginManager {
         }
       }
       throw error;
+    } finally {
+      sessionTransaction?.finalize();
     }
   }
 
@@ -1149,16 +1230,360 @@ export class PluginManager {
     throw error;
   }
 
-  private async applyStrategyLogbookSessionEffects(
+  private async prepareStrategyLogbookSessionEffects(
     operatorId: string,
-    effects: NonNullable<import('@tx5dr/plugin-api').StrategyActionResult['logbookSessionEffects']>,
-  ): Promise<void> {
+    effects: StrategyLogbookSessionEffects,
+  ): Promise<PreparedStrategyLogbookSessionTransaction> {
     const instance = this.getStrategyInstance(operatorId);
     const operator = this.deps.getOperatorById(operatorId);
     if (!instance || !operator) throw new Error('strategy_logbook_session_unavailable');
     const pluginName = instance.plugin.definition.name;
     const stationCallsign = operator.config.myCallsign.trim().toUpperCase();
-    await LogManager.getInstance().applyPluginSessionEffects(pluginName, stationCallsign, effects);
+    const logManager = LogManager.getInstance();
+    const seenSessionKeys = new Set<string>();
+    const sessionIdentities: string[] = [];
+    for (const effect of effects) {
+      if (seenSessionKeys.has(effect.sessionKey)) {
+        throw new Error(`strategy_logbook_session_duplicate_effect:${effect.sessionKey}`);
+      }
+      seenSessionKeys.add(effect.sessionKey);
+      if (effect.operation === 'open' && (effect.retention ?? 'durable') !== 'runtime') {
+        throw new Error('strategy_logbook_session_durable_effect_not_transactional');
+      }
+      sessionIdentities.push(this.strategyRuntimeSessionIdentity({
+        pluginName,
+        stationCallsign,
+        sessionKey: effect.sessionKey,
+      }));
+    }
+
+    const releaseSessionLocks = await this.acquireStrategyRuntimeSessionLocks(sessionIdentities);
+    let locksReleased = false;
+    const finalize = (): void => {
+      if (locksReleased) return;
+      locksReleased = true;
+      releaseSessionLocks();
+    };
+    const prepared: Array<{
+      effect: StrategyLogbookSessionEffects[number];
+      existed: boolean;
+      wasTracked: boolean;
+      previousTitle?: string;
+      previousRecords: import('@tx5dr/contracts').QSORecord[];
+    }> = [];
+    try {
+      for (const effect of effects) {
+        const existing = logManager.getPluginSessionLogBookByKey(
+          pluginName,
+          stationCallsign,
+          effect.sessionKey,
+        );
+        if (effect.operation === 'destroy'
+            && existing?.binding.kind === 'plugin-session'
+            && existing.binding.retention !== 'runtime') {
+          throw new Error('Durable plugin logbook sessions cannot be destroyed');
+        }
+        const exactExisting = effect.operation === 'open'
+          ? existing?.binding.kind === 'plugin-session' && existing.binding.retention === 'runtime'
+            ? existing
+            : null
+          : existing;
+        const trackedSession = { pluginName, stationCallsign, sessionKey: effect.sessionKey };
+        if (effect.operation === 'destroy'
+            && this.isStrategyRuntimeSessionTrackedByAnotherOperator(
+              operatorId,
+              this.strategyRuntimeSessionIdentity(trackedSession),
+            )) {
+          throw new Error(`strategy_logbook_session_in_use:${effect.sessionKey}`);
+        }
+        prepared.push({
+          effect: snapshotPluginData(effect, 'structured'),
+          existed: Boolean(exactExisting),
+          wasTracked: this.isStrategyRuntimeSessionTracked(operatorId, trackedSession),
+          previousTitle: exactExisting?.name,
+          previousRecords: effect.operation === 'destroy' && exactExisting
+            ? snapshotPluginData(await exactExisting.provider.queryQSOs(), 'structured')
+            : [],
+        });
+      }
+    } catch (error) {
+      finalize();
+      throw error;
+    }
+
+    let state: 'prepared' | 'committing' | 'committed' | 'compensated' = 'prepared';
+    let applied: typeof prepared = [];
+    const compensateApplied = async (): Promise<void> => {
+      for (const item of [...applied].reverse()) {
+        if (item.effect.operation === 'open' && !item.existed) {
+          await logManager.applyPluginSessionEffects(pluginName, stationCallsign, [{
+            operation: 'destroy',
+            sessionKey: item.effect.sessionKey,
+          }]);
+          this.untrackStrategyRuntimeSession(operatorId, {
+            pluginName,
+            stationCallsign,
+            sessionKey: item.effect.sessionKey,
+          });
+        } else if (item.effect.operation === 'open' && !item.wasTracked) {
+          this.untrackStrategyRuntimeSession(operatorId, {
+            pluginName,
+            stationCallsign,
+            sessionKey: item.effect.sessionKey,
+          });
+        } else if (item.effect.operation === 'destroy' && item.existed) {
+          await logManager.applyPluginSessionEffects(pluginName, stationCallsign, [{
+            operation: 'open',
+            sessionKey: item.effect.sessionKey,
+            title: item.previousTitle ?? item.effect.sessionKey,
+            retention: 'runtime',
+          }]);
+          if (item.wasTracked) {
+            this.trackStrategyRuntimeSession(operatorId, {
+              pluginName,
+              stationCallsign,
+              sessionKey: item.effect.sessionKey,
+            });
+          }
+          const restored = logManager.getPluginSessionLogBookByKey(
+            pluginName,
+            stationCallsign,
+            item.effect.sessionKey,
+          );
+          if (!restored) throw new Error('runtime_session_compensation_reopen_failed');
+          for (const record of item.previousRecords) {
+            await restored.provider.addQSO(record);
+          }
+        }
+      }
+    };
+
+    const compensateOrDegrade = async (): Promise<void> => {
+      try {
+        await compensateApplied();
+        state = 'compensated';
+      } catch (error) {
+        state = 'compensated';
+        this.markStrategySessionEffectDegraded(operatorId, pluginName, error);
+        throw error;
+      }
+    };
+
+    return {
+      pluginName,
+      commit: async () => {
+        if (state === 'committed') return;
+        if (state !== 'prepared') throw new Error('strategy_logbook_session_transaction_not_committable');
+        state = 'committing';
+        applied = [];
+        try {
+          for (const item of prepared) {
+            try {
+              await logManager.applyPluginSessionEffects(pluginName, stationCallsign, [item.effect]);
+              this.applyStrategyRuntimeSessionTracking(
+                operatorId,
+                pluginName,
+                stationCallsign,
+                item.effect,
+              );
+              applied.push(item);
+            } catch (error) {
+              const current = logManager.getPluginSessionLogBookByKey(
+                pluginName,
+                stationCallsign,
+                item.effect.sessionKey,
+              );
+              const currentIsRuntime = current?.binding.kind === 'plugin-session'
+                && current.binding.retention === 'runtime';
+              if ((item.effect.operation === 'open' && !item.existed && currentIsRuntime)
+                  || (item.effect.operation === 'destroy' && item.existed && !currentIsRuntime)) {
+                this.applyStrategyRuntimeSessionTracking(
+                  operatorId,
+                  pluginName,
+                  stationCallsign,
+                  item.effect,
+                );
+                applied.push(item);
+              }
+              throw error;
+            }
+          }
+          state = 'committed';
+        } catch (error) {
+          try {
+            await compensateOrDegrade();
+          } catch {
+            // The degraded gate is the authoritative outcome when compensation fails.
+          }
+          finalize();
+          throw error;
+        }
+      },
+      compensate: async () => {
+        try {
+          if (state === 'compensated') return;
+          if (state === 'prepared') {
+            state = 'compensated';
+            return;
+          }
+          if (state !== 'committed') throw new Error('strategy_logbook_session_transaction_not_compensatable');
+          await compensateOrDegrade();
+        } finally {
+          finalize();
+        }
+      },
+      finalize,
+    };
+  }
+
+  private markStrategySessionEffectDegraded(
+    operatorId: string,
+    pluginName: string,
+    error: unknown,
+  ): void {
+    const reason = `Logbook session transaction entered degraded state: ${
+      error instanceof Error ? error.message : String(error)
+    }`;
+    this.strategySessionEffectDegradedOperators.set(operatorId, { pluginName, reason });
+    this.suspendedQueueExecutions.add(operatorId);
+    this.deps.releaseTargetReservation?.(operatorId);
+    this.deps.getOperatorById?.(operatorId)?.stop();
+    this.deps.requestOperatorStrategyStop?.(operatorId, reason);
+    this.deps.notifyOperatorStatusChanged?.(operatorId);
+    logger.error('Strategy logbook session transaction entered degraded state', {
+      operatorId,
+      pluginName,
+      reason,
+    });
+  }
+
+  private strategyRuntimeSessionIdentity(session: TrackedStrategyRuntimeSession): string {
+    return `${session.pluginName}\0${session.stationCallsign}\0${session.sessionKey}`;
+  }
+
+  private async acquireStrategyRuntimeSessionLocks(
+    identities: readonly string[],
+  ): Promise<() => void> {
+    const releases: Array<() => void> = [];
+    try {
+      for (const identity of [...new Set(identities)].sort()) {
+        releases.push(await this.acquireStrategyRuntimeSessionLock(identity));
+      }
+    } catch (error) {
+      for (const release of releases.reverse()) release();
+      throw error;
+    }
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      for (const release of releases.reverse()) release();
+    };
+  }
+
+  private async acquireStrategyRuntimeSessionLock(identity: string): Promise<() => void> {
+    const tails = this.strategyRuntimeSessionTransactionTails
+      ?? (this.strategyRuntimeSessionTransactionTails = new Map());
+    const previous = tails.get(identity) ?? Promise.resolve();
+    let releaseCurrent!: () => void;
+    const current = new Promise<void>((resolve) => { releaseCurrent = resolve; });
+    const tail = previous.catch(() => undefined).then(() => current);
+    tails.set(identity, tail);
+    await previous.catch(() => undefined);
+
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      releaseCurrent();
+      if (tails.get(identity) === tail) tails.delete(identity);
+    };
+  }
+
+  private isStrategyRuntimeSessionTracked(
+    operatorId: string,
+    session: TrackedStrategyRuntimeSession,
+  ): boolean {
+    return this.strategyRuntimeSessionsByOperator.get(operatorId)
+      ?.has(this.strategyRuntimeSessionIdentity(session)) === true;
+  }
+
+  private trackStrategyRuntimeSession(
+    operatorId: string,
+    session: TrackedStrategyRuntimeSession,
+  ): void {
+    const sessions = this.strategyRuntimeSessionsByOperator.get(operatorId) ?? new Map();
+    sessions.set(this.strategyRuntimeSessionIdentity(session), { ...session });
+    this.strategyRuntimeSessionsByOperator.set(operatorId, sessions);
+  }
+
+  private untrackStrategyRuntimeSession(
+    operatorId: string,
+    session: TrackedStrategyRuntimeSession,
+  ): void {
+    const sessions = this.strategyRuntimeSessionsByOperator.get(operatorId);
+    if (!sessions) return;
+    sessions.delete(this.strategyRuntimeSessionIdentity(session));
+    if (sessions.size === 0) this.strategyRuntimeSessionsByOperator.delete(operatorId);
+  }
+
+  private applyStrategyRuntimeSessionTracking(
+    operatorId: string,
+    pluginName: string,
+    stationCallsign: string,
+    effect: StrategyLogbookSessionEffects[number],
+  ): void {
+    const session = { pluginName, stationCallsign, sessionKey: effect.sessionKey };
+    if (effect.operation === 'open') this.trackStrategyRuntimeSession(operatorId, session);
+    else this.untrackStrategyRuntimeSession(operatorId, session);
+  }
+
+  private isStrategyRuntimeSessionTrackedByAnotherOperator(
+    operatorId: string,
+    identity: string,
+  ): boolean {
+    for (const [candidateOperatorId, sessions] of this.strategyRuntimeSessionsByOperator) {
+      if (candidateOperatorId !== operatorId && sessions.has(identity)) return true;
+    }
+    return false;
+  }
+
+  private async cleanupTrackedStrategyRuntimeSessions(
+    operatorId: string,
+    pluginName: string,
+  ): Promise<void> {
+    const sessions = this.strategyRuntimeSessionsByOperator.get(operatorId);
+    if (!sessions) return;
+    const failures: unknown[] = [];
+    for (const [identity] of [...sessions]) {
+      const releaseSessionLock = await this.acquireStrategyRuntimeSessionLocks([identity]);
+      try {
+        const currentSessions = this.strategyRuntimeSessionsByOperator.get(operatorId);
+        if (!currentSessions) continue;
+        const session = currentSessions.get(identity);
+        if (!session || session.pluginName !== pluginName) continue;
+        currentSessions.delete(identity);
+        if (currentSessions.size === 0) this.strategyRuntimeSessionsByOperator.delete(operatorId);
+        if (this.isStrategyRuntimeSessionTrackedByAnotherOperator(operatorId, identity)) continue;
+        try {
+          await LogManager.getInstance().destroyRuntimePluginSessionLogBookByKey(
+            session.pluginName,
+            session.stationCallsign,
+            session.sessionKey,
+          );
+        } catch (error) {
+          const restored = this.strategyRuntimeSessionsByOperator.get(operatorId) ?? new Map();
+          restored.set(identity, session);
+          this.strategyRuntimeSessionsByOperator.set(operatorId, restored);
+          failures.push(error);
+        }
+      } finally {
+        releaseSessionLock();
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, 'Failed to clean up tracked strategy runtime sessions');
+    }
   }
 
   private restoreUncommittedRuntime(
@@ -1221,10 +1646,12 @@ export class PluginManager {
   }
 
   getCurrentTransmission(operatorId: string): string | null {
+    if (this.strategySessionEffectDegradedOperators.has(operatorId)) return null;
     return this.orchestrator.readCurrentTransmission(operatorId);
   }
 
   getCurrentTransmissions(operatorId: string): import('@tx5dr/plugin-api').StrategyTransmission[] {
+    if (this.strategySessionEffectDegradedOperators.has(operatorId)) return [];
     return this.orchestrator.readCurrentTransmissions(operatorId);
   }
 
@@ -2341,7 +2768,11 @@ export class PluginManager {
     return undefined;
   }
 
-  private assertStrategyRuntimeV2(pluginName: string, runtime: StrategyRuntime | undefined): asserts runtime is StrategyRuntime {
+  private assertStrategyRuntimeV2(
+    pluginName: string,
+    runtime: StrategyRuntime | undefined,
+    features?: import('@tx5dr/contracts').StrategyFeatures,
+  ): asserts runtime is StrategyRuntime {
     if (!runtime) {
       throw new Error(`${pluginName} did not create a strategy runtime`);
     }
@@ -2360,6 +2791,18 @@ export class PluginManager {
     const missing = requiredMethods.filter((name) => typeof runtime[name] !== 'function');
     if (missing.length > 0) {
       throw new Error(`${pluginName} strategy runtime is missing v2 methods: ${missing.join(', ')}`);
+    }
+    if (features?.targetQueue === 1 && !isQueuedStrategyRuntime(runtime)) {
+      throw new Error(`${pluginName} declares targetQueue but does not implement QueuedStrategyRuntime`);
+    }
+    if (features?.parallelTargetQueue === 1) {
+      const missingParallel = ['getTransmissions', 'onTransmissionsCompleted']
+        .filter((name) => typeof runtime[name as keyof StrategyRuntime] !== 'function');
+      if (missingParallel.length > 0) {
+        throw new Error(
+          `${pluginName} declares parallelTargetQueue but is missing: ${missingParallel.join(', ')}`,
+        );
+      }
     }
     try {
       structuredClone(runtime.checkpoint());
@@ -3178,6 +3621,36 @@ export class PluginManager {
         });
         logger.warn(`onUnload error: plugin=${instance.plugin.definition.name}, operator=${operatorId}`, err);
       }
+    }
+    let runtimeSessionCleanupSucceeded = true;
+    try {
+      await this.cleanupTrackedStrategyRuntimeSessions(
+        operatorId,
+        instance.plugin.definition.name,
+      );
+    } catch (error) {
+      runtimeSessionCleanupSucceeded = false;
+      this.emitPluginRuntimeLog({
+        stage: 'activate',
+        level: 'warn',
+        message: 'Tracked strategy runtime session cleanup failed',
+        pluginName: instance.plugin.definition.name,
+        directoryName: instance.plugin.dirPath ? path.basename(instance.plugin.dirPath) : undefined,
+        details: {
+          operatorId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+      logger.warn(
+        `Runtime session cleanup failed: plugin=${instance.plugin.definition.name}, operator=${operatorId}`,
+        error,
+      );
+    }
+    const degraded = this.strategySessionEffectDegradedOperators.get(operatorId);
+    if (runtimeSessionCleanupSucceeded
+        && degraded?.pluginName === instance.plugin.definition.name) {
+      this.strategySessionEffectDegradedOperators.delete(operatorId);
+      this.suspendedQueueExecutions.delete(operatorId);
     }
     this.closeInstanceIngress(instance);
     this.invocationGuard.revokeInstance(instance, 'plugin instance unloaded');
