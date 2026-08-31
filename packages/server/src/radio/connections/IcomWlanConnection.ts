@@ -41,9 +41,24 @@ import {
   type RadioModeInfo,
   type RadioModeBandwidth,
   type SetRadioModeOptions,
+  type RadioWriteResult,
 } from './IRadioConnection.js';
+import type { TxAudioInputSource } from '@tx5dr/contracts';
+import { ICOM_CONNECTOR_SOURCE_MAP } from '../txAudioInput/TxAudioInputProvider.js';
 
 const logger = createLogger('IcomWlanConnection');
+
+type IcomRadioIdentity = {
+  modelId: IcomModelId | null;
+  profileName: string | null;
+  authority: string;
+  verified: boolean;
+  transceiverId?: number;
+  civAddress?: number;
+  rigName?: string;
+  audioName?: string;
+  mismatch?: boolean;
+};
 const SPECTRUM_CAT_TIMEOUT_MS = 1000;
 const TX_METER_SETTLE_MS = 200;
 const METER_SAMPLE_LOG_INTERVAL_MS = 5000;
@@ -134,6 +149,8 @@ export class IcomWlanConnection
   private lastMeterSampleLoggedAt = 0;
   private detectedModelId: IcomModelId | null = null;
   private detectedProfileName: string | null = null;
+  private radioIdentity: IcomRadioIdentity | null = null;
+  private txAudioInputSource: TxAudioInputSource | null = null;
   private lastKnownFrequency: number | null = null;
   private frequencyNullFailureCount = 0;
   private firstFrequencyNullFailureAt: number | null = null;
@@ -164,6 +181,10 @@ export class IcomWlanConnection
       modelId: this.detectedModelId,
       profileName: this.detectedProfileName,
     };
+  }
+
+  getRadioIdentity(): IcomRadioIdentity | null {
+    return this.radioIdentity;
   }
 
   /**
@@ -541,6 +562,31 @@ export class IcomWlanConnection
           )
         ),
       ]);
+
+      const getIdentity = mode === 'full' && (this.rig as unknown as {
+        getRadioIdentity?: (options?: { timeout?: number }) => Promise<IcomRadioIdentity>;
+      }).getRadioIdentity;
+      if (typeof getIdentity === 'function') {
+        try {
+          this.radioIdentity = await getIdentity.call(this.rig, { timeout: 1500 });
+          if (this.radioIdentity.modelId) {
+            this.detectedModelId = this.radioIdentity.modelId;
+            this.detectedProfileName = this.radioIdentity.profileName;
+          }
+          logger.info('ICOM radio identity resolved', {
+            modelId: this.radioIdentity.modelId,
+            authority: this.radioIdentity.authority,
+            verified: this.radioIdentity.verified,
+            transceiverId: this.radioIdentity.transceiverId,
+            civAddress: this.radioIdentity.civAddress,
+          });
+        } catch (error) {
+          logger.warn('ICOM radio identity query failed; keeping identity unverified', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          this.radioIdentity = null;
+        }
+      }
 
       // 连接成功
       if (mode === 'control-only') {
@@ -1669,6 +1715,72 @@ export class IcomWlanConnection
     });
   }
 
+  /** Normalized TX audio source backed by the model-specific 0x1a/0x05 route. */
+  async getTxAudioInputSource(): Promise<TxAudioInputSource | null> {
+    return this.runSerializedTask('getTxAudioInputSource', async () => {
+      this.checkConnected();
+      const getMode = (this.rig as unknown as {
+        getConnectorDataMode?: (options?: { timeout?: number }) => Promise<string | null>;
+      }).getConnectorDataMode;
+      if (typeof getMode === 'function') {
+        const mode = await getMode.call(this.rig, { timeout: 1500 });
+        const normalized = ({ MIC: 'mic', ACC: 'accessory', USB: 'usb', WLAN: 'network' } as const)[mode as 'MIC' | 'ACC' | 'USB' | 'WLAN'];
+        if (normalized) this.txAudioInputSource = normalized;
+      }
+      return this.txAudioInputSource;
+    });
+  }
+
+  async getSupportedTxAudioInputSources(): Promise<TxAudioInputSource[]> {
+    const model = this.radioIdentity?.verified ? this.radioIdentity.modelId : null;
+    if (model !== 'IC-705' && model !== 'IC-905') {
+      logger.debug('ICOM TX audio input route not advertised', {
+        detectedModelId: this.detectedModelId,
+        effectiveModelId: model,
+        profileName: this.detectedProfileName,
+      });
+      return [];
+    }
+    return ['mic', 'accessory', 'usb', 'network'];
+  }
+
+  async setTxAudioInputSource(source: TxAudioInputSource): Promise<RadioWriteResult<TxAudioInputSource>> {
+    return this.runSerializedTask('setTxAudioInputSource', async () => {
+      this.checkConnected();
+      const model = this.radioIdentity?.verified ? this.radioIdentity.modelId : null;
+      if (model !== 'IC-705' && model !== 'IC-905') {
+        if (!model) {
+          logger.warn('ICOM TX audio input route unavailable: connector profile not resolved', {
+            detectedModelId: this.detectedModelId,
+            profileName: this.detectedProfileName,
+          });
+          throw new Error('ICOM connector profile not resolved');
+        }
+        logger.warn('ICOM TX audio input route unavailable: active profile has no connector route provider', {
+          detectedModelId: this.detectedModelId,
+          effectiveModelId: model,
+          profileName: this.detectedProfileName,
+        });
+        throw this.optionalOperationUnavailable('setTxAudioInputSource', 'No connector data-mode extension for active profile');
+      }
+      const connector = ICOM_CONNECTOR_SOURCE_MAP[source];
+      if (!connector) throw new Error(`Unsupported ICOM TX audio source: ${source}`);
+      await this.rig!.setConnectorDataMode(connector);
+      const getMode = (this.rig as unknown as {
+        getConnectorDataMode?: (options?: { timeout?: number }) => Promise<string | null>;
+      }).getConnectorDataMode;
+      if (typeof getMode === 'function') {
+        const actual = await getMode.call(this.rig, { timeout: 1500 });
+        const normalized = ({ MIC: 'mic', ACC: 'accessory', USB: 'usb', WLAN: 'network' } as const)[actual as 'MIC' | 'ACC' | 'USB' | 'WLAN'];
+        if (normalized !== source) {
+          throw new Error(`ICOM TX audio input readback mismatch: requested ${source}, radio reported ${actual ?? 'null'}`);
+        }
+      }
+      this.txAudioInputSource = source;
+      return { requested: source, applied: source, outcome: 'applied', acknowledgement: typeof getMode === 'function' ? 'readback' : 'reply' };
+    }, { critical: true });
+  }
+
   async setAudioIfMode(source: string): Promise<void> {
     await this.runSerializedTask('setAudioIfMode', async () => {
       this.checkConnected();
@@ -2208,6 +2320,8 @@ export class IcomWlanConnection
       this.tunerEnabled = false;
       this.detectedModelId = null;
       this.detectedProfileName = null;
+      this.radioIdentity = null;
+      this.txAudioInputSource = null;
       this.removeAllListeners();
     } finally {
       // 确保标志位被重置

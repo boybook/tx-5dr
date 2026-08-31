@@ -43,6 +43,7 @@ import type {
   RadioModeBandwidth,
   SetRadioModeOptions,
 } from './connections/IRadioConnection.js';
+import type { TxAudioInputSource, TxAudioInputSourcePolicy } from '@tx5dr/contracts';
 import { RadioConnectionType, RadioConnectionState } from './connections/IRadioConnection.js';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 import { RadioCapabilityManager } from './RadioCapabilityManager.js';
@@ -485,6 +486,8 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   private sessionMutationTail: Promise<unknown> = Promise.resolve();
   private sessionMutationActive = false;
   private connectionGeneration = 0;
+  private txAudioPolicyAppliedSource: TxAudioInputSource | null = null;
+  private txAudioPolicyWarningKey: string | null = null;
 
   /**
    * 连接事件清理器列表（用于断开时清理）
@@ -1294,6 +1297,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         }
       }
 
+      // Apply the profile's normalized TX audio route after the operating
+      // state is settled. This is best-effort by design: a route failure must
+      // never block PTT or invalidate an otherwise successful mode change.
+      await this.applyTxAudioInputSourcePolicy();
+
       return result;
     } catch (error) {
       if (request.mode && request.frequency === undefined && isRecoverableOptionalRadioError(error)) {
@@ -1322,6 +1330,40 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
       this.handleConnectionError(error as Error);
       throw error;
+    }
+  }
+
+  private async applyTxAudioInputSourcePolicy(): Promise<void> {
+    const connection = this.connection;
+    const policy: TxAudioInputSourcePolicy = this.configManager.getActiveProfile()?.txAudioInputSource ?? 'auto';
+    if (!connection?.setTxAudioInputSource || policy === 'unchanged') return;
+
+    let source: TxAudioInputSource | null = policy === 'auto' ? null : policy as TxAudioInputSource;
+    if (policy === 'auto') {
+      if (connection.getType() === RadioConnectionType.ICOM_WLAN) source = 'network';
+      else return;
+    }
+    if (!source) return;
+    if (this.txAudioPolicyAppliedSource === source) return;
+
+    try {
+      await connection.setTxAudioInputSource(source);
+      this.txAudioPolicyAppliedSource = source;
+      this.txAudioPolicyWarningKey = null;
+      await this.capabilityManager.reprobeCapability('tx_audio_input_source').catch(() => undefined);
+      await this.capabilityManager.refreshDescriptor('tx_audio_input_source').catch(() => undefined);
+      await this.capabilityManager.refreshAll().catch(() => undefined);
+    } catch (error) {
+      const warningKey = `${policy}:${source}:${error instanceof Error ? error.message : String(error)}`;
+      if (this.txAudioPolicyWarningKey !== warningKey) {
+        this.txAudioPolicyWarningKey = warningKey;
+        logger.warn('TX audio input source policy could not be confirmed; continuing', {
+          policy,
+          source,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      this.capabilityManager.markCapabilityUnavailable('tx_audio_input_source', error);
     }
   }
 
@@ -2364,6 +2406,8 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     this.cleanupConnectionListeners();
     try { await this.connection.disconnect('preparing new connection'); } catch {}
     this.connection = null;
+    this.txAudioPolicyAppliedSource = null;
+    this.txAudioPolicyWarningKey = null;
     this.connectionGeneration += 1;
 
     if (config.type === 'icom-wlan') {
@@ -2398,6 +2442,8 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
   private activateConnectedSession(connection: IRadioConnection): void {
     this.connectionGeneration += 1;
+    this.txAudioPolicyAppliedSource = null;
+    this.txAudioPolicyWarningKey = null;
     connection.startBackgroundTasks?.();
     this.startFrequencyMonitoring();
     void this.startTunerMonitoring();
@@ -2415,6 +2461,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     logger.debug('Bootstrap phase: capability manager');
     await this.capabilityManager.onConnected(connection);
+    await this.applyTxAudioInputSourcePolicy();
 
     if (restoredFrequency !== null) {
       this.updateKnownFrequency(restoredFrequency);
@@ -2448,6 +2495,8 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
       this.cleanupConnectionListeners();
       this.connection = null;
+      this.txAudioPolicyAppliedSource = null;
+      this.txAudioPolicyWarningKey = null;
       this.connectionGeneration += 1;
     }
 

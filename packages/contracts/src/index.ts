@@ -105,6 +105,7 @@ export * from './schema/pskreporter.schema.js';
 
 // Radio Profile Schema
 export * from './schema/radio-profile.schema.js';
+export * from './schema/tx-audio-input.schema.js';
 
 // Ability Schema (must be before auth.schema which imports from it)
 export * from './schema/ability.js';

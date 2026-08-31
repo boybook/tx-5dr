@@ -25,6 +25,7 @@ site repository.
 ## Decisions
 
 - [External device panel boundary](decisions/device-panel-boundary.md)
+- [TX audio input source capability](decisions/tx-audio-input-source.md)
 
 Decision records retain the accepted boundary and current consequences. They do
 not track implementation progress or branch-by-branch task history.
