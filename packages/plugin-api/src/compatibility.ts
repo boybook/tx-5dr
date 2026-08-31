@@ -48,9 +48,12 @@ export function comparePluginApiVersions(left: string, right: string): number | 
   return comparePrerelease(a.prerelease, b.prerelease);
 }
 
+/** Stable error returned when a plugin requires a newer Plugin API. */
 export class PluginApiCompatibilityError extends Error {
+  /** Machine-readable compatibility failure code. */
   readonly code = 'PLUGIN_API_VERSION_UNSUPPORTED' as const;
 
+  /** Captures the available version, required floor, and optional plugin identity. */
   constructor(
     readonly pluginApiVersion: string,
     readonly minPluginApiVersion: string,
