@@ -18,12 +18,15 @@ import {
   defineCompletionModule,
   defineFT8ExchangeModule,
   distancePoints,
+  fixedPoints,
   gridAndSnrExchange,
   gridExchange,
   gridFieldMultiplier,
   maidenheadDistanceKm,
   nextContestSerial,
+  multiplierKeysFrom,
   oncePerBand,
+  scoreBy,
   requireExchangeAndFinalAck,
   type FT8ContestQso,
   type GridExchange,
@@ -423,6 +426,89 @@ describe('contest toolkit', () => {
       startTime: Date.parse('2026-06-06T00:01:00Z'),
       distanceKm: 0,
     }).points).toBe(2);
+  });
+
+  it('assembles fixed-point and zero-point multiplier contests from shared helpers', () => {
+    type SprintQso = FT8ContestQso<{ grid: string }>;
+    const sprintScoring = fixedPoints<SprintQso>(1, {
+      multiplierKeys: gridFieldMultiplier({
+        grid: (qso) => qso.receivedExchange?.grid,
+        band: (qso) => qso.band,
+      }),
+    });
+    const sprintRows: SprintQso[] = [
+      {
+        callsign: 'K1ABC',
+        band: '20M',
+        mode: 'FT4',
+        startTime: Date.now(),
+        receivedExchange: { grid: 'FN31' },
+      },
+      {
+        callsign: 'K2DEF',
+        band: '20M',
+        mode: 'FT4',
+        startTime: Date.now(),
+        receivedExchange: { grid: 'FN31' },
+      },
+    ];
+    const sprintSummary = sprintScoring.aggregate(
+      sprintRows.map((qso) => sprintScoring.score(qso)),
+    );
+    expect(sprintSummary).toMatchObject({
+      qsoCount: 2,
+      qsoPoints: 2,
+      multiplierCount: 1,
+      total: 2,
+    });
+
+    type BataviaQso = FT8ContestQso & {
+      prefix: string;
+      dxcc: string;
+      ybMember: boolean;
+      sameCountry: boolean;
+    };
+    const bataviaScoring = scoreBy<BataviaQso>({
+      id: 'batavia-like',
+      points(qso) {
+        if (qso.ybMember) return qso.sameCountry ? 5 : 5;
+        if (qso.sameCountry) return 0;
+        return qso.dxcc === 'YB' ? 2 : 1;
+      },
+      eligible: () => true,
+      multiplierKeys: multiplierKeysFrom({
+        key: (qso: BataviaQso) => qso.prefix,
+        band: (qso) => qso.band,
+      }),
+    });
+    const bataviaSummary = bataviaScoring.aggregate([
+      bataviaScoring.score({
+        callsign: 'YB1AAA',
+        band: '20M',
+        mode: 'FT8',
+        startTime: Date.now(),
+        prefix: 'YB',
+        dxcc: 'YB',
+        ybMember: true,
+        sameCountry: true,
+      }),
+      bataviaScoring.score({
+        callsign: 'K1ABC',
+        band: '20M',
+        mode: 'FT8',
+        startTime: Date.now(),
+        prefix: 'K',
+        dxcc: 'K',
+        ybMember: false,
+        sameCountry: true,
+      }),
+    ]);
+    expect(bataviaSummary).toMatchObject({
+      qsoCount: 2,
+      qsoPoints: 5,
+      multiplierCount: 2,
+      total: 10,
+    });
   });
 
   it('covers FT Challenge Grid, SNR, ZZ00 and completion rules', () => {
