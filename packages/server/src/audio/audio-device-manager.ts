@@ -743,7 +743,20 @@ export class AudioDeviceManager {
             const claimedHardwareIds = [profile.audio?.inputHardwareId, profile.audio?.outputHardwareId];
             return claimedHardwareIds.some((id) => id && id === uniqueByName.hardwareId);
           });
-          if (actualDeviceId !== null && (candidateInUse || candidateClaimedByProfile)) {
+          // Multi-radio evidence: registry already saw the same product name under
+          // more than one hardwareId. Reject so unplugging radio A cannot silently
+          // open radio B. A single-radio USB port move only ever registered one id.
+          const sameNameHardwareIds = new Set<string>();
+          for (const entry of [
+            ...this.deviceRegistry[direction].values(),
+            ...this.deviceRegistry[otherDirection].values(),
+          ]) {
+            if (entry.name === deviceName && entry.hardwareId) {
+              sameNameHardwareIds.add(entry.hardwareId);
+            }
+          }
+          const registryShowsMultipleRadios = sameNameHardwareIds.size > 1;
+          if (actualDeviceId !== null && (candidateInUse || candidateClaimedByProfile || registryShowsMultipleRadios)) {
             logger.warn('Skipping unique same-name fallback: candidate appears to be a different radio', {
               direction,
               requestedHardwareId: hardwareId,
@@ -752,6 +765,7 @@ export class AudioDeviceManager {
               candidateHardwareId: uniqueByName.hardwareId,
               candidateInUse,
               candidateClaimedByProfile,
+              registryShowsMultipleRadios,
             });
           } else if (actualDeviceId !== null) {
             logger.info('Configured hardwareId not present; falling back to unique same-name device', {
@@ -899,15 +913,41 @@ export class AudioDeviceManager {
   }
 
   clearActiveDevice(direction: AudioDirection, deviceName?: string | null, deviceId?: string | null): void {
-    const entries = deviceId
-      ? [[this.getDeviceKey(direction, deviceId), this.findRegisteredDeviceById(direction, deviceId)] as const]
-      : deviceName
-        ? Array.from(this.deviceRegistry[direction].entries()).filter(([, device]) => device.name === deviceName)
-        : Array.from(this.deviceRegistry[direction].entries());
+    const registry = this.deviceRegistry[direction];
+    const matched = new Map<string, RegisteredAudioDevice>();
 
-    for (const [key, device] of entries) {
-      if (!device?.isActiveByTx5dr) continue;
-      this.deviceRegistry[direction].set(key, {
+    if (deviceId) {
+      const byId = this.findRegisteredDeviceById(direction, deviceId);
+      if (byId) {
+        matched.set(this.getDeviceKey(direction, byId.id), byId);
+      }
+      // Relocate may rewrite the registry key (e.g. input-3 → input-3__held /
+      // input-usb:…) while lastRtAudioId still points at the pre-relocate id.
+      for (const [key, device] of registry.entries()) {
+        if (
+          device.lastRtAudioId === deviceId
+          || device.id === `${deviceId}__held`
+        ) {
+          matched.set(key, device);
+        }
+      }
+    }
+
+    if (matched.size === 0 && deviceName) {
+      for (const [key, device] of registry.entries()) {
+        if (device.name === deviceName) {
+          matched.set(key, device);
+        }
+      }
+    } else if (!deviceId && !deviceName) {
+      for (const [key, device] of registry.entries()) {
+        matched.set(key, device);
+      }
+    }
+
+    for (const [key, device] of matched) {
+      if (!device.isActiveByTx5dr) continue;
+      registry.set(key, {
         ...device,
         availability: 'cached',
         isActiveByTx5dr: false,

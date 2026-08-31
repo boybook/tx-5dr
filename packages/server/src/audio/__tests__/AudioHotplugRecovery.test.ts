@@ -1070,6 +1070,66 @@ describe('audio hotplug recovery', () => {
     expect(mockState.openCalls).toHaveLength(0);
   });
 
+  it('rejects the unique same-name fallback when registry shows multiple same-name radios', async () => {
+    mockUsbIdentities([
+      makeUsbIdentity({ hardwareId: 'usb:1-2', alsaCard: 0 }),
+    ]);
+    const manager = AudioDeviceManager.getInstance();
+    // Both radios were seen earlier; A (usb:1-1) is now gone, only B remains live.
+    manager.markDeviceActive('output', 'USB Audio CODEC', 'output-3', 48000, 2, 'usb:1-1');
+    manager.clearActiveDevice('output', 'USB Audio CODEC', 'output-3');
+    manager.markDeviceActive('output', 'USB Audio CODEC', 'output-5', 48000, 2, 'usb:1-2');
+    manager.clearActiveDevice('output', 'USB Audio CODEC', 'output-5');
+
+    mockState.devices = [
+      { id: 4, name: 'USB Audio CODEC', outputChannels: 2, preferredSampleRate: 48000 },
+    ];
+    mockConfigManager.getAudioConfig.mockReturnValue({
+      outputDeviceName: 'USB Audio CODEC',
+      outputDeviceId: 'output-3',
+      outputHardwareId: 'usb:1-1',
+      sampleRate: 48000,
+      bufferSize: 1024,
+    });
+
+    const streamManager = new AudioStreamManager();
+    await expect(streamManager.startOutput()).rejects.toMatchObject({
+      code: RadioErrorCode.DEVICE_NOT_FOUND,
+    });
+    expect(mockState.openCalls).toHaveLength(0);
+  });
+
+  it('clears relocated __held active entries when stopping by the original device id', async () => {
+    const manager = AudioDeviceManager.getInstance();
+    manager.markDeviceActive('input', 'USB Audio CODEC', 'input-3', 48000, 1, 'usb:1-1');
+    // Simulate hotplug relocate rewriting the registry key while the stream is open.
+    const registry = (manager as unknown as {
+      deviceRegistry: Record<'input' | 'output', Map<string, {
+        id: string;
+        name: string;
+        isActiveByTx5dr: boolean;
+        lastRtAudioId?: string;
+        hardwareId?: string;
+        availability: string;
+      }>>;
+    }).deviceRegistry;
+    const original = registry.input.get('input:input-3');
+    expect(original).toBeTruthy();
+    registry.input.delete('input:input-3');
+    registry.input.set('input:input-3__held', {
+      ...original!,
+      id: 'input-3__held',
+      lastRtAudioId: 'input-3',
+      isActiveByTx5dr: true,
+      availability: 'active',
+    });
+
+    manager.clearActiveDevice('input', 'USB Audio CODEC', 'input-3');
+
+    expect(registry.input.get('input:input-3__held')?.isActiveByTx5dr).toBe(false);
+    expect(registry.input.get('input:input-3__held')?.availability).toBe('cached');
+  });
+
   it('rejects registry-cache reuse when the cached numeric id is now a non-USB device', async () => {
     mockUsbIdentities([]);
     const manager = AudioDeviceManager.getInstance();
