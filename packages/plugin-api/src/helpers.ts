@@ -71,26 +71,39 @@ export interface KVStore {
 
 /** Read-only live view of one plugin storage scope. */
 export interface ReadonlyKVStore {
+  /** Reads a detached stored value or the caller-provided default. */
   get<T = unknown>(key: string, defaultValue?: T): T;
+  /** Reports whether the scope currently contains an explicit key. */
   has(key: string): boolean;
+  /** Returns the current key names as a detached array. */
   keys(): string[];
 }
 
+/** Exact digital-mode text that a plugin wants the Host encoder to validate. */
 export interface DigitalMessagePreflightRequest {
+  /** FT8 or FT4 encoder to use for validation. */
   mode: 'FT8' | 'FT4';
+  /** Operator-visible message text before Host normalization and encoding. */
   text: string;
 }
 
+/** Detached result of validating one message without producing audio or transmitting. */
 export interface DigitalMessagePreflightResult {
+  /** Whether the Host encoder accepts the normalized text exactly. */
   encodable: boolean;
+  /** Normalized text that was submitted to the encoder. */
   requestedText: string;
+  /** Exact text recovered from the encoded payload when encoding succeeded. */
   transmittedText?: string;
+  /** Stable reason explaining why exact encoding was rejected. */
   reason?: 'empty' | 'encoder_changed_text' | 'encode_failed';
+  /** Sanitized encoder diagnostic intended for plugin logs. */
   error?: string;
 }
 
 /** Read-only digital-mode validation; no audio or encoder handle is exposed. */
 export interface DigitalMessagePreflight {
+  /** Validates and round-trips one FT8/FT4 message through the Host encoder. */
   check(request: DigitalMessagePreflightRequest): Promise<DigitalMessagePreflightResult>;
 }
 
