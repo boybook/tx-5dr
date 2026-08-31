@@ -1,6 +1,11 @@
 import { createHash } from 'node:crypto';
 
-import type { QSORecord } from '@tx5dr/contracts';
+import {
+  CONTEST_QSO_ENVELOPE_MAX_BYTES,
+  parseContestQsoEnvelope,
+  serializeContestQsoEnvelope,
+  type QSORecord,
+} from '@tx5dr/contracts';
 import {
   getBandFromFrequency,
   normalizeQsoModeForStorage,
@@ -14,6 +19,12 @@ import {
 } from '@tx5dr/plugin-api';
 
 export const ADIF_MAX_TAG_HEADER_BYTES = 64 * 1024;
+export const ADIF_CONTEST_ENTRY_MAX_CAPTURE_BYTES = CONTEST_QSO_ENVELOPE_MAX_BYTES;
+const ADIF_CONTEST_ENTRY_FIELD = 'app_tx5dr_contest_entry';
+
+export function isAdifContestEntryField(name: string): boolean {
+  return name.trim().toLowerCase() === ADIF_CONTEST_ENTRY_FIELD;
+}
 
 export interface AdifByteRange {
   /** Inclusive byte offset. */
@@ -25,6 +36,8 @@ export interface AdifByteRange {
 export type AdifScanIssueCode =
   | 'malformed-tag'
   | 'invalid-field-length'
+  | 'invalid-field-encoding'
+  | 'field-value-too-large'
   | 'incomplete-field-value'
   | 'unexpected-eoh'
   | 'non-whitespace-between-records';
@@ -74,6 +87,8 @@ export interface AdifScanResult {
 
 export interface EncodeAdifRecordOptions {
   fallbackMyGrid?: string;
+  /** Internal forward-compatibility value retained when this Host cannot decode it yet. */
+  preservedContestEntry?: string;
 }
 
 interface ParsedTag {
@@ -204,6 +219,41 @@ function parseTagAt(source: Buffer, start: number): ParsedTag {
     };
   }
 
+  if (isAdifContestEntryField(normalizedName)
+      && length > ADIF_CONTEST_ENTRY_MAX_CAPTURE_BYTES) {
+    return {
+      kind: 'malformed',
+      start,
+      end: valueEnd,
+      nextOffset: valueEnd,
+      issue: {
+        code: 'field-value-too-large',
+        offset: start,
+        message: `ADIF field ${rawName} exceeds the ${ADIF_CONTEST_ENTRY_MAX_CAPTURE_BYTES}-byte limit`,
+      },
+    };
+  }
+
+  const valueBytes = source.subarray(valueStart, valueEnd);
+  let value: string;
+  try {
+    value = isAdifContestEntryField(normalizedName)
+      ? new TextDecoder('utf-8', { fatal: true }).decode(valueBytes)
+      : valueBytes.toString('utf8');
+  } catch {
+    return {
+      kind: 'malformed',
+      start,
+      end: valueEnd,
+      nextOffset: valueEnd,
+      issue: {
+        code: 'invalid-field-encoding',
+        offset: start,
+        message: `ADIF field ${rawName} is not valid UTF-8`,
+      },
+    };
+  }
+
   return {
     kind: 'field',
     start,
@@ -212,7 +262,7 @@ function parseTagAt(source: Buffer, start: number): ParsedTag {
     field: {
       name: normalizedName,
       rawName,
-      value: source.subarray(valueStart, valueEnd).toString('utf8'),
+      value,
       range: makeRange(start, valueEnd),
       valueRange: makeRange(valueStart, valueEnd),
     },
@@ -379,6 +429,7 @@ const QSO_PROJECTION_FIELD_NAMES = new Set([
   'submode',
   'comment',
   'contest_id',
+  'app_tx5dr_contest_entry',
   'app_tx5dr_message_history',
   'app_tx5dr_id',
   'operator',
@@ -500,6 +551,15 @@ export function decodeAdifRecord(record: ScannedAdifRecord, runtimeId?: string):
 
   const mode = mapAdifMode(value('mode'), value('submode'));
   const text = parseQsoTextFields(value('comment'), value('app_tx5dr_message_history'));
+  const standardContestId = value('contest_id') || undefined;
+  const parsedContestEntry = value('app_tx5dr_contest_entry');
+  const decodedContestEntry = parsedContestEntry
+    ? parseContestQsoEnvelope(parsedContestEntry)
+    : undefined;
+  const contestEntry = decodedContestEntry
+    && (!standardContestId || standardContestId === decodedContestEntry.contestId)
+    ? decodedContestEntry
+    : undefined;
   const explicitId = value('app_tx5dr_id')?.trim();
   const operator = value('operator')?.trim();
   const fallbackId = `${callsign}_${qsoDate.trim()}_${timeOn.trim()}${operator ? `_${operator}` : ''}`;
@@ -522,7 +582,8 @@ export function decodeAdifRecord(record: ScannedAdifRecord, runtimeId?: string):
     reportReceived: value('rst_rcvd') || undefined,
     messageHistory: text.messageHistory,
     comment: text.comment,
-    contestId: value('contest_id') || undefined,
+    contestId: standardContestId || contestEntry?.contestId,
+    contestEntry,
     qth: value('qth') || undefined,
     notes: value('notes') || value('note') || undefined,
   };
@@ -592,6 +653,9 @@ function formatTime(timestamp: number): string {
 
 /** Encode one canonical TX-5DR QSO record. The returned buffer always ends in EOR + LF. */
 export function encodeAdifRecord(qso: QSORecord, options: EncodeAdifRecordOptions = {}): Buffer {
+  if (qso.contestId && qso.contestEntry && qso.contestId !== qso.contestEntry.contestId) {
+    throw new TypeError('contestEntry.contestId must match contestId');
+  }
   const adifMode = toAdifMode(qso);
   const frequency = (qso.frequency / 1_000_000).toFixed(6);
   const parts: string[] = [
@@ -616,7 +680,12 @@ export function encodeAdifRecord(qso: QSORecord, options: EncodeAdifRecordOption
   };
 
   append('GRIDSQUARE', qso.grid);
-  append('CONTEST_ID', qso.contestId);
+  append('CONTEST_ID', qso.contestId ?? qso.contestEntry?.contestId);
+  if (qso.contestEntry) {
+    append('APP_TX5DR_CONTEST_ENTRY', serializeContestQsoEnvelope(qso.contestEntry));
+  } else if (options.preservedContestEntry !== undefined) {
+    parts.push(field('APP_TX5DR_CONTEST_ENTRY', options.preservedContestEntry));
+  }
   appendNumber('DXCC', qso.dxccId);
   append('COUNTRY', qso.dxccEntity);
   appendNumber('CQZ', qso.cqZone);

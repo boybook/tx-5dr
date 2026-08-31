@@ -1,13 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { QSORecord } from '@tx5dr/contracts';
 import type { LogbookBatchMutation, LogbookBatchResult } from '@tx5dr/plugin-api';
-import { createMockContext } from '@tx5dr/plugin-api/testing';
+import { createMockContext, createMockEventBus } from '@tx5dr/plugin-api/testing';
 import {
   wwDigiStrategyPlugin,
   wwDigiTestables,
 } from './index.js';
 import type { ContestQso } from './contest-log.js';
 import { parseWWDigiAdifImport } from './adif-import.js';
+import { createWWDigiContestEntry } from './contest-entry.js';
 
 function qsoRecord(id: string, startTime: number, contestId = 'WW-DIGI'): QSORecord {
   return {
@@ -53,7 +54,26 @@ function createContestContext(options: {
     options: { expectedRevision: string },
   ) => Promise<LogbookBatchResult>;
 } = {}) {
-  const queryQSOs = vi.fn(async (_filter?: unknown) => options.records ?? []);
+  const records = options.records ?? [];
+  let revision = 0;
+  const queryQSOs = vi.fn(async (_filter?: unknown) => records.map((record) => structuredClone(record)));
+  const defaultApplyQsoBatch = async (
+    mutations: readonly LogbookBatchMutation[],
+  ): Promise<LogbookBatchResult> => {
+    const outcomes = mutations.map((mutation, inputIndex) => {
+      if (mutation.type === 'add') {
+        const record = structuredClone(mutation.record);
+        records.push(record);
+        return { inputIndex, status: 'added' as const, record: structuredClone(record) };
+      }
+      const index = records.findIndex((record) => record.id === mutation.qsoId);
+      if (index < 0) throw new Error(`Unknown QSO: ${mutation.qsoId}`);
+      records[index] = { ...records[index]!, ...structuredClone(mutation.updates) };
+      return { inputIndex, status: 'updated' as const, record: structuredClone(records[index]!) };
+    });
+    revision += 1;
+    return { revision: `revision-${revision}`, outcomes };
+  };
   const ctx = createMockContext({
     permissions: ['logbook:session', 'operator:transmit-control', 'plugin:event-bus'] as const,
     callsign: 'BG5DRB',
@@ -80,12 +100,15 @@ function createContestContext(options: {
           getLogBookId: async () => options.logBookId ?? 'plugin-session-ww-digi-2026',
           awaitReady: options.awaitReady ?? (async () => {}),
           queryQSOs,
-          readQsoSnapshot: options.readQsoSnapshot ?? (async () => ({ revision: 'revision-1', records: [] })),
+          readQsoSnapshot: options.readQsoSnapshot ?? (async () => ({
+            revision: `revision-${revision}`,
+            records: records.map((record) => structuredClone(record)),
+          })),
           countQSOs: async () => 0,
           getStatistics: async () => null,
           addQSO: async (record: QSORecord) => record,
           updateQSO: async (_id: string, updates: Partial<QSORecord>) => qsoRecord('updated', 0, updates.contestId),
-          applyQsoBatch: options.applyQsoBatch ?? (async () => ({ revision: 'revision-1', outcomes: [] })),
+          applyQsoBatch: options.applyQsoBatch ?? defaultApplyQsoBatch,
           notifyUpdated: async () => {},
           destroy: async () => {},
         };
@@ -124,13 +147,39 @@ describe('WW Digi contest edition persistence', () => {
       .toMatchObject({ state: 'healthy' });
   });
 
+  it('observes the active contest edition after the configured year changes', async () => {
+    const eventBus = createMockEventBus();
+    const base = createContestContext();
+    const ctx = createMockContext({
+      permissions: ['logbook:session', 'operator:transmit-control', 'plugin:event-bus'] as const,
+      callsign: 'BG5DRB',
+      grid: 'OL32',
+      config: { ...base.ctx.config },
+      eventBus,
+      logbookSessions: base.ctx.logbook.sessions,
+    });
+    await wwDigiStrategyPlugin.onLoad!(ctx as never);
+    const initialRefreshes = ctx.ui._events.filter((event) => event.type === 'operator-projection-refresh').length;
+
+    await ctx.updateConfig({ contestYear: 2027 });
+    eventBus.publish('ww-digi.session.changed', { callsign: 'BG5DRB', contestYear: 2026 });
+    await Promise.resolve();
+    expect(ctx.ui._events.filter((event) => event.type === 'operator-projection-refresh')).toHaveLength(initialRefreshes);
+
+    eventBus.publish('ww-digi.session.changed', { callsign: 'BG5DRB', contestYear: 2027 });
+    await vi.waitFor(() => {
+      expect(ctx.ui._events.filter((event) => event.type === 'operator-projection-refresh'))
+        .toHaveLength(initialRefreshes + 1);
+    });
+  });
+
   it('refreshes the contest projection only from its independent session', async () => {
     const in2026 = qsoRecord('qso-2026', Date.UTC(2026, 7, 29, 12, 0));
     const in2025 = qsoRecord('qso-2025', Date.UTC(2025, 7, 30, 12, 0));
     const nonContest = qsoRecord('not-ww-digi', Date.UTC(2026, 7, 29, 12, 1), 'OTHER');
     const { ctx, queryQSOs } = createContestContext({ records: [in2025, in2026, nonContest] });
     ctx.store.operator.set(
-      wwDigiTestables.ledgerKey(2025),
+      wwDigiTestables.legacyLedgerKey(2025),
       [contestQso('retained-2025', Date.UTC(2025, 7, 30, 12))],
     );
 
@@ -149,7 +198,7 @@ describe('WW Digi contest edition persistence', () => {
       .toEqual(expect.arrayContaining([
         expect.objectContaining({ qsoId: 'qso-2026', source: 'ww-digi' }),
       ]));
-    expect(ctx.store.operator.get<ContestQso[]>(wwDigiTestables.ledgerKey(2025)))
+    expect(ctx.store.operator.get<ContestQso[]>(wwDigiTestables.legacyLedgerKey(2025)))
       .toEqual([expect.objectContaining({ qsoId: 'retained-2025' })]);
     expect(ctx.store.global.get<{ health?: { state?: string } }>(wwDigiTestables.sessionKey('BG5DRB', 2026))?.health)
       .toEqual(expect.objectContaining({ state: 'healthy' }));
@@ -185,7 +234,14 @@ describe('WW Digi contest edition persistence', () => {
   });
 
   it('exports only independent WW Digi session records as standard ADIF', async () => {
-    const contest = qsoRecord('contest', Date.UTC(2026, 7, 29, 12, 0));
+    const contest = {
+      ...qsoRecord('contest', Date.UTC(2026, 7, 29, 12, 0)),
+      contestEntry: createWWDigiContestEntry({
+        contestYear: 2026,
+        sentGrid: 'OL32',
+        receivedGrid: 'PM95',
+      }),
+    };
     const unrelated = { ...qsoRecord('other', Date.UTC(2026, 7, 29, 12, 1), 'OTHER'), callsign: 'K1OTHER' };
     const { ctx } = createContestContext({ records: [contest, unrelated] });
 
@@ -244,15 +300,17 @@ describe('WW Digi contest edition persistence', () => {
 
     expect(applyQsoBatch).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({ imported: 1, merged: 0, duplicates: 0 });
-    const importedId = records[0]!.id;
+    expect(records[0]!.contestEntry).toMatchObject({
+      contestId: 'WW-DIGI',
+      editionId: 'ww-digi-2026',
+      annotations: { source: 'imported', status: 'included' },
+    });
     expect(ctx.store.global.get<{ overrides?: Record<string, unknown> }>(
       wwDigiTestables.sessionKey('BG5DRB', 2026),
-    )?.overrides).toEqual(expect.objectContaining({
-      [importedId]: expect.objectContaining({ source: 'imported', status: 'included' }),
-    }));
+    )?.overrides).toEqual({});
   });
 
-  it('migrates a schema v1 session to an unconfirmed v2 session without losing overrides', async () => {
+  it('normalizes a schema v1 session to a versioned edition without losing legacy overrides', async () => {
     const record = qsoRecord('legacy-qso', Date.UTC(2026, 7, 29, 12));
     const { ctx } = createContestContext({ records: [record] });
     const key = wwDigiTestables.sessionKey('BG5DRB', 2026);
@@ -269,31 +327,129 @@ describe('WW Digi contest edition persistence', () => {
 
     await wwDigiTestables.refreshContestProjection(ctx, 2026);
     expect(ctx.store.global.get<Record<string, unknown>>(key)).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
+      contestId: 'WW-DIGI',
+      editionId: 'ww-digi-2026',
+      rulesetVersion: 'tx5dr-ww-digi-v1',
       setup: { status: 'unconfirmed' },
       overrides: { 'legacy-qso': { status: 'x-qso', operatorId: 'operator-0' } },
       operatingIndex: { workedByBand: {} },
     });
   });
 
+  it('marks a conflicting legacy sidecar for review until the envelope records operator resolution', async () => {
+    const qso = {
+      ...qsoRecord('conflicted', Date.UTC(2026, 7, 29, 12)),
+      contestEntry: createWWDigiContestEntry({
+        contestYear: 2026,
+        sentGrid: 'OL32',
+        receivedGrid: 'PM95',
+        status: 'included',
+        source: 'ww-digi',
+        operatorId: 'operator-new',
+      }),
+    };
+    const records = [qso];
+    const { ctx } = createContestContext({ records });
+    ctx.store.global.set(wwDigiTestables.sessionKey('BG5DRB', 2026), {
+      schemaVersion: 3,
+      revision: 0,
+      config: {
+        callsign: 'BG5DRB', location: 'DX', categoryBand: 'ALL', categoryPower: 'LOW',
+        categoryOperator: 'SINGLE-OP', categoryTransmitter: 'ONE', operators: [],
+      },
+      overrides: { conflicted: { status: 'x-qso', operatorId: 'operator-old' } },
+      operatorTransmitters: {}, migratedOperators: {}, health: { state: 'healthy' },
+      setup: { status: 'unconfirmed' },
+      operatingIndex: {
+        revision: 0, contestYear: 2026, callsign: 'BG5DRB', workedByBand: {}, workedFieldsByBand: {},
+      },
+    });
+
+    await expect(wwDigiTestables.readContestRecords(ctx, 2026)).resolves.toEqual([
+      expect.objectContaining({
+        qsoId: 'conflicted', status: 'review', operatorId: 'operator-new', source: 'ww-digi',
+      }),
+    ]);
+    await expect(wwDigiTestables.renderADIF(ctx, 2026))
+      .rejects.toThrow('requires review before export');
+
+    await wwDigiTestables.updateContestRecordEntry(ctx, 2026, 'conflicted', (entry) => ({
+      ...entry,
+      status: 'included',
+    }));
+
+    expect(records[0]!.contestEntry?.annotations).toMatchObject({
+      status: 'included', legacyOverrideResolved: true,
+    });
+    await expect(wwDigiTestables.readContestRecords(ctx, 2026)).resolves.toEqual([
+      expect.objectContaining({
+        qsoId: 'conflicted', status: 'included', operatorId: 'operator-new',
+      }),
+    ]);
+    expect(ctx.store.global.get<{ overrides?: Record<string, unknown> }>(
+      wwDigiTestables.sessionKey('BG5DRB', 2026),
+    )?.overrides).toEqual({ conflicted: { status: 'x-qso', operatorId: 'operator-old' } });
+    expect((await wwDigiTestables.renderADIF(ctx, 2026))).toContain('<call:6>JA1AAA');
+
+    await wwDigiTestables.updateContestRecordEntry(ctx, 2026, 'conflicted', (entry) => ({
+      ...entry,
+      status: 'included',
+      transmitterId: 1,
+    }));
+    expect(records[0]!.contestEntry?.annotations).toMatchObject({
+      status: 'included', transmitterId: 1, legacyOverrideResolved: true,
+    });
+    await expect(wwDigiTestables.readContestRecords(ctx, 2026)).resolves.toEqual([
+      expect.objectContaining({ qsoId: 'conflicted', status: 'included', transmitterId: 1 }),
+    ]);
+  });
+
+  it('updates review state inside the QSO transaction without writing a new sidecar', async () => {
+    const records = [qsoRecord('reviewed', Date.UTC(2026, 7, 29, 12))];
+    const { ctx } = createContestContext({ records });
+
+    await wwDigiTestables.updateContestRecordEntry(ctx, 2026, 'reviewed', (entry) => ({
+      ...entry,
+      status: 'x-qso',
+      transmitterId: 1,
+    }));
+
+    expect(records[0]!.contestEntry).toMatchObject({
+      editionId: 'ww-digi-2026',
+      annotations: { status: 'x-qso', transmitterId: 1 },
+    });
+    expect(ctx.store.global.get<{ overrides?: Record<string, unknown> }>(
+      wwDigiTestables.sessionKey('BG5DRB', 2026),
+    )?.overrides).toBeUndefined();
+  });
+
   it('records per-operator metadata in the shared session for the QSO year', async () => {
-    const { ctx } = createContestContext();
+    const records = [
+      qsoRecord('qso-2025', Date.UTC(2025, 7, 30, 12)),
+      qsoRecord('qso-2026', Date.UTC(2026, 7, 29, 12)),
+    ];
+    const { ctx } = createContestContext({ records });
     const hook = wwDigiStrategyPlugin.hooks?.onQSOComplete;
     expect(hook).toBeTypeOf('function');
 
-    await hook!(qsoRecord('qso-2025', Date.UTC(2025, 7, 30, 12)), ctx);
-    expect(ctx.store.global.get<{ overrides?: Record<string, unknown> }>(wwDigiTestables.sessionKey('BG5DRB', 2025))?.overrides)
-      .toEqual(expect.objectContaining({ 'qso-2025': expect.objectContaining({ operatorId: 'operator-0' }) }));
+    await hook!(records[0]!, ctx);
+    expect(records[0]!.contestEntry?.annotations).toMatchObject({
+      operatorId: 'operator-0', transmitterId: 0,
+    });
 
-    await hook!(qsoRecord('qso-2026', Date.UTC(2026, 7, 29, 12)), ctx);
-    expect(ctx.store.global.get<{ overrides?: Record<string, unknown> }>(wwDigiTestables.sessionKey('BG5DRB', 2026))?.overrides)
-      .toEqual(expect.objectContaining({ 'qso-2026': expect.objectContaining({ operatorId: 'operator-0', transmitterId: 0 }) }));
+    await hook!(records[1]!, ctx);
+    expect(records[1]!.contestEntry?.annotations).toMatchObject({
+      operatorId: 'operator-0', transmitterId: 0,
+    });
   });
 
   it('records an out-of-period completion only when the active radio is virtual', async () => {
     const record = qsoRecord('local-simulation-qso', Date.UTC(2026, 7, 28, 9, 20, 15));
-    const physical = createContestContext({ records: [record] });
-    const virtual = createContestContext({ records: [record], simulation: true });
+    const physicalRecords = [structuredClone(record)];
+    const virtualRecords = [structuredClone(record)];
+    const physical = createContestContext({ records: physicalRecords });
+    const virtual = createContestContext({ records: virtualRecords, simulation: true });
     const hook = wwDigiStrategyPlugin.hooks?.onQSOComplete;
 
     await hook!(record, physical.ctx);
@@ -302,11 +458,7 @@ describe('WW Digi contest edition persistence', () => {
     )?.overrides).toBeUndefined();
 
     await hook!(record, virtual.ctx);
-    expect(virtual.ctx.store.global.get<{ overrides?: Record<string, unknown> }>(
-      wwDigiTestables.sessionKey('BG5DRB', 2026),
-    )?.overrides).toEqual(expect.objectContaining({
-      'local-simulation-qso': expect.objectContaining({ operatorId: 'operator-0' }),
-    }));
+    expect(virtualRecords[0]!.contestEntry?.annotations).toMatchObject({ operatorId: 'operator-0' });
   });
 
   it('defaults the setting to the current UTC year with bounded input', () => {

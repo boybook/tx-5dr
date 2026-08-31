@@ -124,6 +124,21 @@ describe('AdifCodec byte scanner', () => {
     expect(source.subarray(scan.records[0]!.range.start, scan.records[0]!.range.end)).toEqual(source);
   });
 
+  it('keeps invalid UTF-8 contest envelopes opaque instead of rewriting damaged bytes', () => {
+    const source = Buffer.concat([
+      Buffer.from('<CALL:5>BG2AA<QSO_DATE:8>20260810<TIME_ON:6>010203<MODE:3>FT8<FREQ:9>14.074000<APP_TX5DR_CONTEST_ENTRY:2>'),
+      Buffer.from([0xff, 0xfe]),
+      Buffer.from('<EOR>'),
+    ]);
+
+    const scan = scanAdifBuffer(source);
+
+    expect(scan.records).toHaveLength(1);
+    expect(scan.records[0]?.syntacticallyValid).toBe(false);
+    expect(scan.records[0]?.issues.map((issue) => issue.code)).toContain('invalid-field-encoding');
+    expect(decodeAdifRecord(scan.records[0]!)).toBeUndefined();
+  });
+
   it('separates safe trailing whitespace from an incomplete final record', () => {
     const complete = '<CALL:5>BG2AA<QSO_DATE:8>20260810<TIME_ON:6>010203<MODE:3>FT8<FREQ:9>14.074000<EOR>';
     const source = Buffer.from(`${complete}\r\n\t<CALL:5>PART`);
@@ -174,6 +189,15 @@ describe('AdifCodec QSO mapping', () => {
       messageHistory: ['BG5DRB N0CALL -12'],
       comment: 'TU',
       contestId: 'WW-DIGI',
+      contestEntry: {
+        schemaVersion: 1,
+        contestId: 'WW-DIGI',
+        editionId: '2026',
+        rulesetVersion: '2026.1',
+        sent: { grid: 'PL05', note: '\u53f0\u5317<portable>' },
+        received: { grid: 'PL05', snr: '-09' },
+        annotations: { status: 'included', transmitter: 1, reviewed: false },
+      },
       grid: 'PL05AA',
       myGrid: 'PL04AA',
       myCallsign: 'BG5DRB',
@@ -217,6 +241,7 @@ describe('AdifCodec QSO mapping', () => {
       qth: source.qth,
       notes: source.notes,
       contestId: source.contestId,
+      contestEntry: source.contestEntry,
       dxccId: source.dxccId,
       dxccEntity: source.dxccEntity,
       dxccStatus: source.dxccStatus,

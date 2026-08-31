@@ -42,11 +42,48 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
 
-      - name: Update package versions
+      - name: Validate version sources
+        run: yarn check:versions
+
+      - name: Validate release surface
         env:
           VERSION: ${{ inputs.version }}
         run: |
-          echo "Setting version to $VERSION"
+          node <<'EOF'
+          const fs = require('fs');
+          const version = String(process.env.VERSION || '');
+          const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version);
+          if (!match) throw new Error(`Invalid publish version: ${version}`);
+          const packageDirs = [
+            'packages/contracts',
+            'packages/core',
+            'packages/plugin-api',
+            'packages/create-tx5dr-plugin',
+          ];
+          for (const packageDir of packageDirs) {
+            const manifest = JSON.parse(fs.readFileSync(`${packageDir}/package.json`, 'utf8'));
+            if (manifest.version !== version) {
+              throw new Error(
+                `${manifest.name} source version is ${manifest.version}; expected committed ${version}`,
+              );
+            }
+          }
+          const supportsStableContest = Number(match[1]) > 2
+            || (Number(match[1]) === 2 && Number(match[2]) >= 1);
+          const pluginApi = JSON.parse(fs.readFileSync('packages/plugin-api/package.json', 'utf8'));
+          if (pluginApi.exports?.['./contest'] && !supportsStableContest) {
+            throw new Error(
+              'The stable @tx5dr/plugin-api/contest surface requires version 2.1.0 or newer. '
+              + 'Publish 2.0.1 containment from the pre-Contest-SDK baseline.',
+            );
+          }
+          EOF
+
+      - name: Prepare registry dependency manifests
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          echo "Preparing workspace dependencies for SDK train $VERSION"
           node <<'EOF'
           const fs = require('fs');
           const path = require('path');
@@ -68,8 +105,6 @@ jobs:
           for (const packageDir of packageDirs) {
             const packageJsonPath = path.join(packageDir, 'package.json');
             const pkg = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
-            pkg.version = version;
-
             for (const field of ['dependencies', 'peerDependencies', 'optionalDependencies']) {
               if (!pkg[field]) continue;
               for (const [name, resolvedVersion] of publishedVersions.entries()) {
@@ -101,9 +136,16 @@ jobs:
           yarn workspace @tx5dr/plugin-api build
           yarn workspace create-tx5dr-plugin build
 
+      - name: Lint plugin API
+        run: yarn workspace @tx5dr/plugin-api lint
+
       - name: Run tests
         run: |
           yarn workspace @tx5dr/plugin-api test
+          yarn workspace create-tx5dr-plugin smoke:ft8-contest
+
+      - name: Verify packed plugin API exports
+        run: yarn workspace @tx5dr/plugin-api smoke:pack
 
       - name: Publish @tx5dr/contracts
         run: |

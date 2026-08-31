@@ -16,8 +16,8 @@ vi.mock('../../config/config-manager.js', () => ({
 }));
 vi.mock('../../generated/buildInfo.js', () => ({
   SERVER_BUILD_INFO: {
-    version: '2.4.6',
-    channel: 'release',
+    version: '1.0.0-nightly.202608311200+gabcdef1',
+    channel: 'nightly',
     commit: 'abcdef0123456789',
     commitShort: 'abcdef0',
   },
@@ -102,7 +102,10 @@ describe('TelemetryService', () => {
 
     expect(context.endpoint).toBe('https://telemetry.example.invalid');
     expect(context.installationId).toMatch(/^[0-9a-f-]{36}$/);
-    expect(context.app).toMatchObject({ version: '2.4.6', distribution: 'electron' });
+    expect(context.app).toMatchObject({
+      version: '1.0.0-nightly.202608311200+gabcdef1',
+      distribution: 'electron',
+    });
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -121,8 +124,8 @@ describe('TelemetryService', () => {
     const registration = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body));
     const events = JSON.parse(String(vi.mocked(fetch).mock.calls[1][1]?.body));
     expect(registration.app).toEqual({
-      version: '2.4.6',
-      build_channel: 'release',
+      version: '1.0.0-nightly.202608311200+gabcdef1',
+      build_channel: 'nightly',
       build_commit: 'abcdef0',
       distribution: 'electron',
       os_family: process.platform,

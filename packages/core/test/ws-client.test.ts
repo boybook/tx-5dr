@@ -200,7 +200,10 @@ test('suppresses business commands before server handshake completes', async () 
 test('allows authentication protocol commands before session readiness', async () => {
   const restoreWebSocket = installFakeWebSocket();
   try {
-    const client = new WSClient({ url: 'ws://example.test/ws' });
+    const client = new WSClient({
+      url: 'ws://example.test/ws',
+      clientVersion: '1.0.0-nightly.202608311200+gabcdef1',
+    });
     const connectPromise = client.connect();
     const socket = FakeWebSocket.sockets[0];
     socket.open();
@@ -218,6 +221,7 @@ test('allows authentication protocol commands before session readiness', async (
     ]);
     assert.deepEqual(messages[0].data, { jwt: 'jwt-1' });
     assert.deepEqual(messages[2].data?.enabledOperatorIds, ['op-1']);
+    assert.equal(messages[2].data?.clientVersion, '1.0.0-nightly.202608311200+gabcdef1');
 
     client.disconnect();
   } finally {

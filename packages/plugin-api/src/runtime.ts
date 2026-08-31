@@ -463,6 +463,8 @@ export interface StrategyQSOCompletionSettlement {
   status: 'committed' | 'failed';
   /** Lane copied from the accepted completion effect. */
   streamId?: string;
+  /** Detached source metadata copied from the accepted completion effect. */
+  metadata?: Record<string, unknown>;
 }
 
 /** Complete output of one speculative strategy decision. */

@@ -153,6 +153,7 @@ export interface DecisionOrchestratorDeps {
   getStrategyRuntimeGeneration: (operatorId: string) => number | undefined;
   getStrategyPluginName?: (operatorId: string) => string;
   getStrategyMaxConcurrentStreams?: (operatorId: string) => number | undefined;
+  getStrategyMaxSimultaneousSignals?: (operatorId: string) => number | undefined;
   getEffectiveOperatorMaxConcurrentStreams?: (operatorId: string) => number;
   invokeStrategyRuntime: <T>(
     operatorId: string,

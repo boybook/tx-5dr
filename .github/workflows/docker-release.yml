@@ -53,6 +53,8 @@ jobs:
           # 生成标签
           TIMESTAMP=$(date +%Y%m%d-%H%M%S)
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          COMMIT_STAMP=$(git show -s --date=format-local:%Y%m%d%H%M --format=%cd "${{ github.sha }}")
+          HOST_VERSION=$(node scripts/host-version.mjs --channel nightly --build-stamp "$COMMIT_STAMP" --commit "${{ github.sha }}")
 
           # 基础标签
           TAGS="${DOCKER_USERNAME}/${DOCKER_IMAGE_NAME}:latest"
@@ -66,6 +68,8 @@ jobs:
           echo "tags=${TAGS}" >> $GITHUB_OUTPUT
           echo "docker_username=${DOCKER_USERNAME}" >> $GITHUB_OUTPUT
           echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "host_version=${HOST_VERSION}" >> $GITHUB_OUTPUT
+          echo "build_stamp=${COMMIT_STAMP}" >> $GITHUB_OUTPUT
 
           echo "📦 Generated tags:"
           echo "${TAGS}" | tr ',' '\n'
@@ -106,13 +110,14 @@ jobs:
           build-args: |
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
             VCS_REF=${{ github.sha }}
+            BUILD_STAMP=${{ steps.tags.outputs.build_stamp }}
             TX5DR_CLUBLOG_API_KEY=${{ secrets.CLUBLOG_API_KEY }}
           labels: |
             org.opencontainers.image.title=${{ env.DOCKER_IMAGE_NAME }}
             org.opencontainers.image.description=TX-5DR Digital Radio System
             org.opencontainers.image.url=https://github.com/${{ github.repository }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.version=${{ steps.tags.outputs.short_sha }}
+            org.opencontainers.image.version=${{ steps.tags.outputs.host_version }}
             org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
             org.opencontainers.image.revision=${{ github.sha }}
 
@@ -273,7 +278,7 @@ jobs:
             --product docker \
             --channel nightly \
             --tag "nightly-docker" \
-            --version "${{ steps.tags.outputs.short_sha }}" \
+            --version "${{ steps.tags.outputs.host_version }}" \
             --commit "${{ steps.tags.outputs.short_sha }}" \
             --published-at "${{ steps.release_info.outputs.timestamp }}" \
             --base-url "${OSS_BASE_URL}" \

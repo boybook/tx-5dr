@@ -1,4 +1,9 @@
-import type { LogBookDxccSummary, QSORecord } from '@tx5dr/contracts';
+import {
+  ContestQsoEnvelopeSchema,
+  type ContestQsoEnvelope,
+  type LogBookDxccSummary,
+  type QSORecord,
+} from '@tx5dr/contracts';
 import {
   DXCC_RESOLVER_VERSION,
   type CallsignAnalysis,
@@ -44,6 +49,8 @@ const IMPORT_MERGE_FIELDS: Array<keyof QSORecord> = [
   'qth',
   'comment',
   'notes',
+  'contestId',
+  'contestEntry',
   'reportSent',
   'reportReceived',
   'submode',
@@ -90,10 +97,20 @@ function createIndex(): RecordIndex {
   };
 }
 
+function cloneContestEntry(entry: Readonly<ContestQsoEnvelope> | undefined): ContestQsoEnvelope | undefined {
+  return entry ? {
+    ...entry,
+    sent: { ...entry.sent },
+    received: { ...entry.received },
+    annotations: entry.annotations ? { ...entry.annotations } : undefined,
+  } : undefined;
+}
+
 function cloneRecord(record: Readonly<QSORecord>): QSORecord {
   return {
     ...record,
     messageHistory: [...record.messageHistory],
+    contestEntry: cloneContestEntry(record.contestEntry),
   };
 }
 
@@ -247,8 +264,16 @@ export function enrichQsoWithDxcc(qso: QSORecord): QSORecord {
 }
 
 export function normalizeQsoForPersistence(record: QSORecord): QSORecord {
+  const contestEntry = record.contestEntry
+    ? ContestQsoEnvelopeSchema.parse(record.contestEntry)
+    : undefined;
+  if (record.contestId && contestEntry && record.contestId !== contestEntry.contestId) {
+    throw new TypeError('contestEntry.contestId must match contestId');
+  }
   const textNormalized = {
     ...record,
+    contestId: record.contestId ?? contestEntry?.contestId,
+    contestEntry,
     messageHistory: normalizeMessageHistory(record.messageHistory),
   };
   return enrichQsoWithDxcc(normalizeQsoModeForStorage({
@@ -278,12 +303,22 @@ function latestTimestamp(current?: number, incoming?: number): number | undefine
 
 export function mergeImportedQso(existing: QSORecord, incoming: QSORecord): { changed: boolean; record: QSORecord } {
   let changed = false;
-  const merged: QSORecord = { ...existing };
+  const merged = cloneRecord(existing);
   for (const field of IMPORT_MERGE_FIELDS) {
     if (isMissing(merged[field]) && !isMissing(incoming[field])) {
-      merged[field] = incoming[field] as never;
+      if (field === 'contestId' && merged.contestEntry
+        && incoming.contestId !== merged.contestEntry.contestId) continue;
+      if (field === 'contestEntry' && incoming.contestEntry
+        && merged.contestId && incoming.contestEntry.contestId !== merged.contestId) continue;
+      merged[field] = (field === 'contestEntry'
+        ? cloneContestEntry(incoming.contestEntry)
+        : incoming[field]) as never;
       changed = true;
     }
+  }
+  if (!merged.contestId && merged.contestEntry) {
+    merged.contestId = merged.contestEntry.contestId;
+    changed = true;
   }
   if (merged.messageHistory.length === 0 && incoming.messageHistory.length > 0) {
     merged.messageHistory = [...incoming.messageHistory];

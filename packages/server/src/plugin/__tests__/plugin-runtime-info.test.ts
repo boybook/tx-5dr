@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildPluginRuntimeInfo, resolvePluginDistribution } from '../runtime-info.js';
+import {
+  buildPluginRuntimeInfo,
+  comparePluginApiVersions,
+  resolvePluginDistribution,
+} from '../runtime-info.js';
+import { SERVER_BUILD_INFO } from '../../generated/buildInfo.js';
 
 describe('plugin runtime info', () => {
   it('prefers electron when embedded desktop environment markers are present', () => {
@@ -33,6 +38,8 @@ describe('plugin runtime info', () => {
       env: { TX5DR_RUNTIME_FLAVOR: 'android-bridge' } as NodeJS.ProcessEnv,
       hasDockerEnvFile: true,
     })).toEqual({
+      hostVersion: SERVER_BUILD_INFO.version,
+      pluginApiVersion: SERVER_BUILD_INFO.pluginApiVersion,
       pluginDir: '/opt/tx5dr-data/plugins',
       pluginDataDir: '/opt/tx5dr-data/plugin-data',
       dataDir: '/opt/tx5dr-data',
@@ -57,6 +64,8 @@ describe('plugin runtime info', () => {
       } as NodeJS.ProcessEnv,
       hasDockerEnvFile: true,
     })).toEqual({
+      hostVersion: SERVER_BUILD_INFO.version,
+      pluginApiVersion: SERVER_BUILD_INFO.pluginApiVersion,
       pluginDir: '/opt/tx5dr-user/plugins',
       pluginDataDir: '/opt/tx5dr-user/plugin-data',
       dataDir: '/opt/tx5dr-user/data',
@@ -91,6 +100,8 @@ describe('plugin runtime info', () => {
       env: {} as NodeJS.ProcessEnv,
       hasDockerEnvFile: false,
     })).toEqual({
+      hostVersion: SERVER_BUILD_INFO.version,
+      pluginApiVersion: SERVER_BUILD_INFO.pluginApiVersion,
       pluginDir: '/app/data/plugins',
       pluginDataDir: '/app/data/plugin-data',
       dataDir: '/app/data',
@@ -100,5 +111,14 @@ describe('plugin runtime info', () => {
       distribution: 'docker',
       hostPluginDirHint: './data/plugins',
     });
+  });
+
+  it('compares release, nightly prerelease, and build metadata using semver precedence', () => {
+    expect(comparePluginApiVersions('2.1.0', '2.1.0')).toBe(0);
+    expect(comparePluginApiVersions('2.1.1', '2.1.0')).toBe(1);
+    expect(comparePluginApiVersions('2.1.0-nightly.2', '2.1.0')).toBe(-1);
+    expect(comparePluginApiVersions('2.1.0-nightly.10', '2.1.0-nightly.2')).toBe(1);
+    expect(comparePluginApiVersions('2.1.0+abcdef', '2.1.0+123456')).toBe(0);
+    expect(comparePluginApiVersions('development', '2.1.0')).toBeNull();
   });
 });

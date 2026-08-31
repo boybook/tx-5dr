@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import type {
+  ContestQsoEnvelope,
   LogBookDxccSummary,
   LogBookImportResult,
   LogbookBackupStatus,
@@ -118,7 +120,22 @@ function initialHealth(): LogbookHealth {
 }
 
 function cloneRecord(record: Readonly<QSORecord>): QSORecord {
-  return { ...record, messageHistory: [...record.messageHistory] };
+  return {
+    ...record,
+    messageHistory: [...record.messageHistory],
+    contestEntry: cloneContestEntry(record.contestEntry),
+  };
+}
+
+function cloneContestEntry(
+  entry: Readonly<ContestQsoEnvelope> | undefined,
+): ContestQsoEnvelope | undefined {
+  return entry ? {
+    ...entry,
+    sent: { ...entry.sent },
+    received: { ...entry.received },
+    annotations: entry.annotations ? { ...entry.annotations } : undefined,
+  } : undefined;
 }
 
 function cloneHealth(health: LogbookHealth): LogbookHealth {
@@ -135,13 +152,7 @@ function qsoRecordsEqual(left: Readonly<QSORecord>, right: Readonly<QSORecord>):
     if (key === 'dxccResolvedAt') continue;
     const leftValue = left[key];
     const rightValue = right[key];
-    if (Array.isArray(leftValue) || Array.isArray(rightValue)) {
-      if (!Array.isArray(leftValue) || !Array.isArray(rightValue)) return false;
-      if (leftValue.length !== rightValue.length) return false;
-      if (leftValue.some((value, index) => value !== rightValue[index])) return false;
-    } else if (leftValue !== rightValue) {
-      return false;
-    }
+    if (!isDeepStrictEqual(leftValue, rightValue)) return false;
   }
   return true;
 }
@@ -368,6 +379,9 @@ export class ADIFLogProvider implements ILogProvider {
               messageHistory: mutation.updates.messageHistory
                 ? [...mutation.updates.messageHistory]
                 : undefined,
+              ...('contestEntry' in mutation.updates ? {
+                contestEntry: cloneContestEntry(mutation.updates.contestEntry),
+              } : {}),
             },
           }
     ));
@@ -594,7 +608,10 @@ export class ADIFLogProvider implements ILogProvider {
             continue;
           }
         }
-        chunks.push(encodeAdifRecord(qso, { fallbackMyGrid: exportOptions?.fallbackGrid }));
+        chunks.push(encodeAdifRecord(qso, {
+          fallbackMyGrid: exportOptions?.fallbackGrid,
+          preservedContestEntry: segment?.unparsedContestEntry,
+        }));
       }
       return Buffer.concat(chunks).toString('utf8');
     });

@@ -36,8 +36,8 @@ export function useBuildInfo(): BuildInfo | null {
 }
 
 /**
- * Whether the build info represents an actual packaged build (CI overwrites
- * the generated buildInfo.ts; dev runs leave the placeholder "development").
+ * Whether the canonical build info represents an actual packaged build (dev
+ * runs leave the placeholder "development").
  */
 export function isPackagedBuild(info: BuildInfo | null): boolean {
   return !!info && info.commitShort !== 'development' && info.commit !== 'development';

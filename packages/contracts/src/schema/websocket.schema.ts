@@ -2256,6 +2256,7 @@ export interface DigitalRadioEngineEvents {
       | { kind: 'plugin-session'; sessionId: string }
       | { kind: 'plugin-session-key'; sessionKey: string };
     sourcePluginName?: string;
+    metadata?: Record<string, unknown>;
     retryAttemptId?: string;
     resolve?: (record: z.infer<typeof QSORecordSchema>) => void;
     reject?: (error: unknown) => void;

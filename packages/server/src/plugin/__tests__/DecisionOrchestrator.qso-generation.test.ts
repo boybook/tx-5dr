@@ -59,6 +59,27 @@ describe('DecisionOrchestrator QSO runtime identity', () => {
     expect(orchestrator.readCurrentTransmissions('op1')).toEqual([]);
   });
 
+  it('enforces the contest simultaneous-signal cap independently of active QSO lanes', () => {
+    const runtime = {
+      getTransmissions: () => [
+        { streamId: 'stream-1', text: 'JA1AAA BG5DRB OL32', audioFrequencyHz: 1_200 },
+        { streamId: 'stream-2', text: 'JA2BBB BG5DRB OL32', audioFrequencyHz: 1_500 },
+      ],
+    };
+    const orchestrator = new DecisionOrchestrator({
+      getOperatorById: () => ({ config: { frequency: 1_500, maxConcurrentStreams: 5 } }),
+      getStrategyMaxConcurrentStreams: () => 2,
+      getStrategyMaxSimultaneousSignals: () => 1,
+      invokeStrategyRuntimeSync: (
+        _operatorId: string,
+        _operation: string,
+        callback: (value: typeof runtime) => unknown,
+      ) => callback(runtime),
+    } as any);
+
+    expect(orchestrator.readCurrentTransmissions('op1')).toEqual([]);
+  });
+
   it('does not settle a completion into a replacement runtime with the same lifecycle epoch', async () => {
     const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
     const invokeStrategyRuntimeSync = vi.fn();
@@ -120,12 +141,28 @@ describe('DecisionOrchestrator QSO runtime identity', () => {
         lifecycleEpoch: 1,
         streamId: 'lane-1',
         persistencePolicy: 'preserve-distinct',
-        record: qsoRecord('qso-1', 'JA1AAA'),
+        metadata: {
+          authorizationId: 'auth-1',
+          evidence: { finalAcknowledgement: 'RR73' },
+        },
+        record: {
+          ...qsoRecord('qso-1', 'JA1AAA'),
+          contestId: 'WW-DIGI',
+          contestEntry: {
+            schemaVersion: 1,
+            contestId: 'WW-DIGI',
+            editionId: '2026',
+            rulesetVersion: '2026.1',
+            sent: { grid: 'PL05' },
+            received: { grid: 'PM96' },
+          },
+        },
       },
       {
         lifecycleEpoch: 1,
         streamId: 'lane-2',
         persistencePolicy: 'preserve-distinct',
+        metadata: { authorizationId: 'auth-2' },
         record: qsoRecord('qso-2', 'K1BBB'),
       },
     ]);
@@ -134,8 +171,17 @@ describe('DecisionOrchestrator QSO runtime identity', () => {
     expect(requests[0]).toMatchObject({
       streamId: 'lane-1',
       persistencePolicy: 'preserve-distinct',
+      metadata: {
+        authorizationId: 'auth-1',
+        evidence: { finalAcknowledgement: 'RR73' },
+      },
+      qsoRecord: expect.objectContaining({
+        contestEntry: expect.objectContaining({ received: { grid: 'PM96' } }),
+      }),
       qsoLifecycleId: 'op1:runtime:10:stream:lane-1:qso:1:qso-1',
     });
+    (requests[0]!.metadata!.evidence as { finalAcknowledgement: string })
+      .finalAcknowledgement = 'MUTATED';
     requests[0]!.reject?.(new Error('disk full'));
 
     await vi.waitFor(() => expect(requests).toHaveLength(2));
@@ -152,6 +198,10 @@ describe('DecisionOrchestrator QSO runtime identity', () => {
       recordId: 'qso-1',
       status: 'failed',
       streamId: 'lane-1',
+      metadata: {
+        authorizationId: 'auth-1',
+        evidence: { finalAcknowledgement: 'RR73' },
+      },
     });
     expect(settleQSOCompletion).toHaveBeenNthCalledWith(2, {
       lifecycleEpoch: 1,
@@ -159,6 +209,7 @@ describe('DecisionOrchestrator QSO runtime identity', () => {
       persistedRecordId: 'persisted-2',
       status: 'committed',
       streamId: 'lane-2',
+      metadata: { authorizationId: 'auth-2' },
     });
   });
 
@@ -213,5 +264,56 @@ describe('DecisionOrchestrator QSO runtime identity', () => {
       { operatorId: 'op1', streamId: 'lane-1', lifecycleEpoch: 4, runtimeGeneration: 12 },
       { operatorId: 'op1', streamId: 'lane-2', lifecycleEpoch: 7, runtimeGeneration: 12 },
     ]);
+  });
+
+  it('defers session effects for action revalidation but preserves ordinary decisions', async () => {
+    const sessionEffect = {
+      operation: 'destroy' as const,
+      sessionKey: 'practice',
+    };
+    const runtime = {
+      checkpoint: () => ({}),
+      restore: vi.fn(),
+      decide: vi.fn(() => ({
+        transmission: null,
+        snapshot: { currentState: 'active' },
+        logbookSessionEffects: [sessionEffect],
+      })),
+    };
+    const operator = {
+      isTransmitting: true,
+      notifyStateChanged: vi.fn(),
+    };
+    const token = { operatorId: 'op1', epoch: 9, source: 'manual', priority: 100 } as const;
+    const signal = new AbortController().signal;
+    const orchestrator = new DecisionOrchestrator({
+      eventEmitter: new EventEmitter<DigitalRadioEngineEvents>(),
+      getOperatorById: () => operator,
+      getStrategyRuntime: () => runtime,
+      getStrategyRuntimeGeneration: () => 12,
+      invokeStrategyRuntimeSync: (
+        _operatorId: string,
+        _operation: string,
+        callback: (value: typeof runtime) => unknown,
+      ) => callback(runtime),
+      invokeStrategyRuntime: async (
+        _operatorId: string,
+        _operation: string,
+        callback: (value: typeof runtime) => unknown,
+      ) => callback(runtime),
+      intentCoordinator: { isCurrent: () => true, ownsExecution: () => true },
+    } as any);
+    const apply = vi.spyOn(orchestrator as any, 'applyStrategyLogbookSessionEffects')
+      .mockResolvedValue(undefined);
+
+    const deferred = await orchestrator.revalidateStrategyExecutionInLane(
+      'op1', token, signal, { deferEffects: true },
+    );
+    expect(deferred?.logbookSessionEffects).toEqual([sessionEffect]);
+    expect(apply).not.toHaveBeenCalled();
+
+    await orchestrator.revalidateStrategyExecutionInLane('op1', token, signal);
+    expect(apply).toHaveBeenCalledOnce();
+    expect(apply).toHaveBeenCalledWith('op1', [sessionEffect]);
   });
 });

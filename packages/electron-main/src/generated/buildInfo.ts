@@ -7,11 +7,16 @@ export interface BuildInfo {
   buildTimestamp: string;
 }
 
-export const BUILD_INFO: BuildInfo = {
-  channel: 'release',
-  version: '1.0.0',
-  commit: 'development',
-  commitShort: 'development',
-  tag: 'development',
-  buildTimestamp: '1970-01-01T00:00:00.000Z',
-};
+// Electron Main is CommonJS; runtime require preserves the package export
+// boundary without creating a second generated build identity.
+const canonicalBuildInfo = require('@tx5dr/server/build-info.json') as Omit<BuildInfo, 'tag'>;
+const hostBuildInfo = canonicalBuildInfo;
+
+export const BUILD_INFO: BuildInfo = Object.freeze({
+  channel: hostBuildInfo.channel,
+  version: hostBuildInfo.version,
+  commit: hostBuildInfo.commit,
+  commitShort: hostBuildInfo.commitShort,
+  tag: hostBuildInfo.channel === 'nightly' ? 'nightly-app' : hostBuildInfo.version,
+  buildTimestamp: hostBuildInfo.buildTimestamp,
+});

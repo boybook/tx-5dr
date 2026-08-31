@@ -49,6 +49,72 @@ describe('ADIF QSO mode projection', () => {
     expect(adif).toContain('<contest_id:7>WW-DIGI');
     expect(parseADIFRecord(adif, 'test')?.contestId).toBe('WW-DIGI');
   });
+
+  it('round-trips the atomic contest envelope with Unicode exchange data', () => {
+    const contestEntry = {
+      schemaVersion: 1 as const,
+      contestId: 'FT-CHALLENGE',
+      editionId: '2026-weekend-1',
+      rulesetVersion: '2026.1',
+      sent: { grid: 'PL05', operatorNote: '台北<portable>' },
+      received: { grid: 'PM96', snr: '-12' },
+      annotations: { status: 'included', transmitter: 1, reviewed: false },
+    };
+    const adif = convertQSOToADIF(createQso({
+      contestId: contestEntry.contestId,
+      contestEntry,
+    }));
+
+    expect(adif).toContain('<contest_id:12>FT-CHALLENGE');
+    expect(adif).toMatch(/<app_tx5dr_contest_entry:\d+>\{"schemaVersion":1/);
+    expect(parseADIFRecord(adif, 'test')).toMatchObject({
+      contestId: contestEntry.contestId,
+      contestEntry,
+    });
+  });
+
+  it('parses external Unicode contest envelopes using ADIF byte lengths', () => {
+    const contestEntry = {
+      schemaVersion: 1 as const,
+      contestId: 'FT-CHALLENGE',
+      editionId: '2026-weekend-1',
+      rulesetVersion: '2026.1',
+      sent: { grid: 'PL05', operatorNote: '台北' },
+      received: { grid: 'PM96', snr: '-12' },
+    };
+    const rawEnvelope = JSON.stringify(contestEntry);
+    const adif = '<CALL:6>N0CALL<QSO_DATE:8>20260417<TIME_ON:6>120000<MODE:3>FT8<FREQ:9>14.074000'
+      + '<CONTEST_ID:12>FT-CHALLENGE'
+      + `<APP_TX5DR_CONTEST_ENTRY:${Buffer.byteLength(rawEnvelope)}>${rawEnvelope}<EOR>`;
+
+    expect(parseADIFRecord(adif, 'test')).toMatchObject({ contestEntry });
+  });
+
+  it('round-trips Unicode QTH and notes with UTF-8 byte lengths', () => {
+    const adif = convertQSOToADIF(createQso({ qth: '台北', notes: '測試' }));
+
+    expect(adif).toContain('<qth:6>台北');
+    expect(adif).toContain('<notes:6>測試');
+    expect(parseADIFRecord(adif, 'test')).toMatchObject({ qth: '台北', notes: '測試' });
+  });
+
+  it('does not attach a private contest envelope that conflicts with CONTEST_ID', () => {
+    const encoded = convertQSOToADIF(createQso({
+      contestId: 'FT-CHALLENGE',
+      contestEntry: {
+        schemaVersion: 1,
+        contestId: 'FT-CHALLENGE',
+        editionId: '2026-weekend-1',
+        rulesetVersion: '2026.1',
+        sent: {},
+        received: {},
+      },
+    })).replace('FT-CHALLENGE', 'WW-DIGI     ');
+
+    const parsed = parseADIFRecord(encoded, 'test');
+    expect(parsed?.contestId).toBe('WW-DIGI     ');
+    expect(parsed?.contestEntry).toBeUndefined();
+  });
 });
 
 describe('ADIF QSO comments', () => {

@@ -46,10 +46,14 @@
       "outputs": []
     },
     "test": {
+      "dependsOn": [
+        "^build"
+      ],
       "outputs": []
     }
   },
   "globalDependencies": [
-    "packages/shared-config/**"
+    "packages/shared-config/**",
+    "packages/server/src/generated/buildInfo.json"
   ]
 }

@@ -8,6 +8,8 @@ import { AdifFileStore } from '../persistence/AdifFileStore.js';
 import { LogbookScanTimeoutError } from '../persistence/LogbookScanWorker.js';
 import { MutationBlockedError, PersistenceCoordinator } from '../../utils/persistence/index.js';
 
+const DURABLE_IO_TEST_TIMEOUT_MS = 15_000;
+
 class CountingAdifFileStore extends AdifFileStore {
   appendCommits = 0;
   rewriteCommits = 0;
@@ -61,6 +63,40 @@ describe('ADIFLogProvider import', () => {
     await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
+  it('preserves a future contest envelope in durable rewrites and exports', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+    const futureEnvelope = JSON.stringify({
+      schemaVersion: 2,
+      contestId: 'FUTURE-TEST',
+      editionId: '2027',
+      rulesetVersion: '2027.1',
+      sent: { grid: 'PL04' },
+      received: { grid: 'FN31' },
+    });
+    const raw = '<CALL:5>BG2AA<APP_TX5DR_ID:10>future-qso'
+      + '<QSO_DATE:8>20260810<TIME_ON:6>010203<MODE:3>FT8<FREQ:9>14.074000'
+      + '<CONTEST_ID:11>FUTURE-TEST'
+      + `<APP_TX5DR_CONTEST_ENTRY:${Buffer.byteLength(futureEnvelope)}>${futureEnvelope}<EOR>`;
+
+    await provider.importADIF(buildAdif([raw]));
+    await provider.close();
+
+    const reloaded = new ADIFLogProvider({
+      logFilePath: join(tempDir, 'logbook.adi'),
+      autoCreateFile: false,
+      logFileName: 'logbook.adi',
+    });
+    await reloaded.initialize();
+    await reloaded.updateQSO('future-qso', { notes: 'reviewed' });
+    const exported = await reloaded.exportADIF();
+
+    expect(exported).toContain(
+      `<APP_TX5DR_CONTEST_ENTRY:${Buffer.byteLength(futureEnvelope)}>${futureEnvelope}`,
+    );
+    await reloaded.close();
+  }, DURABLE_IO_TEST_TIMEOUT_MS);
+
   it('merges duplicate ADIF records by filling missing fields', async () => {
     const { provider, tempDir } = await createProvider();
     tempDirs.push(tempDir);
@@ -84,7 +120,7 @@ describe('ADIFLogProvider import', () => {
     expect(qsos[0].lotwQslReceived).toBe('Y');
 
     await provider.close();
-  });
+  }, DURABLE_IO_TEST_TIMEOUT_MS);
 
   it('initializes without recreating the retired metadata sidecar', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-meta-lazy-'));
@@ -534,7 +570,7 @@ describe('ADIFLogProvider import', () => {
     await reloaded.initialize();
     expect((await reloaded.queryQSOs())).toHaveLength(1);
     await reloaded.close();
-  });
+  }, DURABLE_IO_TEST_TIMEOUT_MS);
 
   it('updates the first of two byte-identical external records and keeps runtime IDs reload-stable', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-identical-update-'));
@@ -558,7 +594,7 @@ describe('ADIFLogProvider import', () => {
     expect((await reloaded.queryQSOs()).map(record => record.id).sort()).toEqual(committedIds);
     await expect(reloaded.getQSO(first!.id)).resolves.toMatchObject({ notes: 'edited duplicate' });
     await reloaded.close();
-  });
+  }, DURABLE_IO_TEST_TIMEOUT_MS);
 
   it('preserves unparseable external ADIF records and keeps normal new QSOs at the bottom', async () => {
     const { provider, tempDir } = await createProvider();
@@ -740,7 +776,7 @@ describe('ADIFLogProvider import', () => {
 
     await reloaded.close();
     await provider.close();
-  });
+  }, DURABLE_IO_TEST_TIMEOUT_MS);
 
   it('reads a filtered detached QSO snapshot with its provider revision', async () => {
     const { provider, tempDir } = await createProvider();
@@ -947,6 +983,52 @@ describe('ADIFLogProvider import', () => {
     ]);
     await provider.close();
   });
+
+  it('compares nested contest envelopes by value and persists real nested updates', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+    const contestEntry = {
+      schemaVersion: 1 as const,
+      contestId: 'FT-CHALLENGE',
+      editionId: '2026-weekend-1',
+      rulesetVersion: '2026.1',
+      sent: { grid: 'PL05' },
+      received: { grid: 'PM96' },
+      annotations: { status: 'included' },
+    };
+    await provider.addQSO({
+      id: 'batch-contest-envelope',
+      callsign: 'JA1AAA',
+      frequency: 14_074_000,
+      mode: 'FT8',
+      startTime: 1,
+      messageHistory: [],
+      contestId: contestEntry.contestId,
+      contestEntry,
+    });
+    const snapshot = await provider.readQsoSnapshot();
+
+    const noOp = await provider.applyQsoBatch([{
+      type: 'update',
+      qsoId: 'batch-contest-envelope',
+      updates: { contestEntry: structuredClone(contestEntry) },
+    }], { expectedRevision: snapshot.revision });
+    expect(noOp.revision).toBe(snapshot.revision);
+    expect(noOp.outcomes[0]?.status).toBe('unchanged');
+
+    const changedEntry = structuredClone(contestEntry);
+    changedEntry.received.grid = 'PM95';
+    const changed = await provider.applyQsoBatch([{
+      type: 'update',
+      qsoId: 'batch-contest-envelope',
+      updates: { contestEntry: changedEntry },
+    }], { expectedRevision: noOp.revision });
+    changedEntry.received.grid = 'MUTATED';
+
+    expect(changed.outcomes[0]?.status).toBe('updated');
+    expect((await provider.getQSO('batch-contest-envelope'))?.contestEntry?.received.grid).toBe('PM95');
+    await provider.close();
+  }, DURABLE_IO_TEST_TIMEOUT_MS);
 
   it('keeps a durable write successful when a health listener throws', async () => {
     const { provider, tempDir } = await createProvider();

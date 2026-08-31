@@ -836,10 +836,14 @@ export interface UIBridge {
    * `bridge.invoke()` SDK method. The host routes incoming invoke requests to
    * the handler and sends the return value back to the iframe.
    *
-   * Only one handler can be registered per plugin instance. Calling this method
-   * again replaces the previous handler.
+   * A registration with `pageIds` only handles those pages and composes with
+   * other page-scoped registrations. Omitting `pageIds` preserves the legacy
+   * fallback behavior; a later fallback registration replaces the previous one.
    */
-  registerPageHandler(handler: PluginUIHandler): void;
+  registerPageHandler(
+    handler: PluginUIHandler,
+    registration?: PluginUIHandlerRegistration,
+  ): void;
 
   /**
    * Pushes a JSON-compatible data snapshot to the specific page session.
@@ -894,6 +898,12 @@ export interface PluginUIHandler {
     data: unknown,
     requestContext: PluginUIRequestContext,
   ): Promise<unknown>;
+}
+
+/** Optional routing scope for one iframe page handler registration. */
+export interface PluginUIHandlerRegistration {
+  /** Page ids owned by this handler. An explicitly empty list is invalid. */
+  pageIds?: readonly string[];
 }
 
 /** Host-authenticated user identity attached to an iframe invoke request. */

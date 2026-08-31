@@ -48,6 +48,7 @@ import type { PluginEventBusOwner } from './PluginEventBusHost.js';
 import { createLogger } from '../utils/logger.js';
 import type { LoadedPlugin, PluginManagerDeps } from './types.js';
 import { snapshotPluginData } from './plugin-data-boundary.js';
+import { SERVER_BUILD_INFO } from '../generated/buildInfo.js';
 
 type HostHamlibModule = {
   Rotator: HamlibHostDependency['Rotator'];
@@ -184,6 +185,7 @@ export class PluginContextFactory {
     );
 
     const baseContext: PluginContextBase = {
+      pluginApiVersion: SERVER_BUILD_INFO.pluginApiVersion,
       get config() {
         return getPluginSettings();
       },

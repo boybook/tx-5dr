@@ -14,7 +14,11 @@ import {
 import type { PluginQuickSetting } from '@tx5dr/plugin-api';
 import { getCallsignInfo, getStandardDigitalFrequencyMatch } from '@tx5dr/core';
 import { ContestSessionNotifier, ContestSessionRepository } from '@tx5dr/plugin-api/toolkit';
-import { WWDigiStrategyRuntime, type WWDigiRuntimeConfig } from './WWDigiStrategyRuntime.js';
+import {
+  WWDigiStrategyRuntime,
+  type WWDigiPracticeOperatingIndex,
+  type WWDigiRuntimeConfig,
+} from './WWDigiStrategyRuntime.js';
 import {
   generateWWDigiCabrillo,
   isWithinWWDigiContestPeriod,
@@ -39,6 +43,14 @@ import {
   type WWDigiParsedImport,
 } from './adif-import.js';
 import { summarizeWWDigiScore } from './score.js';
+import {
+  createWWDigiContestEntry,
+  readWWDigiContestEntry,
+  wwDigiEditionId,
+  wwDigiRulesetVersion,
+  WW_DIGI_CONTEST_ID,
+  type WWDigiContestEntryView,
+} from './contest-entry.js';
 
 export const BUILTIN_WW_DIGI_PLUGIN_NAME = 'ww-digi';
 const DEFAULT_CONTEST_YEAR = new Date().getUTCFullYear();
@@ -52,8 +64,11 @@ interface ContestQsoOverride {
 }
 
 interface WWDigiContestSession {
-  schemaVersion: 2;
+  schemaVersion: 3;
   revision: number;
+  contestId: typeof WW_DIGI_CONTEST_ID;
+  editionId: string;
+  rulesetVersion: ReturnType<typeof wwDigiRulesetVersion>;
   config: ContestConfig;
   overrides: Record<string, ContestQsoOverride>;
   operatorTransmitters: Record<string, 0 | 1>;
@@ -67,8 +82,6 @@ const SESSION_CHANGED_TOPIC = 'ww-digi.session.changed';
 const RUNTIME_LOGBOOK_ID_PREFIX = 'contest-logbook-id:';
 
 const practiceRuntimes = new Map<string, WWDigiStrategyRuntime>();
-const practiceOperatingIndexes = new Map<string, ContestOperatingIndex>();
-const practiceQsoIds = new Map<string, Set<string>>();
 const ADIF_IMPORT_PREVIEW_TTL_MS = 15 * 60_000;
 
 interface PendingAdifImport {
@@ -149,11 +162,11 @@ function configuredContestYear(value: unknown): number {
   return resolveWWDigiContestPeriod(numeric).contestYear;
 }
 
-function ledgerKey(contestYear: number): string {
+function legacyLedgerKey(contestYear: number): string {
   return `contestQsos:${contestYear}`;
 }
 
-function healthKey(contestYear: number): string {
+function legacyHealthKey(contestYear: number): string {
   return `ledgerHealth:${contestYear}`;
 }
 
@@ -163,8 +176,11 @@ function sessionKey(callsign: string, contestYear: number): string {
 
 function createSession(ctx: WWDigiIdentityContext, _contestYear: number): WWDigiContestSession {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     revision: 0,
+    contestId: WW_DIGI_CONTEST_ID,
+    editionId: wwDigiEditionId(_contestYear),
+    rulesetVersion: wwDigiRulesetVersion(_contestYear),
     config: seedContestConfig(ctx),
     overrides: {},
     operatorTransmitters: {},
@@ -184,10 +200,14 @@ function createSession(ctx: WWDigiIdentityContext, _contestYear: number): WWDigi
 function normalizeSession(
   ctx: WWDigiIdentityContext,
   contestYear: number,
-  stored: Partial<WWDigiContestSession> & { schemaVersion?: number; revision?: number },
+  stored: Omit<Partial<WWDigiContestSession>, 'schemaVersion'> & {
+    schemaVersion?: number;
+    revision?: number;
+  },
 ): WWDigiContestSession {
   const created = createSession(ctx, contestYear);
-  const setup = stored.schemaVersion === 2 && stored.setup?.status === 'confirmed'
+  const setup = (stored.schemaVersion === 2 || stored.schemaVersion === 3)
+      && stored.setup?.status === 'confirmed'
     ? { ...stored.setup }
     : { status: 'unconfirmed' as const };
   const workedByBand = Object.fromEntries(Object.entries(stored.operatingIndex?.workedByBand ?? {})
@@ -203,8 +223,11 @@ function normalizeSession(
     operatorTransmitters: stored.operatorTransmitters ?? {},
     migratedOperators: stored.migratedOperators ?? {},
     health: stored.health ?? created.health,
-    schemaVersion: 2,
+    schemaVersion: 3,
     revision: stored.revision ?? 0,
+    contestId: WW_DIGI_CONTEST_ID,
+    editionId: wwDigiEditionId(contestYear),
+    rulesetVersion: wwDigiRulesetVersion(contestYear),
     setup,
     operatingIndex: {
       revision: stored.operatingIndex?.revision ?? 0,
@@ -239,6 +262,8 @@ function sessionFingerprint(ctx: WWDigiIdentityContext, contestYear: number, con
   return JSON.stringify({
     callsign: ctx.operator.callsign.trim().toUpperCase(),
     contestYear,
+    editionId: wwDigiEditionId(contestYear),
+    rulesetVersion: wwDigiRulesetVersion(contestYear),
     grid: ctx.operator.grid.trim().toUpperCase().slice(0, 4),
     location: config.location.trim().toUpperCase(),
     categoryBand: config.categoryBand,
@@ -329,22 +354,13 @@ function modeOf(record: QSORecord): 'FT4' | 'FT8' | null {
   return null;
 }
 
-function readLedger(ctx: WWDigiContext, contestYear: number): ContestQso[] {
-  const value = ctx.store.operator.get<unknown>(ledgerKey(contestYear), []);
-  return Array.isArray(value)
-    ? (value as ContestQso[]).filter((record) => (
-      ctx.radio.isSimulation || isWithinWWDigiContestPeriod(record.startTime, contestYear)
-    ))
-    : [];
-}
-
-function readLedgerHealth(ctx: WWDigiContext, contestYear: number): ContestLedgerHealth {
-  const value = ctx.store.operator.get<unknown>(healthKey(contestYear));
-  if (!value || typeof value !== 'object' || !('state' in value)) return { state: 'unknown' };
-  const state = (value as { state?: unknown }).state;
-  return state === 'healthy' || state === 'degraded' || state === 'unknown'
-    ? value as ContestLedgerHealth
-    : { state: 'unknown' };
+function readWWDigiContestEntryForYear(
+  record: Pick<QSORecord, 'contestId' | 'contestEntry'>,
+  contestYear: number,
+): WWDigiContestEntryView | undefined {
+  if (record.contestEntry?.editionId !== wwDigiEditionId(contestYear)
+      || record.contestEntry.rulesetVersion !== wwDigiRulesetVersion(contestYear)) return undefined;
+  return readWWDigiContestEntry(record);
 }
 
 function toContestQso(
@@ -356,25 +372,59 @@ function toContestQso(
   if (!includeOutsideContestPeriod && !isWithinWWDigiContestPeriod(record.startTime, contestYear)) return null;
   const band = resolveWWDigiBand(record.frequency);
   const mode = modeOf(record);
+  const contestEntry = readWWDigiContestEntryForYear(record, contestYear);
+  const contestIdentityConflict = record.contestEntry !== undefined && contestEntry === undefined;
   const myCallsign = record.myCallsign?.trim().toUpperCase();
-  const sentGrid = record.myGrid?.trim().toUpperCase().slice(0, 4);
+  const sentGrid = contestEntry?.sentGrid ?? record.myGrid?.trim().toUpperCase().slice(0, 4);
   if (!band || !mode || !myCallsign || !sentGrid) return null;
   return {
     qsoId: record.id,
     callsign: record.callsign,
     myCallsign,
     sentGrid,
-    receivedGrid: record.grid?.trim().toUpperCase().slice(0, 4),
+    receivedGrid: contestEntry?.receivedGrid ?? record.grid?.trim().toUpperCase().slice(0, 4),
     frequencyHz: Math.round(record.frequency),
     band,
     mode,
     startTime: record.startTime,
-    status: existing?.status ?? 'included',
-    streamId: existing?.streamId,
-    authorizationId: existing?.authorizationId,
-    operatorId: existing?.operatorId,
-    transmitterId: existing?.transmitterId,
-    source: existing?.source ?? (record.contestId?.toUpperCase() === 'WW-DIGI' ? 'ww-digi' : 'reconciled'),
+    status: contestEntry?.status ?? existing?.status
+      ?? (contestIdentityConflict || !record.grid ? 'review' : 'included'),
+    streamId: contestEntry?.streamId ?? existing?.streamId,
+    authorizationId: contestEntry?.authorizationId ?? existing?.authorizationId,
+    operatorId: contestEntry?.operatorId ?? existing?.operatorId,
+    transmitterId: contestEntry?.transmitterId ?? existing?.transmitterId,
+    source: contestEntry?.source ?? existing?.source
+      ?? (record.contestId?.toUpperCase() === WW_DIGI_CONTEST_ID ? 'ww-digi' : 'reconciled'),
+  };
+}
+
+function hasLegacyOverrideConflict(
+  envelope: WWDigiContestEntryView,
+  override: ContestQsoOverride,
+): boolean {
+  return (override.status !== undefined && envelope.status !== undefined && override.status !== envelope.status)
+    || (override.operatorId !== undefined && envelope.operatorId !== undefined && override.operatorId !== envelope.operatorId)
+    || (override.transmitterId !== undefined && envelope.transmitterId !== undefined
+      && override.transmitterId !== envelope.transmitterId)
+    || (override.source !== undefined && envelope.source !== undefined && override.source !== envelope.source);
+}
+
+function mergeLegacyOverride(
+  record: QSORecord,
+  qso: ContestQso,
+  override: ContestQsoOverride | undefined,
+  contestYear: number,
+): ContestQso {
+  if (!override) return qso;
+  const envelope = readWWDigiContestEntryForYear(record, contestYear);
+  if (!envelope) return { ...qso, ...override };
+  if (envelope.legacyOverrideResolved) return qso;
+  return {
+    ...qso,
+    status: hasLegacyOverrideConflict(envelope, override) ? 'review' : qso.status,
+    operatorId: qso.operatorId ?? override.operatorId,
+    transmitterId: qso.transmitterId ?? override.transmitterId,
+    source: qso.source ?? override.source,
   };
 }
 
@@ -414,8 +464,7 @@ async function readContestRecords(ctx: WWDigiContext, contestYear: number): Prom
       if (record.contestId?.toUpperCase() !== 'WW-DIGI') continue;
       const qso = toContestQso(record, contestYear, undefined, ctx.radio.isSimulation);
       if (!qso || qso.myCallsign !== ctx.operator.callsign.trim().toUpperCase()) continue;
-      const override = session.overrides[qso.qsoId];
-      const merged = { ...qso, ...override };
+      const merged = mergeLegacyOverride(record, qso, session.overrides[qso.qsoId], contestYear);
       projected.push({
         ...merged,
         status: session.config.categoryTransmitter === 'TWO' && merged.transmitterId === undefined && merged.status !== 'x-qso'
@@ -437,10 +486,28 @@ async function renderADIF(ctx: WWDigiContext, contestYear: number): Promise<stri
       timeRange: { start: period.startTime, end: period.endTime - 1 },
     } : {}),
   });
-  return generateADIFFile(records.filter((record) => (
+  const selected = records.filter((record) => (
     record.contestId?.toUpperCase() === 'WW-DIGI'
       && record.myCallsign?.trim().toUpperCase() === ctx.operator.callsign.trim().toUpperCase()
-  )), {
+  ));
+  const session = sessionRepository(ctx, contestYear).read();
+  for (const record of selected) {
+    const projected = toContestQso(record, contestYear, undefined, ctx.radio.isSimulation);
+    if (!projected || !readWWDigiContestEntryForYear(record, contestYear)) {
+      throw new Error(`WW Digi QSO ${record.id} requires review before export`);
+    }
+    const merged = mergeLegacyOverride(
+      record,
+      projected,
+      session.overrides[record.id],
+      contestYear,
+    );
+    if (merged.status === 'review'
+        || (session.config.categoryTransmitter === 'TWO' && merged.transmitterId === undefined)) {
+      throw new Error(`WW Digi QSO ${record.id} requires review before export`);
+    }
+  }
+  return generateADIFFile(selected, {
     programId: 'TX5DR-WW-DIGI',
     includeStationCallsign: true,
   });
@@ -468,26 +535,6 @@ async function commitAdifImport(
         plan.items.map((item) => item.mutation),
         { expectedRevision: snapshot.revision },
       );
-      const repository = sessionRepository(ctx, contestYear);
-      repository.update((session) => {
-        const overrides = { ...session.overrides };
-        for (const outcome of batch.outcomes) {
-          const item = plan.items[outcome.inputIndex];
-          if (!item) continue;
-          const existing = overrides[outcome.record.id];
-          overrides[outcome.record.id] = {
-            ...existing,
-            status: item.candidate.reviewIssues.length > 0
-              ? 'review'
-              : existing?.status ?? 'included',
-            ...(existing?.source
-              ? { source: existing.source }
-              : item.existingRecordId ? {} : { source: 'imported' as const }),
-          };
-        }
-        return { ...session, overrides, health: { state: 'healthy', updatedAt: Date.now() } };
-      });
-      await repository.flush();
       await refreshContestProjectionWithHealth(ctx, contestYear);
       notifyContestLogChanged(ctx, contestYear);
       return {
@@ -506,6 +553,65 @@ async function commitAdifImport(
     }
   }
   throw new Error('adif_import_revision_conflict');
+}
+
+async function updateContestRecordEntry(
+  ctx: WWDigiContext,
+  contestYear: number,
+  qsoId: string,
+  mutate: (current: WWDigiContestEntryView) => WWDigiContestEntryView,
+): Promise<QSORecord> {
+  const logbook = await openContestLogbook(ctx, contestYear);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const snapshot = await logbook.readQsoSnapshot();
+    const record = snapshot.records.find((candidate) => candidate.id === qsoId);
+    if (!record) throw new Error('Unknown contest QSO');
+    const fallback = sessionRepository(ctx, contestYear).read().overrides[qsoId];
+    const projected = toContestQso(record, contestYear, undefined, ctx.radio.isSimulation);
+    if (!projected) throw new Error('Invalid contest QSO');
+    const qso = mergeLegacyOverride(record, projected, fallback, contestYear);
+    const existing = readWWDigiContestEntryForYear(record, contestYear);
+    const current: WWDigiContestEntryView = existing ?? {
+      sentGrid: qso.sentGrid,
+      receivedGrid: qso.receivedGrid,
+      status: qso.status,
+      source: qso.source,
+      streamId: qso.streamId,
+      authorizationId: qso.authorizationId,
+      operatorId: qso.operatorId,
+      transmitterId: qso.transmitterId,
+      practice: false,
+      legacyOverrideResolved: false,
+    };
+    const next = mutate(structuredClone(current));
+    try {
+      const result = await logbook.applyQsoBatch([{
+        type: 'update',
+        qsoId,
+        updates: {
+          contestId: WW_DIGI_CONTEST_ID,
+          contestEntry: createWWDigiContestEntry({
+            contestYear,
+            sentGrid: next.sentGrid ?? qso.sentGrid,
+            receivedGrid: next.receivedGrid,
+            status: next.status ?? 'review',
+            source: next.source ?? 'reconciled',
+            streamId: next.streamId,
+            authorizationId: next.authorizationId,
+            operatorId: next.operatorId,
+            transmitterId: next.transmitterId,
+            practice: next.practice,
+            legacyOverrideResolved: next.legacyOverrideResolved || fallback !== undefined,
+          }),
+        },
+      }], { expectedRevision: snapshot.revision });
+      return result.outcomes[0]!.record;
+    } catch (error) {
+      if ((error as { code?: unknown })?.code === 'LOGBOOK_REVISION_CONFLICT' && attempt < 2) continue;
+      throw error;
+    }
+  }
+  throw new Error('LOGBOOK_REVISION_CONFLICT');
 }
 
 async function refreshContestProjection(
@@ -616,15 +722,18 @@ function canStartPractice(ctx: StrategyPluginContext, contestYear: number): bool
     && !getStandardDigitalFrequencyMatch(practiceModeName(ctx), ctx.radio.frequency);
 }
 
-function runtimePresentation(ctx: StrategyPluginContext, practiceEnabled = false): Pick<
+function runtimePresentation(
+  ctx: StrategyPluginContext,
+  practiceEnabled = false,
+  practiceIndex?: WWDigiPracticeOperatingIndex,
+): Pick<
   StrategyRuntimeSnapshot,
   'actions' | 'attentions' | 'messagePresentation' | 'transmitGate'
 > {
   const contestYear = configuredContestYear(ctx.config.contestYear);
   const session = runtimeSession(ctx, contestYear);
   const operatingIndex = practiceEnabled
-    ? practiceOperatingIndexes.get(ctx.operator.id)
-      ?? buildOperatingIndex(ctx.operator.callsign, contestYear, [], 0)
+    ? practiceIndex ?? buildOperatingIndex(ctx.operator.callsign, contestYear, [], 0)
     : session.operatingIndex;
   const callableMessageMatchers = [
     { firstTokenIn: ['CQ'] },
@@ -739,11 +848,15 @@ function runtimePresentation(ctx: StrategyPluginContext, practiceEnabled = false
   };
 }
 
-function hasWorkedInRuntimeSession(ctx: StrategyPluginContext, callsign: string, practiceEnabled = false): boolean {
+function hasWorkedInRuntimeSession(
+  ctx: StrategyPluginContext,
+  callsign: string,
+  practiceEnabled = false,
+  practiceIndex?: WWDigiPracticeOperatingIndex,
+): boolean {
   const contestYear = configuredContestYear(ctx.config.contestYear);
   const session = practiceEnabled
-    ? practiceOperatingIndexes.get(ctx.operator.id)
-      ?? buildOperatingIndex(ctx.operator.callsign, contestYear, [], 0)
+    ? practiceIndex ?? buildOperatingIndex(ctx.operator.callsign, contestYear, [], 0)
     : runtimeSession(ctx, contestYear).operatingIndex;
   const band = ctx.radio.band.trim().toUpperCase();
   return (session.workedByBand[band] ?? []).includes(callsign.trim().toUpperCase());
@@ -849,6 +962,9 @@ export const wwDigiStrategyPlugin = definePlugin({
           myGrid: ctx.operator.grid.slice(0, 4).toUpperCase(),
           frequency: base,
           modeName,
+          contestYear: configuredContestYear(ctx.config.contestYear),
+          operatorId: ctx.operator.id,
+          transmitterId: Number(ctx.config.transmitterId) === 1 ? 1 : 0,
           slotMs: ctx.operator.mode.slotMs,
           transmitCycles: [...ctx.operator.transmitCycles],
           parallelStreams: parallelStreams(ctx.config.parallelStreams),
@@ -866,14 +982,24 @@ export const wwDigiStrategyPlugin = definePlugin({
         return ctx.operator.isTargetBeingWorkedByOthers(callsign);
       },
       hasWorkedCallsign(callsign: string) {
-        return Promise.resolve(hasWorkedInRuntimeSession(ctx, callsign, runtimeRef.current?.isPracticeEnabled() === true));
+        const runtime = runtimeRef.current;
+        return Promise.resolve(hasWorkedInRuntimeSession(
+          ctx,
+          callsign,
+          runtime?.isPracticeEnabled() === true,
+          runtime?.getPracticeOperatingIndex(),
+        ));
       },
     };
     const runtime = new WWDigiStrategyRuntime(operator, ctx.log, () => {
       const base = resolveBaseFrequency();
       return [base - 100, base, base + 100];
     }, async (text, mode) => ctx.digitalMessagePreflight.check({ text, mode }), () => (
-      runtimePresentation(ctx, runtimeRef.current?.isPracticeEnabled() === true)
+      runtimePresentation(
+        ctx,
+        runtimeRef.current?.isPracticeEnabled() === true,
+        runtimeRef.current?.getPracticeOperatingIndex(),
+      )
     ), () => {
       const contestYear = configuredContestYear(ctx.config.contestYear);
       if (runtimeRef.current?.isPracticeEnabled()) {
@@ -886,19 +1012,6 @@ export const wwDigiStrategyPlugin = definePlugin({
       canStart: () => canStartPractice(ctx, configuredContestYear(ctx.config.contestYear)),
       sessionKey: practiceLogbookSessionKey(ctx.operator.id),
       title: `WW Digi Practice - ${ctx.operator.callsign.trim().toUpperCase()}`,
-      onStarted: () => {
-        const contestYear = configuredContestYear(ctx.config.contestYear);
-        practiceOperatingIndexes.set(
-          ctx.operator.id,
-          buildOperatingIndex(ctx.operator.callsign, contestYear, [], 0),
-        );
-      },
-      onStopped: () => practiceOperatingIndexes.delete(ctx.operator.id),
-      onCompletion: (recordId) => {
-        const ids = practiceQsoIds.get(ctx.operator.id) ?? new Set<string>();
-        ids.add(recordId);
-        practiceQsoIds.set(ctx.operator.id, ids);
-      },
     });
     runtimeRef.current = runtime;
     practiceRuntimes.set(ctx.operator.id, runtime);
@@ -911,7 +1024,9 @@ export const wwDigiStrategyPlugin = definePlugin({
     await openContestLogbook(typed, contestYear);
     const notifier = new ContestSessionNotifier<{ callsign: string; contestYear: number }>(typed.eventBus, SESSION_CHANGED_TOPIC);
     notifier.subscribe((event) => {
-      if (event.callsign === typed.operator.callsign.trim().toUpperCase() && event.contestYear === contestYear) {
+      const activeContestYear = configuredContestYear(typed.config.contestYear);
+      if (event.callsign === typed.operator.callsign.trim().toUpperCase()
+          && event.contestYear === activeContestYear) {
         notifyLocalContestLogChanged(typed);
         typed.ui.refreshOperatorProjection();
       }
@@ -1028,17 +1143,7 @@ export const wwDigiStrategyPlugin = definePlugin({
           const qsoId = typeof payload.qsoId === 'string' ? payload.qsoId : '';
           const status = payload.status === 'x-qso' ? 'x-qso'
             : payload.status === 'review' ? 'review' : 'included';
-          const records = await readContestRecords(typed, selectedYear);
-          if (!records.some((record) => record.qsoId === qsoId)) throw new Error('Unknown contest QSO');
-          const repository = sessionRepository(typed, selectedYear);
-          repository.update((session) => ({
-            ...session,
-            overrides: {
-              ...session.overrides,
-              [qsoId]: { ...session.overrides[qsoId], status },
-            },
-          }));
-          await repository.flush();
+          await updateContestRecordEntry(typed, selectedYear, qsoId, (entry) => ({ ...entry, status }));
           await refreshContestProjectionWithHealth(typed, selectedYear);
           notifyContestLogChanged(typed, selectedYear);
           return { records: await readContestRecords(typed, selectedYear) };
@@ -1047,15 +1152,11 @@ export const wwDigiStrategyPlugin = definePlugin({
           const qsoId = typeof payload.qsoId === 'string' ? payload.qsoId : '';
           const transmitterId = payload.transmitterId === 1 ? 1 : payload.transmitterId === 0 ? 0 : undefined;
           if (transmitterId === undefined) throw new Error('Invalid transmitter ID');
-          const repository = sessionRepository(typed, selectedYear);
-          repository.update((session) => ({
-            ...session,
-            overrides: {
-              ...session.overrides,
-              [qsoId]: { ...session.overrides[qsoId], transmitterId, status: 'included' },
-            },
+          await updateContestRecordEntry(typed, selectedYear, qsoId, (entry) => ({
+            ...entry,
+            transmitterId,
+            status: 'included',
           }));
-          await repository.flush();
           await refreshContestProjectionWithHealth(typed, selectedYear);
           notifyContestLogChanged(typed, selectedYear);
           return { records: await readContestRecords(typed, selectedYear) };
@@ -1097,22 +1198,18 @@ export const wwDigiStrategyPlugin = definePlugin({
       },
     });
   },
-  async onUnload(ctx) {
+  onUnload(ctx) {
     const typed = ctx as WWDigiContext;
     for (const [token, pending] of pendingAdifImports) {
       if (pending.operatorId === typed.operator.id) pendingAdifImports.delete(token);
     }
     practiceRuntimes.delete(typed.operator.id);
-    practiceOperatingIndexes.delete(typed.operator.id);
-    practiceQsoIds.delete(typed.operator.id);
-    await typed.logbook.sessions.destroy(practiceLogbookSessionKey(typed.operator.id));
   },
   hooks: {
     async onConfigChange(changes, ctx) {
       if (!Object.prototype.hasOwnProperty.call(changes, 'contestYear')) return;
       const typed = ctx as WWDigiContext;
       practiceRuntimes.get(typed.operator.id)?.revokePractice();
-      practiceOperatingIndexes.delete(typed.operator.id);
       await typed.logbook.sessions.destroy(practiceLogbookSessionKey(typed.operator.id));
       const contestYear = configuredContestYear(typed.config.contestYear);
       await openContestLogbook(typed, contestYear);
@@ -1124,9 +1221,7 @@ export const wwDigiStrategyPlugin = definePlugin({
       if (record.contestId?.toUpperCase() !== 'WW-DIGI') return;
       const selectedYear = configuredContestYear(typed.config.contestYear);
       const runtime = practiceRuntimes.get(typed.operator.id);
-      const practiceIds = practiceQsoIds.get(typed.operator.id);
-      const isPracticeQso = practiceIds?.delete(record.id) === true;
-      if (practiceIds?.size === 0) practiceQsoIds.delete(typed.operator.id);
+      const isPracticeQso = readWWDigiContestEntry(record)?.practice === true;
       if (isPracticeQso) {
         if (!runtime?.isPracticeEnabled()) return;
         const logbook = await typed.logbook.sessions.open({
@@ -1141,9 +1236,9 @@ export const wwDigiStrategyPlugin = definePlugin({
           const qso = toContestQso(practiceRecord, selectedYear, undefined, true);
           return qso ? [qso] : [];
         });
-        const previous = practiceOperatingIndexes.get(typed.operator.id)
+        const previous = runtime.getPracticeOperatingIndex()
           ?? buildOperatingIndex(typed.operator.callsign, selectedYear, [], 0);
-        practiceOperatingIndexes.set(typed.operator.id, buildOperatingIndex(
+        runtime.setPracticeOperatingIndex(buildOperatingIndex(
           typed.operator.callsign,
           selectedYear,
           projected,
@@ -1163,25 +1258,15 @@ export const wwDigiStrategyPlugin = definePlugin({
       if (!contestQso) return;
       try {
         const transmitterId = Number(typed.config.transmitterId) === 1 ? 1 : 0;
-        const repository = sessionRepository(typed, contestYear);
-        repository.update((session) => ({
-          ...session,
-          overrides: {
-            ...session.overrides,
-            [record.id]: {
-              ...session.overrides[record.id],
-              status: session.overrides[record.id]?.status ?? 'included',
-              operatorId: typed.operator.id,
-              transmitterId,
-              source: record.contestId?.toUpperCase() === 'WW-DIGI'
-                ? 'ww-digi'
-                : record.messageHistory.length > 0 ? 'standard' : 'manual',
-            },
-          },
-          operatorTransmitters: { ...session.operatorTransmitters, [typed.operator.id]: transmitterId },
-          health: { state: 'healthy', updatedAt: Date.now() },
-        }));
-        await repository.flush();
+        if (!readWWDigiContestEntry(record)) {
+          await updateContestRecordEntry(typed, contestYear, record.id, (entry) => ({
+            ...entry,
+            status: contestQso.status,
+            operatorId: typed.operator.id,
+            transmitterId,
+            source: record.messageHistory.length > 0 ? 'standard' : 'manual',
+          }));
+        }
         const projection = await refreshContestProjectionWithHealth(typed, contestYear);
         runtime?.notifyQsoLogged(record.id, record.callsign, record.grid, projection.claimedScore);
         notifyContestLogChanged(typed, contestYear);
@@ -1197,8 +1282,8 @@ export const wwDigiStrategyPlugin = definePlugin({
 
 export const wwDigiTestables = {
   configuredContestYear,
-  ledgerKey,
-  healthKey,
+  legacyLedgerKey,
+  legacyHealthKey,
   sessionKey,
   resolveContestLocation,
   buildOperatingIndex,
@@ -1207,8 +1292,7 @@ export const wwDigiTestables = {
   isSessionConfirmed,
   requiresContestSection,
   validateSessionConfig,
-  readLedger,
-  readLedgerHealth,
+  updateContestRecordEntry,
   refreshContestProjection,
   refreshContestProjectionWithHealth,
   renderCabrillo,

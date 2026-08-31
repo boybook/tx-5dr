@@ -3,6 +3,12 @@ import type { PluginDistribution, PluginRuntimeInfo } from '@tx5dr/contracts';
 import { tx5drPaths } from '../utils/app-paths.js';
 import { resolveRuntimeDistribution, type RuntimeDetectionOptions } from '../utils/runtime-distribution.js';
 import { resolvePluginPaths } from './paths.js';
+import { SERVER_BUILD_INFO } from '../generated/buildInfo.js';
+export {
+  assertPluginApiCompatible,
+  comparePluginApiVersions,
+  PluginApiCompatibilityError,
+} from '@tx5dr/plugin-api';
 
 
 interface PluginRuntimePaths {
@@ -29,6 +35,8 @@ export function buildPluginRuntimeInfo(
   const distribution = resolvePluginDistribution(paths.dataDir, options);
   const pluginPaths = resolvePluginPaths(paths.dataDir, options.env ?? process.env);
   const info: PluginRuntimeInfo = {
+    hostVersion: SERVER_BUILD_INFO.version,
+    pluginApiVersion: SERVER_BUILD_INFO.pluginApiVersion,
     pluginDir: pluginPaths.pluginDir,
     pluginDataDir: pluginPaths.pluginDataDir,
     dataDir: paths.dataDir,

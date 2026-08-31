@@ -1,4 +1,4 @@
-import type { QSORecord } from '@tx5dr/contracts';
+import type { ContestQsoEnvelope, QSORecord } from '@tx5dr/contracts';
 import { getBandFromFrequency } from '@tx5dr/core';
 
 import {
@@ -17,6 +17,8 @@ export interface LogbookRecordProjection {
   readonly runtimeId: string;
   readonly explicitId?: string;
   readonly qso?: Readonly<QSORecord>;
+  /** Raw value retained when the current Host cannot validate this private field. */
+  readonly unparsedContestEntry?: string;
 }
 
 export interface LogbookSourcePart {
@@ -66,6 +68,8 @@ export interface LogbookDocumentSegment {
   readonly rawHash: string;
   readonly syntacticallyValid: boolean;
   readonly qso?: Readonly<QSORecord>;
+  /** Valid UTF-8 future/private value retained without exposing it through QSORecord. */
+  readonly unparsedContestEntry?: string;
 }
 
 export interface LogbookImportAppend {
@@ -117,6 +121,7 @@ interface StoredSegment {
   rawHash: string;
   syntacticallyValid: boolean;
   qso?: Readonly<QSORecord>;
+  unparsedContestEntry?: string;
   leadingRange: AdifByteRange;
   rawRange: AdifByteRange;
 }
@@ -144,11 +149,22 @@ export interface LogbookRenderOptions {
   includeIncompleteTail?: boolean;
 }
 
+function cloneContestEntry(
+  entry: Readonly<ContestQsoEnvelope> | undefined,
+): ContestQsoEnvelope | undefined {
+  if (!entry) return undefined;
+  const sent = Object.freeze({ ...entry.sent });
+  const received = Object.freeze({ ...entry.received });
+  const annotations = entry.annotations ? Object.freeze({ ...entry.annotations }) : undefined;
+  return Object.freeze({ ...entry, sent, received, annotations }) as ContestQsoEnvelope;
+}
+
 function cloneQso(qso: QSORecord, id = qso.id): Readonly<QSORecord> {
   return Object.freeze({
     ...qso,
     id,
     messageHistory: Object.freeze([...(qso.messageHistory ?? [])]) as unknown as string[],
+    contestEntry: cloneContestEntry(qso.contestEntry),
   });
 }
 
@@ -234,6 +250,7 @@ function asSegmentView(segment: StoredSegment): LogbookDocumentSegment {
     rawHash: segment.rawHash,
     syntacticallyValid: segment.syntacticallyValid,
     qso: segment.qso,
+    unparsedContestEntry: segment.unparsedContestEntry,
   });
 }
 
@@ -300,11 +317,15 @@ export class LogbookRecordProjector {
         : duplicateIdFor(record.rawHash, ordinal);
     const runtimeId = allocateRuntimeId(this.usedQsoIds, preferredId, record.rawHash, ordinal);
     const decoded = decodeAdifRecord(record, runtimeId);
+    const rawContestEntry = getLastAdifFieldValue(record, 'app_tx5dr_contest_entry');
     if (decoded) this.usedQsoIds.add(decoded.id);
     return Object.freeze({
       runtimeId,
       explicitId,
       qso: decoded ? cloneQso(decoded) : undefined,
+      unparsedContestEntry: rawContestEntry !== undefined && !decoded?.contestEntry
+        ? rawContestEntry
+        : undefined,
     });
   }
 }
@@ -491,6 +512,7 @@ export class LogbookDocument {
         rawHash: record.rawHash,
         syntacticallyValid: record.syntacticallyValid,
         qso: decoded ? cloneQso(decoded) : undefined,
+        unparsedContestEntry: projection.unparsedContestEntry,
         leadingRange: { ...record.leadingRange },
         rawRange: { ...record.range },
       };
@@ -629,8 +651,13 @@ export class LogbookDocument {
           throw new Error(`QSO with id ${replacementId} already exists`);
         }
         const replacement = { ...operation.qso, id: replacementId };
-        const fragment = parseRecordFragment(encodeAdifRecord(replacement));
         const previous = segments[index]!;
+        const unparsedContestEntry = replacement.contestEntry
+          ? undefined
+          : previous.unparsedContestEntry;
+        const fragment = parseRecordFragment(encodeAdifRecord(replacement, {
+          preservedContestEntry: unparsedContestEntry,
+        }));
         const nextSegment = segments[index + 1];
         if (fragment.trailing.length > 0) {
           if (nextSegment && partsLength(nextSegment.leading) === 0) {
@@ -647,6 +674,7 @@ export class LogbookDocument {
           rawHash: fragment.scan.rawHash,
           syntacticallyValid: fragment.scan.syntacticallyValid,
           qso: cloneQso(replacement, replacementId),
+          unparsedContestEntry,
         };
         changedIds.push(operation.id);
         if (replacementId !== operation.id) changedIds.push(replacementId);
@@ -720,6 +748,7 @@ export class LogbookDocument {
       const decoded = input.qso
         ? cloneQso(input.qso, runtimeId)
         : decodeAdifRecord(fragment.scan, runtimeId);
+      const rawContestEntry = getLastAdifFieldValue(fragment.scan, 'app_tx5dr_contest_entry');
       if (decoded && usedIds.has(decoded.id)) throw new Error(`QSO with id ${decoded.id} already exists`);
       if (decoded) {
         usedIds.add(decoded.id);
@@ -736,6 +765,9 @@ export class LogbookDocument {
         rawHash: fragment.scan.rawHash,
         syntacticallyValid: fragment.scan.syntacticallyValid,
         qso: decoded ? cloneQso(decoded as QSORecord) : undefined,
+        unparsedContestEntry: rawContestEntry !== undefined && !decoded?.contestEntry
+          ? rawContestEntry
+          : undefined,
         leadingRange: { start: 0, end: 0 },
         rawRange: { start: 0, end: 0 },
       });

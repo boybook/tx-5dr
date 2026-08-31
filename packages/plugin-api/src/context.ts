@@ -39,6 +39,9 @@ import type { HostDependencies } from './host-dependencies.js';
  * TX-5DR internals.
  */
 export interface PluginContextBase {
+  /** Bundled Plugin API version. Use plugin declarations for compatibility checks. */
+  readonly pluginApiVersion: string;
+
   /**
    * Resolved plugin configuration values.
    *
@@ -253,6 +256,8 @@ export type RuntimePluginContext = PluginContextBase & Partial<{
  * command, radio, logbook-write, network, timer or UI capability.
  */
 export interface StrategyPluginContext {
+  /** Bundled Plugin API version available before the strategy runtime is created. */
+  readonly pluginApiVersion: string;
   /** Detached snapshot of the strategy plugin's resolved configuration. */
   readonly config: Readonly<Record<string, unknown>>;
   /** Logger scoped to this strategy instance. */

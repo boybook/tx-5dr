@@ -1,4 +1,8 @@
+import { distancePoints, maidenheadDistanceKm } from '@tx5dr/plugin-api/contest';
+
 export const WW_DIGI_SCORE_BANDS = ['160M', '80M', '40M', '20M', '15M', '10M'] as const;
+
+const WW_DIGI_DISTANCE_SCORING = distancePoints<{ distanceKm?: number }>({ stepKm: 3_000 });
 
 export interface WWDigiScoreRecord {
   qsoId: string;
@@ -47,25 +51,14 @@ export function calculateWWDigiQsoPoints(sentGrid: string, receivedGrid: string)
   const received = validGrid(receivedGrid);
   if (!sent || !received) return null;
   const distanceKm = calculateWWDigiGridDistance(sent, received);
-  return distanceKm === null ? null : 1 + Math.floor(distanceKm / 3_000);
+  return distanceKm === null ? null : WW_DIGI_DISTANCE_SCORING.score({ distanceKm }).points;
 }
 
 export function calculateWWDigiGridDistance(sentGrid: string, receivedGrid: string): number | null {
   const sent = validGrid(sentGrid);
   const received = validGrid(receivedGrid);
   if (!sent || !received) return null;
-  const center = (grid: string) => ({
-    lon: (grid.charCodeAt(0) - 65) * 20 - 180 + Number(grid[2]) * 2 + 1,
-    lat: (grid.charCodeAt(1) - 65) * 10 - 90 + Number(grid[3]) + 0.5,
-  });
-  const from = center(sent);
-  const to = center(received);
-  const radians = (degrees: number) => degrees * Math.PI / 180;
-  const latitudeDelta = radians(to.lat - from.lat);
-  const longitudeDelta = radians(to.lon - from.lon);
-  const a = Math.sin(latitudeDelta / 2) ** 2
-    + Math.cos(radians(from.lat)) * Math.cos(radians(to.lat)) * Math.sin(longitudeDelta / 2) ** 2;
-  return 6_371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return maidenheadDistanceKm(sent, received) ?? null;
 }
 
 export function summarizeWWDigiScore<T extends WWDigiScoreRecord>(

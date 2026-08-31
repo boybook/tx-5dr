@@ -247,6 +247,7 @@ describe('LogManager callsign logbook creation', () => {
       pluginName: 'contest-plugin',
       stationCallsign: 'BG4IAJ',
       sessionKey: 'contest:2026',
+      retention: 'durable',
     });
     expect(manager.getLogBooks()).toEqual([]);
     expect(manager.resolveLogBookId(firstLogBook.id)).toBeNull();

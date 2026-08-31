@@ -8,6 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV NODE_ENV=production
 ARG VCS_REF=development
 ARG BUILD_DATE=development
+ARG BUILD_STAMP=docker
 ARG TX5DR_CLUBLOG_API_KEY=
 
 # 显示构建信息
@@ -84,11 +85,12 @@ COPY . .
 RUN node scripts/generate-ico.js || true
 
 # 生成服务端构建元数据
-RUN node scripts/prepare-server-build-info.mjs \
+RUN node scripts/check-version-consistency.mjs && \
+    node scripts/prepare-server-build-info.mjs \
     --channel nightly \
-    --version "${VCS_REF}" \
     --commit "${VCS_REF}" \
     --build-timestamp "${BUILD_DATE}" \
+    --build-stamp "${BUILD_STAMP}" \
     --distribution docker
 
 # 构建应用
