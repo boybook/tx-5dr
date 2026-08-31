@@ -1,5 +1,10 @@
 # Icom USB/ACC 12 kHz IF 解调 Spike（Phase A）
 
+> **Status:** experimental comparison record. `icom-12k-if` is not a default
+> production path, and the results below do not establish compatibility for
+> every ICOM model or firmware. Current schemas, implementation, and tests are
+> authoritative.
+
 验证：电台菜单手动切到 `ACC/USB Output Select = IF` 后，TX-5DR 用软件 SSB 解调再走现有 12 kHz FT8/频谱路径，是否比 AF+AGC 更能保住强台旁的弱信号。
 
 **不是** WLAN 能力 `audio_if_mode`（CI-V `AFIF*` 音频口路由）。本路径是 **USB 声卡 PCM 上的 IF → 软件解调**。
