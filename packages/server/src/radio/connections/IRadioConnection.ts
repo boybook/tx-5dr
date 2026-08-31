@@ -6,7 +6,7 @@
  */
 
 import { EventEmitter } from 'eventemitter3';
-import type { HamlibConfig, LevelMeterReading, MeterCapabilities, TunerCapabilities, TunerStatus } from '@tx5dr/contracts';
+import type { HamlibConfig, LevelMeterReading, MeterCapabilities, TunerCapabilities, TunerStatus, TxAudioInputSource } from '@tx5dr/contracts';
 import type { RadioIoQueueSnapshot } from './RadioIoQueue.js';
 
 /**
@@ -229,6 +229,14 @@ export type RadioConnectionConfig = HamlibConfig;
  * 所有电台连接实现必须实现此接口
  */
 export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
+  /**
+   * Normalized physical TX audio input routing. Optional because many CAT
+   * backends (including generic Hamlib/rigctld) do not expose this setting.
+   * Implementations must serialize protocol I/O through their owning queue.
+   */
+  getTxAudioInputSource?(): Promise<TxAudioInputSource | null>;
+  getSupportedTxAudioInputSources?(): Promise<TxAudioInputSource[]>;
+  setTxAudioInputSource?(source: TxAudioInputSource): Promise<RadioWriteResult<TxAudioInputSource>>;
   /**
    * 获取连接类型
    */

@@ -124,6 +124,21 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
     await this.pollCapabilityOnce(id);
   }
 
+  /** Re-run support probing after a late model/profile-identification event. */
+  async reprobeCapability(id: string): Promise<void> {
+    if (!this.connection) return;
+    const definition = CAPABILITY_DEFINITION_MAP.get(id);
+    if (!definition) throw new Error(`Unknown capability '${id}'`);
+    const result = this.normalizeProbeResult(await definition.probeSupport(this.connection));
+    if (result.supported) {
+      this.supportedCapabilities.add(id);
+      if (result.source) this.supportSources.set(id, result.source);
+      await this.refreshDescriptorIfNeeded(id, definition);
+      await this.pollCapabilityOnce(id);
+      this.emit('capabilityList', this.getCapabilitySnapshot());
+    }
+  }
+
   async writeCapability(id: string, value?: CapabilityValue, action?: boolean): Promise<void> {
     if (!this.connection) {
       throw new Error('Radio not connected');

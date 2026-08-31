@@ -39,6 +39,7 @@ type MockRig = {
   setFrequency: ReturnType<typeof vi.fn>;
   setMode: ReturnType<typeof vi.fn>;
   setPtt: ReturnType<typeof vi.fn>;
+  setConnectorDataMode: ReturnType<typeof vi.fn>;
   readOperatingFrequency: ReturnType<typeof vi.fn>;
   readOperatingMode: ReturnType<typeof vi.fn>;
   readTransceiverState: ReturnType<typeof vi.fn>;
@@ -113,6 +114,8 @@ type IcomWlanConnectionTestAccessor = {
   defaultDataMode: boolean;
   softwarePttActive: boolean;
   pttActivatedAt: number | null;
+  detectedModelId: string | null;
+  radioIdentity: { modelId: string; profileName: string; authority: string; verified: boolean } | null;
 };
 
 function asTestConnection(connection: IcomWlanConnection): IcomWlanConnectionTestAccessor {
@@ -148,6 +151,7 @@ function createConnectedConnection(): { connection: IcomWlanConnection; rig: Moc
     setFrequency: vi.fn().mockResolvedValue(undefined),
     setMode: vi.fn().mockResolvedValue(undefined),
     setPtt: vi.fn().mockResolvedValue(undefined),
+    setConnectorDataMode: vi.fn().mockResolvedValue(undefined),
     readOperatingFrequency: vi.fn().mockResolvedValue(7100000),
     readOperatingMode: vi.fn().mockResolvedValue({ mode: 1, modeName: 'USB', filterName: 'Normal' }),
     readTransceiverState: vi.fn().mockResolvedValue('RX'),
@@ -271,6 +275,23 @@ describe('IcomWlanConnection', () => {
     await expect(connection.setMode('USB', 'nochange')).resolves.toBeUndefined();
 
     expect(rig.setMode).toHaveBeenCalledWith(expect.any(Number), { dataMode: true });
+  });
+
+  it('maps normalized TX audio sources to the ICOM connector route', async () => {
+    const { connection, rig } = createConnectedConnection();
+    asTestConnection(connection).detectedModelId = 'IC-705';
+    asTestConnection(connection).radioIdentity = {
+      modelId: 'IC-705', profileName: 'Icom IC-705', authority: 'civ-transceiver-id', verified: true,
+    };
+
+    await expect(connection.setTxAudioInputSource!('usb')).resolves.toMatchObject({
+      requested: 'usb', applied: 'usb', acknowledgement: 'reply',
+    });
+    expect(rig.setConnectorDataMode).toHaveBeenCalledWith('USB');
+    await expect(connection.getTxAudioInputSource!()).resolves.toBe('usb');
+    await expect(connection.getSupportedTxAudioInputSources!()).resolves.toEqual([
+      'mic', 'accessory', 'usb', 'network',
+    ]);
   });
 
   it('uses data mode for digital mode writes even when the ICOM WLAN default is voice mode', async () => {

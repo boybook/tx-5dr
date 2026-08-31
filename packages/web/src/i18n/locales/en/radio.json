@@ -663,6 +663,10 @@
       "label": "Manual Tune",
       "description": "Trigger an immediate antenna matching cycle. Requires the auto-tuner to be enabled first. The radio will briefly transmit a low-power carrier during tuning — ensure an antenna is connected before pressing."
     },
+    "tx_audio_input_source": {
+      "label": "TX Audio Input",
+      "description": "Select the physical audio input routed to the transmitter (microphone, USB, network, or accessory)."
+    },
     "rf_power": {
       "label": "TX Power",
       "description": "Set transmit power from 0–100% of the radio's rated maximum. Reducing power is advisable for extended digital mode operation to prevent PA overheating; for voice, adjust freely based on propagation conditions.",
