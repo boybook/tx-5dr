@@ -72,6 +72,14 @@ export interface WWDigiRuntimeOperator {
   hasWorkedCallsign(callsign: string): Promise<boolean>;
 }
 
+export interface WWDigiPracticeOperatingIndex {
+  revision: number;
+  contestYear: number;
+  callsign: string;
+  workedByBand: Record<string, string[]>;
+  workedFieldsByBand: Record<string, string[]>;
+}
+
 type WWDigiSnapshotExtension = {
   actions?: StrategyRuntimeSnapshot['actions'];
   attentions?: StrategyRuntimeSnapshot['attentions'];
@@ -93,6 +101,7 @@ interface RuntimeCheckpoint {
   allowQueuedCycleSelection: boolean;
   practiceEnabled?: boolean;
   practiceSessionDestroyPending?: boolean;
+  practiceOperatingIndex?: WWDigiPracticeOperatingIndex;
   detachedCompletions?: Array<[string, DetachedCompletion]>;
   detachedCompletionEpoch?: number;
   detachedProtocolContexts?: Array<[string, DetachedProtocolContext]>;
@@ -149,6 +158,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
   private allowQueuedCycleSelection = false;
   private practiceEnabled = false;
   private practiceSessionDestroyPending = false;
+  private practiceOperatingIndex?: WWDigiPracticeOperatingIndex;
   private readonly detachedCompletions = new Map<string, DetachedCompletion>();
   private detachedCompletionEpoch = 0;
   private readonly detachedProtocolContexts = new Map<string, DetachedProtocolContext>();
@@ -167,9 +177,6 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       canStart: () => boolean;
       sessionKey: string;
       title: string;
-      onStarted?: () => void;
-      onStopped?: () => void;
-      onCompletion?: (recordId: string) => void;
     },
   ) {
     const resolveFrequencies = typeof audioFrequenciesHz === 'function'
@@ -215,6 +222,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       allowQueuedCycleSelection: this.allowQueuedCycleSelection,
       practiceEnabled: this.practiceEnabled,
       practiceSessionDestroyPending: this.practiceSessionDestroyPending,
+      practiceOperatingIndex: this.practiceOperatingIndex,
       detachedCompletions: Array.from(this.detachedCompletions.entries()),
       detachedCompletionEpoch: this.detachedCompletionEpoch,
       detachedProtocolContexts: Array.from(this.detachedProtocolContexts.entries()),
@@ -237,6 +245,9 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     this.allowQueuedCycleSelection = state.allowQueuedCycleSelection === true;
     this.practiceEnabled = state.practiceEnabled === true;
     this.practiceSessionDestroyPending = state.practiceSessionDestroyPending === true;
+    this.practiceOperatingIndex = state.practiceOperatingIndex
+      ? structuredClone(state.practiceOperatingIndex)
+      : undefined;
     this.detachedCompletions.clear();
     for (const [recordId, completion] of state.detachedCompletions ?? []) {
       this.detachedCompletions.set(recordId, structuredClone(completion));
@@ -823,12 +834,19 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     if (this.practiceEnabled && this.practice?.canStart() !== true) this.revokePractice();
     return this.practiceEnabled;
   }
+  getPracticeOperatingIndex(): WWDigiPracticeOperatingIndex | undefined {
+    return this.practiceOperatingIndex ? structuredClone(this.practiceOperatingIndex) : undefined;
+  }
+  setPracticeOperatingIndex(index: WWDigiPracticeOperatingIndex): void {
+    if (!this.practiceEnabled) return;
+    this.practiceOperatingIndex = structuredClone(index);
+  }
   revokePractice(): boolean {
     const changed = this.practiceEnabled;
     this.practiceEnabled = false;
     if (changed) {
       this.practiceSessionDestroyPending = true;
-      this.practice?.onStopped?.();
+      this.practiceOperatingIndex = undefined;
     }
     return changed;
   }
@@ -841,7 +859,13 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
         if (!this.practice.canStart()) throw new Error('practice_not_available');
         this.practiceEnabled = true;
         this.practiceSessionDestroyPending = false;
-        this.practice.onStarted?.();
+        this.practiceOperatingIndex = {
+          revision: 0,
+          contestYear: this.operator.config.contestYear ?? new Date().getUTCFullYear(),
+          callsign: this.operator.config.myCallsign.trim().toUpperCase(),
+          workedByBand: {},
+          workedFieldsByBand: {},
+        };
         return {
           requestDecision: true,
           logbookSessionEffects: [{
@@ -853,7 +877,7 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
       if (invocation.actionId === 'stop-practice' && this.practice) {
         this.practiceEnabled = false;
         this.practiceSessionDestroyPending = false;
-        this.practice.onStopped?.();
+        this.practiceOperatingIndex = undefined;
         return {
           requestDecision: true,
           logbookSessionEffects: [{ operation: 'destroy', sessionKey: this.practice.sessionKey }],
@@ -1306,12 +1330,22 @@ export class WWDigiStrategyRuntime implements QueuedStrategyRuntime {
     if (!result?.qsoCompletions?.length) return result;
     const destination = this.completionDestination();
     if (!destination) return result;
-    if (this.practiceEnabled) {
-      for (const effect of result.qsoCompletions) this.practice?.onCompletion?.(effect.record.id);
-    }
     return {
       ...result,
-      qsoCompletions: result.qsoCompletions.map((effect) => ({ ...effect, destination })),
+      qsoCompletions: result.qsoCompletions.map((effect) => ({
+        ...effect,
+        destination,
+        record: this.practiceEnabled && effect.record.contestEntry ? {
+          ...effect.record,
+          contestEntry: {
+            ...effect.record.contestEntry,
+            annotations: {
+              ...effect.record.contestEntry.annotations,
+              practice: true,
+            },
+          },
+        } : effect.record,
+      })),
     };
   }
 

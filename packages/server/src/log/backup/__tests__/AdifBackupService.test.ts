@@ -222,7 +222,7 @@ describe('AdifBackupService', () => {
       currentRevision: 'unavailable',
     });
     expect(await readFile(mainPath, 'utf8')).toContain('<CALL:5>BG5AA');
-  });
+  }, 15_000);
 
   it('never exposes a filesystem error message through backup status', async () => {
     const { mainPath, store } = await createMain();

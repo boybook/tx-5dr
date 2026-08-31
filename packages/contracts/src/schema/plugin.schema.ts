@@ -23,6 +23,7 @@ export const StrategyFeaturesSchema = z.object({
   queueActivation: z.enum(['immediate', 'operator-toggle']).optional(),
   manualInitiation: z.literal(1).optional(),
   maxConcurrentStreams: z.number().int().min(1).max(5).optional(),
+  maxSimultaneousSignals: z.number().int().min(1).max(5).optional(),
 }).optional();
 export type StrategyFeatures = z.infer<typeof StrategyFeaturesSchema>;
 
@@ -521,6 +522,11 @@ export type PluginStorageConfig = z.infer<typeof PluginStorageConfigSchema>;
 
 // ===== 插件清单 =====
 
+const SemanticVersionSchema = z.string().regex(
+  /^v?(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/,
+  'must be a semantic version',
+);
+
 /**
  * Normalized manifest describing a plugin's static metadata and declarations.
  *
@@ -531,6 +537,7 @@ export const PluginManifestSchema = z.object({
   apiVersion: z.literal(2).optional(),
   name: z.string(),
   version: z.string(),
+  minPluginApiVersion: SemanticVersionSchema.optional(),
   type: PluginTypeSchema,
   strategyFeatures: StrategyFeaturesSchema,
   instanceScope: PluginInstanceScopeSchema.optional().default('operator'),
@@ -664,6 +671,8 @@ export const PluginDistributionSchema = z.enum([
 export type PluginDistribution = z.infer<typeof PluginDistributionSchema>;
 
 export const PluginRuntimeInfoSchema = z.object({
+  hostVersion: z.string(),
+  pluginApiVersion: SemanticVersionSchema,
   pluginDir: z.string(),
   pluginDataDir: z.string(),
   dataDir: z.string(),
@@ -694,7 +703,7 @@ export const PluginMarketScreenshotSchema = z.object({
 });
 export type PluginMarketScreenshot = z.infer<typeof PluginMarketScreenshotSchema>;
 
-export const PluginMarketCatalogEntrySchema = z.object({
+const PluginMarketCatalogEntryInputSchema = z.object({
   name: z.string(),
   title: z.string(),
   description: z.string(),
@@ -702,7 +711,9 @@ export const PluginMarketCatalogEntrySchema = z.object({
   readmeSourceUrl: z.string().url().optional(),
   locales: PluginLocalesSchema.optional(),
   latestVersion: z.string(),
-  minHostVersion: z.string(),
+  minPluginApiVersion: SemanticVersionSchema.optional(),
+  /** Catalog schema v1 compatibility alias; normalized on read. */
+  minHostVersion: SemanticVersionSchema.optional(),
   author: z.string().optional(),
   license: z.string().optional(),
   repository: z.string().url().optional(),
@@ -715,15 +726,93 @@ export const PluginMarketCatalogEntrySchema = z.object({
   sha256: z.string().regex(/^[a-f0-9]{64}$/i),
   size: z.number().int().nonnegative(),
   publishedAt: z.string(),
+  artifactManifestVersion: z.literal(1).optional(),
+}).superRefine((value, context) => {
+  if (!value.minPluginApiVersion && !value.minHostVersion) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['minPluginApiVersion'],
+      message: 'minPluginApiVersion is required',
+    });
+  }
+  if (value.minPluginApiVersion && value.minHostVersion
+      && value.minPluginApiVersion !== value.minHostVersion) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['minPluginApiVersion'],
+      message: 'minPluginApiVersion conflicts with legacy minHostVersion',
+    });
+  }
+});
+
+export const PluginMarketCatalogEntrySchema = PluginMarketCatalogEntryInputSchema.transform((value) => {
+  const { minHostVersion: _legacyMinimum, ...entry } = value;
+  return {
+    ...entry,
+    minPluginApiVersion: value.minPluginApiVersion ?? value.minHostVersion!,
+  };
 });
 export type PluginMarketCatalogEntry = z.infer<typeof PluginMarketCatalogEntrySchema>;
 
-export const PluginMarketCatalogSchema = z.object({
-  schemaVersion: z.number().int().positive(),
-  generatedAt: z.string(),
-  channel: PluginMarketChannelSchema,
-  plugins: z.array(PluginMarketCatalogEntrySchema),
+const PluginMarketCatalogV2EntrySchema = PluginMarketCatalogEntryInputSchema.superRefine(
+  (value, context) => {
+    if (!value.minPluginApiVersion) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['minPluginApiVersion'],
+        message: 'catalog schema v2 requires minPluginApiVersion',
+      });
+    }
+    if (value.minHostVersion) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['minHostVersion'],
+        message: 'catalog schema v2 does not support legacy minHostVersion',
+      });
+    }
+    if (value.artifactManifestVersion !== 1) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['artifactManifestVersion'],
+        message: 'catalog schema v2 requires artifactManifestVersion 1',
+      });
+    }
+  },
+).transform((value) => {
+  const { minHostVersion: _legacyMinimum, ...entry } = value;
+  return {
+    ...entry,
+    minPluginApiVersion: value.minPluginApiVersion!,
+  };
 });
+
+export const PluginArtifactManifestSchema = z.object({
+  schemaVersion: z.literal(1),
+  name: z.string(),
+  version: z.string(),
+  minPluginApiVersion: SemanticVersionSchema,
+  apiVersion: z.literal(2).optional(),
+  type: PluginTypeSchema,
+  instanceScope: PluginInstanceScopeSchema.optional().default('operator'),
+  permissions: z.array(PluginPermissionSchema).optional().default([]),
+  strategyFeatures: StrategyFeaturesSchema,
+});
+export type PluginArtifactManifest = z.infer<typeof PluginArtifactManifestSchema>;
+
+export const PluginMarketCatalogSchema = z.discriminatedUnion('schemaVersion', [
+  z.object({
+    schemaVersion: z.literal(1),
+    generatedAt: z.string(),
+    channel: PluginMarketChannelSchema,
+    plugins: z.array(PluginMarketCatalogEntrySchema),
+  }),
+  z.object({
+    schemaVersion: z.literal(2),
+    generatedAt: z.string(),
+    channel: PluginMarketChannelSchema,
+    plugins: z.array(PluginMarketCatalogV2EntrySchema),
+  }),
+]);
 export type PluginMarketCatalog = z.infer<typeof PluginMarketCatalogSchema>;
 
 export const PluginMarketCatalogResponseSchema = z.object({

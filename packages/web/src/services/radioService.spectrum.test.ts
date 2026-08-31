@@ -4,6 +4,7 @@ import { RadioService } from './radioService';
 
 const mockState = vi.hoisted(() => ({
   clients: [] as Array<{
+    config: { clientVersion?: string };
     connected: boolean;
     ready: boolean;
     subscribeSpectrum: ReturnType<typeof vi.fn>;
@@ -14,12 +15,14 @@ const mockState = vi.hoisted(() => ({
 
 vi.mock('@tx5dr/core', () => {
   class WSClient {
+    config: { clientVersion?: string };
     connected = false;
     ready = false;
     subscribeSpectrum = vi.fn();
     handlers = new Map<string, Set<(data?: unknown) => void>>();
 
-    constructor() {
+    constructor(config: { clientVersion?: string }) {
+      this.config = config;
       mockState.clients.push(this as never);
     }
 
@@ -85,6 +88,8 @@ describe('RadioService spectrum subscription reliability', () => {
   it('keeps desired spectrum kind while disconnected and replays with ack retry', async () => {
     const service = new RadioService();
     const client = mockState.clients[0]!;
+
+    expect(client.config.clientVersion).toBe('1.0.0');
 
     service.subscribeSpectrum('audio');
 

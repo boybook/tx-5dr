@@ -23,6 +23,11 @@
 /** Core plugin definition and lifecycle interfaces. */
 export { definePlugin } from './definition.js';
 export {
+  assertPluginApiCompatible,
+  comparePluginApiVersions,
+  PluginApiCompatibilityError,
+} from './compatibility.js';
+export {
   PLUGIN_COMMAND_CAPABILITY_PERMISSIONS,
   PLUGIN_CONTEXT_CAPABILITY_KEYS,
   getPluginContextCapabilityKeys,
@@ -178,6 +183,7 @@ export type {
   UIBridge,
   PanelMeta,
   PluginUIHandler,
+  PluginUIHandlerRegistration,
   PluginUIRequestContext,
   PluginUIRequestUser,
   PluginUIBoundResource,
@@ -203,6 +209,14 @@ export type {
   LogbookBatchResult,
   LogbookQsoSnapshot,
 } from '@tx5dr/core';
+
+/** Atomic contest-QSO contract and its durable private-field codec. */
+export {
+  CONTEST_QSO_ENVELOPE_MAX_BYTES,
+  ContestQsoEnvelopeSchema,
+  parseContestQsoEnvelope,
+  serializeContestQsoEnvelope,
+} from '@tx5dr/contracts';
 
 
 /** Callsign and DXCC helpers available to plugins. */
@@ -236,6 +250,7 @@ export type {
   SlotPack,
   FrequencyState,
   QSORecord,
+  ContestQsoEnvelope,
   FrameMessage,
   ModeDescriptor,
   OperatorSlots,
@@ -343,6 +358,9 @@ export {
   getPluginPageStorePath,
 } from './utils/page-scope.js';
 export type { PluginPageBoundResource } from './utils/page-scope.js';
+
+/** Composable FT8/FT4 contest rules, assembler and framework-neutral test kit. */
+export * from './toolkit/contest/index.js';
 
 /** QSO text field utilities. */
 export {

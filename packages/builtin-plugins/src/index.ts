@@ -160,6 +160,23 @@ export {
   BUILTIN_NO_REPLY_MEMORY_FILTER_PLUGIN_NAME,
 };
 
+export {
+  createWWDigiContestEntry,
+  readWWDigiContestEntry,
+  withWWDigiContestEntry,
+  wwDigiEditionId,
+  wwDigiRulesetVersion,
+  WW_DIGI_CONTEST_ID,
+  WW_DIGI_RULESET_VERSION,
+} from './ww-digi/contest-entry.js';
+export type {
+  WWDigiContestEntryInput,
+  WWDigiContestEntryView,
+  WWDigiContestSource,
+  WWDigiContestStatus,
+  WWDigiRulesetVersion,
+} from './ww-digi/contest-entry.js';
+
 // ===== Registry =====
 
 /**

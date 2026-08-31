@@ -49,6 +49,61 @@ export const SubdivisionConfidenceSchema = z.enum([
   'low',
 ]);
 
+/** Maximum UTF-8 JSON size of contest-owned data persisted with one QSO. */
+export const CONTEST_QSO_ENVELOPE_MAX_BYTES = 8 * 1024;
+
+const ContestQsoExchangeSchema = z.record(z.string(), z.string());
+const ContestQsoAnnotationValueSchema = z.union([z.string(), z.number().finite(), z.boolean()]);
+
+function durableContestQsoJson(value: unknown): string {
+  return JSON.stringify(value).replace(/[<>\u007f-\uffff]/g, character => (
+    `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`
+  ));
+}
+
+/**
+ * Versioned contest facts that must be committed atomically with their QSO.
+ *
+ * The shape is deliberately shallow and bounded. Contest plugins may choose
+ * their exchange and annotation keys, but cannot persist arbitrary object
+ * graphs or binary payloads in the logbook record.
+ */
+export const ContestQsoEnvelopeSchema = z.object({
+  schemaVersion: z.literal(1),
+  contestId: z.string().min(1),
+  editionId: z.string().min(1),
+  rulesetVersion: z.string().min(1),
+  sent: ContestQsoExchangeSchema,
+  received: ContestQsoExchangeSchema,
+  annotations: z.record(z.string(), ContestQsoAnnotationValueSchema).optional(),
+}).strict().superRefine((value, context) => {
+  if (new TextEncoder().encode(durableContestQsoJson(value)).byteLength > CONTEST_QSO_ENVELOPE_MAX_BYTES) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Contest QSO envelope must not exceed ${CONTEST_QSO_ENVELOPE_MAX_BYTES} UTF-8 JSON bytes`,
+    });
+  }
+});
+
+/**
+ * Serialize a validated contest envelope as ASCII-only JSON for durable ADIF
+ * private fields. Escaping non-ASCII and angle brackets keeps legacy string
+ * ADIF readers byte-safe without changing the decoded data.
+ */
+export function serializeContestQsoEnvelope(value: ContestQsoEnvelope): string {
+  return durableContestQsoJson(ContestQsoEnvelopeSchema.parse(value));
+}
+
+/** Parse and validate an envelope read from a durable private field. */
+export function parseContestQsoEnvelope(value: string): ContestQsoEnvelope | undefined {
+  try {
+    const parsed = ContestQsoEnvelopeSchema.safeParse(JSON.parse(value));
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // 操作配置
 export const OperatorConfigSchema = z.object({
   id: z.string(),
@@ -114,6 +169,7 @@ export const QSORecordSchema = z.object({
   messageHistory: z.array(z.string()), // 内部消息历史（FT8 等数字模式）
   comment: z.string().optional(), // 标准 ADIF COMMENT 字段
   contestId: z.string().optional(), // ADIF CONTEST_ID
+  contestEntry: ContestQsoEnvelopeSchema.optional(), // TX-5DR atomic contest facts
   myCallsign: z.string().optional(), // 我的呼号（操作员呼号）
   myGrid: z.string().optional(), // 我的网格定位（操作员网格）
   qth: z.string().optional(), // 对方 QTH（地点，语音通联常用）
@@ -150,6 +206,14 @@ export const QSORecordSchema = z.object({
 
   // 附注（对应 ADIF NOTES 字段）
   notes: z.string().optional(),
+}).superRefine((value, context) => {
+  if (value.contestId && value.contestEntry && value.contestId !== value.contestEntry.contestId) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['contestEntry', 'contestId'],
+      message: 'contestEntry.contestId must match contestId',
+    });
+  }
 });
 
 /** Host persistence behavior for an automatically completed QSO. */
@@ -174,6 +238,7 @@ export type DxccStatus = z.infer<typeof DxccStatusSchema>;
 export type DxccSource = z.infer<typeof DxccSourceSchema>;
 export type DxccConfidence = z.infer<typeof DxccConfidenceSchema>;
 export type QSOContext = z.infer<typeof QSOContextSchema>;
+export type ContestQsoEnvelope = z.infer<typeof ContestQsoEnvelopeSchema>;
 
 /**
  * Canonical persisted QSO record used by TX-5DR logbooks and plugin hooks.

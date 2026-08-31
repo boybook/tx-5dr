@@ -5,21 +5,21 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT_DIR="$PROJECT_ROOT/out/android-runtime"
 WORK_DIR="$OUT_DIR/work"
 DIST_DIR="$OUT_DIR/dist"
-VERSION="nightly"
+RELEASE_VERSION=""
 CHANNEL="nightly"
 COMMIT="$(git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
-SHORT="${COMMIT:0:7}"
 BUILD_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+BUILD_STAMP=""
 COMMIT_TITLE="$(git -C "$PROJECT_ROOT" show -s --format=%s "$COMMIT" 2>/dev/null || echo "")"
-ARTIFACT_NAME="TX-5DR-${VERSION}-android-runtime-linux-arm64.tar.gz"
 BASE_URL="${TX5DR_ANDROID_RUNTIME_BASE_URL:-https://dl.tx5dr.com}"
 OBJECT_PREFIX="${TX5DR_ANDROID_RUNTIME_OBJECT_PREFIX:-tx-5dr/android-runtime/${CHANNEL}}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --version) VERSION="$2"; shift 2 ;;
+    --release-version) RELEASE_VERSION="$2"; shift 2 ;;
     --channel) CHANNEL="$2"; shift 2 ;;
-    --commit) COMMIT="$2"; SHORT="${COMMIT:0:7}"; shift 2 ;;
+    --commit) COMMIT="$2"; shift 2 ;;
+    --build-stamp) BUILD_STAMP="$2"; shift 2 ;;
     --commit-title) COMMIT_TITLE="$2"; shift 2 ;;
     --build-timestamp) BUILD_TS="$2"; shift 2 ;;
     --out-dir) OUT_DIR="$2"; WORK_DIR="$OUT_DIR/work"; DIST_DIR="$OUT_DIR/dist"; shift 2 ;;
@@ -30,20 +30,40 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-SAFE_VERSION="$(printf '%s' "$VERSION" | sed 's/[^A-Za-z0-9._-]/./g')"
-ARTIFACT_NAME="TX-5DR-${SAFE_VERSION}-android-runtime-linux-arm64.tar.gz"
+if [[ -z "$BUILD_STAMP" ]]; then
+  BUILD_STAMP="$(TZ=UTC git -C "$PROJECT_ROOT" show -s --date=format-local:%Y%m%d%H%M --format=%cd "$COMMIT" 2>/dev/null || date -u +%Y%m%d%H%M)"
+fi
+
 rm -rf "$WORK_DIR" "$DIST_DIR"
 mkdir -p "$WORK_DIR/tx5dr" "$DIST_DIR"
 
 if [[ "${NO_BUILD:-0}" != "1" ]]; then
-  node "$PROJECT_ROOT/scripts/prepare-server-build-info.mjs" \
-    --channel "$CHANNEL" \
-    --version "$VERSION" \
-    --commit "$COMMIT" \
-    --build-timestamp "$BUILD_TS" \
+  BUILD_INFO_ARGS=(
+    --channel "$CHANNEL"
+    --commit "$COMMIT"
+    --build-timestamp "$BUILD_TS"
+    --build-stamp "$BUILD_STAMP"
     --distribution android-bridge
+  )
+  if [[ "$CHANNEL" == "release" ]]; then
+    [[ -n "$RELEASE_VERSION" ]] || { echo "--release-version is required for release builds" >&2; exit 2; }
+    BUILD_INFO_ARGS+=(--version "$RELEASE_VERSION")
+  elif [[ -n "$RELEASE_VERSION" ]]; then
+    echo "--release-version is only valid for release builds" >&2
+    exit 2
+  fi
+  node "$PROJECT_ROOT/scripts/prepare-server-build-info.mjs" "${BUILD_INFO_ARGS[@]}"
   (cd "$PROJECT_ROOT" && yarn build)
 fi
+
+BUILD_INFO_PATH="$PROJECT_ROOT/packages/server/src/generated/buildInfo.json"
+if [[ ! -f "$BUILD_INFO_PATH" ]]; then
+  BUILD_INFO_PATH="$PROJECT_ROOT/packages/server/dist/generated/buildInfo.json"
+fi
+[[ -f "$BUILD_INFO_PATH" ]] || { echo "Canonical build info is missing" >&2; exit 1; }
+VERSION="$(node -e 'const info=require(process.argv[1]); if(!info.version) throw new Error("Canonical build version is missing"); process.stdout.write(info.version)' "$BUILD_INFO_PATH")"
+SAFE_VERSION="$(printf '%s' "$VERSION" | sed 's/[^A-Za-z0-9._-]/./g')"
+ARTIFACT_NAME="TX-5DR-${SAFE_VERSION}-android-runtime-linux-arm64.tar.gz"
 
 APP_ROOT="$WORK_DIR/tx5dr"
 mkdir -p "$APP_ROOT/packages" "$APP_ROOT/resources"

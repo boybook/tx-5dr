@@ -71,26 +71,39 @@ export interface KVStore {
 
 /** Read-only live view of one plugin storage scope. */
 export interface ReadonlyKVStore {
+  /** Reads a detached stored value or the caller-provided default. */
   get<T = unknown>(key: string, defaultValue?: T): T;
+  /** Reports whether the scope currently contains an explicit key. */
   has(key: string): boolean;
+  /** Returns the current key names as a detached array. */
   keys(): string[];
 }
 
+/** Exact digital-mode text that a plugin wants the Host encoder to validate. */
 export interface DigitalMessagePreflightRequest {
+  /** FT8 or FT4 encoder to use for validation. */
   mode: 'FT8' | 'FT4';
+  /** Operator-visible message text before Host normalization and encoding. */
   text: string;
 }
 
+/** Detached result of validating one message without producing audio or transmitting. */
 export interface DigitalMessagePreflightResult {
+  /** Whether the Host encoder accepts the normalized text exactly. */
   encodable: boolean;
+  /** Normalized text that was submitted to the encoder. */
   requestedText: string;
+  /** Exact text recovered from the encoded payload when encoding succeeded. */
   transmittedText?: string;
+  /** Stable reason explaining why exact encoding was rejected. */
   reason?: 'empty' | 'encoder_changed_text' | 'encode_failed';
+  /** Sanitized encoder diagnostic intended for plugin logs. */
   error?: string;
 }
 
 /** Read-only digital-mode validation; no audio or encoder handle is exposed. */
 export interface DigitalMessagePreflight {
+  /** Validates and round-trips one FT8/FT4 message through the Host encoder. */
   check(request: DigitalMessagePreflightRequest): Promise<DigitalMessagePreflightResult>;
 }
 
@@ -836,10 +849,14 @@ export interface UIBridge {
    * `bridge.invoke()` SDK method. The host routes incoming invoke requests to
    * the handler and sends the return value back to the iframe.
    *
-   * Only one handler can be registered per plugin instance. Calling this method
-   * again replaces the previous handler.
+   * A registration with `pageIds` only handles those pages and composes with
+   * other page-scoped registrations. Omitting `pageIds` preserves the legacy
+   * fallback behavior; a later fallback registration replaces the previous one.
    */
-  registerPageHandler(handler: PluginUIHandler): void;
+  registerPageHandler(
+    handler: PluginUIHandler,
+    registration?: PluginUIHandlerRegistration,
+  ): void;
 
   /**
    * Pushes a JSON-compatible data snapshot to the specific page session.
@@ -894,6 +911,12 @@ export interface PluginUIHandler {
     data: unknown,
     requestContext: PluginUIRequestContext,
   ): Promise<unknown>;
+}
+
+/** Optional routing scope for one iframe page handler registration. */
+export interface PluginUIHandlerRegistration {
+  /** Page ids owned by this handler. An explicitly empty list is invalid. */
+  pageIds?: readonly string[];
 }
 
 /** Host-authenticated user identity attached to an iframe invoke request. */

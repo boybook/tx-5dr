@@ -88,6 +88,10 @@ function createManager(options: {
       getHealth: vi.fn(() => ({ state: 'healthy', readable: true, writable: true, issues: [], updatedAt: 0 })),
       onHealthChanged: vi.fn(() => () => {}),
       queryQSOs: options.logBook.provider.queryQSOs ?? vi.fn(async () => []),
+      readQsoSnapshot: options.logBook.provider.readQsoSnapshot
+        ?? vi.fn(async () => ({ revision: 'r0', records: [] })),
+      applyQsoBatch: options.logBook.provider.applyQsoBatch
+        ?? vi.fn(async () => ({ revision: 'r0', outcomes: [] })),
       getStatistics: options.logBook.provider.getStatistics ?? vi.fn(async () => ({ totalQSOs: 0, uniqueCallsigns: 0 })),
     },
   };
@@ -146,6 +150,7 @@ async function invokeRecordQSO(manager: RadioOperatorManager, payload: {
   persistencePolicy?: QSOPersistencePolicy;
   destination?: { kind: 'plugin-session'; sessionId: string };
   sourcePluginName?: string;
+  metadata?: Record<string, unknown>;
   retryAttemptId?: string;
   resolve?: (record: QSORecord) => void;
   reject?: (error: unknown) => void;
@@ -1360,7 +1365,21 @@ describe('RadioOperatorManager automatic QSO logging', () => {
       callsign: 'BG5DRB',
     });
     const operator = await addBasicOperator(manager, 'op1', 'BG5DRB');
+    const recordQSOLog = vi.spyOn(operator, 'recordQSOLog');
     attachQSOHookSpy(manager);
+    const metadata = {
+      authorizationId: 'auth-1',
+      evidence: { finalAcknowledgement: 'RR73', source: 'physical-tx' },
+    };
+    const contestEntry = {
+      schemaVersion: 1 as const,
+      contestId: 'WW-DIGI',
+      editionId: '2026',
+      rulesetVersion: '2026.1',
+      sent: { grid: 'PL05' },
+      received: { grid: 'FN31' },
+      annotations: { status: 'included', authorizationId: 'auth-1' },
+    };
 
     await invokeRecordQSO(manager, {
       operatorId: 'op1',
@@ -1369,6 +1388,9 @@ describe('RadioOperatorManager automatic QSO logging', () => {
       qsoLifecycleEpoch: 2,
       qsoRuntimeGeneration: 10,
       persistencePolicy: 'preserve-distinct',
+      destination: { kind: 'plugin-session', sessionId: 'plugin-session-test' },
+      sourcePluginName: 'ww-digi',
+      metadata,
       qsoRecord: {
         id: 'contest-retry',
         callsign: 'K1BBB',
@@ -1378,16 +1400,26 @@ describe('RadioOperatorManager automatic QSO logging', () => {
         messageHistory: [],
         myCallsign: 'BG5DRB',
         contestId: 'WW-DIGI',
+        contestEntry,
       },
     });
-    const [attempt] = manager.listUnsavedQsos('log-1');
+    const [attempt] = manager.listUnsavedQsos('plugin-session-test');
     expect(attempt).toBeDefined();
     expect(operator.isLogbookPersistenceBlocked).toBe(true);
     expect([...(manager as any).unsavedQsoAttempts.values()]).toEqual([
-      expect.objectContaining({ streamId: 'lane-3', persistencePolicy: 'preserve-distinct' }),
+      expect.objectContaining({
+        streamId: 'lane-3',
+        persistencePolicy: 'preserve-distinct',
+        destination: { kind: 'plugin-session', sessionId: 'plugin-session-test' },
+        sourcePluginName: 'ww-digi',
+        metadata,
+        qsoRecord: expect.objectContaining({ contestEntry }),
+      }),
     ]);
+    metadata.evidence.finalAcknowledgement = 'MUTATED';
+    contestEntry.received.grid = 'MUTATED';
 
-    await expect(manager.retryUnsavedQso('log-1', attempt!.attemptId))
+    await expect(manager.retryUnsavedQso('plugin-session-test', attempt!.attemptId))
       .resolves.toMatchObject({ id: 'contest-retried-1' });
 
     expect(readQsoSnapshot).toHaveBeenCalledTimes(2);
@@ -1395,7 +1427,31 @@ describe('RadioOperatorManager automatic QSO logging', () => {
     expect(provider.getLastQSOWithCallsign).not.toHaveBeenCalled();
     expect(provider.addQSO).not.toHaveBeenCalled();
     expect(provider.updateQSO).not.toHaveBeenCalled();
-    expect(manager.listUnsavedQsos('log-1')).toEqual([]);
+    expect(recordQSOLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contestEntry: expect.objectContaining({ received: { grid: 'FN31' } }),
+      }),
+      expect.objectContaining({
+        destination: { kind: 'plugin-session', sessionId: 'plugin-session-test' },
+        sourcePluginName: 'ww-digi',
+        metadata: {
+          authorizationId: 'auth-1',
+          evidence: { finalAcknowledgement: 'RR73', source: 'physical-tx' },
+        },
+      }),
+    );
+    expect(applyQsoBatch).toHaveBeenNthCalledWith(
+      2,
+      [expect.objectContaining({
+        type: 'add',
+        record: expect.objectContaining({
+          contestEntry: expect.objectContaining({ received: { grid: 'FN31' } }),
+        }),
+      })],
+      { expectedRevision: 'revision-2' },
+      'op1',
+    );
+    expect(manager.listUnsavedQsos('plugin-session-test')).toEqual([]);
     expect(operator.isLogbookPersistenceBlocked).toBe(false);
   });
 

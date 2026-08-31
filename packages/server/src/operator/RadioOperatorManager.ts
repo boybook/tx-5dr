@@ -141,6 +141,7 @@ export interface UnsavedQsoAttempt {
   persistencePolicy?: QSOPersistencePolicy;
   destination?: PluginLogbookDestination;
   sourcePluginName?: string;
+  metadata?: Record<string, unknown>;
   createdAt: number;
 }
 
@@ -397,6 +398,7 @@ export class RadioOperatorManager {
       persistencePolicy?: QSOPersistencePolicy;
       destination?: PluginLogbookDestination;
       sourcePluginName?: string;
+      metadata?: Record<string, unknown>;
       retryAttemptId?: string;
       resolve?: (record: QSORecord) => void;
       reject?: (error: unknown) => void;
@@ -448,6 +450,7 @@ export class RadioOperatorManager {
             data.streamId,
             destination,
             sourcePluginName,
+            data.metadata,
           );
           if (this.isCurrentQsoLifecycle(
             data.operatorId,
@@ -519,6 +522,7 @@ export class RadioOperatorManager {
               data.streamId,
               destination,
               sourcePluginName,
+              data.metadata,
             ),
             unsavedCount: 1,
             error: {
@@ -587,7 +591,7 @@ export class RadioOperatorManager {
         };
 
         const completedQSO = retryAttempt
-          ? { ...retryAttempt.qsoRecord, messageHistory: [...retryAttempt.qsoRecord.messageHistory] }
+          ? structuredClone(retryAttempt.qsoRecord)
           : await this.completeAutomaticQSORecord(data.operatorId, normalizedQSO);
         // Retain the exact first candidate so an explicit retry cannot silently
         // rebuild a different history, report, or frequency later.
@@ -725,6 +729,7 @@ export class RadioOperatorManager {
           data.streamId,
           destination,
           sourcePluginName,
+          data.metadata,
         );
         this.preparedQsoCandidates.delete(persistenceKey);
         if (this.isCurrentQsoLifecycle(
@@ -1554,10 +1559,7 @@ export class RadioOperatorManager {
     if (!operator) {
       throw new LogbookOperationError('LOGBOOK_UNSAVED_QSO_NOT_FOUND', 'The operator for this unsaved QSO is unavailable');
     }
-    const retry = operator.recordQSOLog({
-        ...attempt.qsoRecord,
-        messageHistory: [...attempt.qsoRecord.messageHistory],
-      }, {
+    const retry = operator.recordQSOLog(structuredClone(attempt.qsoRecord), {
         retryAttemptId: attempt.attemptId,
         qsoLifecycleId: attempt.qsoLifecycleId,
         qsoLifecycleEpoch: attempt.qsoLifecycleEpoch,
@@ -1566,6 +1568,7 @@ export class RadioOperatorManager {
         persistencePolicy: attempt.persistencePolicy,
         destination: attempt.destination,
         sourcePluginName: attempt.sourcePluginName,
+        metadata: attempt.metadata ? structuredClone(attempt.metadata) : undefined,
       })
       .then((persisted) => {
         if (this.isCurrentQsoLifecycle(
@@ -1637,6 +1640,7 @@ export class RadioOperatorManager {
     streamId?: string,
     destination?: PluginLogbookDestination,
     sourcePluginName?: string,
+    metadata?: Record<string, unknown>,
   ): string {
     const existing = this.getUnsavedQsosForOperator(operatorId).find((attempt) => (
       qsoLifecycleId !== undefined
@@ -1649,7 +1653,7 @@ export class RadioOperatorManager {
       attemptId,
       operatorId,
       logBookId,
-      qsoRecord: { ...record, messageHistory: [...record.messageHistory] },
+      qsoRecord: structuredClone(record),
       qsoLifecycleId,
       qsoLifecycleEpoch,
       qsoRuntimeGeneration,
@@ -1657,6 +1661,7 @@ export class RadioOperatorManager {
       persistencePolicy,
       destination,
       sourcePluginName,
+      metadata: metadata ? structuredClone(metadata) : undefined,
       createdAt: Date.now(),
     });
     return attemptId;

@@ -8,6 +8,7 @@
  *   npx create-tx5dr-plugin my-plugin                    # Name only, prompts for rest
  *   npx create-tx5dr-plugin my-plugin --type utility     # Non-interactive
  *   npx create-tx5dr-plugin my-plugin --template ui-react
+ *   npx create-tx5dr-plugin my-contest --template ft8-contest
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -18,9 +19,9 @@ import { createInterface } from 'node:readline';
 
 type PluginType = 'utility' | 'strategy';
 type Language = 'ts' | 'js';
-type Template = 'basic' | 'ui-vanilla' | 'ui-react' | 'ui-vue';
+type Template = 'basic' | 'ui-vanilla' | 'ui-react' | 'ui-vue' | 'ft8-contest';
 
-const VALID_TEMPLATES: Template[] = ['basic', 'ui-vanilla', 'ui-react', 'ui-vue'];
+const VALID_TEMPLATES: Template[] = ['basic', 'ui-vanilla', 'ui-react', 'ui-vue', 'ft8-contest'];
 
 interface PluginConfig {
   name: string;
@@ -75,7 +76,7 @@ function printUsage(): void {
   Options:
     --type <utility|strategy>                        Plugin type (default: utility)
     --lang <ts|js>                                   Language (default: ts)
-    --template <basic|ui-vanilla|ui-react|ui-vue>    Template (default: basic)
+    --template <basic|ui-vanilla|ui-react|ui-vue|ft8-contest>  Template (default: basic)
     --help, -h                                       Show this help message
 
   Templates:
@@ -83,12 +84,14 @@ function printUsage(): void {
     ui-vanilla   Plugin with vanilla HTML/JS/CSS UI page
     ui-react     Plugin with React + Vite UI page
     ui-vue       Plugin with Vue + Vite UI page
+    ft8-contest  TypeScript strategy with composable FT8 contest rules
 
   Examples:
     npx create-tx5dr-plugin my-plugin
     npx create-tx5dr-plugin my-plugin --type strategy
     npx create-tx5dr-plugin my-plugin --template ui-react
     npx create-tx5dr-plugin my-plugin --template ui-vue --type utility
+    npx create-tx5dr-plugin my-contest --template ft8-contest
   `);
 }
 
@@ -110,22 +113,31 @@ async function promptConfig(partial: Partial<PluginConfig>): Promise<PluginConfi
       process.exit(1);
     }
 
-    let type = partial.type;
-    if (!type) {
+    let template = partial.template;
+    if (!template) {
+      const answer = await prompt(rl, 'Template (basic/ui-vanilla/ui-react/ui-vue/ft8-contest) [basic]: ');
+      template = VALID_TEMPLATES.includes(answer as Template) ? answer as Template : 'basic';
+    }
+
+    if (template === 'ft8-contest' && partial.type && partial.type !== 'strategy') {
+      console.error('The ft8-contest template requires --type strategy.');
+      process.exit(1);
+    }
+    if (template === 'ft8-contest' && partial.lang && partial.lang !== 'ts') {
+      console.error('The ft8-contest template requires --lang ts.');
+      process.exit(1);
+    }
+
+    let type: PluginType = template === 'ft8-contest' ? 'strategy' : partial.type ?? 'utility';
+    if (!partial.type && template !== 'ft8-contest') {
       const answer = await prompt(rl, 'Plugin type (utility/strategy) [utility]: ');
       type = answer === 'strategy' ? 'strategy' : 'utility';
     }
 
-    let lang = partial.lang;
-    if (!lang) {
+    let lang: Language = template === 'ft8-contest' ? 'ts' : partial.lang ?? 'ts';
+    if (!partial.lang && template !== 'ft8-contest') {
       const answer = await prompt(rl, 'Language (ts/js) [ts]: ');
       lang = answer === 'js' ? 'js' : 'ts';
-    }
-
-    let template = partial.template;
-    if (!template) {
-      const answer = await prompt(rl, 'Template (basic/ui-vanilla/ui-react/ui-vue) [basic]: ');
-      template = VALID_TEMPLATES.includes(answer as Template) ? answer as Template : 'basic';
     }
 
     return { name, type, lang, template };
@@ -137,7 +149,9 @@ async function promptConfig(partial: Partial<PluginConfig>): Promise<PluginConfi
 // ===== Helpers =====
 
 function hasUI(config: PluginConfig): boolean {
-  return config.template !== 'basic';
+  return config.template === 'ui-vanilla'
+    || config.template === 'ui-react'
+    || config.template === 'ui-vue';
 }
 
 function hasVite(config: PluginConfig): boolean {
@@ -154,6 +168,7 @@ function generatePackageJson(config: PluginConfig): string {
   if (config.lang === 'ts') {
     devDeps['typescript'] = '^5.0.0';
     devDeps['vitest'] = '^1.0.0';
+    if (config.template === 'ft8-contest') devDeps['esbuild'] = '^0.25.0';
   }
 
   if (hasVite(config)) {
@@ -172,7 +187,13 @@ function generatePackageJson(config: PluginConfig): string {
 
   const scripts: Record<string, string> = {};
   if (config.lang === 'ts') {
-    if (hasVite(config)) {
+    if (config.template === 'ft8-contest') {
+      scripts['build'] = 'npm run build:types && npm run build:bundle';
+      scripts['build:types'] = 'tsc --emitDeclarationOnly';
+      scripts['build:bundle'] = 'esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --legal-comments=none --outfile=dist/index.mjs';
+      scripts['typecheck'] = 'tsc --noEmit';
+      scripts['dev'] = 'esbuild src/index.ts --bundle --platform=node --format=esm --target=node20 --legal-comments=none --outfile=dist/index.mjs --watch';
+    } else if (hasVite(config)) {
       scripts['build'] = 'tsc && npm run build:ui';
       scripts['build:ui'] = 'vite build --config ui/vite.config.ts';
       scripts['dev:server'] = 'tsc --watch';
@@ -190,7 +211,10 @@ function generatePackageJson(config: PluginConfig): string {
     version: '0.1.0',
     type: 'module',
     ...(config.lang === 'ts'
-      ? { main: 'dist/index.js', types: 'dist/index.d.ts' }
+      ? {
+          main: config.template === 'ft8-contest' ? 'dist/index.mjs' : 'dist/index.js',
+          types: 'dist/index.d.ts',
+        }
       : { main: 'index.js' }),
     scripts,
     devDependencies: devDeps,
@@ -414,6 +438,161 @@ export default plugin;
 `;
 }
 
+function generateTsFT8ContestPlugin(config: PluginConfig): string {
+  return `import {
+  type FrameMessage,
+  type ParsedFT8Message,
+  type SlotInfo,
+  type StrategyDecisionMetaV2,
+  type StrategyDecisionResult,
+  type StrategyPluginContext,
+  type StrategyRuntime,
+  type StrategyRuntimeCheckpoint,
+  type StrategyRuntimeContext,
+  type StrategyRuntimeSlot,
+  type StrategyRuntimeSlotContentUpdate,
+  type StrategyRuntimeSnapshot,
+} from '@tx5dr/plugin-api';
+import {
+  cabrilloSubmission,
+  CONTEST_SESSION_PERMISSIONS,
+  composeFT8ContestPlugin,
+  createContestQsoEnvelopeAdapter,
+  defaultContestSession,
+  defineFT8Contest,
+  distancePoints,
+  fixedWeekendEdition,
+  gridExchange,
+  requireExchangeAndFinalAck,
+  type FT8ContestQso,
+  type GridExchange,
+} from '@tx5dr/plugin-api/contest';
+import zhLocale from './locales/zh.json' with { type: 'json' };
+import enLocale from './locales/en.json' with { type: 'json' };
+
+export type ContestQso = FT8ContestQso<GridExchange> & {
+  frequencyKhz: number;
+  cabrilloDateTime: string;
+};
+
+export const contest = defineFT8Contest<GridExchange, ContestQso>({
+  id: '${config.name}',
+  rulesetVersion: '2026.1',
+  edition: fixedWeekendEdition({
+    id: '2026',
+    // Replace these example boundaries and record the official rule source.
+    startAt: '2026-01-03T00:00:00Z',
+    endAt: '2026-01-04T00:00:00Z',
+  }),
+  bands: ['80M', '40M', '20M', '15M', '10M'],
+  exchange: gridExchange(),
+  // Completion is explicit because it belongs to the RF fail-closed boundary.
+  completion: requireExchangeAndFinalAck(),
+  scoring: distancePoints<ContestQso>({ stepKm: 3000 }),
+  submission: cabrilloSubmission<ContestQso>({
+    headers: () => [['CONTEST', '${config.name.toUpperCase()}']],
+    qsoLine: (qso) =>
+      \`QSO: \${qso.frequencyKhz} DG \${qso.cabrilloDateTime} \${qso.callsign}\`,
+  }),
+});
+
+export const contestEnvelope = createContestQsoEnvelopeAdapter(contest);
+
+export const session = defaultContestSession({
+  create: () => ({
+    schemaVersion: 1,
+    revision: 0,
+    settings: {},
+  }),
+});
+
+class ContestRuntime implements StrategyRuntime {
+  private state: StrategyRuntimeSlot = 'TX6';
+  private slots: Partial<Record<StrategyRuntimeSlot, string>> = {};
+  private context: StrategyRuntimeContext = {};
+
+  constructor(private readonly ctx: StrategyPluginContext) {}
+
+  checkpoint(): StrategyRuntimeCheckpoint {
+    return structuredClone({ state: this.state, slots: this.slots, context: this.context });
+  }
+
+  restore(checkpoint: StrategyRuntimeCheckpoint): void {
+    const saved = checkpoint as {
+      state: StrategyRuntimeSlot;
+      slots: Partial<Record<StrategyRuntimeSlot, string>>;
+      context: StrategyRuntimeContext;
+    };
+    this.state = saved.state;
+    this.slots = { ...saved.slots };
+    this.context = { ...saved.context };
+  }
+
+  decide(messages: ParsedFT8Message[], meta: StrategyDecisionMetaV2): StrategyDecisionResult {
+    if (meta.signal.aborted) throw meta.signal.reason ?? new Error('Strategy decision aborted');
+    // Apply the contest exchange/completion modules in your protocol reducer here.
+    return { transmission: this.getTransmitText(), snapshot: this.getSnapshot() };
+  }
+
+  getTransmitText(): string | null {
+    return this.slots[this.state] ?? null;
+  }
+
+  requestCall(callsign: string, lastMessage?: { message: FrameMessage; slotInfo: SlotInfo }): void {
+    this.context.targetCallsign = callsign;
+    this.state = 'TX1';
+    this.ctx.log.info('Contest call requested', { callsign });
+  }
+
+  getSnapshot(): StrategyRuntimeSnapshot {
+    return {
+      currentState: this.state,
+      slots: { ...this.slots },
+      context: { ...this.context },
+      availableSlots: ['TX1', 'TX2', 'TX3', 'TX4', 'TX5', 'TX6'],
+    };
+  }
+
+  patchContext(patch: Partial<StrategyRuntimeContext>): void {
+    Object.assign(this.context, patch);
+  }
+
+  setState(state: StrategyRuntimeSlot): void {
+    this.state = state;
+  }
+
+  setSlotContent(update: StrategyRuntimeSlotContentUpdate): void {
+    this.slots[update.slot] = update.content;
+  }
+
+  reset(reason?: string): void {
+    this.state = 'TX6';
+    this.slots = {};
+    this.context = {};
+    this.ctx.log.info('Contest strategy reset', { reason });
+  }
+}
+
+export const plugin = composeFT8ContestPlugin({
+  name: '${config.name}',
+  version: '0.1.0',
+  minPluginApiVersion: '2.1.0',
+  description: 'pluginDescription',
+  permissions: CONTEST_SESSION_PERMISSIONS,
+  contest,
+  session,
+  runtime: (_contest, context) => new ContestRuntime(context),
+});
+
+export const locales: Record<string, Record<string, string>> = {
+  zh: zhLocale,
+  en: enLocale,
+};
+
+export default plugin;
+`;
+}
+
 function generateTsUtilityPluginWithUI(config: PluginConfig): string {
   return `import {
   definePlugin,
@@ -586,6 +765,49 @@ export default plugin;
 // ===== Test templates =====
 
 function generateTsTest(config: PluginConfig): string {
+  if (config.template === 'ft8-contest') {
+    return `import { describe, it, expect } from 'vitest';
+import { createFT8ContestTestKit } from '@tx5dr/plugin-api/contest';
+import { contest, contestEnvelope, plugin } from '../index.js';
+
+describe('${config.name}', () => {
+  const kit = createFT8ContestTestKit(contest);
+
+  it('exposes an FT8 strategy plugin', () => {
+    expect(plugin.type).toBe('strategy');
+    expect(plugin.minPluginApiVersion).toBe('2.1.0');
+    expect(contest.operating).toMatchObject({
+      humanInitiation: 'required',
+      maxConcurrentQsos: 1,
+      maxSimultaneousSignals: 1,
+    });
+  });
+
+  it('round-trips the contest exchange', () => {
+    kit.exchange({ grid: 'FN31' }, { grid: 'FN31' });
+    kit.invalidExchange({ grid: 'ZZ99' }, 'invalid_grid');
+  });
+
+  it('requires exchange and a final acknowledgement', () => {
+    kit.completion({
+      sentExchange: { grid: 'PL04' },
+      receivedExchange: { grid: 'FN31' },
+      receivedFinalAck: true,
+    }, true);
+  });
+
+  it('creates an identity-bound contest QSO envelope', () => {
+    const envelope = contestEnvelope.create({
+      sent: { grid: 'PL04' },
+      received: { grid: 'FN31' },
+    });
+    expect(contestEnvelope.validate(envelope).ok).toBe(true);
+    expect(envelope.rulesetVersion).toBe(contest.rulesetVersion);
+  });
+});
+`;
+  }
+
   if (config.type === 'strategy') {
     return `import { describe, it, expect } from 'vitest';
 import { createMockContext, createMockSlotInfo, createMockParsedMessage } from '@tx5dr/plugin-api/testing';
@@ -1172,7 +1394,9 @@ function generateFiles(config: PluginConfig): Map<string, string> {
   if (config.lang === 'ts') {
     files.set('tsconfig.json', generateTsConfig());
 
-    if (config.type === 'strategy') {
+    if (config.template === 'ft8-contest') {
+      files.set('src/index.ts', generateTsFT8ContestPlugin(config));
+    } else if (config.type === 'strategy') {
       files.set('src/index.ts', generateTsStrategyPlugin(config));
     } else if (hasUI(config)) {
       files.set('src/index.ts', generateTsUtilityPluginWithUI(config));

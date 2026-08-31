@@ -60,22 +60,30 @@ export interface StrategyRuntimeSnapshot {
   transmitGate?: StrategyTransmitGate;
 }
 
+/** Semantic tone requested by strategy-owned message presentation rules. */
 export type StrategyMessagePresentationTone = 'neutral' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger';
 
+/** Compact label and semantic tone rendered beside a decoded message. */
 export interface StrategyMessagePresentationBadge {
+  /** Literal label or plugin locale key. */
   label: string;
+  /** Host-themed semantic tone; plugins cannot provide CSS. */
   tone: StrategyMessagePresentationTone;
 }
 
+/** Bounded token matcher evaluated by the Host against normalized message tokens. */
 export interface StrategyMessagePresentationTokenMatch {
   /** Exact, case-insensitive token matching; arbitrary regular expressions are not accepted. */
   firstTokenIn?: string[];
+  /** Matches when any normalized message token equals one of these values. */
   anyTokenIn?: string[];
 }
 
+/** Named visual class assigned by a strategy presentation projection. */
 export interface StrategyMessagePresentationClass {
   /** @deprecated Use `badges`; retained for API v2 snapshot compatibility. */
   badge?: { label: string; tone: StrategyMessagePresentationTone };
+  /** Badges revealed when the optional emphasis matcher succeeds. */
   badges?: StrategyMessagePresentationBadge[];
   /** Semantic row treatment; Host maps tones to its theme and never accepts plugin CSS. */
   row?: {
@@ -88,45 +96,72 @@ export interface StrategyMessagePresentationClass {
    * The accent, text decoration and opacity remain visible when none match.
    */
   emphasisWhen?: StrategyMessagePresentationTokenMatch[];
+  /** Optional semantic strike-through for completed or excluded rows. */
   textDecoration?: 'line-through';
+  /** Optional semantic opacity treatment. */
   opacity?: 'normal' | 'muted';
 }
 
+/** Assigns a class when a Host-extracted fact is new within a partition. */
 export interface StrategyMessagePresentationNoveltyRule {
   /** Canonical message fact extracted by Host before comparing plugin-owned known values. */
   fact: 'grid-field-2';
+  /** Plugin-owned known values keyed by the configured partition. */
   knownValuesByPartition: Record<string, string[]>;
+  /** Presentation class used when the extracted fact is not known. */
   classId: string;
 }
 
+/** Adds a badge when a bounded token matcher accepts the decoded message. */
 export interface StrategyMessagePresentationTagRule {
+  /** Stable rule identity for diagnostics and replacement. */
   id: string;
+  /** Host-evaluated token matcher. */
   match: StrategyMessagePresentationTokenMatch;
+  /** Badge rendered when the matcher succeeds. */
   badge: StrategyMessagePresentationBadge;
 }
 
+/** Complete strategy-owned, data-only presentation projection for decoded messages. */
 export interface StrategyMessagePresentationProjection {
+  /** Monotonic plugin revision used to replace stale projections. */
   revision: number;
+  /** Whether the projection replaces logbook presentation or augments it. */
   mode: 'replace-logbook' | 'augment';
+  /** Canonical message subject classified by the projection. */
   subject: 'sender-callsign';
+  /** Partition used for assignments and novelty checks. */
   partitionBy: 'band' | 'mode' | 'none';
+  /** Optional partition allowlist. */
   eligiblePartitions?: string[];
+  /** Class applied when no assignment or rule selects another class. */
   defaultClass?: string;
+  /** Strategy-defined presentation classes keyed by stable ID. */
   classes: Record<string, StrategyMessagePresentationClass>;
+  /** Explicit subject-to-class assignments. */
   assignments: Array<{ subject: string; partition?: string; classId: string }>;
+  /** Optional Host-evaluated novelty rules. */
   noveltyRules?: StrategyMessagePresentationNoveltyRule[];
+  /** Optional Host-evaluated tag rules. */
   tagRules?: StrategyMessagePresentationTagRule[];
 }
 
+/** Strategy-owned reason that prevents an operator from starting transmission. */
 export interface StrategyTransmitGate {
+  /** Always false while the gate is present. */
   allowed: false;
+  /** Literal message or plugin locale key shown to the operator. */
   reason: string;
+  /** Optional strategy action that can resolve the gate. */
   actionId?: string;
 }
 
+/** Semantic tone used for strategy-owned operator actions. */
 export type StrategyActionTone = 'default' | 'primary' | 'success' | 'warning' | 'danger';
+/** Host layout requested for a strategy-owned action. */
 export type StrategyActionPresentation = 'primary' | 'secondary' | 'menu' | 'segmented';
 
+/** Optional value editor attached to a strategy-owned action. */
 export type StrategyActionInput =
   | {
       kind: 'text';
@@ -148,41 +183,66 @@ export type StrategyActionInput =
 
 /** One context-sensitive command wholly owned by a strategy plugin. */
 export interface StrategyActionDescriptor {
+  /** Stable action identifier passed back to the owning runtime. */
   id: string;
+  /** Literal label or plugin locale key. */
   label: string;
+  /** Optional literal description or plugin locale key. */
   description?: string;
+  /** Host icon identifier. */
   icon?: string;
+  /** Semantic action tone. */
   tone?: StrategyActionTone;
+  /** Preferred Host layout for this command. */
   presentation?: StrategyActionPresentation;
+  /** Optional group identity used by menus and segmented controls. */
   groupId?: string;
+  /** Whether a toggle-like action is currently selected. */
   selected?: boolean;
+  /** Explanation shown while the action is disabled. */
   disabledReason?: string;
+  /** Optional exact transmission preview. */
   previewText?: string;
+  /** Confirmation dialog requested before invocation. */
   confirmation?: {
     title: string;
     description?: string;
     confirmLabel?: string;
     cancelLabel?: string;
   };
+  /** Optional text, number, or audio-frequency editor. */
   input?: StrategyActionInput;
   /** Host-validated navigation to a page declared by the owning plugin. */
   navigation?: { kind: 'plugin-page'; pageId: string };
 }
 
+/** Strategy-owned operator attention item with optional actions and notification. */
 export interface StrategyAttention {
+  /** Stable identity used to replace or dismiss the item. */
   id: string;
+  /** Semantic severity rendered by the Host. */
   tone: 'info' | 'warning' | 'danger' | 'success';
+  /** Literal title or plugin locale key. */
   title: string;
+  /** Optional literal description or plugin locale key. */
   description?: string;
+  /** Locale interpolation parameters. */
   params?: Record<string, string | number>;
+  /** Whether the Host may surface an out-of-page notification. */
   notify?: boolean;
+  /** Epoch milliseconds after which the Host may discard the item. */
   expiresAt?: number;
+  /** Strategy action IDs offered with the item. */
   actionIds?: string[];
 }
 
+/** Durable QSO completion state projected by one strategy stream. */
 export interface StrategyCompletionProjection {
+  /** Current preparation or commit phase. */
   state: 'not-ready' | 'ready' | 'committing' | 'committed' | 'failed';
+  /** Optional literal label or plugin locale key. */
   label?: string;
+  /** Durable record ID once the Host commits the QSO. */
   recordId?: string;
 }
 
@@ -212,42 +272,60 @@ export interface StrategyStreamSnapshot {
   qsoLifecycleEpoch: number;
   /** Protocol-approved states that the operator may select for this lane. */
   stateOptions?: StrategyStateOption[];
+  /** Context-sensitive actions owned by this lane. */
   actions?: StrategyActionDescriptor[];
+  /** Operator attention items owned by this lane. */
   attentions?: StrategyAttention[];
+  /** Durable QSO completion projection for this lane. */
   completion?: StrategyCompletionProjection;
+  /** Most recent accepted inbound protocol text. */
   lastReceivedText?: string;
+  /** Exact text this lane plans to transmit next. */
   nextTransmitText?: string;
 }
 
+/** Optimistic target for a strategy action invocation. */
 export type StrategyActionTarget =
   | { kind: 'runtime' }
   | { kind: 'stream'; streamId: string; lifecycleEpoch: number }
   | { kind: 'queue-entry'; entryId: string; queueVersion: number };
 
+/** Host-validated invocation of one strategy-owned action. */
 export interface StrategyActionInvocation {
+  /** Runtime, stream, or queue entry that owns the action. */
   target: StrategyActionTarget;
+  /** Action identifier from the current strategy projection. */
   actionId: string;
+  /** Untrusted action input that the strategy must validate. */
   payload?: unknown;
 }
 
+/** Host-managed plugin logbook session effect returned by an accepted action or decision. */
 export type StrategyLogbookSessionEffect =
   | { operation: 'open'; sessionKey: string; title: string; retention?: 'durable' | 'runtime' }
   | { operation: 'destroy'; sessionKey: string };
 
+/** Declarative effects returned after invoking a strategy-owned action. */
 export interface StrategyActionResult {
+  /** Requests a fresh speculative decision after the action commits. */
   requestDecision?: boolean;
   /** Start this operator through the Host's normal automation path after a direct user action. */
   requestOperatorStart?: boolean;
+  /** QSO effects prepared and committed by the Host. */
   qsoCompletions?: StrategyQSOCompletionEffect[];
   /** Host-managed plugin logbook session operations caused by this explicit action. */
   logbookSessionEffects?: StrategyLogbookSessionEffect[];
+  /** Stable action outcome for UI feedback and diagnostics. */
   outcome?: { code: string; message?: string };
 }
 
 /** Optimistic request to move one strategy-owned lane to a user-selectable state. */
 export interface StrategyStreamStateUpdate {
+  /** Lane to update. */
   streamId: string;
+  /** Strategy-approved target state. */
   stateId: string;
+  /** Optimistic lane lifecycle epoch from the current projection. */
   expectedLifecycleEpoch: number;
 }
 
@@ -263,8 +341,11 @@ export interface StrategyTransmission {
 
 /** Physical confirmation for one transmitted lane in an atomic frame. */
 export interface StreamPhysicalReceipt extends StrategyTransmission {
+  /** Host physical-frame identity. */
   frameId: string;
+  /** Monotonic physical-frame revision. */
   revision: number;
+  /** Literal proof that this lane reached physical transmission. */
   physicalConfirmed: true;
 }
 
@@ -312,8 +393,11 @@ export interface AssistedQueueRow {
   lastHeardCyclesAgo?: number;
   /** Cycle in which the target was most recently decoded transmitting. */
   lastHeardCycle?: 0 | 1;
+  /** Active strategy stream currently processing this entry. */
   streamId?: string;
+  /** Reserved audio carrier when the entry owns a stream. */
   audioFrequencyHz?: number;
+  /** Audited operator authorization associated with this entry. */
   authorizationId?: string;
   /** Plugin-declared row actions. Omission preserves legacy queue controls. */
   actions?: StrategyActionDescriptor[];
@@ -428,8 +512,11 @@ export type StrategyRuntimeCheckpoint = unknown;
 
 /** Operator transmit-cycle selection observed by an active strategy runtime. */
 export interface StrategyOperatorTransmitCyclesChanged {
+  /** Previous Host-selected transmit cycles. */
   previousTransmitCycles: number[];
+  /** Current Host-selected transmit cycles. */
   transmitCycles: number[];
+  /** Source of the accepted cycle change. */
   source?: 'manual' | 'plugin' | 'late-decode' | 'slot-auto';
 }
 
@@ -463,6 +550,8 @@ export interface StrategyQSOCompletionSettlement {
   status: 'committed' | 'failed';
   /** Lane copied from the accepted completion effect. */
   streamId?: string;
+  /** Detached source metadata copied from the accepted completion effect. */
+  metadata?: Record<string, unknown>;
 }
 
 /** Complete output of one speculative strategy decision. */

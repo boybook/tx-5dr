@@ -7,7 +7,8 @@
     ".": "./dist/index.js",
     "./server": "./dist/server.js",
     "./DigitalRadioEngine": "./dist/DigitalRadioEngine.js",
-    "./cpu-profile": "./dist/services/ServerCpuProfileManager.js"
+    "./cpu-profile": "./dist/services/ServerCpuProfileManager.js",
+    "./build-info.json": "./dist/generated/buildInfo.json"
   },
   "scripts": {
     "build": "node ../../scripts/clean-paths.mjs dist && tsc",

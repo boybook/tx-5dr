@@ -66,6 +66,7 @@ describe('PluginContextFactory storage readiness', () => {
       () => ({}),
     );
 
+    expect(ctx.pluginApiVersion).toBe('2.1.0');
     expect(ctx.store.global.get('existing')).toEqual({ ok: true });
   });
 });

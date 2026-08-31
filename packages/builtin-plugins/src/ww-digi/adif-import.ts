@@ -10,6 +10,7 @@ import {
   resolveWWDigiBand,
   type WWDigiBand,
 } from './contest-log.js';
+import { createWWDigiContestEntry } from './contest-entry.js';
 
 export const WW_DIGI_ADIF_IMPORT_MAX_BYTES = 700 * 1024;
 
@@ -246,6 +247,13 @@ export function parseWWDigiAdifImport(
       mode,
       submode: mode,
       contestId: 'WW-DIGI',
+      contestEntry: createWWDigiContestEntry({
+        contestYear: options.contestYear,
+        sentGrid: sourceMyGrid ?? stationGrid,
+        receivedGrid: remoteGrid,
+        status: reviewIssues.length > 0 ? 'review' : 'included',
+        source: 'imported',
+      }),
       myCallsign: stationCallsign,
       myGrid: sourceMyGrid ?? stationGrid,
       grid: remoteGrid,
@@ -277,6 +285,18 @@ function possibleDuplicate(candidate: WWDigiImportCandidate, existing: QSORecord
     && Math.abs(candidate.record.startTime - existing.startTime) <= 120_000;
 }
 
+function synchronizeContestEntryStatus(candidate: WWDigiImportCandidate): void {
+  const entry = candidate.record.contestEntry;
+  if (!entry) return;
+  candidate.record.contestEntry = {
+    ...entry,
+    annotations: {
+      ...entry.annotations,
+      status: candidate.reviewIssues.length > 0 ? 'review' : 'included',
+    },
+  };
+}
+
 export function planWWDigiAdifImport(
   candidates: readonly WWDigiImportCandidate[],
   existingRecords: readonly QSORecord[],
@@ -301,6 +321,7 @@ export function planWWDigiAdifImport(
     if (confirmations.stationGrid) {
       candidate.reviewIssues = candidate.reviewIssues.filter((issue) => issue !== 'missing-my-grid');
     }
+    synchronizeContestEntryStatus(candidate);
     if (seen.has(candidate.fingerprint)) {
       duplicates += 1;
       continue;
@@ -313,6 +334,9 @@ export function planWWDigiAdifImport(
       if (!existing.myGrid && candidate.record.myGrid) updates.myGrid = candidate.record.myGrid;
       if (!existing.myCallsign) updates.myCallsign = candidate.record.myCallsign;
       if (existing.contestId?.trim().toUpperCase() !== 'WW-DIGI') updates.contestId = 'WW-DIGI';
+      if (!existing.contestEntry && candidate.record.contestEntry) {
+        updates.contestEntry = structuredClone(candidate.record.contestEntry);
+      }
       if (Object.keys(updates).length === 0) {
         duplicates += 1;
         continue;
@@ -329,6 +353,7 @@ export function planWWDigiAdifImport(
       if (!candidate.reviewIssues.includes('possible-duplicate')) {
         candidate.reviewIssues.push('possible-duplicate');
       }
+      synchronizeContestEntryStatus(candidate);
     }
     items.push({ mutation: { type: 'add', record: candidate.record }, candidate });
   }

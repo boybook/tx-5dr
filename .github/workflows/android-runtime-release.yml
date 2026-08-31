@@ -71,11 +71,12 @@ jobs:
           echo "display_timestamp=$(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
           echo "short_sha=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
           echo "commit_title=$(git show -s --format=%s "${{ github.sha }}")" >> $GITHUB_OUTPUT
-          BASE_VERSION=$(node -p "require('./package.json').version.split('-')[0].split('+')[0]")
           COMMIT_STAMP=$(git show -s --date=format-local:%Y%m%d%H%M --format=%cd "${{ github.sha }}")
+          echo "build_stamp=${COMMIT_STAMP}" >> $GITHUB_OUTPUT
           if [ -z "${{ github.event.inputs.version }}" ]; then
             echo "tag=nightly-android-runtime" >> $GITHUB_OUTPUT
-            echo "version=${BASE_VERSION}-nightly.${COMMIT_STAMP}+$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+            HOST_VERSION=$(node scripts/host-version.mjs --channel nightly --build-stamp "$COMMIT_STAMP" --commit "${{ github.sha }}")
+            echo "version=${HOST_VERSION}" >> $GITHUB_OUTPUT
             echo "channel=nightly" >> $GITHUB_OUTPUT
             echo "channel_path=nightly" >> $GITHUB_OUTPUT
             echo "object_prefix=tx-5dr/android-runtime/nightly" >> $GITHUB_OUTPUT
@@ -94,11 +95,13 @@ jobs:
           TX5DR_ANDROID_RUNTIME_BASE_URL: https://dl.tx5dr.com
           TX5DR_ANDROID_RUNTIME_OBJECT_PREFIX: ${{ steps.release_info.outputs.object_prefix }}
         run: |
+          yarn check:versions
           BASE_URL="${TX5DR_ANDROID_RUNTIME_BASE_URL:-https://dl.tx5dr.com}"
           scripts/package-android-runtime.sh \
-            --version "${{ steps.release_info.outputs.version }}" \
+            --release-version "${{ github.event.inputs.version }}" \
             --channel "${{ steps.release_info.outputs.channel }}" \
             --commit "${{ github.sha }}" \
+            --build-stamp "${{ steps.release_info.outputs.build_stamp }}" \
             --commit-title "${{ steps.release_info.outputs.commit_title }}" \
             --build-timestamp "${{ steps.release_info.outputs.timestamp }}" \
             --base-url "$BASE_URL" \

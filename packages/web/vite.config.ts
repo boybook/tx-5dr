@@ -10,9 +10,9 @@ const DEFAULT_WEB_PORT = 8076;
 const configuredWebPort = Number(process.env.WEB_PORT || process.env.TX5DR_WEB_DEV_PORT || DEFAULT_WEB_PORT);
 const backendTarget = process.env.TX5DR_BACKEND_TARGET || `http://localhost:${process.env.PORT || 4000}`;
 
-const rootPkgVersion = (() => {
+const hostBuildVersion = (() => {
   try {
-    const raw = readFileSync(resolve(__dirname, '../../package.json'), 'utf8');
+    const raw = readFileSync(resolve(__dirname, '../server/src/generated/buildInfo.json'), 'utf8');
     return JSON.parse(raw).version as string;
   } catch {
     return 'unknown';
@@ -82,7 +82,7 @@ export default defineConfig({
   },
   define: {
     global: 'globalThis',
-    'import.meta.env.PACKAGE_VERSION': JSON.stringify(rootPkgVersion),
+    'import.meta.env.PACKAGE_VERSION': JSON.stringify(hostBuildVersion),
   },
   resolve: {
     alias: {

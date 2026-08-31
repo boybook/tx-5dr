@@ -59,6 +59,7 @@ import { getAuthHeaders, getStoredJwt } from '../../utils/authHeaders';
 import { QrzCallsignLink } from '../common/QrzCallsignLink';
 import { useHasMinRole } from '../../store/authStore';
 import { createPrefixedClientId } from '../../utils/clientId';
+import { CLIENT_BUILD_VERSION } from '../../utils/clientBuildVersion';
 import {
   isLogbookHealthOperationError,
   resolveLogbookViewPolicy,
@@ -285,7 +286,11 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     // 浏览器 WebSocket 不支持自定义请求头，通过 token 参数传递 JWT
     const wsJwt = getStoredJwt() || undefined;
     const url = getLogbookWebSocketUrl({ operatorId, logBookId: effectiveLogBookId, token: wsJwt });
-    const client = new WSClient({ url, heartbeatInterval: 30000 });
+    const client = new WSClient({
+      url,
+      heartbeatInterval: 30000,
+      clientVersion: CLIENT_BUILD_VERSION,
+    });
 
     // 类型断言：logbookChangeNotice 是日志本专用事件
     const handleLogbookChange = (payload: unknown) => {

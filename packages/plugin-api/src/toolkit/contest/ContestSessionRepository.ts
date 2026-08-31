@@ -5,7 +5,12 @@ export interface VersionedContestSession {
   revision: number;
 }
 
-/** Atomic repository for callsign/year-scoped plugin contest sessions. */
+/**
+ * In-process atomic repository for plugin-owned contest session state.
+ * `update()` serializes reducers only within the current Host process; call
+ * `flush()` when the resulting snapshot must be durable. This repository does
+ * not provide a transaction with Host logbook/QSO writes.
+ */
 export class ContestSessionRepository<TSession extends VersionedContestSession> {
   constructor(
     private readonly store: KVStore,
