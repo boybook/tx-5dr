@@ -14,7 +14,7 @@ npx create-tx5dr-plugin [name] [options]
 |------|-------------|---------|
 | `--type <utility\|strategy>` | Plugin type | `utility` |
 | `--lang <ts\|js>` | Language | `ts` |
-| `--template <basic\|ui-vanilla\|ui-react\|ui-vue>` | Project template | `basic` |
+| `--template <basic\|ui-vanilla\|ui-react\|ui-vue\|ft8-contest>` | Project template | `basic` |
 | `--help, -h` | Show help | |
 
 ### Templates
@@ -25,6 +25,12 @@ npx create-tx5dr-plugin [name] [options]
 | `ui-vanilla` | Plugin with vanilla HTML/JS/CSS UI page |
 | `ui-react` | Plugin with React + Vite UI page |
 | `ui-vue` | Plugin with Vue + Vite UI page |
+| `ft8-contest` | TypeScript strategy with composable FT8/FT4 contest rules and tests |
+
+`ft8-contest` fixes the type to `strategy` and language to `ts`; conflicting
+explicit `--type` or `--lang` values are rejected. Its build emits declarations
+with TypeScript and a self-contained ESM `dist/index.mjs` with esbuild, so the
+Host can load the linked plugin directory without the project `node_modules`.
 
 ### Examples
 
@@ -46,6 +52,9 @@ npx create-tx5dr-plugin my-plugin --template ui-vue
 
 # Vanilla UI (no build step for UI files)
 npx create-tx5dr-plugin my-plugin --template ui-vanilla
+
+# FT8 contest strategy with rule modules and test kit
+npx create-tx5dr-plugin my-contest --template ft8-contest
 ```
 
 ## Generated Structure

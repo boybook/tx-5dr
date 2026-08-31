@@ -62,7 +62,134 @@ export default definePlugin({
 |---------|-------------|
 | `@tx5dr/plugin-api` | `definePlugin()`, capability-derived contexts, hooks, structured command ports, and radio/message types |
 | `@tx5dr/plugin-api/testing` | Mock factories for unit testing: `createMockContext()`, `createMockSlotInfo()`, `createMockParsedMessage()`, `createMockEventBus()` |
+| `@tx5dr/plugin-api/contest` | Composable FT8/FT4 exchange, completion, dupe, scoring, submission, session and plugin assembly modules |
+| `@tx5dr/plugin-api/toolkit` | Advanced contest and parallel-QSO building blocks |
 | `@tx5dr/plugin-api/bridge` | Ambient type declarations for the iframe Bridge SDK (`window.tx5dr`) |
+
+Release boundary: `2.0.1` is the containment release for the existing
+experimental/advanced `./toolkit` surface. The stable `./contest` entry point,
+root re-exports and `ft8-contest` scaffold start at `2.1.0`; the publish workflow
+rejects an older version when that stable export is present.
+
+Plugin compatibility uses the bundled `@tx5dr/plugin-api` SemVer, not the
+TX-5DR product/nightly version. Marketplace plugins declare
+`minPluginApiVersion`; `apiVersion: 2` remains the separate runtime ABI marker.
+
+## FT8 Contest Composition
+
+Contest rules are public, replaceable modules. `composeFT8ContestPlugin()` is a
+convenience entry point, not a required base class: a plugin may also import the
+same modules and connect them with `definePlugin()` itself.
+
+```ts
+import {
+  cabrilloSubmission,
+  composeFT8ContestPlugin,
+  defineFT8Contest,
+  distancePoints,
+  fixedWeekendEdition,
+  gridExchange,
+  requireExchangeAndFinalAck,
+} from '@tx5dr/plugin-api/contest';
+import { createContestRuntime } from './runtime.js';
+
+const contest = defineFT8Contest({
+  id: 'example-ft8',
+  rulesetVersion: '2026.1',
+  edition: fixedWeekendEdition({
+    id: '2026',
+    startAt: '2026-08-29T00:00:00Z',
+    endAt: '2026-08-30T00:00:00Z',
+  }),
+  bands: ['80M', '40M', '20M', '15M', '10M'],
+  exchange: gridExchange(),
+  completion: requireExchangeAndFinalAck(),
+  scoring: distancePoints({ stepKm: 3000 }),
+  submission: cabrilloSubmission({
+    headers: () => [['CONTEST', 'EXAMPLE-FT8']],
+    qsoLine: (qso) => `QSO: ${qso.callsign}`,
+  }),
+});
+
+export default composeFT8ContestPlugin({
+  name: 'example-ft8',
+  version: '1.0.0',
+  minPluginApiVersion: '2.1.0',
+  contest,
+  runtime: createContestRuntime,
+});
+```
+
+The definition defaults to FT8, one QSO, one signal, human initiation and
+callsign-per-band duplicate checking. Completion remains mandatory because a
+plugin must choose its RF fail-closed evidence policy explicitly. The assembler
+maps human initiation and QSO/simultaneous-signal limits into Host-enforced
+strategy capabilities. `cycleRelation` remains a runtime-adapter responsibility
+because it depends on the contest protocol's lane semantics. Optional
+`defaultContestSession()` and `defaultContestWorkbench()` hide storage keys and
+page routing while keeping their module interfaces replaceable.
+
+Single-stream contests may add `strategyFeatures.targetQueue` explicitly.
+Definitions with more than one concurrent QSO automatically require the Host's
+parallel queue contract; the assembler validates the returned runtime as soon
+as it is created. Contest identities, editions and rule-module entry points are
+snapshotted when `defineFT8Contest()` returns.
+
+Use `projectFT8ContestQsos()`, `scoreFT8ContestQsos()` and
+`formatFT8ContestSubmission()` as the common eligibility path. They apply the
+edition window, supported modes/bands, review/excluded state and dupe policy
+before score or export. Allocate serials with `nextContestSerial()` inside a
+session `transact()` planner so a revision retry recalculates the serial from the
+latest durable QSO snapshot.
+
+For a contest application, declare the shared session capabilities and let the
+facade own Host session keys, event topics and revision-conflict retries:
+
+```ts
+import {
+  CONTEST_SESSION_PERMISSIONS,
+  createContestQsoEnvelopeAdapter,
+  defaultContestSession,
+} from '@tx5dr/plugin-api/contest';
+
+const session = defaultContestSession({
+  create: () => ({ schemaVersion: 1, revision: 0, settings: {} }),
+});
+const contestEnvelope = createContestQsoEnvelopeAdapter(contest);
+
+const contestEntry = contestEnvelope.create({
+  sent: { grid: 'PL04' },
+  received: { grid: 'FN31' },
+  annotations: { status: 'review' },
+});
+
+// Inside a current Host callback:
+await session.access(ctx).transact(
+  (snapshot) => planImportMutations(parsedImport, snapshot),
+  { reason: 'import' },
+);
+```
+
+The facade opens the Host plugin-session on each current invocation, exposes
+health/query/snapshot, retries a snapshot-planned QSO batch up to three times,
+and publishes UI/event-bus notifications after commit. The plugin still parses
+the file and owns its exchange, review fields and mutations. It never receives
+the raw Host session handle. Use `CONTEST_SESSION_PERMISSIONS` as the plugin's
+permissions when composing this default module.
+
+Session identity includes plugin owner, station callsign, `contestId`,
+`editionId` and `rulesetVersion`. The default facade is durable-only because its
+cleanup context cannot destroy a runtime Host session; runtime practice/session
+lifecycles must use strategy `logbookSessionEffects`. The envelope adapter
+freezes the contest identity and uses the definition's typed exchange codec for
+create/validation.
+
+`defaultContestWorkbench()` exports a recommended `ContestWorkbenchCommand`
+union for `get-state`, settings, QSO review, import and export action names plus
+a narrow `ContestWorkbenchViewModel`. It is not a closed action DSL: plugins may
+extend `ContestWorkbenchRequest` with custom actions. The plugin supplies typed
+decoding, handlers and contest-specific generic fields; the SDK does not impose
+a UI framework.
 
 ## Capability Model
 

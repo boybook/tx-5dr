@@ -13,6 +13,7 @@
 npx create-tx5dr-plugin my-plugin
 npx create-tx5dr-plugin my-strategy --type strategy
 npx create-tx5dr-plugin my-panel --template ui-react
+npx create-tx5dr-plugin my-contest --template ft8-contest
 ```
 
 也可以在现有 ESM 项目中安装 API：
@@ -62,6 +63,98 @@ export default definePlugin({
 `radio:power`、`logbook:write` 或 `logbook:sync` 的 utility 插件必须使用 v2，
 否则 Host 会以 `PLUGIN_API_INCOMPATIBLE` 拒绝加载。
 
+### 1.3 组装 FT8/FT4 比赛插件
+
+比赛插件从 `@tx5dr/plugin-api/contest` 导入公开模块。规则模块可以单独替换，
+`composeFT8ContestPlugin()` 只是连接 strategy runtime 和生命周期模块的便利入口，
+并不是必须继承的基类。
+
+```ts
+import {
+  cabrilloSubmission,
+  composeFT8ContestPlugin,
+  defineFT8Contest,
+  distancePoints,
+  fixedWeekendEdition,
+  gridExchange,
+  requireExchangeAndFinalAck,
+} from '@tx5dr/plugin-api/contest';
+import { createContestRuntime } from './runtime.js';
+
+const contest = defineFT8Contest({
+  id: 'example-ft8',
+  rulesetVersion: '2026.1',
+  edition: fixedWeekendEdition({
+    id: '2026',
+    startAt: '2026-08-29T00:00:00Z',
+    endAt: '2026-08-30T00:00:00Z',
+  }),
+  bands: ['80M', '40M', '20M', '15M', '10M'],
+  exchange: gridExchange(),
+  completion: requireExchangeAndFinalAck(),
+  scoring: distancePoints({ stepKm: 3000 }),
+  submission: cabrilloSubmission({
+    headers: () => [['CONTEST', 'EXAMPLE-FT8']],
+    qsoLine: (qso) => `QSO: ${qso.callsign}`,
+  }),
+});
+
+export default composeFT8ContestPlugin({
+  name: 'example-ft8',
+  version: '1.0.0',
+  minPluginApiVersion: '2.1.0',
+  contest,
+  runtime: createContestRuntime,
+});
+```
+
+默认规则为 FT8、人工发起、单 QSO、单发射信号、呼号加波段判重。完成条件必须
+显式选择，因为它属于 RF fail-closed 边界。常见规则可使用构造器；特殊比赛可以
+直接实现 `FT8ExchangeModule`、`CompletionModule`、`DupeModule`、
+`ScoringModule` 或 `SubmissionModule`。组装器会把人工发起、并发 QSO 和同帧信号
+上限映射为 Host capability；`cycleRelation` 仍由 runtime adapter 按比赛协议实现。
+计分和导出应统一通过 `projectFT8ContestQsos()`、`scoreFT8ContestQsos()`、
+`formatFT8ContestSubmission()`，避免各插件重复遗漏赛期、模式、波段、审核状态或判重。
+`defaultContestSession()` 只保证当前
+Host 进程内的配置/投影 KV update 原子性，必须 `flush()` 后才 durable；QSO 数据
+则通过 Host plugin-session 的 revision-guarded batch 单独提交。
+
+需要完整比赛应用层时，插件显式声明 `CONTEST_SESSION_PERMISSIONS`（即
+`logbook:session + plugin:event-bus`），并将 `defaultContestSession()` 交给组装器。
+它隐藏 session key、event topic 和 raw logbook handle，公开 health、query、snapshot、
+通知/订阅，以及最多三次 revision-conflict 重试的 `transact()`：
+
+```ts
+import {
+  createContestQsoEnvelopeAdapter,
+  defaultContestSession,
+} from '@tx5dr/plugin-api/contest';
+
+const session = defaultContestSession({
+  create: () => ({ schemaVersion: 1, revision: 0, settings: {} }),
+});
+const contestEnvelope = createContestQsoEnvelopeAdapter(contest);
+
+// 必须在当前 Host callback 内绑定当前 ctx；不要缓存 invocation context。
+await session.access(ctx).transact(
+  (snapshot) => planImportMutations(parsedImport, snapshot),
+  { reason: 'import' },
+);
+```
+
+插件仍负责解析 ADIF/上传内容、定义比赛字段和审核逻辑，只需根据最新 snapshot
+返回 mutations；SDK 不发明导入 DSL。`defaultContestWorkbench()` 统一
+`get-state/save-settings/set-qso-status/preview-import/commit-import/export` 消息名，
+并提供稳定的 `ContestWorkbenchViewModel` 外壳；页面渲染和泛型中的比赛字段仍由
+插件拥有，不建立通用 UI 框架。公开的 `ContestWorkbenchCommand` 是推荐标准 union，
+不是封闭 DSL；插件仍可用 `ContestWorkbenchRequest` 扩展自定义 action。
+
+默认 session 以 `contestId + editionId + rulesetVersion` 隔离，并且只创建 durable
+Host session。runtime/practice session 不能由 cleanup context可靠销毁，必须通过
+strategy action 的 `logbookSessionEffects` 管理。`createContestQsoEnvelopeAdapter()`
+会把相同三元身份和 typed exchange codec 写入/校验 `ContestQsoEnvelope`，插件无需
+重复手写 identity 与 encode/decode。
+
 ## 2. 插件类型与实例作用域
 
 ### 2.1 插件类型
@@ -108,6 +201,7 @@ Plugin；Host 只增加最小的通用能力。该能力必须具有中性语义
 | `apiVersion` | 新插件使用 `2` |
 | `name` | 稳定且唯一的插件 ID；发布后不要更改 |
 | `version` | 插件版本 |
+| `minPluginApiVersion` | 最低内置 `@tx5dr/plugin-api` SemVer；Marketplace 插件必填 |
 | `type` | `strategy` 或 `utility` |
 | `instanceScope` | `operator`（默认）或 `global` |
 | `description` | 插件管理页中的简短说明或翻译 key |
@@ -125,6 +219,20 @@ Plugin；Host 只增加最小的通用能力。该能力必须具有中性语义
 
 Host 会校验并冻结加载后的定义。不要在运行期修改 definition、permissions、hooks
 或 UI descriptor。
+
+### 3.1 版本边界
+
+- TX-5DR `1.0.0-nightly.*` 是产品构建身份，只用于升级、诊断和 artifact 追踪。
+- `@tx5dr/plugin-api` SemVer 是插件兼容轴，Host 通过 `pluginApiVersion` 暴露内置版本。
+- `apiVersion: 2` 是运行时 ABI 代际，不是 npm package version。
+- 插件自己的 `version` 只用于 Marketplace 更新。
+- 数据 `schemaVersion` 与比赛 `rulesetVersion` 只服务各自迁移，不参与 Loader 兼容判断。
+
+运行时构建身份只有一个权威文件：`packages/server/src/generated/buildInfo.json`。
+Electron Main、嵌入 Server、Web bundle、遥测和诊断上报都消费这一份构建产物；其他模块不得维护版本副本。
+
+Loader 仅比较 `minPluginApiVersion <= pluginApiVersion`，不会使用产品 Host version
+决定插件是否可加载。
 
 ## 4. Context 与 capability
 
