@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { FT8MessageParser } from '@tx5dr/core';
 import type { ParsedFT8Message } from '@tx5dr/plugin-api';
 import {
+  buildWWDigiCompletionEffect,
   deriveWWDigiTransmission,
   initializeWWDigiProtocolContext,
   reduceWWDigiInbound,
@@ -85,5 +86,46 @@ describe('WW Digi protocol context', () => {
 
     expect(reduced.changed).toBe(false);
     expect(reduced.context).toEqual(context);
+  });
+
+  it('freezes edition and operator ownership into the completion envelope', () => {
+    const context = initializeWWDigiProtocolContext({
+      callsign: 'LZ2INP', audioFrequencyHz: 1_022, now: Date.UTC(2026, 7, 29, 12),
+      targetGrid: 'KN34',
+    }, config);
+    const completed = reduceWWDigiInbound(
+      context,
+      parsed('BH5HIE LZ2INP RR73', Date.UTC(2026, 7, 29, 12, 1)),
+      config,
+    );
+
+    const effect = buildWWDigiCompletionEffect(completed.context, {
+      streamId: 'stream-2',
+      lifecycleEpoch: 3,
+      endTime: Date.UTC(2026, 7, 29, 12, 1),
+      authorizationId: 'auth-7',
+    }, {
+      ...config,
+      contestYear: 2026,
+      operatorId: 'operator-0',
+      transmitterId: 1,
+    });
+
+    expect(effect.record.contestEntry).toEqual({
+      schemaVersion: 1,
+      contestId: 'WW-DIGI',
+      editionId: 'ww-digi-2026',
+      rulesetVersion: 'tx5dr-ww-digi-v1',
+      sent: { grid: 'PM00' },
+      received: { grid: 'KN34' },
+      annotations: {
+        status: 'included',
+        source: 'ww-digi',
+        streamId: 'stream-2',
+        authorizationId: 'auth-7',
+        operatorId: 'operator-0',
+        transmitterId: 1,
+      },
+    });
   });
 });

@@ -353,6 +353,11 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
     return parsed.success ? parsed.data : null;
   };
 
+  const isPluginApiVersionFailure = (error: unknown): boolean => (
+    Boolean(error && typeof error === 'object'
+      && (error as { code?: unknown }).code === 'PLUGIN_API_VERSION_UNSUPPORTED')
+  );
+
   const getResolvedGlobalSettings = (name: string): Record<string, unknown> => {
     const config = configManager.getPluginsConfig();
     const storedGlobalSettings = config.configs?.[name]?.settings ?? {};
@@ -499,15 +504,18 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
       }
 
       try {
-        const result = await installPluginFromMarketplace(req.params.name, runtimeInfo.pluginDir, channel);
+        const result = await installPluginFromMarketplace(req.params.name, runtimeInfo.pluginDir, channel, {
+          pluginApiVersion: runtimeInfo.pluginApiVersion,
+        });
         await engine.pluginManager.rescanPlugins();
         return reply.send(result);
       } catch (err) {
         logger.error(`Failed to install plugin from marketplace: plugin=${req.params.name}, channel=${channel}`, err);
-        return reply.status(502).send({
-          code: 'PLUGIN_MARKET_INSTALL_FAILED',
+        const pluginApiVersionFailure = isPluginApiVersionFailure(err);
+        return reply.status(pluginApiVersionFailure ? 409 : 502).send({
+          code: pluginApiVersionFailure ? 'PLUGIN_API_VERSION_UNSUPPORTED' : 'PLUGIN_MARKET_INSTALL_FAILED',
           message: err instanceof Error ? err.message : 'Failed to install plugin from marketplace',
-          userMessage: 'Plugin installation failed',
+          userMessage: pluginApiVersionFailure ? 'Update TX-5DR before installing this plugin' : 'Plugin installation failed',
         });
       }
     },
@@ -540,15 +548,18 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
 
       const runtimeInfo = await getPluginRuntimeInfo();
       try {
-        const result = await updatePluginFromMarketplace(req.params.name, runtimeInfo.pluginDir, channel);
+        const result = await updatePluginFromMarketplace(req.params.name, runtimeInfo.pluginDir, channel, {
+          pluginApiVersion: runtimeInfo.pluginApiVersion,
+        });
         await engine.pluginManager.rescanPlugins();
         return reply.send(result);
       } catch (err) {
         logger.error(`Failed to update plugin from marketplace: plugin=${req.params.name}, channel=${channel}`, err);
-        return reply.status(502).send({
-          code: 'PLUGIN_MARKET_UPDATE_FAILED',
+        const pluginApiVersionFailure = isPluginApiVersionFailure(err);
+        return reply.status(pluginApiVersionFailure ? 409 : 502).send({
+          code: pluginApiVersionFailure ? 'PLUGIN_API_VERSION_UNSUPPORTED' : 'PLUGIN_MARKET_UPDATE_FAILED',
           message: err instanceof Error ? err.message : 'Failed to update plugin from marketplace',
-          userMessage: 'Plugin update failed',
+          userMessage: pluginApiVersionFailure ? 'Update TX-5DR before updating this plugin' : 'Plugin update failed',
         });
       }
     },

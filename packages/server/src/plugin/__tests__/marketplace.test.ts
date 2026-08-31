@@ -33,7 +33,7 @@ describe('plugin marketplace helpers', () => {
           readmeMarkdown: '# Heartbeat Demo\n\nExample timer and quick-action plugin.',
           readmeSourceUrl: 'https://github.com/boybook/tx-5dr-plugins/blob/main/heartbeat-demo/README.md',
           latestVersion: '1.2.3',
-          minHostVersion: '1.0.0',
+          minPluginApiVersion: '1.0.0',
           artifactUrl: 'https://cdn.example.com/plugins/heartbeat-demo-1.2.3.zip',
           sha256: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
           size: 12345,

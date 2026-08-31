@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'eventemitter3';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -7,6 +7,29 @@ import type { DigitalRadioEngineEvents, LogbookAnalysis, SlotInfo, SlotPack } fr
 import { MODES } from '@tx5dr/contracts';
 import { RadioOperator } from '@tx5dr/core';
 import { PluginManager } from '../PluginManager.js';
+import { LogManager } from '../../log/LogManager.js';
+
+function installInMemoryLogManager(): void {
+  const sessionLogBook = {
+    id: 'plugin-session-test',
+    name: 'Plugin Session',
+    binding: {
+      kind: 'plugin-session', pluginName: 'ww-digi', stationCallsign: 'BG4IAJ',
+      sessionKey: 'ww-digi:2026', retention: 'durable',
+    },
+    provider: {
+      queryQSOs: vi.fn(async () => []),
+      readQsoSnapshot: vi.fn(async () => ({ revision: 'r0', records: [] })),
+      applyQsoBatch: vi.fn(async () => ({ revision: 'r0', outcomes: [] })),
+      getHealth: vi.fn(() => ({ state: 'healthy', readable: true, writable: true, issues: [], updatedAt: 0 })),
+      getStatistics: vi.fn(async () => ({ totalQSOs: 0, uniqueCallsigns: 0 })),
+    },
+  };
+  vi.spyOn(LogManager, 'getInstance').mockReturnValue({
+    getOrCreatePluginSessionLogBook: vi.fn(async () => sessionLogBook),
+    getPluginSessionLogBook: vi.fn(() => sessionLogBook),
+  } as unknown as LogManager);
+}
 
 function createSlotInfo(startMs: number): SlotInfo {
   return {
@@ -53,8 +76,15 @@ async function flushAsyncWork(): Promise<void> {
 
 describe('PluginManager autocall arbitration and novelty watch', () => {
   const tempDirs: string[] = [];
+  const managers: PluginManager[] = [];
+
+  beforeEach(() => {
+    installInMemoryLogManager();
+  });
 
   afterEach(async () => {
+    await Promise.all(managers.splice(0).map((manager) => manager.shutdown()));
+    vi.restoreAllMocks();
     await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
@@ -130,6 +160,7 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
       resetOperatorRuntime: () => {},
       dataDir,
     });
+    managers.push(pluginManager);
 
     pluginManager.loadConfig({
       configs: options?.pluginConfigs ?? {},
@@ -242,6 +273,7 @@ describe('PluginManager autocall arbitration and novelty watch', () => {
       resetOperatorRuntime: () => {},
       dataDir,
     });
+    managers.push(pluginManager);
 
     pluginManager.loadConfig({
       configs: {

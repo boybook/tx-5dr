@@ -10,6 +10,8 @@ const logger = createLogger('WSClient');
 export interface WSClientConfig {
   url: string;
   heartbeatInterval?: number;
+  /** Build identity reported during the application-level handshake. */
+  clientVersion?: string;
 }
 
 /**
@@ -18,7 +20,8 @@ export interface WSClientConfig {
  */
 export class WSClient extends WSMessageHandler {
   private ws: WebSocket | null = null;
-  private config: Required<WSClientConfig>;
+  private config: { url: string; heartbeatInterval: number };
+  private clientVersion: string | undefined;
   private isConnecting = false;
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private jwt: string | null = null;
@@ -46,6 +49,8 @@ export class WSClient extends WSMessageHandler {
       url: config.url,
       heartbeatInterval: config.heartbeatInterval ?? 30000,
     };
+    const clientVersion = typeof config.clientVersion === 'string' ? config.clientVersion.trim() : '';
+    this.clientVersion = clientVersion || undefined;
 
     this.onWSEvent('handshakeComplete', () => {
       this.sessionReady = true;
@@ -507,12 +512,17 @@ export class WSClient extends WSMessageHandler {
     selectedOperatorId: string | null,
     clientInstanceId: string,
   ): void {
-    logger.info('Sending handshake:', { enabledOperatorIds, selectedOperatorId, clientInstanceId });
+    logger.info('Sending handshake:', {
+      enabledOperatorIds,
+      selectedOperatorId,
+      clientInstanceId,
+      clientVersion: this.clientVersion,
+    });
     this.send('clientHandshake', {
       enabledOperatorIds,
       selectedOperatorId,
       clientInstanceId,
-      clientVersion: '1.0.0',
+      ...(this.clientVersion ? { clientVersion: this.clientVersion } : {}),
       clientCapabilities: ['operatorFiltering', 'handshakeProtocol', 'selectedOperatorScopedAnalysis']
     });
   }

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import type { QSORecord } from '@tx5dr/contracts';
 import { describe, expect, it } from 'vitest';
 
-import { encodeAdifRecord, scanAdifBuffer } from '../AdifCodec.js';
+import { encodeAdifRecord, getLastAdifFieldValue, scanAdifBuffer } from '../AdifCodec.js';
 import {
   BufferLogbookSourceAdapter,
   LogbookDocument,
@@ -141,6 +141,48 @@ describe('LogbookDocument loading and indexes', () => {
 });
 
 describe('LogbookDocument prepared mutations', () => {
+  it('preserves an undecodable future contest envelope across unrelated updates', () => {
+    const futureEnvelope = JSON.stringify({
+      schemaVersion: 2,
+      contestId: 'FUTURE-TEST',
+      editionId: '2027',
+      rulesetVersion: '2027.1',
+      sent: { grid: 'PL04' },
+      received: { grid: 'FN31' },
+    });
+    const privateField = `<APP_TX5DR_CONTEST_ENTRY:${Buffer.byteLength(futureEnvelope)}>${futureEnvelope}`;
+    const source = Buffer.from(rawRecord(
+      'BG2AA',
+      '010203',
+      '14.074000',
+      `<CONTEST_ID:11>FUTURE-TEST${privateField}`,
+    ));
+    const document = LogbookDocument.fromScan(scanAdifBuffer(source));
+    const target = document.getQsoRecords()[0]!;
+    expect(target.contestEntry).toBeUndefined();
+
+    const mutation = document.prepareUpdate(target.id, { notes: 'reviewed' });
+    const candidate = materializeParts(mutation.rewriteParts, source);
+    const record = scanAdifBuffer(candidate).records[0]!;
+
+    expect(getLastAdifFieldValue(record, 'app_tx5dr_contest_entry')).toBe(futureEnvelope);
+    expect(getLastAdifFieldValue(record, 'notes')).toBe('reviewed');
+
+    const canonical = {
+      schemaVersion: 1 as const,
+      contestId: 'FUTURE-TEST',
+      editionId: '2027',
+      rulesetVersion: '2027.2',
+      sent: { grid: 'PL04' },
+      received: { grid: 'FN31' },
+    };
+    const replaced = document.prepareUpdate(target.id, { contestEntry: canonical });
+    const replacedRecord = scanAdifBuffer(materializeParts(replaced.rewriteParts, source)).records[0]!;
+    expect(replacedRecord.fields.filter((field) => field.name === 'app_tx5dr_contest_entry')).toHaveLength(1);
+    expect(JSON.parse(getLastAdifFieldValue(replacedRecord, 'app_tx5dr_contest_entry')!))
+      .toEqual(canonical);
+  });
+
   it('exposes a range-backed rewrite plan and inlines only the changed record', () => {
     const first = rawRecord('BG2AA', '010203', '14.074000', '<APP_OTHER:3>ONE');
     const middle = rawRecord('BG2BB', '010303', '14.075000', '<APP_OTHER:3>TWO');

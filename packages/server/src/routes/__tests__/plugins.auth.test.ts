@@ -33,6 +33,10 @@ const pauseActiveTransmitControlPlugins = vi.fn();
 const resumeTransmitControlPlugins = vi.fn();
 const setOperatorStrategy = vi.fn();
 const persistOperatorStrategy = vi.fn();
+const rescanPlugins = vi.fn();
+const installPluginFromMarketplace = vi.fn();
+const updatePluginFromMarketplace = vi.fn();
+const uninstallPluginFromMarketplace = vi.fn();
 const logbookSyncHost = {
   getProviderInfo: vi.fn(),
   upload: vi.fn(),
@@ -53,10 +57,31 @@ vi.mock('../../DigitalRadioEngine.js', () => ({
         pauseActiveTransmitControlPlugins,
         resumeTransmitControlPlugins,
         setOperatorStrategy,
+        rescanPlugins,
         logbookSyncHost,
       },
     }),
   },
+}));
+
+vi.mock('../../plugin/runtime-info.js', () => ({
+  getPluginRuntimeInfo: vi.fn(async () => ({
+    hostVersion: '1.0.0',
+    pluginApiVersion: '2.1.0',
+    pluginDir: '/tmp/tx5dr-plugins',
+    pluginDataDir: '/tmp/tx5dr-plugin-data',
+    dataDir: '/tmp/tx5dr',
+    configDir: '/tmp/tx5dr/config',
+    logsDir: '/tmp/tx5dr/logs',
+    cacheDir: '/tmp/tx5dr/cache',
+    distribution: 'web-dev',
+  })),
+}));
+
+vi.mock('../../plugin/marketplace-installer.js', () => ({
+  installPluginFromMarketplace,
+  updatePluginFromMarketplace,
+  uninstallPluginFromMarketplace,
 }));
 
 vi.mock('../../config/config-manager.js', () => ({
@@ -91,6 +116,10 @@ describe('pluginRoutes auth', () => {
     pauseActiveTransmitControlPlugins.mockReset().mockResolvedValue(['automation-demo']);
     resumeTransmitControlPlugins.mockReset().mockResolvedValue([]);
     setOperatorStrategy.mockReset();
+    rescanPlugins.mockReset().mockResolvedValue(undefined);
+    installPluginFromMarketplace.mockReset();
+    updatePluginFromMarketplace.mockReset();
+    uninstallPluginFromMarketplace.mockReset();
     persistOperatorStrategy.mockReset().mockResolvedValue(undefined);
     logbookSyncHost.getProviderInfo.mockReset();
     logbookSyncHost.upload.mockReset();
@@ -165,6 +194,30 @@ describe('pluginRoutes auth', () => {
 
     expect(response.statusCode).toBe(403);
     expect(getSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('returns 409 without rescanning when the plugin requires a newer Plugin API', async () => {
+    installPluginFromMarketplace.mockRejectedValue(Object.assign(
+      new Error('plugin requires Plugin API >= 2.2.0'),
+      { code: 'PLUGIN_API_VERSION_UNSUPPORTED' },
+    ));
+
+    const response = await fastify.inject({
+      method: 'POST',
+      url: '/api/plugins/market/external-plugin/install',
+      headers: { 'x-role': UserRole.ADMIN },
+      payload: { channel: 'stable' },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: 'PLUGIN_API_VERSION_UNSUPPORTED' });
+    expect(installPluginFromMarketplace).toHaveBeenCalledWith(
+      'external-plugin',
+      '/tmp/tx5dr-plugins',
+      'stable',
+      { pluginApiVersion: '2.1.0' },
+    );
+    expect(rescanPlugins).not.toHaveBeenCalled();
   });
 
   it('allows operator accounts to pause their own operator transmit-control plugins', async () => {

@@ -4078,7 +4078,7 @@ function setupIpcHandlers() {
     return { canceled: false, filePath: result.filePath };
   });
 
-  ipcMain.handle('app:getVersion', () => app.getVersion());
+  ipcMain.handle('app:getVersion', () => BUILD_INFO.version);
   ipcMain.handle('app:getBuildInfo', () => BUILD_INFO);
   ipcMain.handle('app:quit', async () => {
     await cleanupAndQuit('renderer');

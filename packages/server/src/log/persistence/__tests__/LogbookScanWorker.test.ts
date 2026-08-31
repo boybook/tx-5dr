@@ -6,7 +6,7 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { scanAdifBuffer } from '../AdifCodec.js';
+import { ADIF_CONTEST_ENTRY_MAX_CAPTURE_BYTES, scanAdifBuffer } from '../AdifCodec.js';
 import { projectLogbookRecords } from '../LogbookDocument.js';
 import { scanLogbookFileInline } from '../LogbookScanCore.js';
 import {
@@ -159,6 +159,25 @@ describe('LogbookScanWorker', () => {
     expect(scanned.recordProjections[0]?.qso?.comment?.endsWith('z')).toBe(true);
     expect(scanned.warnings).not.toEqual(expect.arrayContaining([
       expect.stringContaining('projection limit'),
+    ]));
+  });
+
+  it('bounds contest-envelope capture and makes oversized records opaque', async () => {
+    const oversized = Buffer.alloc(ADIF_CONTEST_ENTRY_MAX_CAPTURE_BYTES + 1, 0x78);
+    const source = Buffer.concat([
+      Buffer.from(`<APP_TX5DR_CONTEST_ENTRY:${oversized.length}>`),
+      oversized,
+      Buffer.from(adifRecord()),
+    ]);
+    const filePath = await tempFile(source);
+
+    const scanned = await scanLogbookFileInline(filePath);
+
+    expect(scanned.scan.records).toHaveLength(1);
+    expect(scanned.scan.records[0]?.syntacticallyValid).toBe(false);
+    expect(scanned.recordProjections[0]?.qso).toBeUndefined();
+    expect(scanned.warnings).toEqual(expect.arrayContaining([
+      expect.stringContaining(`${ADIF_CONTEST_ENTRY_MAX_CAPTURE_BYTES}-byte limit`),
     ]));
   });
 

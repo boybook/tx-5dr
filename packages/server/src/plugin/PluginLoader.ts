@@ -5,7 +5,7 @@ import {
   type SimulationScenarioDescriptor,
 } from '@tx5dr/plugin-api';
 import type { PluginPanelDescriptor, PluginRuntimeLogEntry, PluginUIPageDescriptor } from '@tx5dr/contracts';
-import { PluginManifestSchema } from '@tx5dr/contracts';
+import { PluginArtifactManifestSchema, PluginManifestSchema } from '@tx5dr/contracts';
 import type { LoadedPlugin } from './types.js';
 import type { Dirent } from 'fs';
 import { promises as fs } from 'fs';
@@ -13,9 +13,12 @@ import path from 'path';
 import { pathToFileURL } from 'url';
 import { createLogger } from '../utils/logger.js';
 import { validateArchiveRelativePath } from './path-security.js';
+import { assertPluginApiCompatible } from './runtime-info.js';
+import { SERVER_BUILD_INFO } from '../generated/buildInfo.js';
 
 const logger = createLogger('PluginLoader');
 const ENTRY_FILE_CANDIDATES = ['plugin.js', 'plugin.mjs', 'index.js', 'index.mjs'] as const;
+const ARTIFACT_MANIFEST_FILE = 'tx5dr-plugin.json';
 const SIMULATION_CALLSIGN = /^[A-Z0-9]+(?:\/[A-Z0-9]+)*$/i;
 const SIMULATION_GRID = /^[A-R]{2}[0-9]{2}$/i;
 
@@ -50,6 +53,7 @@ export function validatePluginDefinition(def: AnyPluginDefinition): void {
     apiVersion: def.apiVersion,
     name: def.name,
     version: def.version,
+    minPluginApiVersion: def.minPluginApiVersion,
     type: def.type,
     strategyFeatures: def.strategyFeatures,
     instanceScope: def.instanceScope,
@@ -65,6 +69,31 @@ export function validatePluginDefinition(def: AnyPluginDefinition): void {
 
   if (manifest.type === 'strategy' && typeof def.createStrategyRuntime !== 'function') {
     throw new Error('Strategy plugins must provide createStrategyRuntime(ctx)');
+  }
+  if (manifest.strategyFeatures && manifest.type !== 'strategy') {
+    throw new Error('PLUGIN_CAPABILITY_INVALID: strategyFeatures require a strategy plugin');
+  }
+  if (manifest.strategyFeatures?.parallelTargetQueue && !manifest.strategyFeatures.targetQueue) {
+    throw new Error('PLUGIN_CAPABILITY_INVALID: parallelTargetQueue requires targetQueue');
+  }
+  if (manifest.strategyFeatures?.queueActivation && !manifest.strategyFeatures.targetQueue) {
+    throw new Error('PLUGIN_CAPABILITY_INVALID: queueActivation requires targetQueue');
+  }
+  if ((manifest.strategyFeatures?.maxConcurrentStreams ?? 1) > 1
+      && !manifest.strategyFeatures?.parallelTargetQueue) {
+    throw new Error('PLUGIN_CAPABILITY_INVALID: maxConcurrentStreams > 1 requires parallelTargetQueue');
+  }
+  if ((manifest.strategyFeatures?.maxSimultaneousSignals ?? 1) > 1
+      && !manifest.strategyFeatures?.parallelTargetQueue) {
+    throw new Error('PLUGIN_CAPABILITY_INVALID: maxSimultaneousSignals > 1 requires parallelTargetQueue');
+  }
+  if (manifest.strategyFeatures?.maxConcurrentStreams !== undefined
+      && manifest.strategyFeatures?.maxSimultaneousSignals !== undefined
+      && manifest.strategyFeatures.maxSimultaneousSignals
+        > manifest.strategyFeatures.maxConcurrentStreams) {
+    throw new Error(
+      'PLUGIN_CAPABILITY_INVALID: maxSimultaneousSignals cannot exceed maxConcurrentStreams',
+    );
   }
   const requiresCapabilityApiV2 = manifest.permissions?.some((permission) => (
     PLUGIN_COMMAND_CAPABILITY_PERMISSIONS.includes(
@@ -157,6 +186,45 @@ export function validatePluginDefinition(def: AnyPluginDefinition): void {
   }
 }
 
+async function validateInstalledArtifactManifest(
+  dirPath: string,
+  definition: AnyPluginDefinition,
+): Promise<void> {
+  const manifestPath = path.join(dirPath, ARTIFACT_MANIFEST_FILE);
+  let raw: string;
+  try {
+    raw = await fs.readFile(manifestPath, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') return;
+    throw error;
+  }
+  const manifest = PluginArtifactManifestSchema.parse(JSON.parse(raw));
+  const definitionPermissions = [...(definition.permissions ?? [])].sort();
+  const manifestPermissions = [...manifest.permissions].sort();
+  const mismatches = [
+    manifest.name === definition.name ? undefined : 'name',
+    manifest.version === definition.version ? undefined : 'version',
+    manifest.minPluginApiVersion === definition.minPluginApiVersion
+      ? undefined
+      : 'minPluginApiVersion',
+    manifest.apiVersion === definition.apiVersion ? undefined : 'apiVersion',
+    manifest.type === definition.type ? undefined : 'type',
+    manifest.instanceScope === (definition.instanceScope ?? 'operator')
+      ? undefined
+      : 'instanceScope',
+    JSON.stringify(manifestPermissions) === JSON.stringify(definitionPermissions)
+      ? undefined
+      : 'permissions',
+    JSON.stringify(manifest.strategyFeatures ?? null)
+      === JSON.stringify(definition.strategyFeatures ?? null)
+      ? undefined
+      : 'strategyFeatures',
+  ].filter((field): field is string => field !== undefined);
+  if (mismatches.length > 0) {
+    throw new Error(`Plugin artifact manifest differs from runtime definition: ${mismatches.join(', ')}`);
+  }
+}
+
 function deepFreezeDefinition<T>(value: T, seen = new WeakSet<object>()): T {
   if (!value || typeof value !== 'object' || seen.has(value as object)) {
     return value;
@@ -175,6 +243,7 @@ export function canonicalizePluginDefinition(def: AnyPluginDefinition): AnyPlugi
     apiVersion: def.apiVersion,
     name: def.name,
     version: def.version,
+    minPluginApiVersion: def.minPluginApiVersion,
     type: def.type,
     strategyFeatures: def.strategyFeatures,
     instanceScope: def.instanceScope,
@@ -366,7 +435,10 @@ function validateSpecialPanel(
  * 每个子目录视为一个插件，入口文件为 plugin.js 或 index.js
  */
 export class PluginLoader {
-  constructor(private readonly emitRuntimeLog?: PluginLoaderRuntimeLogEmitter) {}
+  constructor(
+    private readonly emitRuntimeLog?: PluginLoaderRuntimeLogEmitter,
+    private readonly pluginApiVersion = SERVER_BUILD_INFO.pluginApiVersion,
+  ) {}
 
   async scanAndLoad(pluginDir: string): Promise<LoadedPlugin[]> {
     this.emitRuntimeLog?.({
@@ -521,6 +593,12 @@ export class PluginLoader {
     let definition: AnyPluginDefinition;
     try {
       definition = canonicalizePluginDefinition(exportedDefinition);
+      assertPluginApiCompatible(
+        definition.minPluginApiVersion,
+        definition.name,
+        this.pluginApiVersion,
+      );
+      await validateInstalledArtifactManifest(dirPath, definition);
     } catch (err) {
       throw new PluginLoadError(
         'validate_error',

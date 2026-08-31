@@ -32,15 +32,32 @@ describe('LogbookRecordService', () => {
   });
 
   it('does not expose mutable references to its query state', () => {
-    const service = new LogbookRecordService([qso('qso-1')]);
+    const service = new LogbookRecordService([qso('qso-1', {
+      contestId: 'FT-CHALLENGE',
+      contestEntry: {
+        schemaVersion: 1,
+        contestId: 'FT-CHALLENGE',
+        editionId: '2026-weekend-1',
+        rulesetVersion: '2026.1',
+        sent: { grid: 'PL05' },
+        received: { grid: 'PM96' },
+        annotations: { status: 'included' },
+      },
+    })]);
 
     const returned = service.get('qso-1')!;
     returned.callsign = 'CHANGED';
     returned.messageHistory.push('CHANGED');
+    returned.contestEntry!.received.grid = 'CHANGED';
+    returned.contestEntry!.annotations!.status = 'review';
 
     expect(service.get('qso-1')).toMatchObject({
       callsign: 'N0CALL',
       messageHistory: ['CQ N0CALL EN50'],
+      contestEntry: {
+        received: { grid: 'PM96' },
+        annotations: { status: 'included' },
+      },
     });
     expect(service.lastWithCallsign('N0CALL')).toMatchObject({ callsign: 'N0CALL' });
   });
@@ -73,5 +90,42 @@ describe('LogbookRecordService', () => {
       lotwQslSent: 'N',
       lotwQslReceived: 'N',
     });
+  });
+
+  it('merges a missing contest envelope by value and derives its standard contest id', () => {
+    const incoming = qso('import-1', {
+      contestEntry: {
+        schemaVersion: 1,
+        contestId: 'FT-CHALLENGE',
+        editionId: '2026-weekend-1',
+        rulesetVersion: '2026.1',
+        sent: { grid: 'PL05' },
+        received: { grid: 'PM96' },
+        annotations: { status: 'included' },
+      },
+    });
+
+    const result = mergeImportedQso(qso('qso-1'), incoming);
+    incoming.contestEntry!.received.grid = 'CHANGED';
+
+    expect(result.changed).toBe(true);
+    expect(result.record.contestId).toBe('FT-CHALLENGE');
+    expect(result.record.contestEntry?.received.grid).toBe('PM96');
+  });
+
+  it('does not merge a contest envelope that conflicts with an existing contest id', () => {
+    const result = mergeImportedQso(qso('qso-1', { contestId: 'WW-DIGI' }), qso('import-1', {
+      contestEntry: {
+        schemaVersion: 1,
+        contestId: 'FT-CHALLENGE',
+        editionId: '2026-weekend-1',
+        rulesetVersion: '2026.1',
+        sent: {},
+        received: {},
+      },
+    }));
+
+    expect(result.changed).toBe(false);
+    expect(result.record.contestEntry).toBeUndefined();
   });
 });

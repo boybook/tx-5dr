@@ -2,7 +2,9 @@ import { createHash, type Hash } from 'node:crypto';
 import { constants, promises as fs } from 'node:fs';
 
 import {
+  ADIF_CONTEST_ENTRY_MAX_CAPTURE_BYTES,
   ADIF_MAX_TAG_HEADER_BYTES,
+  isAdifContestEntryField,
   isAdifQsoProjectionField,
   type AdifByteRange,
   type AdifScanIssue,
@@ -410,7 +412,16 @@ class StreamingBodyScanner {
     }
 
     const valueEnd = tagEnd + tag.length;
-    const capture = isAdifQsoProjectionField(tag.name)
+    const contestEntryTooLarge = isAdifContestEntryField(tag.name)
+      && tag.length > ADIF_CONTEST_ENTRY_MAX_CAPTURE_BYTES;
+    if (contestEntryTooLarge) {
+      this.addRecordIssue({
+        code: 'field-value-too-large',
+        offset: this.tagStart,
+        message: `ADIF field ${tag.rawName} exceeds the ${ADIF_CONTEST_ENTRY_MAX_CAPTURE_BYTES}-byte limit`,
+      });
+    }
+    const capture = isAdifQsoProjectionField(tag.name) && !contestEntryTooLarge
       ? Buffer.allocUnsafe(tag.length)
       : undefined;
     this.pendingField = {
@@ -452,11 +463,25 @@ class StreamingBodyScanner {
 
   private finishField(): void {
     const field = this.pendingField!;
-    if (isAdifQsoProjectionField(field.name)) {
+    if (field.capture !== undefined) {
+      let value: string;
+      try {
+        value = isAdifContestEntryField(field.name)
+          ? new TextDecoder('utf-8', { fatal: true }).decode(field.capture)
+          : field.capture.toString('utf8');
+      } catch {
+        this.addRecordIssue({
+          code: 'invalid-field-encoding',
+          offset: field.tagStart,
+          message: `ADIF field ${field.rawName} is not valid UTF-8`,
+        });
+        this.pendingField = undefined;
+        return;
+      }
       this.fields.set(field.name, {
         name: field.name,
         rawName: field.rawName,
-        value: field.capture?.toString('utf8') ?? '',
+        value,
         range: makeRange(field.tagStart, field.valueEnd),
         valueRange: makeRange(field.valueStart, field.valueEnd),
       });

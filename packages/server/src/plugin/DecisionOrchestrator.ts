@@ -325,7 +325,10 @@ export class DecisionOrchestrator {
       { isReDecision: true },
       token,
       signal,
-      { commitQsoCompletions: options.deferEffects !== true },
+      {
+        commitQsoCompletions: options.deferEffects !== true,
+        applyLogbookSessionEffects: options.deferEffects !== true,
+      },
     );
     if (!this.isCommandCurrent(token, signal)) return null;
     if (options.deferEffects) return decision;
@@ -493,6 +496,17 @@ export class DecisionOrchestrator {
       const maxStreams = Math.min(operatorMaxStreams, strategyMaxStreams ?? operatorMaxStreams);
       if (transmissions.length > maxStreams) {
         throw new Error(`Strategy returned ${transmissions.length} streams; operator limit is ${maxStreams}`);
+      }
+      const strategyMaxSignals = this.deps.getStrategyMaxSimultaneousSignals?.(operatorId);
+      if (strategyMaxSignals !== undefined
+          && (!Number.isInteger(strategyMaxSignals) || strategyMaxSignals < 1)) {
+        throw new Error(`Strategy declared an invalid simultaneous signal limit: ${strategyMaxSignals}`);
+      }
+      const maxSignals = Math.min(maxStreams, strategyMaxSignals ?? maxStreams);
+      if (transmissions.length > maxSignals) {
+        throw new Error(
+          `Strategy returned ${transmissions.length} simultaneous signals; strategy limit is ${maxSignals}`,
+        );
       }
       const streamIds = new Set<string>();
       return transmissions.map((transmission) => {
@@ -843,7 +857,10 @@ export class DecisionOrchestrator {
     meta: { isReDecision: boolean },
     token: OperatorCommandToken,
     signal: AbortSignal,
-    options: { commitQsoCompletions?: boolean } = {},
+    options: {
+      commitQsoCompletions?: boolean;
+      applyLogbookSessionEffects?: boolean;
+    } = {},
   ): Promise<StrategyDecisionResult | null> {
     if (!this.deps.getStrategyRuntime(operatorId)) {
       return null;
@@ -951,7 +968,8 @@ export class DecisionOrchestrator {
           ...(result.qsoCompletion ? [result.qsoCompletion] : []),
           ...(result.qsoCompletions ?? []),
         ];
-        if (result.logbookSessionEffects?.length) {
+        if (result.logbookSessionEffects?.length
+            && options.applyLogbookSessionEffects !== false) {
           await this.applyStrategyLogbookSessionEffects(operatorId, result.logbookSessionEffects);
         }
         if (qsoCompletions.length > 0 && options.commitQsoCompletions !== false) {
@@ -1050,6 +1068,7 @@ export class DecisionOrchestrator {
         persistencePolicy: effect.persistencePolicy,
         destination: effect.destination,
         sourcePluginName,
+        metadata: effect.metadata ? snapshotPluginData(effect.metadata, 'structured') : undefined,
         resolve,
         reject,
       });
@@ -1062,6 +1081,7 @@ export class DecisionOrchestrator {
         'committed',
         effect.streamId,
         persistedRecord.id,
+        effect.metadata,
       );
     }).catch((error) => {
       this.settleStrategyQSOCompletion(
@@ -1071,6 +1091,8 @@ export class DecisionOrchestrator {
         qsoRecord.id,
         'failed',
         effect.streamId,
+        undefined,
+        effect.metadata,
       );
       logger.warn('Declarative QSO completion failed after decision commit', {
         operatorId,
@@ -1088,6 +1110,7 @@ export class DecisionOrchestrator {
     status: 'committed' | 'failed',
     streamId?: string,
     persistedRecordId?: string,
+    metadata?: Record<string, unknown>,
   ): void {
     if (this.deps.getStrategyRuntimeGeneration(operatorId) !== runtimeGeneration) {
       logger.debug('Skipped QSO settlement for a replaced strategy runtime', {
@@ -1114,6 +1137,7 @@ export class DecisionOrchestrator {
             recordId,
             status,
             streamId,
+            ...(metadata ? { metadata: snapshotPluginData(metadata, 'structured') } : {}),
             ...(persistedRecordId ? { persistedRecordId } : {}),
           });
         },

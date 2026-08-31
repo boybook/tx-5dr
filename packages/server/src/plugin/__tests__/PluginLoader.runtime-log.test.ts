@@ -552,6 +552,111 @@ describe('PluginLoader runtime logs', () => {
     expect(errorLog?.message).toContain('Unsafe plugin UI page entry');
   });
 
+  it('isolates a manually installed plugin that requires a newer Plugin API', async () => {
+    const pluginRoot = await createPluginRoot();
+    const pluginDir = join(pluginRoot, 'future-plugin');
+    await mkdir(pluginDir, { recursive: true });
+    await writeFile(join(pluginDir, 'index.mjs'), `
+      export default {
+        name: 'future-plugin',
+        version: '1.0.0',
+        minPluginApiVersion: '2.0.0',
+        type: 'utility',
+      };
+    `, 'utf8');
+
+    const runtimeLogs: PluginLoaderRuntimeLogEvent[] = [];
+    const loader = new PluginLoader((entry) => runtimeLogs.push(entry), '1.9.9');
+    const loaded = await loader.scanAndLoad(pluginRoot);
+
+    expect(loaded).toHaveLength(0);
+    expect(runtimeLogs.some((entry) => (
+      entry.stage === 'validate'
+      && entry.pluginName === 'future-plugin'
+      && entry.message.includes('PLUGIN_API_VERSION_UNSUPPORTED')
+    ))).toBe(true);
+  });
+
+  it('rejects an installed artifact whose static manifest differs from its runtime', async () => {
+    const pluginRoot = await createPluginRoot();
+    const pluginDir = join(pluginRoot, 'manifest-mismatch');
+    await mkdir(pluginDir, { recursive: true });
+    await writeFile(join(pluginDir, 'index.mjs'), `
+      export default {
+        name: 'manifest-mismatch',
+        version: '1.0.0',
+        minPluginApiVersion: '2.0.0',
+        type: 'utility',
+      };
+    `, 'utf8');
+    await writeFile(join(pluginDir, 'tx5dr-plugin.json'), JSON.stringify({
+      schemaVersion: 1,
+      name: 'manifest-mismatch',
+      version: '9.9.9',
+      minPluginApiVersion: '2.0.0',
+      type: 'utility',
+      permissions: [],
+    }), 'utf8');
+
+    const runtimeLogs: PluginLoaderRuntimeLogEvent[] = [];
+    const loader = new PluginLoader((entry) => runtimeLogs.push(entry), '2.1.0');
+    expect(await loader.scanAndLoad(pluginRoot)).toHaveLength(0);
+    expect(runtimeLogs.some((entry) => (
+      entry.message.includes('artifact manifest differs')
+    ))).toBe(true);
+  });
+
+  it('rejects incoherent strategy capability declarations during scan', async () => {
+    const pluginRoot = await createPluginRoot();
+    const pluginDir = join(pluginRoot, 'invalid-capabilities');
+    await mkdir(pluginDir, { recursive: true });
+    await writeFile(join(pluginDir, 'index.mjs'), `
+      export default {
+        apiVersion: 2,
+        name: 'invalid-capabilities',
+        version: '1.0.0',
+        type: 'strategy',
+        strategyFeatures: { parallelTargetQueue: 1 },
+        createStrategyRuntime() { return {}; },
+      };
+    `, 'utf8');
+
+    const runtimeLogs: PluginLoaderRuntimeLogEvent[] = [];
+    const loaded = await new PluginLoader((entry) => runtimeLogs.push(entry)).scanAndLoad(pluginRoot);
+
+    expect(loaded).toHaveLength(0);
+    expect(runtimeLogs.some((entry) => entry.message.includes('parallelTargetQueue requires targetQueue'))).toBe(true);
+  });
+
+  it('rejects a simultaneous-signal cap above the declared QSO stream cap', async () => {
+    const pluginRoot = await createPluginRoot();
+    const pluginDir = join(pluginRoot, 'invalid-signal-cap');
+    await mkdir(pluginDir, { recursive: true });
+    await writeFile(join(pluginDir, 'index.mjs'), `
+      export default {
+        apiVersion: 2,
+        name: 'invalid-signal-cap',
+        version: '1.0.0',
+        type: 'strategy',
+        strategyFeatures: {
+          targetQueue: 1,
+          parallelTargetQueue: 1,
+          maxConcurrentStreams: 1,
+          maxSimultaneousSignals: 2,
+        },
+        createStrategyRuntime() { return {}; },
+      };
+    `, 'utf8');
+
+    const runtimeLogs: PluginLoaderRuntimeLogEvent[] = [];
+    const loaded = await new PluginLoader((entry) => runtimeLogs.push(entry)).scanAndLoad(pluginRoot);
+
+    expect(loaded).toHaveLength(0);
+    expect(runtimeLogs.some((entry) => (
+      entry.message.includes('maxSimultaneousSignals cannot exceed maxConcurrentStreams')
+    ))).toBe(true);
+  });
+
   it('emits locale parse warning but still loads plugin', async () => {
     const pluginRoot = await createPluginRoot();
     const pluginDir = join(pluginRoot, 'bad-locale');

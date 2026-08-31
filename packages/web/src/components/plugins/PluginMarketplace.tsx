@@ -24,6 +24,7 @@ import type {
   PluginMarketCatalogResponse,
   PluginMarketChannel,
   PluginPermission,
+  PluginRuntimeInfo,
   PluginSource,
   PluginStatus,
 } from '@tx5dr/contracts';
@@ -250,6 +251,7 @@ export function PluginMarketplace({ isActive, onOpenInstalledPlugin }: PluginMar
   const [pendingActionByPlugin, setPendingActionByPlugin] = useState<Partial<Record<string, PluginAction>>>({});
   const [pendingToggleByPlugin, setPendingToggleByPlugin] = useState<Record<string, boolean>>({});
   const [uninstallCandidate, setUninstallCandidate] = useState<PluginMarketCatalogEntry | null>(null);
+  const [runtimeInfo, setRuntimeInfo] = useState<PluginRuntimeInfo | null>(null);
   const catalogByChannelRef = useRef<CatalogMap>({});
   const catalogLoadingRef = useRef<BooleanMap>({});
   const entryByKeyRef = useRef<Record<string, PluginMarketCatalogEntry>>({});
@@ -291,6 +293,13 @@ export function PluginMarketplace({ isActive, onOpenInstalledPlugin }: PluginMar
     }
     void loadCatalog(channel);
   }, [channel, isActive, loadCatalog]);
+
+  useEffect(() => {
+    if (!isActive || runtimeInfo) return;
+    void api.getPluginRuntimeInfo()
+      .then(setRuntimeInfo)
+      .catch((error: unknown) => logger.warn('Failed to load plugin Host version', error));
+  }, [isActive, runtimeInfo]);
 
   const currentCatalog = catalogByChannel[channel]?.catalog.plugins ?? [];
   const currentItems = useMemo(
@@ -447,6 +456,11 @@ export function PluginMarketplace({ isActive, onOpenInstalledPlugin }: PluginMar
   const selectedHasGlobalSettings = hasGlobalSettings(selectedItem?.installedPlugin);
   const selectedTitle = selectedItem ? getMarketplaceEntryTitle(selectedItem.entry) : '';
   const selectedDescription = selectedItem ? getMarketplaceEntryDescription(selectedItem.entry) : '';
+  const selectedPluginApiCompatible = !selectedItem || !runtimeInfo
+    || compareSemverLike(
+      runtimeInfo.pluginApiVersion,
+      selectedItem.entry.minPluginApiVersion,
+    ) >= 0;
   const selectedMarketActionNeedsWarning = Boolean(
     isAdmin
     && selectedItem
@@ -651,8 +665,8 @@ export function PluginMarketplace({ isActive, onOpenInstalledPlugin }: PluginMar
                             <div className="flex flex-wrap items-center gap-2 text-[11px] text-default-400">
                               <span>{item.entry.name}</span>
                               <span>
-                                {t('plugins.marketMinHostVersionShort', 'Host >= {{version}}', {
-                                  version: item.entry.minHostVersion,
+                                {t('plugins.marketMinPluginApiVersionShort', 'Plugin API >= {{version}}', {
+                                  version: item.entry.minPluginApiVersion,
                                 })}
                               </span>
                               {item.installedVersion && (
@@ -786,6 +800,19 @@ export function PluginMarketplace({ isActive, onOpenInstalledPlugin }: PluginMar
                       />
                     )}
 
+                    {!selectedPluginApiCompatible && selectedItem && runtimeInfo && (
+                      <Alert
+                        color="warning"
+                        variant="flat"
+                        title={t('plugins.marketPluginApiIncompatibleTitle', 'TX-5DR update required')}
+                        description={t('plugins.marketPluginApiIncompatibleDescription', {
+                          defaultValue: 'This plugin requires Plugin API {{required}} or newer. TX-5DR currently bundles {{current}}.',
+                          required: selectedItem.entry.minPluginApiVersion,
+                          current: runtimeInfo.pluginApiVersion,
+                        })}
+                      />
+                    )}
+
                     {isAdmin && (
                       <div className="flex flex-col gap-3">
                         {selectedMarketActionNeedsWarning && (
@@ -797,6 +824,7 @@ export function PluginMarketplace({ isActive, onOpenInstalledPlugin }: PluginMar
                               color="primary"
                               onPress={() => { void runPluginAction('install', selectedItem); }}
                               isLoading={selectedPendingAction === 'install'}
+                              isDisabled={!selectedPluginApiCompatible}
                             >
                               {t('plugins.marketActionInstall', 'Install')}
                             </Button>
@@ -808,6 +836,7 @@ export function PluginMarketplace({ isActive, onOpenInstalledPlugin }: PluginMar
                               variant={selectedItem.hasUpdate ? 'solid' : 'flat'}
                               onPress={() => { void runPluginAction('update', selectedItem); }}
                               isLoading={selectedPendingAction === 'update'}
+                              isDisabled={!selectedPluginApiCompatible}
                             >
                               {selectedItem.hasUpdate
                                 ? t('plugins.marketActionUpdate', 'Update')
@@ -873,9 +902,15 @@ export function PluginMarketplace({ isActive, onOpenInstalledPlugin }: PluginMar
                         value={selectedItem.installedVersion ?? t('plugins.marketNotInstalled', 'Not installed')}
                       />
                       <MarketplaceMeta
-                        label={t('plugins.marketMinHostVersion', 'Minimum host version')}
-                        value={selectedItem.entry.minHostVersion}
+                        label={t('plugins.marketMinPluginApiVersion', 'Minimum Plugin API version')}
+                        value={selectedItem.entry.minPluginApiVersion}
                       />
+                      {runtimeInfo && (
+                        <MarketplaceMeta
+                          label={t('plugins.marketCurrentPluginApiVersion', 'Bundled Plugin API version')}
+                          value={runtimeInfo.pluginApiVersion}
+                        />
+                      )}
                       <MarketplaceMeta
                         label={t('plugins.marketPublishedAt', 'Published at')}
                         value={formatDateTime(selectedItem.entry.publishedAt)}

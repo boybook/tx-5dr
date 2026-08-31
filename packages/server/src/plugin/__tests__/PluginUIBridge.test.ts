@@ -17,6 +17,36 @@ function createSession(pageId = 'settings') {
 }
 
 describe('PluginUIBridge', () => {
+  it('composes page-scoped handlers without replacing other pages or the fallback', async () => {
+    const bridge = new PluginUIBridge(
+      'demo',
+      { kind: 'operator', operatorId: 'operator-1' },
+      new EventEmitter<DigitalRadioEngineEvents>(),
+      () => [],
+    );
+    const requestContext = {} as import('@tx5dr/plugin-api').PluginUIRequestContext;
+
+    bridge.registerPageHandler({
+      async onMessage(pageId) { return `fallback:${pageId}`; },
+    });
+    bridge.registerPageHandler({
+      async onMessage(pageId, action) { return `contest:${pageId}:${action}`; },
+    }, { pageIds: ['contest-log'] });
+    bridge.registerPageHandler({
+      async onMessage(pageId, action) { return `settings:${pageId}:${action}`; },
+    }, { pageIds: ['settings'] });
+
+    await expect(bridge.handlePageInvoke('contest-log', 'get-state', null, requestContext))
+      .resolves.toBe('contest:contest-log:get-state');
+    await expect(bridge.handlePageInvoke('settings', 'get-config', null, requestContext))
+      .resolves.toBe('settings:settings:get-config');
+    await expect(bridge.handlePageInvoke('diagnostics', 'get-state', null, requestContext))
+      .resolves.toBe('fallback:diagnostics');
+
+    bridge.clearPageHandler();
+    expect(bridge.hasPageHandler()).toBe(false);
+  });
+
   it('refreshes only the owning operator projection', () => {
     const refresh = vi.fn();
     const bridge = new PluginUIBridge(

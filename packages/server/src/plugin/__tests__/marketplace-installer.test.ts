@@ -21,14 +21,31 @@ async function makeTempDir(prefix: string): Promise<string> {
   return dir;
 }
 
-async function createPluginArchive(root: string, pluginName: string, version: string): Promise<string> {
+async function createPluginArchive(
+  root: string,
+  pluginName: string,
+  version: string,
+  minPluginApiVersion = '1.0.0',
+  includeManifest = true,
+): Promise<string> {
   const sourceDir = path.join(root, 'source');
   await fs.mkdir(sourceDir, { recursive: true });
   await fs.writeFile(
     path.join(sourceDir, 'index.mjs'),
-    `export default { name: ${JSON.stringify(pluginName)}, version: ${JSON.stringify(version)}, type: 'utility' };`,
+    `export default { name: ${JSON.stringify(pluginName)}, version: ${JSON.stringify(version)}, minPluginApiVersion: ${JSON.stringify(minPluginApiVersion)}, type: 'utility' };`,
     'utf8',
   );
+  if (includeManifest) {
+    await fs.writeFile(path.join(sourceDir, 'tx5dr-plugin.json'), JSON.stringify({
+      schemaVersion: 1,
+      name: pluginName,
+      version,
+      minPluginApiVersion,
+      type: 'utility',
+      instanceScope: 'operator',
+      permissions: [],
+    }), 'utf8');
+  }
 
   const archivePath = path.join(root, `${pluginName}-${version}.zip`);
   await execFileAsync('zip', ['-qr', archivePath, '.'], { cwd: sourceDir });
@@ -49,7 +66,7 @@ async function createSymlinkArchive(root: string, pluginName: string, version: s
   await fs.mkdir(sourceDir, { recursive: true });
   await fs.writeFile(
     path.join(root, 'outside-index.mjs'),
-    `export default { name: ${JSON.stringify(pluginName)}, version: ${JSON.stringify(version)}, type: 'utility' };`,
+    `export default { name: ${JSON.stringify(pluginName)}, version: ${JSON.stringify(version)}, minPluginApiVersion: '1.0.0', type: 'utility' };`,
     'utf8',
   );
   await fs.symlink('../outside-index.mjs', path.join(sourceDir, 'index.mjs'));
@@ -63,6 +80,7 @@ async function createCatalogFetch(
   pluginName = 'hello-plugin',
   version = '1.0.0',
   artifactUrl = `https://cdn.example.com/${pluginName}-${version}.zip`,
+  minPluginApiVersion = '1.0.0',
 ) {
   const artifactBytes = await fs.readFile(archivePath);
   const sha256 = (await import('node:crypto')).createHash('sha256').update(artifactBytes).digest('hex');
@@ -70,7 +88,7 @@ async function createCatalogFetch(
     artifactBytes,
     fetchImpl: vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         generatedAt: '2026-04-22T12:00:00.000Z',
         channel: 'stable',
         plugins: [
@@ -79,7 +97,8 @@ async function createCatalogFetch(
             title: 'Hello Plugin',
             description: 'test plugin',
             latestVersion: version,
-            minHostVersion: '1.0.0',
+            minPluginApiVersion,
+            artifactManifestVersion: 1,
             artifactUrl,
             sha256,
             size: artifactBytes.length,
@@ -132,7 +151,7 @@ describe('plugin marketplace installer', () => {
             title: 'Hello Plugin',
             description: 'test plugin',
             latestVersion: '1.0.0',
-            minHostVersion: '1.0.0',
+            minPluginApiVersion: '1.0.0',
             artifactUrl: 'https://cdn.example.com/hello-plugin-1.0.0.zip',
             sha256,
             size: artifactBytes.length,
@@ -191,7 +210,7 @@ describe('plugin marketplace installer', () => {
             title: 'Hello Plugin',
             description: 'test plugin',
             latestVersion: '1.1.0',
-            minHostVersion: '1.0.0',
+            minPluginApiVersion: '1.0.0',
             artifactUrl: 'https://cdn.example.com/hello-plugin-1.1.0.zip',
             sha256,
             size: artifactBytes.length,
@@ -244,7 +263,7 @@ describe('plugin marketplace installer', () => {
             title: 'Hello Plugin',
             description: 'test plugin',
             latestVersion: '1.0.0',
-            minHostVersion: '1.0.0',
+            minPluginApiVersion: '1.0.0',
             artifactUrl: 'https://cdn.example.com/hello-plugin-1.0.0.zip',
             sha256,
             size: invalidArtifactBytes.length,
@@ -316,6 +335,124 @@ describe('plugin marketplace installer', () => {
     })).rejects.toThrow('must use HTTPS');
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an incompatible catalog before downloading the artifact', async () => {
+    const root = await makeTempDir('tx5dr-market-plugin-api-version-');
+    const pluginDir = path.join(root, 'plugins');
+    await fs.mkdir(pluginDir, { recursive: true });
+    const archivePath = await createPluginArchive(root, 'hello-plugin', '1.0.0', '2.0.0');
+    const { fetchImpl } = await createCatalogFetch(
+      archivePath,
+      'hello-plugin',
+      '1.0.0',
+      'https://cdn.example.com/hello-plugin-1.0.0.zip',
+      '2.0.0',
+    );
+
+    await expect(installPluginFromMarketplace('hello-plugin', pluginDir, 'stable', {
+      fetchImpl,
+      pluginApiVersion: '1.9.9',
+      env: { TX5DR_PLUGIN_MARKET_BASE_URL: 'https://cdn.example.com/market' },
+    })).rejects.toMatchObject({ code: 'PLUGIN_API_VERSION_UNSUPPORTED' });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await expect(fs.access(path.join(pluginDir, 'hello-plugin'))).rejects.toThrow();
+  });
+
+  it('rejects an artifact whose embedded version differs from the catalog', async () => {
+    const root = await makeTempDir('tx5dr-market-artifact-version-');
+    const pluginDir = path.join(root, 'plugins');
+    await fs.mkdir(pluginDir, { recursive: true });
+    const archivePath = await createPluginArchive(root, 'hello-plugin', '0.9.0');
+    const { fetchImpl } = await createCatalogFetch(archivePath, 'hello-plugin', '1.0.0');
+
+    await expect(installPluginFromMarketplace('hello-plugin', pluginDir, 'stable', {
+      fetchImpl,
+      pluginApiVersion: '1.0.0',
+      env: { TX5DR_PLUGIN_MARKET_BASE_URL: 'https://cdn.example.com/market' },
+    })).rejects.toThrow('Plugin archive version mismatch');
+
+    await expectMarketplaceWorkspaceEmpty(root);
+  });
+
+  it('rejects an artifact whose embedded Plugin API requirement differs from the catalog', async () => {
+    const root = await makeTempDir('tx5dr-market-artifact-plugin-api-version-');
+    const pluginDir = path.join(root, 'plugins');
+    await fs.mkdir(pluginDir, { recursive: true });
+    const archivePath = await createPluginArchive(root, 'hello-plugin', '1.0.0', '1.1.0');
+    const { fetchImpl } = await createCatalogFetch(archivePath, 'hello-plugin', '1.0.0');
+
+    await expect(installPluginFromMarketplace('hello-plugin', pluginDir, 'stable', {
+      fetchImpl,
+      pluginApiVersion: '2.0.0',
+      env: { TX5DR_PLUGIN_MARKET_BASE_URL: 'https://cdn.example.com/market' },
+    })).rejects.toThrow('Plugin archive Plugin API requirement mismatch');
+
+    await expectMarketplaceWorkspaceEmpty(root);
+  });
+
+  it('requires a static manifest for catalog v2 artifacts', async () => {
+    const root = await makeTempDir('tx5dr-market-artifact-manifest-');
+    const pluginDir = path.join(root, 'plugins');
+    await fs.mkdir(pluginDir, { recursive: true });
+    const archivePath = await createPluginArchive(
+      root,
+      'hello-plugin',
+      '1.0.0',
+      '1.0.0',
+      false,
+    );
+    const { fetchImpl } = await createCatalogFetch(archivePath);
+
+    await expect(installPluginFromMarketplace('hello-plugin', pluginDir, 'stable', {
+      fetchImpl,
+      pluginApiVersion: '2.1.0',
+      env: { TX5DR_PLUGIN_MARKET_BASE_URL: 'https://cdn.example.com/market' },
+    })).rejects.toThrow('missing tx5dr-plugin.json');
+
+    await expectMarketplaceWorkspaceEmpty(root);
+  });
+
+  it('keeps catalog v1 artifacts installable during the nightly migration', async () => {
+    const root = await makeTempDir('tx5dr-market-v1-artifact-');
+    const pluginDir = path.join(root, 'plugins');
+    await fs.mkdir(pluginDir, { recursive: true });
+    const archivePath = await createPluginArchive(
+      root,
+      'hello-plugin',
+      '1.0.0',
+      '1.7.11',
+      false,
+    );
+    const artifactBytes = await fs.readFile(archivePath);
+    const sha256 = (await import('node:crypto')).createHash('sha256')
+      .update(artifactBytes)
+      .digest('hex');
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        schemaVersion: 1,
+        generatedAt: '2026-04-22T12:00:00.000Z',
+        channel: 'nightly',
+        plugins: [{
+          name: 'hello-plugin',
+          title: 'Hello Plugin',
+          description: 'legacy test plugin',
+          latestVersion: '1.0.0',
+          minHostVersion: '1.7.11',
+          artifactUrl: 'https://cdn.example.com/hello-plugin-1.0.0.zip',
+          sha256,
+          size: artifactBytes.length,
+          publishedAt: '2026-04-22T12:00:00.000Z',
+        }],
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(artifactBytes, { status: 200 }));
+
+    await expect(installPluginFromMarketplace('hello-plugin', pluginDir, 'nightly', {
+      fetchImpl,
+      pluginApiVersion: '2.1.0',
+      env: { TX5DR_PLUGIN_MARKET_BASE_URL: 'https://cdn.example.com/market' },
+    })).resolves.toMatchObject({ success: true });
   });
 
   it('uninstalls plugin code but leaves plugin-data untouched', async () => {

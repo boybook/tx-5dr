@@ -96,6 +96,7 @@ function createRuntime(options: {
   busyCallsigns?: string[];
   transmitBlocked?: boolean;
   sessionId?: string;
+  practiceAvailable?: boolean;
 } = {}) {
   let transmitting = options.transmitting ?? false;
   const busy = new Set((options.busyCallsigns ?? []).map((callsign) => callsign.toUpperCase()));
@@ -105,6 +106,9 @@ function createRuntime(options: {
     myGrid: 'OL32',
     frequency: 1_500,
     modeName: 'FT8',
+    contestYear: 2026,
+    operatorId: 'operator-0',
+    transmitterId: 1,
     slotMs: MODES.FT8.slotMs,
     transmitCycles: [0],
     parallelStreams: options.parallelStreams ?? 1,
@@ -130,7 +134,11 @@ function createRuntime(options: {
       ? { transmitGate: { allowed: false, reason: 'confirmSettings' } }
       : {}, () => options.sessionId
       ? { kind: 'plugin-session', sessionId: options.sessionId }
-      : undefined),
+      : undefined, options.practiceAvailable ? {
+        canStart: () => true,
+        sessionKey: 'practice:operator-0',
+        title: 'WW Digi Practice',
+      } : undefined),
     setTransmitting(value: boolean) { transmitting = value; },
     config,
   };
@@ -143,6 +151,56 @@ describe('WW Digi strategy transmit gate', () => {
     expect(result.stop).toBe(true);
     expect(result.transmissions).toEqual([]);
     expect(result.snapshot.transmitGate).toEqual({ allowed: false, reason: 'confirmSettings' });
+  });
+});
+
+describe('WW Digi practice transaction state', () => {
+  it('keeps practice indexes inside the runtime checkpoint', async () => {
+    const { runtime } = createRuntime({ practiceAvailable: true });
+    const before = runtime.checkpoint();
+
+    await expect(runtime.invokeAction({
+      target: { kind: 'runtime' }, actionId: 'start-practice',
+    })).resolves.toMatchObject({
+      requestDecision: true,
+      logbookSessionEffects: [{ operation: 'open', sessionKey: 'practice:operator-0' }],
+    });
+    expect(runtime.isPracticeEnabled()).toBe(true);
+    expect(runtime.getPracticeOperatingIndex()).toMatchObject({ revision: 0, workedByBand: {} });
+
+    runtime.restore(before);
+    expect(runtime.isPracticeEnabled()).toBe(false);
+    expect(runtime.getPracticeOperatingIndex()).toBeUndefined();
+  });
+
+  it('marks practice ownership in the same completion envelope', async () => {
+    const { runtime } = createRuntime({
+      transmitting: true,
+      sessionId: 'practice-session',
+      practiceAvailable: true,
+    });
+    await runtime.invokeAction({ target: { kind: 'runtime' }, actionId: 'start-practice' });
+    const started = await activateInbound(runtime, 'JA1AAA', 'PM95');
+    confirmTransmissions(runtime, started);
+
+    const completed = await runtime.decide([
+      parsed('BG5DRB JA1AAA RR73', BASE_TIME + MODES.FT8.slotMs),
+    ], decision(2));
+
+    expect(completed.qsoCompletions?.[0]).toMatchObject({
+      destination: { kind: 'plugin-session', sessionId: 'practice-session' },
+      record: {
+        contestEntry: {
+          editionId: 'ww-digi-2026',
+          rulesetVersion: 'tx5dr-ww-digi-v1',
+          annotations: {
+            operatorId: 'operator-0',
+            transmitterId: 1,
+            practice: true,
+          },
+        },
+      },
+    });
   });
 });
 

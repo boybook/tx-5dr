@@ -19,14 +19,10 @@ VERSION=$(TX5DR_PROJECT_ROOT="$PROJECT_ROOT" node -e '
 const fs = require("fs");
 const path = require("path");
 const root = process.env.TX5DR_PROJECT_ROOT;
-const generated = path.join(root, "packages/server/src/generated/buildInfo.ts");
-let version = process.env.TX5DR_BUILD_VERSION || "";
-if (!version && fs.existsSync(generated)) {
-  const source = fs.readFileSync(generated, "utf8");
-  const match = source.match(/"version"\s*:\s*"([^"]+)/);
-  if (match) version = match[1];
-}
-if (!version) version = require(path.join(root, "package.json")).version;
+const generated = path.join(root, "packages/server/src/generated/buildInfo.json");
+if (!fs.existsSync(generated)) throw new Error(`Missing canonical build info: ${generated}`);
+const version = JSON.parse(fs.readFileSync(generated, "utf8")).version;
+if (typeof version !== "string" || !version) throw new Error("Canonical build version is missing");
 process.stdout.write(version);
 ')
 FORMAT="${1:-both}"
@@ -380,15 +376,9 @@ const fs = require("fs");
 const path = require("path");
 const root = process.argv[2];
 const output = process.argv[3];
-const sourcePath = path.join(root, "packages/server/src/generated/buildInfo.ts");
-let info = { version: process.env.TX5DR_BUILD_VERSION || require(path.join(root, "package.json")).version };
-if (fs.existsSync(sourcePath)) {
-  const source = fs.readFileSync(sourcePath, "utf8");
-  const match = source.match(/SERVER_BUILD_INFO[^=]*=\s*(\{[\s\S]*?\});/);
-  if (match) {
-    try { info = JSON.parse(match[1]); } catch {}
-  }
-}
+const sourcePath = path.join(root, "packages/server/src/generated/buildInfo.json");
+if (!fs.existsSync(sourcePath)) throw new Error(`Missing canonical build info: ${sourcePath}`);
+const info = JSON.parse(fs.readFileSync(sourcePath, "utf8"));
 fs.writeFileSync(output, `${JSON.stringify(info, null, 2)}\n`);
 NODE
 
