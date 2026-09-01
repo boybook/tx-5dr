@@ -16,6 +16,10 @@ describe('FT contest catalog', () => {
   it('registers one thin built-in plugin per contest family', () => {
     expect(ftContestCatalog).toHaveLength(13);
     expect(ftContestBuiltinPluginEntries).toHaveLength(13);
+    expect(ftContestCatalog[0]?.locales.en.pluginName).toBe('ARRL International Digital Contest');
+    expect(ftContestCatalog[0]?.locales.en.pluginDescription).toContain('ARRL');
+    expect(ftContestCatalog[0]?.locales.zh.autoReplyToCQ).toBe('自动回应他人 CQ');
+    expect(ftContestCatalog[0]?.locales.ja.autoReplyToCQ).toBe('他局の CQ に自動応答');
     expect(ftContestCatalog.map((entry) => entry.name)).toEqual([
       'arrl-digital',
       'ft-roundup',

@@ -27,7 +27,7 @@ import {
 import type { AnyPluginDefinition } from '@tx5dr/plugin-api';
 import type { StrategyPluginContext } from '@tx5dr/plugin-api';
 import {
-  contestLocaleLabel,
+  contestLocales,
   createContestStrategyRuntime,
   standardQSOQuickSettings,
   standardQSOSettings,
@@ -314,7 +314,7 @@ function createEntry<TExchange, TQso extends FT8ContestQso<TExchange>>(
     title: input.title,
     contest: input.contest as AnyContest,
     definition: contestPlugin(input.name, input.contest),
-    locales: contestLocaleLabel(input.en, input.zh, input.ja),
+    locales: contestLocales(input.title, input.en, input.zh, input.ja),
   };
 }
 
