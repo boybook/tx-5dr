@@ -193,6 +193,21 @@ describe('HamlibConnection', () => {
     expect(rig.sendRaw).toHaveBeenCalledWith(Buffer.from('MS0;', 'ascii'), 64, Buffer.from(';'));
   });
 
+  it('writes TS-990S USB audio as the documented MS composite source', async () => {
+    const { connection, rig } = createConnectedConnection({
+      sendRaw: vi.fn()
+        .mockResolvedValueOnce(Buffer.alloc(0))
+        .mockResolvedValueOnce(Buffer.from('MS00010;', 'ascii')),
+    });
+    const testConnection = asTestConnection(connection);
+    testConnection.meterRigMetadata = { rigModel: 2039, mfgName: 'Kenwood', modelName: 'TS-990S' };
+    testConnection.currentRadioMode = 'USB';
+
+    await expect(connection.setTxAudioInputSource!('usb')).resolves.toMatchObject({ applied: 'usb' });
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(1, Buffer.from('MS00010;', 'ascii'), 0, Buffer.from(';'));
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(2, Buffer.from('MS0;', 'ascii'), 64, Buffer.from(';'));
+  });
+
   it('does not advertise raw TX audio commands for unknown Hamlib models', async () => {
     const { connection, rig } = createConnectedConnection();
     const testConnection = asTestConnection(connection);
@@ -239,6 +254,36 @@ describe('HamlibConnection', () => {
     expect(rig.sendRaw).toHaveBeenNthCalledWith(2, Buffer.from('EX0722;', 'ascii'), 0, Buffer.from(';'));
     expect(rig.sendRaw).toHaveBeenNthCalledWith(3, Buffer.from('EX070;', 'ascii'), 64, Buffer.from(';'));
     expect(rig.sendRaw).toHaveBeenNthCalledWith(4, Buffer.from('EX072;', 'ascii'), 64, Buffer.from(';'));
+  });
+
+  it('writes FTDX101D USB using its distinct composite EX slots', async () => {
+    const { connection, rig } = createConnectedConnection({
+      sendRaw: vi.fn()
+        .mockResolvedValueOnce(Buffer.alloc(0))
+        .mockResolvedValueOnce(Buffer.alloc(0))
+        .mockResolvedValueOnce(Buffer.from('EX0101111;', 'ascii'))
+        .mockResolvedValueOnce(Buffer.from('EX0101121;', 'ascii')),
+    });
+    const testConnection = asTestConnection(connection);
+    testConnection.meterRigMetadata = { rigModel: 1040, mfgName: 'Yaesu', modelName: 'FTDX-101D' };
+    testConnection.currentRadioMode = 'USB';
+
+    await expect(connection.setTxAudioInputSource!('usb')).resolves.toMatchObject({ applied: 'usb' });
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(1, Buffer.from('EX0101111;', 'ascii'), 0, Buffer.from(';'));
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(2, Buffer.from('EX0101121;', 'ascii'), 0, Buffer.from(';'));
+  });
+
+  it('supports only MIC/REAR on FT-891 and never advertises USB', async () => {
+    const { connection, rig } = createConnectedConnection({
+      sendRaw: vi.fn().mockResolvedValue(Buffer.from('EX11051;', 'ascii')),
+    });
+    const testConnection = asTestConnection(connection);
+    testConnection.meterRigMetadata = { rigModel: 1031, mfgName: 'Yaesu', modelName: 'FT-891' };
+
+    await expect(connection.getSupportedTxAudioInputSources!()).resolves.toEqual(['mic', 'accessory']);
+    await expect(connection.getTxAudioInputSource!()).resolves.toBe('accessory');
+    await expect(connection.setTxAudioInputSource!('usb')).rejects.toThrow(/unsupported TX audio input source/i);
+    expect(rig.sendRaw).toHaveBeenCalledWith(Buffer.from('EX1105;', 'ascii'), 64, Buffer.from(';'));
   });
 
 

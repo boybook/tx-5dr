@@ -86,7 +86,7 @@ type HamlibTxAudioProvider = {
   manufacturer: 'Icom' | 'Yaesu' | 'Kenwood';
   modelNames: readonly string[];
   sources: readonly TxAudioInputSource[];
-  protocol: 'icom-civ' | 'yaesu-ex' | 'yaesu-composite' | 'kenwood-ms';
+  protocol: 'icom-civ' | 'yaesu-ex' | 'yaesu-composite' | 'kenwood-ms' | 'kenwood-ms-composite';
   /** ICOM CI-V command payload after 1A/05 (sub-address and extension). */
   civExtension?: readonly number[];
   /** Yaesu EX command prefix (without value and terminator). */
@@ -95,6 +95,7 @@ type HamlibTxAudioProvider = {
   yaesuCompositeValues?: Readonly<Record<'SSB' | 'AM' | 'FM' | 'DATA', Readonly<Partial<Record<TxAudioInputSource, readonly [number, number]>>>> >;
   /** Kenwood MS register (0 = normal voice, 1 = data). */
   kenwoodRegister?: 0 | 1;
+  kenwoodCompositeValues?: Readonly<Partial<Record<TxAudioInputSource, readonly [number, number, number, number, number]>>>;
   valueMap: Readonly<Partial<Record<TxAudioInputSource, number>>>;
   reverseMap: Readonly<Record<number, TxAudioInputSource>>;
 };
@@ -194,6 +195,26 @@ const HAMLIB_TX_AUDIO_PROVIDERS: readonly HamlibTxAudioProvider[] = [
   },
   {
     manufacturer: 'Yaesu',
+    modelNames: ['FTDX-101D', 'FTDX-101MP'],
+    sources: ['mic', 'usb', 'accessory'],
+    protocol: 'yaesu-composite',
+    yaesuCompositeCommands: {
+      SSB: { modSource: 'EX010111', rearSelect: 'EX010112' },
+      AM: { modSource: 'EX010211', rearSelect: 'EX010213' },
+      FM: { modSource: 'EX010310', rearSelect: 'EX010312' },
+      DATA: { modSource: 'EX010413', rearSelect: 'EX010414' },
+    },
+    yaesuCompositeValues: {
+      SSB: { mic: [0, 0], usb: [1, 1], accessory: [1, 0] },
+      AM: { mic: [0, 0], usb: [1, 1], accessory: [1, 0] },
+      FM: { mic: [0, 0], usb: [1, 1], accessory: [1, 0] },
+      DATA: { mic: [0, 0], usb: [1, 1], accessory: [1, 0] },
+    },
+    valueMap: { mic: 0, usb: 1, accessory: 2 },
+    reverseMap: { 0: 'mic', 1: 'usb', 2: 'accessory' },
+  },
+  {
+    manufacturer: 'Yaesu',
     modelNames: ['FT-991A', 'FT-991'],
     sources: ['mic', 'usb', 'accessory'],
     protocol: 'yaesu-composite',
@@ -213,6 +234,20 @@ const HAMLIB_TX_AUDIO_PROVIDERS: readonly HamlibTxAudioProvider[] = [
     reverseMap: { 0: 'mic', 1: 'usb', 2: 'accessory' },
   },
   {
+    manufacturer: 'Yaesu',
+    modelNames: ['FT-891'],
+    sources: ['mic', 'accessory'],
+    protocol: 'yaesu-ex',
+    yaesuCommands: {
+      SSB: 'EX1105',
+      AM: 'EX0605',
+      FM: 'EX0901',
+      DATA: 'EX0809',
+    },
+    valueMap: { mic: 0, accessory: 1 },
+    reverseMap: { 0: 'mic', 1: 'accessory' },
+  },
+  {
     manufacturer: 'Kenwood',
     modelNames: ['TS-890S'],
     sources: ['mic', 'accessory', 'usb', 'network'],
@@ -220,6 +255,22 @@ const HAMLIB_TX_AUDIO_PROVIDERS: readonly HamlibTxAudioProvider[] = [
     kenwoodRegister: 0,
     valueMap: KENWOOD_TX_AUDIO_VALUE_MAP,
     reverseMap: { 0: 'mic', 1: 'accessory', 2: 'usb', 3: 'network' },
+  },
+  {
+    manufacturer: 'Kenwood',
+    modelNames: ['TS-990S'],
+    sources: ['mic', 'accessory', 'usb', 'spdif', 'mic+accessory', 'mic+usb'],
+    protocol: 'kenwood-ms-composite',
+    kenwoodCompositeValues: {
+      mic: [0, 1, 0, 0, 0],
+      accessory: [0, 0, 1, 0, 0],
+      usb: [0, 0, 0, 1, 0],
+      spdif: [0, 0, 0, 0, 1],
+      'mic+accessory': [0, 1, 1, 0, 0],
+      'mic+usb': [0, 1, 0, 1, 0],
+    },
+    valueMap: { mic: 0, accessory: 1, usb: 2, spdif: 3, 'mic+accessory': 4, 'mic+usb': 5 },
+    reverseMap: { 0: 'mic', 1: 'accessory', 2: 'usb', 3: 'spdif', 4: 'mic+accessory', 5: 'mic+usb' },
   },
 ];
 type RfPowerStepTableEntry = {
@@ -2958,10 +3009,12 @@ export class HamlibConnection
     }
 
     if (provider.protocol === 'yaesu-ex') {
-      const command = `${this.getYaesuTxAudioCommand(provider)}${value === undefined ? '' : value};`;
+      const prefix = this.getYaesuTxAudioCommand(provider);
+      const command = `${prefix}${value === undefined ? '' : value};`;
       const reply = await this.rig!.sendRaw(Buffer.from(command, 'ascii'), value === undefined ? 64 : 0, Buffer.from(';'));
       if (value === undefined) {
-        const match = reply.toString('ascii').match(/EX\d{6}(\d);/);
+        const escapedPrefix = prefix.replace(/[.*+?^${}()|[\[\]\\]/g, '\\$&');
+        const match = reply.toString('ascii').match(new RegExp(`${escapedPrefix}(\\d);`));
         return match ? Number.parseInt(match[1]!, 10) : null;
       }
       return null;
@@ -2975,6 +3028,31 @@ export class HamlibConnection
         const match = reply.toString('ascii').match(new RegExp(`MS${register}([0-3]);`));
         return match ? Number.parseInt(match[1]!, 10) : null;
       }
+      return null;
+    }
+
+    if (provider.protocol === 'kenwood-ms-composite') {
+      const dataSend = (this.currentRadioMode ?? '').toUpperCase().includes('PKT')
+        || (this.currentRadioMode ?? '').toUpperCase().includes('DATA');
+      const p1 = dataSend ? 1 : 0;
+      const values = provider.kenwoodCompositeValues ?? {};
+      const send = async (tuple?: readonly [number, number, number, number, number]) => {
+        const wire = tuple ? `MS${p1}${tuple[1]}${tuple[2]}${tuple[3]}${tuple[4]};` : `MS${p1};`;
+        return this.rig!.sendRaw(Buffer.from(wire, 'ascii'), tuple ? 0 : 64, Buffer.from(';'));
+      };
+      if (value === undefined) {
+        const reply = await send();
+        const match = reply.toString('ascii').match(new RegExp(`MS${p1}([01])([01])([01])([01]);`));
+        if (!match) return null;
+        const tuple = [p1, Number(match[1]), Number(match[2]), Number(match[3]), Number(match[4])] as const;
+        const source = Object.entries(values).find(([, candidate]) => candidate?.[1] === tuple[1]
+          && candidate?.[2] === tuple[2] && candidate?.[3] === tuple[3] && candidate?.[4] === tuple[4])?.[0] as TxAudioInputSource | undefined;
+        return source ? provider.valueMap[source] ?? null : null;
+      }
+      const source = Object.entries(provider.valueMap).find(([, mapped]) => mapped === value)?.[0] as TxAudioInputSource | undefined;
+      const tuple = source ? values[source] : undefined;
+      if (!tuple) return null;
+      await send(tuple);
       return null;
     }
 
