@@ -68,7 +68,7 @@ export default definePlugin({
 
 Release boundary: `2.0.1` is the containment release for the existing
 experimental/advanced `./toolkit` surface. The stable `./contest` entry point,
-root re-exports and `ft8-contest` scaffold start at `2.1.0`; the publish workflow
+root re-exports and `ft8-contest` scaffold start at `2.2.0`; the publish workflow
 rejects an older version when that stable export is present.
 
 Plugin compatibility uses the bundled `@tx5dr/plugin-api` SemVer, not the
@@ -114,7 +114,7 @@ const contest = defineFT8Contest({
 export default composeFT8ContestPlugin({
   name: 'example-ft8',
   version: '1.0.0',
-  minPluginApiVersion: '2.1.0',
+  minPluginApiVersion: '2.2.0',
   contest,
   runtime: createContestRuntime,
 });

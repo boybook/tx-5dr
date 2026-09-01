@@ -576,7 +576,7 @@ class ContestRuntime implements StrategyRuntime {
 export const plugin = composeFT8ContestPlugin({
   name: '${config.name}',
   version: '0.1.0',
-  minPluginApiVersion: '2.1.0',
+  minPluginApiVersion: '2.2.0',
   description: 'pluginDescription',
   permissions: CONTEST_SESSION_PERMISSIONS,
   contest,
@@ -775,7 +775,7 @@ describe('${config.name}', () => {
 
   it('exposes an FT8 strategy plugin', () => {
     expect(plugin.type).toBe('strategy');
-    expect(plugin.minPluginApiVersion).toBe('2.1.0');
+    expect(plugin.minPluginApiVersion).toBe('2.2.0');
     expect(contest.operating).toMatchObject({
       humanInitiation: 'required',
       maxConcurrentQsos: 1,

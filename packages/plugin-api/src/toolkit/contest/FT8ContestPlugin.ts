@@ -8,10 +8,12 @@ import {
   type QueuedStrategyRuntime,
   type StrategyRuntime,
 } from '../../runtime.js';
+import type { ContestLogbookModule } from './ContestLogbook.js';
+import type { VersionedContestSession } from './ContestSessionRepository.js';
 import type { FT8ContestDefinition } from './FT8ContestDefinition.js';
 import type { FT8ContestQso } from './FT8ContestModules.js';
 
-export const FT8_CONTEST_MIN_PLUGIN_API_VERSION = '2.1.0';
+export const FT8_CONTEST_MIN_PLUGIN_API_VERSION = '2.2.0';
 
 export interface FT8RuntimeModule<TContest> {
   readonly id: string;
@@ -104,6 +106,11 @@ export interface ComposeFT8ContestPluginInput<
     FT8ContestDefinition<TExchange, TQso, TSubmissionOptions>,
     WorkbenchPermissions
   > & RequiredPermissionsAvailable<Permissions, WorkbenchPermissions>;
+  logbook?: ContestLogbookModule<
+    FT8ContestDefinition<TExchange, TQso, TSubmissionOptions>,
+    VersionedContestSession,
+    Permissions
+  >;
   hooks?: PluginHooks<Permissions>;
   onLoad?(context: PluginContextFor<Permissions>): void | Promise<void>;
   onUnload?(context: PluginCleanupContext): void | Promise<void>;
@@ -120,6 +127,114 @@ function runtimeFactory<TContest>(
   runtime: FT8RuntimeModule<TContest> | FT8RuntimeFactory<TContest>,
 ): FT8RuntimeFactory<TContest> {
   return typeof runtime === 'function' ? runtime : (contest, context) => runtime.create(contest, context);
+}
+
+function mergeHooks<Permissions extends readonly PluginPermission[]>(
+  hooks: Array<PluginHooks<Permissions> | undefined>,
+): PluginHooks<Permissions> | undefined {
+  const active = hooks.filter((hook): hook is PluginHooks<Permissions> => hook !== undefined);
+  if (active.length === 0) return undefined;
+  return {
+    async onAutoCallCandidate(slotInfo, messages, ctx) {
+      let proposal;
+      for (const hook of active) {
+        proposal = await hook.onAutoCallCandidate?.(slotInfo, messages, ctx) ?? proposal;
+      }
+      return proposal;
+    },
+    async onConfigureAutoCallExecution(request, plan, ctx) {
+      let nextPlan = plan;
+      for (const hook of active) {
+        nextPlan = await hook.onConfigureAutoCallExecution?.(request, nextPlan, ctx) ?? nextPlan;
+      }
+      return nextPlan;
+    },
+    async onFilterCandidates(candidates, ctx) {
+      let next = candidates;
+      for (const hook of active) {
+        next = await hook.onFilterCandidates?.(next, ctx) ?? next;
+      }
+      return next;
+    },
+    async onScoreCandidates(candidates, ctx) {
+      let next = candidates;
+      for (const hook of active) {
+        next = await hook.onScoreCandidates?.(next, ctx) ?? next;
+      }
+      return next;
+    },
+    async onSlotStart(slotInfo, messages, ctx) {
+      for (const hook of active) await hook.onSlotStart?.(slotInfo, messages, ctx);
+    },
+    async onSlotActivity(event, ctx) {
+      for (const hook of active) await hook.onSlotActivity?.(event, ctx);
+    },
+    async onDecode(messages, ctx) {
+      for (const hook of active) await hook.onDecode?.(messages, ctx);
+    },
+    async onFrequencyChange(state, ctx) {
+      for (const hook of active) await hook.onFrequencyChange?.(state, ctx);
+    },
+    async onQSOStart(info, ctx) {
+      for (const hook of active) await hook.onQSOStart?.(info, ctx);
+    },
+    async onQSOComplete(record, ctx) {
+      for (const hook of active) await hook.onQSOComplete?.(record, ctx);
+    },
+    async onQSOFail(info, ctx) {
+      for (const hook of active) await hook.onQSOFail?.(info, ctx);
+    },
+    async onTimer(timerId, ctx) {
+      for (const hook of active) await hook.onTimer?.(timerId, ctx);
+    },
+    async onUserAction(actionId, payload, ctx) {
+      for (const hook of active) await hook.onUserAction?.(actionId, payload, ctx);
+    },
+    async onConfigChange(changes, ctx) {
+      for (const hook of active) await hook.onConfigChange?.(changes, ctx);
+    },
+  };
+}
+
+function mergeRecordMap<T extends Record<string, unknown> | undefined>(
+  first: T,
+  second: T,
+): T {
+  const merged = { ...(first ?? {}), ...(second ?? {}) };
+  return (Object.keys(merged).length > 0 ? merged : undefined) as T;
+}
+
+function mergeArrayById<T extends { id: string }>(first?: readonly T[], second?: readonly T[]): T[] | undefined {
+  const result: T[] = [];
+  const index = new Map<string, number>();
+  for (const item of [...first ?? [], ...second ?? []]) {
+    const existing = index.get(item.id);
+    if (existing === undefined) {
+      index.set(item.id, result.length);
+      result.push(item);
+      continue;
+    }
+    result[existing] = item;
+  }
+  return result.length > 0 ? result : undefined;
+}
+
+function mergeQuickSettings(
+  first?: readonly { settingKey: string }[],
+  second?: readonly { settingKey: string }[],
+): { settingKey: string }[] | undefined {
+  const result: { settingKey: string }[] = [];
+  const index = new Map<string, number>();
+  for (const item of [...first ?? [], ...second ?? []]) {
+    const existing = index.get(item.settingKey);
+    if (existing === undefined) {
+      index.set(item.settingKey, result.length);
+      result.push(item);
+      continue;
+    }
+    result[existing] = item;
+  }
+  return result.length > 0 ? result : undefined;
 }
 
 function assertContestRuntimeFeatures(
@@ -162,7 +277,12 @@ export function composeFT8ContestPlugin<
     runtime,
     session,
     workbench,
+    logbook,
     hooks,
+    settings,
+    quickSettings,
+    panels,
+    ui,
     onLoad,
     onUnload,
     strategyFeatures,
@@ -213,13 +333,37 @@ export function composeFT8ContestPlugin<
     throw new Error('contest_operating_queue_activation_requires_target_queue');
   }
 
+  if (logbook && !metadata.permissions?.includes('logbook:session')) {
+    throw new Error('contest_logbook_missing_permission:logbook:session');
+  }
+  if (logbook && !metadata.permissions?.includes('plugin:event-bus')) {
+    throw new Error('contest_logbook_missing_permission:plugin:event-bus');
+  }
+
+  const mergedHooks = mergeHooks([logbook?.hooks, hooks]);
+  const mergedSettings = mergeRecordMap(logbook?.settings, settings);
+  const mergedQuickSettings = mergeQuickSettings(logbook?.quickSettings, quickSettings);
+  const mergedPanels = mergeArrayById(logbook?.panels, panels);
+  const mergedUi = logbook?.ui || ui
+    ? {
+        dir: ui?.dir ?? logbook?.ui?.dir,
+        pages: mergeArrayById(logbook?.ui?.pages, ui?.pages),
+      }
+    : undefined;
+  const mergedSession: any = session ?? logbook?.session;
+  const mergedWorkbench: any = workbench ?? logbook?.workbench;
+
   return {
     ...metadata,
     apiVersion: 2,
     minPluginApiVersion,
     type: 'strategy',
     strategyFeatures: mergedFeatures,
-    hooks,
+    ...(mergedSettings ? { settings: mergedSettings } : {}),
+    ...(mergedQuickSettings ? { quickSettings: mergedQuickSettings } : {}),
+    ...(mergedPanels ? { panels: mergedPanels } : {}),
+    ...(mergedUi ? { ui: mergedUi } : {}),
+    hooks: mergedHooks,
     createStrategyRuntime(context) {
       assertPluginApiCompatible(minPluginApiVersion, metadata.name, context.pluginApiVersion);
       const runtime = createRuntime(contest, context);
@@ -230,18 +374,18 @@ export function composeFT8ContestPlugin<
       const instanceCleanups: ContestModuleCleanup[] = [];
       cleanups.set(context.operator.id, instanceCleanups);
       try {
-        if (session) {
-          const cleanup = await session.setup({
+        if (mergedSession) {
+          const cleanup = await (mergedSession as any).setup({
             contest,
-            context: context as unknown as PluginContextFor<SessionPermissions>,
+            context: context as any,
             pluginName: metadata.name,
           });
           if (cleanup) instanceCleanups.push(cleanup);
         }
-        if (workbench) {
-          const cleanup = await workbench.setup({
+        if (mergedWorkbench) {
+          const cleanup = await (mergedWorkbench as any).setup({
             contest,
-            context: context as unknown as PluginContextFor<WorkbenchPermissions>,
+            context: context as any,
             pluginName: metadata.name,
           });
           if (cleanup) instanceCleanups.push(cleanup);

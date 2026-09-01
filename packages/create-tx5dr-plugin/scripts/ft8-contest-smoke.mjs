@@ -41,7 +41,7 @@ try {
   if (loaded.default?.name !== 'smoke-contest') {
     throw new Error('isolated FT8 contest bundle did not export the generated plugin');
   }
-  if (loaded.default?.minPluginApiVersion !== '2.1.0') {
+  if (loaded.default?.minPluginApiVersion !== '2.2.0') {
     throw new Error('isolated FT8 contest bundle did not preserve the Plugin API version floor');
   }
   try {

@@ -104,7 +104,7 @@ export interface DefaultContestSessionOptions<
 > {
   /** Scope of the non-QSO KV state. QSO data always lives in the Host plugin-session. */
   stateScope?: 'operator' | 'global';
-  create(contest: TContest): TSession;
+  create(contest: TContest, context: ContestSessionContext): TSession;
   title?(contest: TContest, context: ContestSessionContext): string;
   maxTransactionAttempts?: number;
 }
@@ -446,7 +446,7 @@ export function defaultContestSession<
       const repository = new ContestSessionRepository(
         store,
         sessionKey(contest),
-        () => options.create(contest),
+        () => options.create(contest, context),
       );
       repositories.set(operatorId, repository);
       contests.set(operatorId, contest);
