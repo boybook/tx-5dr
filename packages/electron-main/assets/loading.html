@@ -396,9 +396,23 @@
     let isExpanded = false;
     let unsubscribe = null;
 
+    // STARTUP_LOG_PREVIEW_FORMATTER_START
+    function formatStartupLogPreview(value) {
+      const withoutTimestamp = value.replace(
+        /^\s*\[\d{4}-\d{2}-\d{2}(?:T|\s)\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?\]\s*/,
+        '',
+      );
+      const withoutLevel = withoutTimestamp.replace(
+        /^\s*\[(?:trace|debug|info|warn|warning|error|fatal)\s*\]\s*/i,
+        '',
+      ).trim();
+      return withoutLevel || value;
+    }
+    // STARTUP_LOG_PREVIEW_FORMATTER_END
+
     function renderLines() {
       shell.classList.toggle('logs-expanded', isExpanded);
-      const latestLine = lines.length > 0 ? lines[lines.length - 1].text : text.waiting;
+      const latestLine = lines.length > 0 ? formatStartupLogPreview(lines[lines.length - 1].text) : text.waiting;
       logPreview.textContent = latestLine;
       logPreview.setAttribute('aria-label', latestLine);
       logPreview.setAttribute('title', latestLine);

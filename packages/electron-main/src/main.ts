@@ -289,7 +289,7 @@ const STARTUP_LOG_SOURCES: StartupLogSourceSpec[] = [
 ];
 const STARTUP_LOG_INITIAL_LINES = 200;
 const STARTUP_LOG_MAX_LINES = 300;
-const STARTUP_LOG_POLL_INTERVAL_MS = 200;
+const STARTUP_LOG_POLL_INTERVAL_MS = 100;
 const STARTUP_LOG_TAIL_BYTES = 96 * 1024;
 const STARTUP_LOG_MAX_READ_BYTES = 256 * 1024;
 const startupLogSubscribers = new Map<number, WebContents>();

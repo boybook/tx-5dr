@@ -3,6 +3,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 type Classifier = (value: string) => string;
+type PreviewFormatter = (value: string) => string;
 
 function loadStartupHtml(): string {
   const htmlPath = path.resolve(__dirname, '../../assets/loading.html');
@@ -20,7 +21,19 @@ function loadStartupLogClassifier(): Classifier {
   return new Function(`${match[1]}\nreturn getLogLineClassName;`)() as Classifier;
 }
 
+function loadStartupLogPreviewFormatter(): PreviewFormatter {
+  const html = loadStartupHtml();
+  const match = html.match(/\/\/ STARTUP_LOG_PREVIEW_FORMATTER_START([\s\S]*?)\/\/ STARTUP_LOG_PREVIEW_FORMATTER_END/);
+
+  if (!match) {
+    throw new Error('startup log preview formatter markers not found');
+  }
+
+  return new Function(`${match[1]}\nreturn formatStartupLogPreview;`)() as PreviewFormatter;
+}
+
 const getLogLineClassName = loadStartupLogClassifier();
+const formatStartupLogPreview = loadStartupLogPreviewFormatter();
 
 describe('startup loading log presentation', () => {
   it('starts with a collapsed one-line log preview', () => {
@@ -39,6 +52,19 @@ describe('startup loading log presentation', () => {
 
     expect(html).toContain("logPreview.addEventListener('click', () => {");
     expect(html).toContain('startupMark.classList.add(\'has-error\');\n      isExpanded = true;');
+  });
+
+  it('removes timestamp and level prefixes from the collapsed preview', () => {
+    expect(formatStartupLogPreview('[2026-09-01T14:52:13.648Z] [INFO ] [client-tools] startup complete {"httpPort":8077}'))
+      .toBe('[client-tools] startup complete {"httpPort":8077}');
+    expect(formatStartupLogPreview('[2026-05-10 12:37:12.342] [info] [ElectronMain] started pid=28337'))
+      .toBe('[ElectronMain] started pid=28337');
+  });
+
+  it('leaves the expanded log lines unchanged', () => {
+    const html = loadStartupHtml();
+
+    expect(html).toContain('node.textContent = line.text;');
   });
 
   it('keeps normal child lifecycle lines neutral', () => {
