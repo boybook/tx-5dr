@@ -203,6 +203,16 @@ describe('HamlibConnection', () => {
     expect(rig.sendRaw).not.toHaveBeenCalled();
   });
 
+  it('does not reuse the FT-710 single-slot provider for composite Yaesu models', async () => {
+    const { connection, rig } = createConnectedConnection();
+    const testConnection = asTestConnection(connection);
+    testConnection.meterRigMetadata = { rigModel: 0, mfgName: 'Yaesu', modelName: 'FTDX10' };
+
+    await expect(connection.getSupportedTxAudioInputSources!()).resolves.toEqual([]);
+    await expect(connection.setTxAudioInputSource!('usb')).rejects.toThrow(/no verified TX audio input provider/i);
+    expect(rig.sendRaw).not.toHaveBeenCalled();
+  });
+
 
   it('reads DCD squelch state via low-priority Hamlib polling', async () => {
     const { connection, rig } = createConnectedConnection({
