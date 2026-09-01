@@ -14,7 +14,7 @@ import type { PttType } from 'hamlib';
 import { SpectrumController } from 'hamlib/spectrum';
 import type { ManagedSpectrumConfig, SpectrumLine, SpectrumSupportSummary } from 'hamlib/spectrum';
 import serialport from 'serialport';
-import type { LevelMeterReading, MeterCapabilities, SerialConfig } from '@tx5dr/contracts';
+import type { LevelMeterReading, MeterCapabilities, SerialConfig, TxAudioInputSource } from '@tx5dr/contracts';
 import {
   type MeterDecodeStrategy,
   resolveHamlibMeterDecodeStrategy,
@@ -49,6 +49,7 @@ import {
   type RadioModeBandwidth,
   type SetRadioModeOptions,
 } from './IRadioConnection.js';
+import type { RadioWriteResult } from './IRadioConnection.js';
 
 const logger = createLogger('HamlibConnection');
 const HAMLIB_POLLING_OPERATION_TIMEOUT_MS = 5000;
@@ -80,6 +81,60 @@ interface SpectrumControllerLike {
 
 type SplitSupportState = 'unknown' | 'supported' | 'unsupported';
 type TxFrequencyRange = Awaited<ReturnType<HamLib['getFrequencyRanges']>>['tx'][number];
+
+type HamlibTxAudioProvider = {
+  manufacturer: 'Icom' | 'Yaesu' | 'Kenwood';
+  modelNames: readonly string[];
+  sources: readonly TxAudioInputSource[];
+  protocol: 'icom-civ' | 'yaesu-ex' | 'kenwood-ms';
+  /** ICOM CI-V command payload after 1A/05 (sub-address and extension). */
+  civExtension?: readonly number[];
+  /** Yaesu EX command prefix (without value and terminator). */
+  yaesuCommands?: Readonly<Record<'SSB' | 'AM' | 'FM' | 'DATA', string>>;
+  /** Kenwood MS register (0 = normal voice, 1 = data). */
+  kenwoodRegister?: 0 | 1;
+  valueMap: Readonly<Partial<Record<TxAudioInputSource, number>>>;
+  reverseMap: Readonly<Record<number, TxAudioInputSource>>;
+};
+
+const ICOM_TX_AUDIO_VALUE_MAP = { mic: 0, accessory: 1, usb: 2, network: 3 } as const;
+const YAESU_TX_AUDIO_VALUE_MAP = { mic: 0, usb: 1, accessory: 2 } as const;
+const KENWOOD_TX_AUDIO_VALUE_MAP = { mic: 0, accessory: 1, usb: 2, network: 3 } as const;
+
+const HAMLIB_TX_AUDIO_PROVIDERS: readonly HamlibTxAudioProvider[] = [
+  {
+    manufacturer: 'Icom',
+    modelNames: ['IC-705', 'IC-905'],
+    sources: ['mic', 'accessory', 'usb', 'network'],
+    protocol: 'icom-civ',
+    civExtension: [0x01, 0x19],
+    valueMap: ICOM_TX_AUDIO_VALUE_MAP,
+    reverseMap: { 0: 'mic', 1: 'accessory', 2: 'usb', 3: 'network' },
+  },
+  {
+    manufacturer: 'Yaesu',
+    modelNames: ['FT-710', 'FTX-1'],
+    sources: ['mic', 'usb', 'accessory'],
+    protocol: 'yaesu-ex',
+    yaesuCommands: {
+      SSB: 'EX010114',
+      AM: 'EX010214',
+      FM: 'EX010313',
+      DATA: 'EX010414',
+    },
+    valueMap: YAESU_TX_AUDIO_VALUE_MAP,
+    reverseMap: { 0: 'mic', 1: 'usb', 2: 'accessory' },
+  },
+  {
+    manufacturer: 'Kenwood',
+    modelNames: ['TS-890S'],
+    sources: ['mic', 'accessory', 'usb', 'network'],
+    protocol: 'kenwood-ms',
+    kenwoodRegister: 0,
+    valueMap: KENWOOD_TX_AUDIO_VALUE_MAP,
+    reverseMap: { 0: 'mic', 1: 'accessory', 2: 'usb', 3: 'network' },
+  },
+];
 type RfPowerStepTableEntry = {
   normalized: number;
   milliwatts: number;
@@ -381,6 +436,9 @@ export class HamlibConnection
    * 当前连接会话中探测到的 split 开关状态。
    */
   private splitEnabled = false;
+
+  /** Last successfully read TX audio route for the active model provider. */
+  private txAudioInputSource: TxAudioInputSource | null = null;
 
   constructor() {
     super();
@@ -756,6 +814,7 @@ export class HamlibConnection
     this.meterDecodeStrategy = resolveHamlibMeterDecodeStrategy({ supportedLevels: [] });
     this.meterRigMetadata = null;
     this.meterReader = null;
+    this.txAudioInputSource = null;
     this.hasLoggedMeterStrategySample = false;
     this.supportedModes.clear();
     this.supportedFunctions.clear();
@@ -2740,6 +2799,107 @@ export class HamlibConnection
         throw this.convertOptionalOperationError(error, 'setRepeaterOffset');
       }
     });
+  }
+
+  /**
+   * Resolve a model-specific TX audio provider from Hamlib's authoritative
+   * rig metadata. The configured Hamlib model name is deliberately used; no
+   * profile/display-name heuristics are involved.
+   */
+  private getTxAudioProvider(): HamlibTxAudioProvider | null {
+    const metadata = this.meterRigMetadata;
+    if (!metadata) return null;
+    return HAMLIB_TX_AUDIO_PROVIDERS.find((provider) =>
+      provider.manufacturer.toLowerCase() === metadata.mfgName.toLowerCase()
+      && provider.modelNames.some((name) => name.toLowerCase() === metadata.modelName.toLowerCase()),
+    ) ?? null;
+  }
+
+  private getYaesuTxAudioCommand(provider: HamlibTxAudioProvider): string {
+    const mode = (this.currentRadioMode ?? 'USB').toUpperCase();
+    const key = mode.includes('PKT') || mode.includes('DATA') ? 'DATA'
+      : mode.includes('FM') ? 'FM'
+        : mode.includes('AM') ? 'AM' : 'SSB';
+    return provider.yaesuCommands?.[key] ?? provider.yaesuCommands!.SSB;
+  }
+
+  private async getIcomCivAddress(provider: HamlibTxAudioProvider): Promise<number> {
+    try {
+      const configured = await this.rig!.getConf('civaddr');
+      const parsed = Number.parseInt(String(configured), 10);
+      if (Number.isInteger(parsed) && parsed > 0 && parsed <= 0xff) return parsed;
+    } catch {
+      // Fall through to the model's documented default CI-V address.
+    }
+    return provider.modelNames[0] === 'IC-905' ? 0xac : 0xa4;
+  }
+
+  private async sendTxAudioRaw(provider: HamlibTxAudioProvider, value?: number): Promise<number | null> {
+    if (provider.protocol === 'yaesu-ex') {
+      const command = `${this.getYaesuTxAudioCommand(provider)}${value === undefined ? '' : value};`;
+      const reply = await this.rig!.sendRaw(Buffer.from(command, 'ascii'), value === undefined ? 64 : 0, Buffer.from(';'));
+      if (value === undefined) {
+        const match = reply.toString('ascii').match(/EX\d{6}(\d);/);
+        return match ? Number.parseInt(match[1]!, 10) : null;
+      }
+      return null;
+    }
+
+    if (provider.protocol === 'kenwood-ms') {
+      const register = provider.kenwoodRegister ?? 0;
+      const command = `MS${register}${value === undefined ? '' : value};`;
+      const reply = await this.rig!.sendRaw(Buffer.from(command, 'ascii'), value === undefined ? 64 : 0, Buffer.from(';'));
+      if (value === undefined) {
+        const match = reply.toString('ascii').match(new RegExp(`MS${register}([0-3]);`));
+        return match ? Number.parseInt(match[1]!, 10) : null;
+      }
+      return null;
+    }
+
+    const civAddress = await this.getIcomCivAddress(provider);
+    const extension = provider.civExtension ?? [0x01, 0x19];
+    const payload = [0x1a, 0x05, ...extension];
+    const frame = Buffer.from([0xfe, 0xfe, civAddress, 0xe0, ...payload, ...(value === undefined ? [] : [value]), 0xfd]);
+    const reply = await this.rig!.sendRaw(frame, value === undefined ? 64 : 0, Buffer.from([0xfd]));
+    if (value === undefined) {
+      const marker = Buffer.from(payload);
+      const markerIndex = reply.indexOf(marker);
+      if (markerIndex >= 0 && markerIndex + marker.length < reply.length) return reply[markerIndex + marker.length]!;
+      return null;
+    }
+    return null;
+  }
+
+  async getTxAudioInputSource(): Promise<TxAudioInputSource | null> {
+    return this.runSerializedTask('getTxAudioInputSource', async () => {
+      this.checkConnected();
+      const provider = this.getTxAudioProvider();
+      if (!provider) return this.txAudioInputSource;
+      const raw = await this.sendTxAudioRaw(provider);
+      const normalized = raw === null ? null : provider.reverseMap[raw] ?? null;
+      if (normalized) this.txAudioInputSource = normalized;
+      return this.txAudioInputSource;
+    });
+  }
+
+  async getSupportedTxAudioInputSources(): Promise<TxAudioInputSource[]> {
+    return this.getTxAudioProvider()?.sources.slice() as TxAudioInputSource[] ?? [];
+  }
+
+  async setTxAudioInputSource(source: TxAudioInputSource): Promise<RadioWriteResult<TxAudioInputSource>> {
+    return this.runSerializedTask('setTxAudioInputSource', async () => {
+      this.checkConnected();
+      const provider = this.getTxAudioProvider();
+      if (!provider) throw new Error('Hamlib model has no verified TX audio input provider');
+      const value = provider.valueMap[source];
+      if (value === undefined) throw new Error(`Unsupported TX audio input source for ${this.meterRigMetadata?.modelName ?? 'radio'}: ${source}`);
+      await this.sendTxAudioRaw(provider, value);
+      const actual = await this.sendTxAudioRaw(provider);
+      const applied = actual === null ? source : provider.reverseMap[actual] ?? null;
+      if (applied !== source) throw new Error(`TX audio input readback mismatch: requested ${source}, radio reported ${applied ?? 'unknown'}`);
+      this.txAudioInputSource = source;
+      return { requested: source, applied: source, outcome: 'applied', acknowledgement: 'readback' };
+    }, { critical: true });
   }
 
   async getCtcssTone(): Promise<number> {

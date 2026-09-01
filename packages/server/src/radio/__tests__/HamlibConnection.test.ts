@@ -31,6 +31,8 @@ type MockRig = {
   getPassbandNormal: ReturnType<typeof vi.fn>;
   getPassbandWide: ReturnType<typeof vi.fn>;
   getRfPowerStepTable: ReturnType<typeof vi.fn>;
+  sendRaw: ReturnType<typeof vi.fn>;
+  getConf?: ReturnType<typeof vi.fn>;
 };
 
 type MockSpectrumController = {
@@ -69,6 +71,7 @@ type HamlibConnectionTestAccessor = {
   txFrequencyRanges?: TestFrequencyRange[];
   currentFrequencyHz?: number;
   currentRadioMode?: string;
+  meterRigMetadata?: { rigModel: number; mfgName: string; modelName: string } | null;
   spectrumController?: MockSpectrumController;
   currentConfig?: unknown;
   resolveCurrentTxPowerMaxWatts: () => number | null;
@@ -119,6 +122,8 @@ function createConnectedConnection(rigOverrides: Partial<MockRig> = {}): {
       { modes: ['USB', 'LSB'], width: 3000 },
     ]),
     getRfPowerStepTable: vi.fn().mockResolvedValue(null),
+    sendRaw: vi.fn().mockResolvedValue(Buffer.alloc(0)),
+    getConf: vi.fn().mockResolvedValue('0'),
     getPassbandNarrow: vi.fn().mockResolvedValue(1800),
     getPassbandNormal: vi.fn().mockResolvedValue(2400),
     getPassbandWide: vi.fn().mockResolvedValue(3000),
@@ -141,6 +146,61 @@ function createConnectedConnection(rigOverrides: Partial<MockRig> = {}): {
 describe('HamlibConnection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('exposes Yaesu FT-710 TX audio routing through model-specific EX CAT', async () => {
+    const { connection, rig } = createConnectedConnection({
+      sendRaw: vi.fn()
+        .mockResolvedValueOnce(Buffer.alloc(0))
+        .mockResolvedValueOnce(Buffer.from('EX0101141;', 'ascii')),
+    });
+    const testConnection = asTestConnection(connection);
+    testConnection.meterRigMetadata = { rigModel: 1049, mfgName: 'Yaesu', modelName: 'FT-710' };
+    testConnection.currentRadioMode = 'USB';
+
+    await expect(connection.getSupportedTxAudioInputSources!()).resolves.toEqual(['mic', 'usb', 'accessory']);
+    await expect(connection.setTxAudioInputSource!('usb')).resolves.toMatchObject({ applied: 'usb', acknowledgement: 'readback' });
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(1, Buffer.from('EX0101141;', 'ascii'), 0, Buffer.from(';'));
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(2, Buffer.from('EX010114;', 'ascii'), 64, Buffer.from(';'));
+  });
+
+  it('uses the ICOM CI-V connector extension for IC-705 through Hamlib raw CAT', async () => {
+    const { connection, rig } = createConnectedConnection({
+      getConf: vi.fn().mockResolvedValue('164'),
+      sendRaw: vi.fn().mockResolvedValue(Buffer.from([
+        0xfe, 0xfe, 0xa4, 0xe0, 0x1a, 0x05, 0x01, 0x19, 0x02, 0xfd,
+      ])),
+    });
+    const testConnection = asTestConnection(connection);
+    testConnection.meterRigMetadata = { rigModel: 3085, mfgName: 'Icom', modelName: 'IC-705' };
+
+    await expect(connection.getTxAudioInputSource!()).resolves.toBe('usb');
+    expect(rig.sendRaw).toHaveBeenCalledWith(
+      Buffer.from([0xfe, 0xfe, 0xa4, 0xe0, 0x1a, 0x05, 0x01, 0x19, 0xfd]),
+      64,
+      Buffer.from([0xfd]),
+    );
+  });
+
+  it('exposes Kenwood TS-890S normal modulation source through MS0 CAT', async () => {
+    const { connection, rig } = createConnectedConnection({
+      sendRaw: vi.fn().mockResolvedValue(Buffer.from('MS02;', 'ascii')),
+    });
+    const testConnection = asTestConnection(connection);
+    testConnection.meterRigMetadata = { rigModel: 2041, mfgName: 'Kenwood', modelName: 'TS-890S' };
+
+    await expect(connection.getTxAudioInputSource!()).resolves.toBe('usb');
+    expect(rig.sendRaw).toHaveBeenCalledWith(Buffer.from('MS0;', 'ascii'), 64, Buffer.from(';'));
+  });
+
+  it('does not advertise raw TX audio commands for unknown Hamlib models', async () => {
+    const { connection, rig } = createConnectedConnection();
+    const testConnection = asTestConnection(connection);
+    testConnection.meterRigMetadata = { rigModel: 9999, mfgName: 'Unknown', modelName: 'Unknown' };
+
+    await expect(connection.getSupportedTxAudioInputSources!()).resolves.toEqual([]);
+    await expect(connection.setTxAudioInputSource!('usb')).rejects.toThrow(/no verified TX audio input provider/i);
+    expect(rig.sendRaw).not.toHaveBeenCalled();
   });
 
 
