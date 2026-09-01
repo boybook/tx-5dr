@@ -86,11 +86,12 @@ type HamlibTxAudioProvider = {
   manufacturer: 'Icom' | 'Yaesu' | 'Kenwood';
   modelNames: readonly string[];
   sources: readonly TxAudioInputSource[];
-  protocol: 'icom-civ' | 'yaesu-ex' | 'kenwood-ms';
+  protocol: 'icom-civ' | 'yaesu-ex' | 'yaesu-composite' | 'kenwood-ms';
   /** ICOM CI-V command payload after 1A/05 (sub-address and extension). */
   civExtension?: readonly number[];
   /** Yaesu EX command prefix (without value and terminator). */
   yaesuCommands?: Readonly<Record<'SSB' | 'AM' | 'FM' | 'DATA', string>>;
+  yaesuCompositeCommands?: Readonly<Record<'SSB' | 'AM' | 'FM' | 'DATA', { modSource: string; rearSelect: string }>>;
   /** Kenwood MS register (0 = normal voice, 1 = data). */
   kenwoodRegister?: 0 | 1;
   valueMap: Readonly<Partial<Record<TxAudioInputSource, number>>>;
@@ -168,6 +169,20 @@ const HAMLIB_TX_AUDIO_PROVIDERS: readonly HamlibTxAudioProvider[] = [
       DATA: 'EX010414',
     },
     valueMap: YAESU_TX_AUDIO_VALUE_MAP,
+    reverseMap: { 0: 'mic', 1: 'usb', 2: 'accessory' },
+  },
+  {
+    manufacturer: 'Yaesu',
+    modelNames: ['FTDX-10', 'FTDX10'],
+    sources: ['mic', 'usb', 'accessory'],
+    protocol: 'yaesu-composite',
+    yaesuCompositeCommands: {
+      SSB: { modSource: 'EX010113', rearSelect: 'EX010114' },
+      AM: { modSource: 'EX010213', rearSelect: 'EX010215' },
+      FM: { modSource: 'EX010313', rearSelect: 'EX010314' },
+      DATA: { modSource: 'EX010415', rearSelect: 'EX010416' },
+    },
+    valueMap: { mic: 0, usb: 1, accessory: 2 },
     reverseMap: { 0: 'mic', 1: 'usb', 2: 'accessory' },
   },
   {
@@ -2880,6 +2895,34 @@ export class HamlibConnection
   }
 
   private async sendTxAudioRaw(provider: HamlibTxAudioProvider, value?: number): Promise<number | null> {
+    if (provider.protocol === 'yaesu-composite') {
+      const commands = provider.yaesuCompositeCommands?.[
+        ((this.currentRadioMode ?? 'USB').toUpperCase().includes('PKT') || (this.currentRadioMode ?? '').toUpperCase().includes('DATA')
+          ? 'DATA' : (this.currentRadioMode ?? '').toUpperCase().includes('FM') ? 'FM'
+            : (this.currentRadioMode ?? '').toUpperCase().includes('AM') ? 'AM' : 'SSB')
+      ];
+      if (!commands) return null;
+      const send = async (command: string, parameter?: number) => {
+        const wire = `${command}${parameter === undefined ? '' : parameter};`;
+        return this.rig!.sendRaw(Buffer.from(wire, 'ascii'), parameter === undefined ? 64 : 0, Buffer.from(';'));
+      };
+      if (value === undefined) {
+        const modReply = await send(commands.modSource);
+        const rearReply = await send(commands.rearSelect);
+        const mod = modReply.toString('ascii').match(new RegExp(`${commands.modSource}(\\d);`));
+        const rear = rearReply.toString('ascii').match(new RegExp(`${commands.rearSelect}(\\d);`));
+        if (!mod || !rear) return null;
+        if (Number(mod[1]) === 0) return 0;
+        return Number(rear[1]) === 1 ? 1 : 2;
+      }
+      const mod = value === 0 ? 0 : 1;
+      const rear = value === 1 ? 1 : 0;
+      // Composite route writes are ordered and remain inside the same queue.
+      await send(commands.modSource, mod);
+      await send(commands.rearSelect, rear);
+      return null;
+    }
+
     if (provider.protocol === 'yaesu-ex') {
       const command = `${this.getYaesuTxAudioCommand(provider)}${value === undefined ? '' : value};`;
       const reply = await this.rig!.sendRaw(Buffer.from(command, 'ascii'), value === undefined ? 64 : 0, Buffer.from(';'));

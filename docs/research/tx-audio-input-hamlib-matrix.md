@@ -22,7 +22,7 @@ Hamlib/wfview rig definitions and the ICOM CI-V profile implementation:
 | ICOM IC-7760 | CI-V `1A 05 01 29` (normal/Data-Off input) | `0 MIC`, `3 ACC`, `1 USB`, `2 LINE`, `9 LAN` | implemented; raw frame + readback |
 | Yaesu FT-710, FTX-1 | New CAT `EX010114`, `EX010214`, `EX010313`, `EX010414` | `0 MIC`, `1 USB`, `2 REAR` (normalized `accessory`) | implemented; command selected by current mode |
 | Kenwood TS-890S | `MS0` (normal voice modulation source) | `0 MIC`, `1 ACC2`, `2 USB`, `3 LAN` | implemented; raw CAT + readback |
-| Yaesu FTDX10 | composite MOD SOURCE + REAR SELECT | model-specific two-command transaction | unsupported pending manual byte/value verification |
+| Yaesu FTDX10 | composite MOD SOURCE + REAR SELECT | MIC/REAR + DATA/USB pair | implemented; ordered raw CAT + readback |
 | Yaesu FT-991A | `EX070` + `EX072` (DATA), `EX106` + `EX109` (SSB) | two-stage route | unsupported pending manual byte/value verification |
 | Yaesu FTDX101D / FTDX101MP | likely composite, but not assumed equal to FTDX10 | model/revision-specific | unsupported; no shared profile inference |
 | Yaesu FT-891 | MIC/REAR only; no internal USB audio | model-specific | unsupported until exact CAT selector is verified; USB is never advertised |
@@ -42,6 +42,20 @@ format, and failure semantics from the corresponding CAT reference manuals.
 Other ICOM models also have model-specific `1A 05` extensions (and in several
 cases different sub-addresses). They are included only where the checked-in
 model definition provides a complete normal-input value table.
+
+## Official CAT references consulted
+
+- [FTDX10 CAT Operation Reference (Yaesu)](https://www.yaesu.com/Files/4CB893D7-1018-01AF-FA97E9E9AD48B50C/FTDX10_CAT_OM_ENG_2308-F.pdf)
+  defines SSB `EX010113` (MOD SOURCE) + `EX010114` (REAR SELECT), AM
+  `EX010213` + `EX010215`, FM `EX010313` + `EX010314`, and DATA `EX010415`
+  + `EX010416`. MOD SOURCE values are MIC/REAR; REAR SELECT values are
+  DATA/USB.
+- [FT-991A CAT Operation Reference (Yaesu)](https://www.yaesu.com/Files/4CB893D7-1018-01AF-FA97E9E9AD48B50C/FT-991A_CAT_OM_ENG_1711-D.pdf)
+  defines DATA IN/PORT as `EX070`/`EX072` and SSB MIC/PORT as `EX106`/`EX109`;
+  each is a two-register route and must be implemented as one serialized
+  transaction.
+- [FT-710 CAT Operation Reference (Yaesu)](https://www.yaesu.com/Files/4CB893D7-1018-01AF-FA97E9E9AD48B50C/FT-710_CAT_OM_ENG_2306-C.pdf)
+  confirms the already implemented single-register per-mode `EX` selectors.
 
 ## Runtime invariants
 

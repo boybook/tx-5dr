@@ -203,14 +203,23 @@ describe('HamlibConnection', () => {
     expect(rig.sendRaw).not.toHaveBeenCalled();
   });
 
-  it('does not reuse the FT-710 single-slot provider for composite Yaesu models', async () => {
-    const { connection, rig } = createConnectedConnection();
+  it('writes FTDX10 USB as an ordered MOD SOURCE + REAR SELECT transaction', async () => {
+    const { connection, rig } = createConnectedConnection({
+      sendRaw: vi.fn()
+        .mockResolvedValueOnce(Buffer.alloc(0))
+        .mockResolvedValueOnce(Buffer.alloc(0))
+        .mockResolvedValueOnce(Buffer.from('EX0101131;', 'ascii'))
+        .mockResolvedValueOnce(Buffer.from('EX0101141;', 'ascii')),
+    });
     const testConnection = asTestConnection(connection);
-    testConnection.meterRigMetadata = { rigModel: 0, mfgName: 'Yaesu', modelName: 'FTDX10' };
+    testConnection.meterRigMetadata = { rigModel: 1042, mfgName: 'Yaesu', modelName: 'FTDX-10' };
 
-    await expect(connection.getSupportedTxAudioInputSources!()).resolves.toEqual([]);
-    await expect(connection.setTxAudioInputSource!('usb')).rejects.toThrow(/no verified TX audio input provider/i);
-    expect(rig.sendRaw).not.toHaveBeenCalled();
+    await expect(connection.getSupportedTxAudioInputSources!()).resolves.toEqual(['mic', 'usb', 'accessory']);
+    await expect(connection.setTxAudioInputSource!('usb')).resolves.toMatchObject({ applied: 'usb', acknowledgement: 'readback' });
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(1, Buffer.from('EX0101131;', 'ascii'), 0, Buffer.from(';'));
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(2, Buffer.from('EX0101141;', 'ascii'), 0, Buffer.from(';'));
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(3, Buffer.from('EX010113;', 'ascii'), 64, Buffer.from(';'));
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(4, Buffer.from('EX010114;', 'ascii'), 64, Buffer.from(';'));
   });
 
 
