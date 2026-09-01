@@ -93,6 +93,10 @@ export class TciAudioAdapter extends EventEmitter<TciAudioAdapterEvents> {
     return this.tciConnection.getAudioSampleRate();
   }
 
+  getTxAudioSyncSnapshot() {
+    return this.tciConnection.getTxAudioSyncSnapshot?.() ?? null;
+  }
+
   private handleAudioFrame(pcm16: Buffer, meta?: AudioFrameMeta): void {
     try {
       this.emit('audioData', this.pcm16ToFloat32(pcm16), meta);

@@ -4,8 +4,11 @@ import {
   TciClient,
   TciError,
   TciSampleType,
+  TciTxAudioSync,
+  normalizeSampleType,
   payloadToFloat32,
   float32ToPcm16,
+  type TciTxAudioSyncSnapshot,
   type TciTxChronoRequest,
   type TciStreamFrame,
   type TciHandshakeResult,
@@ -53,31 +56,6 @@ const TCI_AUDIO_NEGOTIATION_COMMANDS = new Set([
   'tx_stream_audio_buffering',
 ]);
 
-interface TxDrainWaiter {
-  resolve: () => void;
-  reject: (error: Error) => void;
-  timer: NodeJS.Timeout;
-}
-
-interface TxAudioDiagnostics {
-  startedAtMs: number;
-  sampleRate: number;
-  configuredBufferingMs: number;
-  lastChronoAtMs: number | null;
-  enqueueCount: number;
-  enqueuedSamples: number;
-  chronoCount: number;
-  requestedSamples: number;
-  copiedSamples: number;
-  underflowFrames: number;
-  underflowSamples: number;
-  maxQueuedSamples: number;
-  minQueuedSamplesBeforeChrono: number | null;
-  minChronoIntervalMs: number | null;
-  maxChronoIntervalMs: number;
-  totalChronoIntervalMs: number;
-}
-
 export class TciConnection extends EventEmitter<IRadioConnectionEvents> implements IRadioConnection {
   private readonly ioQueue = new RadioIoQueue({ label: 'TCI WebSocket' });
   private ioSessionId = 0;
@@ -114,11 +92,12 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
   private connectedUrl: string | null = null;
   private audioRunning = false;
   private readonly audioStreamOwners = new Set<string>();
-  private txAudioChunks: Float32Array[] = [];
-  private txAudioChunkOffset = 0;
-  private txAudioQueuedSamples = 0;
-  private txDrainWaiters: TxDrainWaiter[] = [];
-  private txAudioDiagnostics: TxAudioDiagnostics | null = null;
+  private txAudioSync: TciTxAudioSync | null = null;
+  private txChronoTraceLogged = false;
+  private txFallbackChronoCount = 0;
+  private txFallbackRequestedSamples = 0;
+  private txFallbackCopiedSamples = 0;
+  private txFallbackMissingSamples = 0;
   private readonly options: { writeTimeoutMs?: number };
 
   constructor(options: { writeTimeoutMs?: number } = {}) {
@@ -189,7 +168,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     this.pttWriteUncertain = false;
     this.audioRunning = false;
     this.audioStreamOwners.clear();
-    this.clearTxAudioQueue();
+    this.resetTxAudioSync('connect');
     this.setState(RadioConnectionState.CONNECTING);
 
     try {
@@ -334,7 +313,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
       }
       this.checkConnected();
       if (!enabled) {
-        this.clearTxAudioQueue();
+        this.resetTxAudioSync('ptt-off');
       }
       if (this.isPttAlreadyApplied(enabled)) {
         logger.debug('TCI state matched before write', { operation: 'setPTT', ptt: enabled });
@@ -358,7 +337,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
       }
       this.lastKnownPtt = enabled;
       if (!enabled) {
-        this.clearTxAudioQueue();
+        this.resetTxAudioSync('ptt-off');
         this.clearTxMeterData(true);
       }
     }, { critical: true });
@@ -630,52 +609,38 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
 
   async sendAudio(samples: Float32Array): Promise<void> {
     this.checkConnected();
-    this.enqueueTxAudio(samples);
+    this.ensureTxAudioSync().push(samples);
   }
 
   beginTxAudio(): void {
-    this.finishTxAudioDiagnostics('superseded-by-new-transmission');
-    this.clearTxAudioQueue();
-    this.txAudioDiagnostics = {
-      startedAtMs: performance.now(),
-      sampleRate: this.getAudioSampleRate(),
-      configuredBufferingMs: TCI_TX_STREAM_BUFFERING_MS,
-      lastChronoAtMs: null,
-      enqueueCount: 0,
-      enqueuedSamples: 0,
-      chronoCount: 0,
-      requestedSamples: 0,
-      copiedSamples: 0,
-      underflowFrames: 0,
-      underflowSamples: 0,
-      maxQueuedSamples: 0,
-      minQueuedSamplesBeforeChrono: null,
-      minChronoIntervalMs: null,
-      maxChronoIntervalMs: 0,
-      totalChronoIntervalMs: 0,
-    };
+    this.resetTxAudioSync('superseded-by-new-transmission');
+    this.txAudioSync = this.createTxAudioSync();
+    this.txAudioSync.begin();
+    this.txChronoTraceLogged = false;
+    this.txFallbackChronoCount = 0;
+    this.txFallbackRequestedSamples = 0;
+    this.txFallbackCopiedSamples = 0;
+    this.txFallbackMissingSamples = 0;
+    const snapshot = this.txAudioSync.snapshot();
+    logger.debug(
+      `TCI TX audio sync armed sampleRate=${snapshot.sampleRate} channels=${snapshot.channels} sampleType=${snapshot.sampleType} samplesPerFrame=${snapshot.samplesPerFrame} targetLeadMs=${snapshot.targetLeadMs} recommendedPumpIntervalMs=${snapshot.recommendedPumpIntervalMs} queuedSamples=${snapshot.queuedSamples} queuedAudioMs=${snapshot.queuedAudioMs.toFixed(3)}`,
+    );
   }
 
   async waitForTxAudioDrain(timeoutMs: number): Promise<void> {
-    if (this.txAudioQueuedSamples <= 0) {
+    const sync = this.txAudioSync;
+    if (!sync || sync.snapshot().queuedSamples <= 0) {
       return;
     }
-    await new Promise<void>((resolve, reject) => {
-      const waiter: TxDrainWaiter = {
-        resolve,
-        reject,
-        timer: setTimeout(() => {
-          this.txDrainWaiters = this.txDrainWaiters.filter((candidate) => candidate !== waiter);
-          reject(new Error(`Timed out waiting for TCI TX audio drain (${this.txAudioQueuedSamples} samples queued)`));
-        }, timeoutMs),
-      };
-      this.txDrainWaiters.push(waiter);
-    });
+    await sync.drain(timeoutMs);
   }
 
   endTxAudio(): void {
-    this.finishTxAudioDiagnostics('tx-end');
-    this.clearTxAudioQueue();
+    this.resetTxAudioSync('tx-end');
+  }
+
+  getTxAudioSyncSnapshot(): TciTxAudioSyncSnapshot | null {
+    return this.txAudioSync?.snapshot() ?? null;
   }
 
   private setupClientListeners(client: TciClient): void {
@@ -701,6 +666,79 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
       if (this.client !== client) return;
       this.handleTxChrono(request);
     });
+  }
+
+  private createTxAudioSync(): TciTxAudioSync {
+    const audio = this.client?.getState().audio;
+    return new TciTxAudioSync({
+      sampleRate: audio?.sampleRate ?? this.getAudioSampleRate(),
+      sampleType: normalizeSampleType(audio?.sampleType ?? TciSampleType.FLOAT32),
+      channels: audio?.channels ?? 1,
+      samplesPerFrame: audio?.samplesPerFrame ?? 512,
+      targetLeadMs: audio?.txBufferingMs ?? TCI_TX_STREAM_BUFFERING_MS,
+      minLeadMs: 120,
+      maxLeadMs: 180,
+    });
+  }
+
+  private ensureTxAudioSync(): TciTxAudioSync {
+    if (!this.txAudioSync) {
+      this.txAudioSync = this.createTxAudioSync();
+      this.txAudioSync.begin();
+    }
+    return this.txAudioSync;
+  }
+
+  private resetTxAudioSync(reason: string): void {
+    const sync = this.txAudioSync;
+    if (!sync) {
+      return;
+    }
+    this.logTxAudioDiagnostics(reason, sync.snapshot());
+    sync.end(reason);
+    this.txAudioSync = null;
+    this.txChronoTraceLogged = false;
+    this.txFallbackChronoCount = 0;
+    this.txFallbackRequestedSamples = 0;
+    this.txFallbackCopiedSamples = 0;
+    this.txFallbackMissingSamples = 0;
+  }
+
+  private logTxAudioDiagnostics(reason: string, snapshot: TciTxAudioSyncSnapshot): void {
+    const intervalCount = Math.max(0, snapshot.chronoCount - 1);
+    const summary = [
+      `reason=${reason}`,
+      `sampleRate=${snapshot.sampleRate}`,
+      `channels=${snapshot.channels}`,
+      `sampleType=${snapshot.sampleType}`,
+      `samplesPerFrame=${snapshot.samplesPerFrame}`,
+      `targetLeadMs=${snapshot.targetLeadMs}`,
+      `frameDurationMs=${snapshot.frameDurationMs.toFixed(3)}`,
+      `recommendedPumpIntervalMs=${snapshot.recommendedPumpIntervalMs}`,
+      `enqueueCount=${snapshot.enqueueCount}`,
+      `enqueuedSamples=${snapshot.enqueuedSamples}`,
+      `queuedSamples=${snapshot.queuedSamples}`,
+      `queuedAudioMs=${snapshot.queuedAudioMs.toFixed(3)}`,
+      `chronoCount=${snapshot.chronoCount}`,
+      `requestedSamples=${snapshot.requestedSamples}`,
+      `copiedSamples=${snapshot.copiedSamples}`,
+      `underflowFrames=${snapshot.underflowFrames}`,
+      `underflowSamples=${snapshot.underflowSamples}`,
+      `fallbackChronoCount=${this.txFallbackChronoCount}`,
+      `fallbackRequestedSamples=${this.txFallbackRequestedSamples}`,
+      `fallbackCopiedSamples=${this.txFallbackCopiedSamples}`,
+      `fallbackMissingSamples=${this.txFallbackMissingSamples}`,
+      `maxQueuedSamples=${snapshot.maxQueuedSamples}`,
+      `minQueuedSamplesBeforeChrono=${snapshot.minQueuedSamplesBeforeChrono}`,
+      `averageChronoIntervalMs=${intervalCount > 0 && snapshot.averageChronoIntervalMs !== null ? snapshot.averageChronoIntervalMs.toFixed(3) : 'null'}`,
+      `minChronoIntervalMs=${snapshot.minChronoIntervalMs === null ? 'null' : snapshot.minChronoIntervalMs.toFixed(3)}`,
+      `maxChronoIntervalMs=${snapshot.maxChronoIntervalMs.toFixed(3)}`,
+    ].join(' ');
+    if (reason === 'tx-end' || reason === 'ptt-off' || reason === 'connection-cleanup') {
+      logger.info(`TCI TX audio diagnostics summary ${summary}`);
+      return;
+    }
+    logger.debug(`TCI TX audio diagnostics summary ${summary}`);
   }
 
   private syncStateFromClient(): void {
@@ -949,131 +987,32 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
 
   private handleTxChrono(request: TciTxChronoRequest): void {
     try {
-      const receivedAtMs = performance.now();
-      const requestedSamples = Math.max(0, Math.floor(request.sampleCount));
-      const queuedSamplesBefore = this.txAudioQueuedSamples;
-      const { samples, copied } = this.dequeueTxAudio(requestedSamples);
-      const missingSamples = requestedSamples - copied;
-      const diagnostics = this.txAudioDiagnostics;
-      let chronoIntervalMs: number | null = null;
-      if (diagnostics) {
-        if (diagnostics.lastChronoAtMs !== null) {
-          chronoIntervalMs = receivedAtMs - diagnostics.lastChronoAtMs;
-          diagnostics.totalChronoIntervalMs += chronoIntervalMs;
-          diagnostics.minChronoIntervalMs = diagnostics.minChronoIntervalMs === null
-            ? chronoIntervalMs
-            : Math.min(diagnostics.minChronoIntervalMs, chronoIntervalMs);
-          diagnostics.maxChronoIntervalMs = Math.max(diagnostics.maxChronoIntervalMs, chronoIntervalMs);
-        }
-        diagnostics.lastChronoAtMs = receivedAtMs;
-        diagnostics.chronoCount += 1;
-        diagnostics.requestedSamples += requestedSamples;
-        diagnostics.copiedSamples += copied;
-        diagnostics.minQueuedSamplesBeforeChrono = diagnostics.minQueuedSamplesBeforeChrono === null
-          ? queuedSamplesBefore
-          : Math.min(diagnostics.minQueuedSamplesBeforeChrono, queuedSamplesBefore);
-        if (missingSamples > 0) {
-          diagnostics.underflowFrames += 1;
-          diagnostics.underflowSamples += missingSamples;
-        }
+      const sync = this.txAudioSync;
+      if (!sync) {
+        const fallbackSync = this.createTxAudioSync();
+        fallbackSync.begin();
+        const result = fallbackSync.serviceChrono(request);
+        this.txFallbackChronoCount += 1;
+        this.txFallbackRequestedSamples += request.sampleCount;
+        this.txFallbackCopiedSamples += result.copiedSamples;
+        this.txFallbackMissingSamples += result.missingSamples;
+        logger.debug(
+          `TCI TX chrono served by fallback sync requestedSamples=${request.sampleCount} copiedSamples=${result.copiedSamples} missingSamples=${result.missingSamples}`,
+        );
+        this.client?.sendTxAudioForChrono(request, result.samples);
+        return;
       }
-      this.client?.sendTxAudioForChrono(request, samples);
+      const result = sync.serviceChrono(request);
+      if (!this.txChronoTraceLogged) {
+        this.txChronoTraceLogged = true;
+        const snapshot = sync.snapshot();
+        logger.debug(
+          `TCI TX chrono path active requestedSamples=${request.sampleCount} copiedSamples=${result.copiedSamples} missingSamples=${result.missingSamples} queuedSamples=${snapshot.queuedSamples} queuedAudioMs=${snapshot.queuedAudioMs.toFixed(3)} samplesPerFrame=${snapshot.samplesPerFrame} targetLeadMs=${snapshot.targetLeadMs} recommendedPumpIntervalMs=${snapshot.recommendedPumpIntervalMs}`,
+        );
+      }
+      this.client?.sendTxAudioForChrono(request, result.samples);
     } catch (error) {
       this.emit('error', this.convertError(error, 'txChrono'));
-    }
-  }
-
-  private enqueueTxAudio(samples: Float32Array): void {
-    if (samples.length <= 0) {
-      return;
-    }
-    const copy = new Float32Array(samples);
-    this.txAudioChunks.push(copy);
-    this.txAudioQueuedSamples += copy.length;
-    const diagnostics = this.txAudioDiagnostics;
-    if (diagnostics) {
-      diagnostics.enqueueCount += 1;
-      diagnostics.enqueuedSamples += copy.length;
-      diagnostics.maxQueuedSamples = Math.max(diagnostics.maxQueuedSamples, this.txAudioQueuedSamples);
-    }
-  }
-
-  private finishTxAudioDiagnostics(reason: string): void {
-    const diagnostics = this.txAudioDiagnostics;
-    if (!diagnostics) {
-      return;
-    }
-    const intervalCount = Math.max(0, diagnostics.chronoCount - 1);
-    logger.debug('TCI TX audio diagnostics summary', {
-      reason,
-      durationMs: Number((performance.now() - diagnostics.startedAtMs).toFixed(3)),
-      sampleRate: diagnostics.sampleRate,
-      configuredBufferingMs: diagnostics.configuredBufferingMs,
-      enqueueCount: diagnostics.enqueueCount,
-      enqueuedSamples: diagnostics.enqueuedSamples,
-      chronoCount: diagnostics.chronoCount,
-      requestedSamples: diagnostics.requestedSamples,
-      copiedSamples: diagnostics.copiedSamples,
-      underflowFrames: diagnostics.underflowFrames,
-      underflowSamples: diagnostics.underflowSamples,
-      maxQueuedSamples: diagnostics.maxQueuedSamples,
-      minQueuedSamplesBeforeChrono: diagnostics.minQueuedSamplesBeforeChrono,
-      averageChronoIntervalMs: intervalCount > 0
-        ? Number((diagnostics.totalChronoIntervalMs / intervalCount).toFixed(3))
-        : null,
-      minChronoIntervalMs: diagnostics.minChronoIntervalMs === null
-        ? null
-        : Number(diagnostics.minChronoIntervalMs.toFixed(3)),
-      maxChronoIntervalMs: Number(diagnostics.maxChronoIntervalMs.toFixed(3)),
-    });
-    this.txAudioDiagnostics = null;
-  }
-
-  private dequeueTxAudio(sampleCount: number): { samples: Float32Array; copied: number } {
-    const output = new Float32Array(Math.max(0, sampleCount));
-    let copied = 0;
-    while (copied < output.length && this.txAudioChunks.length > 0) {
-      const chunk = this.txAudioChunks[0]!;
-      const available = chunk.length - this.txAudioChunkOffset;
-      const take = Math.min(output.length - copied, available);
-      output.set(chunk.subarray(this.txAudioChunkOffset, this.txAudioChunkOffset + take), copied);
-      copied += take;
-      this.txAudioChunkOffset += take;
-      this.txAudioQueuedSamples = Math.max(0, this.txAudioQueuedSamples - take);
-      if (this.txAudioChunkOffset >= chunk.length) {
-        this.txAudioChunks.shift();
-        this.txAudioChunkOffset = 0;
-      }
-    }
-    this.resolveTxDrainWaitersIfDrained();
-    return { samples: output, copied };
-  }
-
-  private clearTxAudioQueue(): void {
-    this.txAudioChunks = [];
-    this.txAudioChunkOffset = 0;
-    this.txAudioQueuedSamples = 0;
-    this.resolveTxDrainWaitersIfDrained();
-  }
-
-  private resolveTxDrainWaitersIfDrained(): void {
-    if (this.txAudioQueuedSamples > 0 || this.txDrainWaiters.length === 0) {
-      return;
-    }
-    const waiters = this.txDrainWaiters;
-    this.txDrainWaiters = [];
-    for (const waiter of waiters) {
-      clearTimeout(waiter.timer);
-      waiter.resolve();
-    }
-  }
-
-  private rejectTxDrainWaiters(error: Error): void {
-    const waiters = this.txDrainWaiters;
-    this.txDrainWaiters = [];
-    for (const waiter of waiters) {
-      clearTimeout(waiter.timer);
-      waiter.reject(error);
     }
   }
 
@@ -1084,9 +1023,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     this.backgroundTasksStarted = false;
     this.audioRunning = false;
     this.audioStreamOwners.clear();
-    this.finishTxAudioDiagnostics('connection-cleanup');
-    this.rejectTxDrainWaiters(new Error('TCI connection closed before TX audio drained'));
-    this.clearTxAudioQueue();
+    this.resetTxAudioSync('connection-cleanup');
     await meterSession?.close().catch((error) => logger.debug('TCI meter stream cleanup failed', error));
     if (client) {
       client.removeAllListeners();

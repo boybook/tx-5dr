@@ -61,6 +61,12 @@ function terminate(child, signal = 'SIGTERM') {
   }
 }
 
+function withPreserveSymlinks(nodeOptions = '') {
+  const flags = new Set(String(nodeOptions).split(/\s+/).filter(Boolean));
+  flags.add('--preserve-symlinks');
+  return Array.from(flags).join(' ');
+}
+
 async function startTurbo() {
   selectedServerPort = hasExplicitServerPort
     ? selectedServerPort
@@ -103,6 +109,7 @@ async function startTurbo() {
     TX5DR_WEB_DEV_PORT: String(selectedWebPort),
     RTC_DATA_AUDIO_UDP_PORT: process.env.RTC_DATA_AUDIO_UDP_PORT || '50110',
     RTC_DATA_AUDIO_ICE_UDP_MUX: process.env.RTC_DATA_AUDIO_ICE_UDP_MUX || '1',
+    NODE_OPTIONS: withPreserveSymlinks(process.env.NODE_OPTIONS),
   };
 
   turboChild = spawn('yarn', args, {

@@ -2942,14 +2942,12 @@ function logDevProcessMemory(reason: string): void {
         return rightMemory - leftMemory;
       });
 
-    logger.info('dev electron process memory', {
-      reason,
-      processes,
-      childPids: {
-        web: webProcess?.pid ?? null,
-        server: serverProcess?.pid ?? null,
-      },
-    });
+    const topProcesses = processes.slice(0, 3).map((process) => (
+      `${process.pid}:${process.type}:${process.name ?? 'unknown'}:${process.workingSet}`
+    )).join(', ');
+    logger.info(
+      `dev electron process memory reason=${reason} webPid=${webProcess?.pid ?? 'none'} serverPid=${serverProcess?.pid ?? 'none'} processCount=${processes.length} top=${topProcesses || 'none'}`,
+    );
   } catch (error) {
     logger.warn('failed to collect dev electron process memory', error);
   }

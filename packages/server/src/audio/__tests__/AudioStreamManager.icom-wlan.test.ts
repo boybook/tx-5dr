@@ -58,6 +58,7 @@ type MockTciAdapter = MockIcomAdapter & {
   beginTransmission?: ReturnType<typeof vi.fn>;
   drainTransmission?: ReturnType<typeof vi.fn>;
   endTransmission?: ReturnType<typeof vi.fn>;
+  getTxAudioSyncSnapshot?: ReturnType<typeof vi.fn>;
 };
 
 type MockOpenWebRXAdapter = EventEmitter & {
@@ -267,6 +268,33 @@ describe('AudioStreamManager ICOM WLAN output pacing', () => {
       beginTransmission: vi.fn().mockResolvedValue(undefined),
       drainTransmission: vi.fn().mockResolvedValue(undefined),
       endTransmission: vi.fn().mockResolvedValue(undefined),
+      getTxAudioSyncSnapshot: vi.fn().mockReturnValue({
+        active: true,
+        sampleRate: 12000,
+        channels: 1,
+        sampleType: 'float32',
+        samplesPerFrame: 512,
+        targetLeadMs: 150,
+        minLeadMs: 120,
+        maxLeadMs: 180,
+        frameDurationMs: (512 / 12000) * 1000,
+        recommendedPumpIntervalMs: 8,
+        queuedSamples: 0,
+        queuedAudioMs: 0,
+        enqueueCount: 0,
+        enqueuedSamples: 0,
+        chronoCount: 0,
+        requestedSamples: 0,
+        copiedSamples: 0,
+        underflowFrames: 0,
+        underflowSamples: 0,
+        maxQueuedSamples: 0,
+        minQueuedSamplesBeforeChrono: null,
+        minChronoIntervalMs: null,
+        maxChronoIntervalMs: 0,
+        averageChronoIntervalMs: null,
+        lastChronoAtMs: null,
+      }),
     };
     const manager = createTciManager(adapter);
     const audio = new Float32Array(12000);
@@ -280,7 +308,7 @@ describe('AudioStreamManager ICOM WLAN output pacing', () => {
 
     await expect(playback).resolves.toBeUndefined();
     expect(manager.isPlaying()).toBe(false);
-    expect(adapter.sendAudio).toHaveBeenCalledTimes(10);
+    expect(adapter.sendAudio).toHaveBeenCalledTimes(24);
     expect(adapter.beginTransmission).toHaveBeenCalledOnce();
     expect(adapter.drainTransmission).toHaveBeenCalledOnce();
     expect(adapter.endTransmission).toHaveBeenCalledOnce();

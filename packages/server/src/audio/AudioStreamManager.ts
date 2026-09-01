@@ -2609,28 +2609,22 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       const radioAudioAdapter = radioAudioOutput.adapter;
       const tciRadioAudioAdapter = radioAudioOutput.kind === 'tci' ? radioAudioOutput.adapter : null;
       const playbackStreamGeneration = this.outputStreamGeneration;
-      logger.info(`playing audio via ${radioAudioOutput.label} output (zero-resample)`, {
-        playbackId,
-        ...diagnosticContext,
-        samples: audioData.length,
-        sampleRate: targetSampleRate,
-        duration: `${(audioData.length / targetSampleRate).toFixed(2)}s`,
-        volumeGain: this.volumeGain.toFixed(2),
-      });
+      logger.info(
+        `playing audio via ${radioAudioOutput.label} output (zero-resample) playbackId=${playbackId} frameId=${diagnosticContext.frameId ?? 'none'} operators=${Array.isArray(diagnosticContext.operatorIds) ? diagnosticContext.operatorIds.join(',') || 'none' : 'unknown'} samples=${audioData.length} sampleRate=${targetSampleRate} duration=${(audioData.length / targetSampleRate).toFixed(2)}s volumeGain=${this.volumeGain.toFixed(2)}`,
+      );
 
       this.playing = true;
       this.playbackStartTime = playStartTime;
       this.currentPlaybackKind = playbackKind;
 
       const playbackPromise = (async () => {
-        const chunkSize = ICOM_WLAN_TX_CHUNK_SIZE;
-        const totalChunks = Math.ceil(audioData.length / chunkSize);
-        logger.debug(`${radioAudioOutput.label} chunked send: ${totalChunks} chunks, chunkSize=${chunkSize}, targetLeadMs=${ICOM_WLAN_TX_TARGET_BUFFER_LEAD_MS}`);
-
         const chunkStartTime = Date.now();
         const hrStart = performance.now();
         let samplesWritten = 0;
         let tciTransmissionStarted = false;
+        let chunkSize = ICOM_WLAN_TX_CHUNK_SIZE;
+        let targetLeadMs = ICOM_WLAN_TX_TARGET_BUFFER_LEAD_MS;
+        let waitSliceMs = ICOM_WLAN_TX_MAX_WAIT_SLICE_MS;
         let playbackStarted = false;
         const signalPlaybackStarted = () => {
           if (playbackStarted) return;
@@ -2652,7 +2646,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           let remainingMs = Math.max(0, ms);
           while (remainingMs > 0) {
             assertNotStopped();
-            const sleepMs = Math.min(ICOM_WLAN_TX_MAX_WAIT_SLICE_MS, remainingMs);
+            const sleepMs = Math.min(waitSliceMs, remainingMs);
             await new Promise<void>(res => setTimeout(res, sleepMs));
             remainingMs -= sleepMs;
           }
@@ -2669,7 +2663,18 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           if (tciRadioAudioAdapter) {
             await tciRadioAudioAdapter.beginTransmission();
             tciTransmissionStarted = true;
+            const txSync = tciRadioAudioAdapter.getTxAudioSyncSnapshot();
+            chunkSize = Math.max(1, txSync?.samplesPerFrame ?? chunkSize);
+            targetLeadMs = txSync?.targetLeadMs ?? targetLeadMs;
+            waitSliceMs = txSync?.recommendedPumpIntervalMs ?? waitSliceMs;
+            logger.debug(
+              `TCI paced send engaged playbackId=${playbackId} samplesPerFrame=${txSync?.samplesPerFrame ?? chunkSize} targetLeadMs=${targetLeadMs} recommendedPumpIntervalMs=${waitSliceMs} queuedSamples=${txSync?.queuedSamples ?? 0} queuedAudioMs=${(txSync?.queuedAudioMs ?? 0).toFixed(3)} sampleRate=${txSync?.sampleRate ?? targetSampleRate}`,
+            );
           }
+          const totalChunks = Math.ceil(audioData.length / chunkSize);
+          logger.debug(
+            `${radioAudioOutput.label} chunked send playbackId=${playbackId} totalChunks=${totalChunks} chunkSize=${chunkSize} targetLeadMs=${targetLeadMs} waitSliceMs=${waitSliceMs}`,
+          );
 
           for (let i = 0; i < totalChunks; i++) {
             try {
@@ -2690,8 +2695,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             }
 
             const leadMs = getBufferedLeadMs();
-            if (leadMs > ICOM_WLAN_TX_TARGET_BUFFER_LEAD_MS) {
-              await waitRespectingStop(leadMs - ICOM_WLAN_TX_TARGET_BUFFER_LEAD_MS);
+            if (leadMs > targetLeadMs) {
+              await waitRespectingStop(leadMs - targetLeadMs);
             }
 
             await radioAudioAdapter.sendAudio(chunk);

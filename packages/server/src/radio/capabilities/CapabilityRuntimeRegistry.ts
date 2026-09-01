@@ -5,6 +5,7 @@ import type {
   CapabilityValue,
 } from '@tx5dr/contracts';
 import type { IRadioConnection } from '../connections/IRadioConnection.js';
+import type { RadioIoQueueSnapshot } from '../connections/RadioIoQueue.js';
 import { createLogger } from '../../utils/logger.js';
 import { isRecoverableOptionalRadioError } from '../optionalRadioError.js';
 import { CAPABILITY_DEFINITION_MAP, CAPABILITY_DEFINITIONS } from './definitions.js';
@@ -19,6 +20,36 @@ function shouldEnforceDiscreteNumberOptions(descriptor: CapabilityDescriptor): b
   // rf_power keeps Hamlib discrete metadata for the optional step slider, but
   // the default UI mode writes arbitrary 0-1 percentages.
   return descriptor.id !== 'rf_power';
+}
+
+function formatInlineValue(value: unknown): string {
+  if (value === undefined) return 'undefined';
+  if (value === null) return 'null';
+  if (typeof value === 'string') return JSON.stringify(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function formatQueueSnapshot(queue?: RadioIoQueueSnapshot | null): string {
+  if (!queue) return 'queue=none';
+  return [
+    `label=${queue.label ?? 'radio-io'}`,
+    `busy=${queue.busy}`,
+    `backpressure=${queue.backpressure}`,
+    `critical=${queue.criticalActive}`,
+    `active=${queue.activeCount}`,
+    `activeTask=${queue.activeTask ?? 'none'}`,
+    `activeRunMs=${queue.activeRunMs ?? 'na'}`,
+    `pending=${queue.pendingCount}`,
+    `criticalPending=${queue.criticalPendingCount}`,
+    `normalPending=${queue.normalPendingCount}`,
+    `oldestPending=${queue.oldestPendingTask ?? 'none'}`,
+    `oldestWaitMs=${queue.oldestPendingWaitMs ?? 'na'}`,
+    `deduped=${queue.dedupedTaskCount}`,
+  ].join(',');
 }
 
 export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEvents> {
@@ -187,34 +218,26 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
 
     const isSplitWrite = id === 'split_enabled';
     const writeStartedAt = Date.now();
-    logger.info(`Writing capability: ${id}`, { value });
+    logger.info(`Writing capability: ${id} value=${formatInlineValue(value)}`);
     if (isSplitWrite) {
-      logger.info('Split capability write started', {
-        value,
-        cachedValue: this.valueCache.get(id)?.value,
-        cachedMeta: this.valueCache.get(id)?.meta,
-        queue: this.connection.getRadioIoQueueSnapshot?.(),
-      });
+      logger.info(
+        `Split capability write started value=${formatInlineValue(value)} cachedValue=${formatInlineValue(this.valueCache.get(id)?.value)} cachedMeta=${formatInlineValue(this.valueCache.get(id)?.meta)} ${formatQueueSnapshot(this.connection.getRadioIoQueueSnapshot?.())}`,
+      );
     }
 
     let writeResult: CapabilityWriteResult | void;
     try {
       writeResult = await definition.write(this.connection, value);
       if (isSplitWrite) {
-        logger.info('Split capability write completed', {
-          value,
-          durationMs: Date.now() - writeStartedAt,
-          queue: this.connection.getRadioIoQueueSnapshot?.(),
-        });
+        logger.info(
+          `Split capability write completed value=${formatInlineValue(value)} durationMs=${Date.now() - writeStartedAt} ${formatQueueSnapshot(this.connection.getRadioIoQueueSnapshot?.())}`,
+        );
       }
     } catch (error) {
       if (isSplitWrite) {
-        logger.warn('Split capability write failed', {
-          value,
-          durationMs: Date.now() - writeStartedAt,
-          error: error instanceof Error ? error.message : String(error),
-          queue: this.connection.getRadioIoQueueSnapshot?.(),
-        });
+        logger.warn(
+          `Split capability write failed value=${formatInlineValue(value)} durationMs=${Date.now() - writeStartedAt} error=${error instanceof Error ? error.message : String(error)} ${formatQueueSnapshot(this.connection.getRadioIoQueueSnapshot?.())}`,
+        );
       }
 
       if (isRecoverableOptionalRadioError(error)) {
@@ -237,17 +260,11 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
     this.emit('capabilityChanged', optimisticState);
 
     if (id === 'split_enabled') {
-      logger.info('Split capability write readback requested', {
-        value,
-        queue: this.connection.getRadioIoQueueSnapshot?.(),
-      });
+      logger.info(`Split capability write readback requested value=${formatInlineValue(value)} ${formatQueueSnapshot(this.connection.getRadioIoQueueSnapshot?.())}`);
       await this.pollCapabilityOnce(id, { queueAfterActive: true, source: 'write-readback' });
-      logger.info('Split capability write readback completed', {
-        value,
-        cachedValue: this.valueCache.get(id)?.value,
-        cachedMeta: this.valueCache.get(id)?.meta,
-        queue: this.connection.getRadioIoQueueSnapshot?.(),
-      });
+      logger.info(
+        `Split capability write readback completed value=${formatInlineValue(value)} cachedValue=${formatInlineValue(this.valueCache.get(id)?.value)} cachedMeta=${formatInlineValue(this.valueCache.get(id)?.meta)} ${formatQueueSnapshot(this.connection.getRadioIoQueueSnapshot?.())}`,
+      );
       return;
     }
 
@@ -495,11 +512,9 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
 
     if (this.connection.isCriticalOperationActive?.()) {
       if (isSplitPoll) {
-        logger.info('Split capability poll queued despite critical radio operation active', {
-          pollId: splitPollId,
-          source: options.source ?? 'polling',
-          queue: this.connection.getRadioIoQueueSnapshot?.(),
-        });
+        logger.info(
+          `Split capability poll queued despite critical radio operation active pollId=${splitPollId} source=${options.source ?? 'polling'} ${formatQueueSnapshot(this.connection.getRadioIoQueueSnapshot?.())}`,
+        );
       } else {
         logger.debug(`Skipping capability poll while critical radio operation is active: ${id}`);
         return;
@@ -512,13 +527,9 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
 
     try {
       if (isSplitPoll) {
-        logger.info('Split capability poll started', {
-          pollId: splitPollId,
-          source: options.source ?? 'polling',
-          cachedValue: this.valueCache.get(id)?.value,
-          cachedMeta: this.valueCache.get(id)?.meta,
-          queue: this.connection.getRadioIoQueueSnapshot?.(),
-        });
+        logger.info(
+          `Split capability poll started pollId=${splitPollId} source=${options.source ?? 'polling'} cachedValue=${formatInlineValue(this.valueCache.get(id)?.value)} cachedMeta=${formatInlineValue(this.valueCache.get(id)?.meta)} ${formatQueueSnapshot(this.connection.getRadioIoQueueSnapshot?.())}`,
+        );
       }
 
       const newValue = await definition.read(this.connection);
@@ -534,11 +545,9 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
           }
         } catch (metaError) {
           if (isSplitPoll) {
-            logger.info('Split capability poll meta read failed', {
-              pollId: splitPollId,
-              source: options.source ?? 'polling',
-              error: metaError instanceof Error ? metaError.message : String(metaError),
-            });
+            logger.info(
+              `Split capability poll meta read failed pollId=${splitPollId} source=${options.source ?? 'polling'} error=${metaError instanceof Error ? metaError.message : String(metaError)}`,
+            );
           }
           logger.debug(`readMeta failed for ${id}`, metaError);
         }
@@ -551,17 +560,9 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
         || JSON.stringify(cached.meta) !== JSON.stringify(mergedMeta);
 
       if (isSplitPoll) {
-        logger.info('Split capability poll completed', {
-          pollId: splitPollId,
-          source: options.source ?? 'polling',
-          durationMs: Date.now() - splitPollStartedAt,
-          value: newValue,
-          meta: mergedMeta,
-          cachedValue: cached?.value,
-          cachedMeta: cached?.meta,
-          changed,
-          queue: this.connection.getRadioIoQueueSnapshot?.(),
-        });
+        logger.info(
+          `Split capability poll completed pollId=${splitPollId} source=${options.source ?? 'polling'} durationMs=${Date.now() - splitPollStartedAt} value=${formatInlineValue(newValue)} meta=${formatInlineValue(mergedMeta)} cachedValue=${formatInlineValue(cached?.value)} cachedMeta=${formatInlineValue(cached?.meta)} changed=${changed} ${formatQueueSnapshot(this.connection.getRadioIoQueueSnapshot?.())}`,
+        );
       }
 
       if (changed) {
@@ -592,13 +593,9 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
       }
     } catch (error) {
       if (isSplitPoll) {
-        logger.warn('Split capability poll failed', {
-          pollId: splitPollId,
-          source: options.source ?? 'polling',
-          durationMs: Date.now() - splitPollStartedAt,
-          error: error instanceof Error ? error.message : String(error),
-          queue: this.connection.getRadioIoQueueSnapshot?.(),
-        });
+        logger.warn(
+          `Split capability poll failed pollId=${splitPollId} source=${options.source ?? 'polling'} durationMs=${Date.now() - splitPollStartedAt} error=${error instanceof Error ? error.message : String(error)} ${formatQueueSnapshot(this.connection.getRadioIoQueueSnapshot?.())}`,
+        );
       }
 
       if (isRecoverableOptionalRadioError(error)) {

@@ -113,6 +113,12 @@ describe('TciConnection', () => {
     expect(Array.from(payloadToFloat32(pcm16, TciSampleType.INT16))).toEqual([0, expect.closeTo(0.5, 4), expect.closeTo(-0.5, 4)]);
 
     await connection.beginTxAudio();
+    expect(connection.getTxAudioSyncSnapshot()).toMatchObject({
+      active: true,
+      sampleRate: 12000,
+      samplesPerFrame: 512,
+      targetLeadMs: 150,
+    });
     await connection.sendAudio(new Float32Array([0.25, -0.25]));
     expect(server.receivedTxAudioFrames).toHaveLength(0);
     server.sendTxChrono({ sampleCount: 2 });

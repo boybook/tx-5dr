@@ -132,6 +132,16 @@ Manual microphone PTT uses the same public transports as monitoring, but the TX 
 - TX diagnostics keep strict end-to-end timing separate from server-only timing: `endToEndMs` is recorded only when browser/server clock sync is reliable, while `serverPipelineMs` covers server receive to output write for fallback troubleshooting.
 - PTT startup disables output playout until radio PTT is active; only a small startup buffer is retained, and old frames are trimmed rather than flushed late.
 
+## TCI TX Synchronization
+
+TCI transmission keeps its own pull-style pacing boundary and does not use a worker thread.
+
+- `tci-client-node` owns the reusable TX audio sync helper: it tracks queued samples, chrono servicing, drain waiters, and burst-underflow diagnostics.
+- `TciConnection` owns the active TX session and converts `TxChrono` requests into exact-length, zero-padded TX frames.
+- `TciAudioAdapter` only bridges the connection into the server audio layer and exposes the current pacing snapshot.
+- `AudioStreamManager` uses the snapshot to choose small TCI chunks, a short pump slice, and a target lead around 120–180 ms.
+- ICOM WLAN output keeps its existing pacing path unchanged.
+
 ## Latency Policy
 
 Realtime voice audio is a state stream, not a file stream.

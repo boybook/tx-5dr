@@ -10,6 +10,7 @@ class MockTciConnection extends EventEmitter {
   endTxAudio = vi.fn();
   sendAudio = vi.fn().mockResolvedValue(undefined);
   getAudioSampleRate = vi.fn(() => 12000);
+  getTxAudioSyncSnapshot = vi.fn(() => ({ samplesPerFrame: 512, targetLeadMs: 150, recommendedPumpIntervalMs: 8 }));
 }
 
 describe('TciAudioAdapter', () => {
@@ -63,5 +64,10 @@ describe('TciAudioAdapter', () => {
 
     expect(connection.sendAudio).toHaveBeenCalledWith(samples);
     expect(adapter.getSampleRate()).toBe(12000);
+    expect(adapter.getTxAudioSyncSnapshot()).toEqual({
+      samplesPerFrame: 512,
+      targetLeadMs: 150,
+      recommendedPumpIntervalMs: 8,
+    });
   });
 });
