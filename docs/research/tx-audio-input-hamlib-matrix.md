@@ -23,7 +23,7 @@ Hamlib/wfview rig definitions and the ICOM CI-V profile implementation:
 | Yaesu FT-710, FTX-1 | New CAT `EX010114`, `EX010214`, `EX010313`, `EX010414` | `0 MIC`, `1 USB`, `2 REAR` (normalized `accessory`) | implemented; command selected by current mode |
 | Kenwood TS-890S | `MS0` (normal voice modulation source) | `0 MIC`, `1 ACC2`, `2 USB`, `3 LAN` | implemented; raw CAT + readback |
 | Yaesu FTDX10 | composite MOD SOURCE + REAR SELECT | MIC/REAR + DATA/USB pair | implemented; ordered raw CAT + readback |
-| Yaesu FT-991A | `EX070` + `EX072` (DATA), `EX106` + `EX109` (SSB) | two-stage route | unsupported pending manual byte/value verification |
+| Yaesu FT-991A | `EX070` + `EX072` (DATA), `EX106` + `EX109` (SSB) | two-stage route | implemented; ordered raw CAT + readback |
 | Yaesu FTDX101D / FTDX101MP | likely composite, but not assumed equal to FTDX10 | model/revision-specific | unsupported; no shared profile inference |
 | Yaesu FT-891 | MIC/REAR only; no internal USB audio | model-specific | unsupported until exact CAT selector is verified; USB is never advertised |
 
@@ -33,11 +33,11 @@ returned as a normalized source. Kenwood TS-590SG only exposes a DATA1 input
 extension in the checked-in definition; it is not included because this
 feature is explicitly about the physical voice/audio source, not DATA mode.
 
-The composite Yaesu rows are intentionally not implemented by reusing the
-FT-710 provider: a normalized `usb` write may require two ordered menu writes,
+The composite Yaesu rows are implemented independently from the FT-710
+provider: a normalized `usb` write is represented as two ordered menu writes,
 and a partial write could leave the radio selecting the wrong physical input.
-The implementation needs the exact command bytes, value meanings, readback
-format, and failure semantics from the corresponding CAT reference manuals.
+FTDX10 and FT-991A are enabled only because their exact command bytes, value
+meanings, and readback format are documented in the official CAT references.
 
 Other ICOM models also have model-specific `1A 05` extensions (and in several
 cases different sub-addresses). They are included only where the checked-in

@@ -92,6 +92,7 @@ type HamlibTxAudioProvider = {
   /** Yaesu EX command prefix (without value and terminator). */
   yaesuCommands?: Readonly<Record<'SSB' | 'AM' | 'FM' | 'DATA', string>>;
   yaesuCompositeCommands?: Readonly<Record<'SSB' | 'AM' | 'FM' | 'DATA', { modSource: string; rearSelect: string }>>;
+  yaesuCompositeValues?: Readonly<Record<'SSB' | 'AM' | 'FM' | 'DATA', Readonly<Partial<Record<TxAudioInputSource, readonly [number, number]>>>> >;
   /** Kenwood MS register (0 = normal voice, 1 = data). */
   kenwoodRegister?: 0 | 1;
   valueMap: Readonly<Partial<Record<TxAudioInputSource, number>>>;
@@ -181,6 +182,32 @@ const HAMLIB_TX_AUDIO_PROVIDERS: readonly HamlibTxAudioProvider[] = [
       AM: { modSource: 'EX010213', rearSelect: 'EX010215' },
       FM: { modSource: 'EX010313', rearSelect: 'EX010314' },
       DATA: { modSource: 'EX010415', rearSelect: 'EX010416' },
+    },
+    yaesuCompositeValues: {
+      SSB: { mic: [0, 0], usb: [1, 1], accessory: [1, 0] },
+      AM: { mic: [0, 0], usb: [1, 1], accessory: [1, 0] },
+      FM: { mic: [0, 0], usb: [1, 1], accessory: [1, 0] },
+      DATA: { mic: [0, 0], usb: [1, 1], accessory: [1, 0] },
+    },
+    valueMap: { mic: 0, usb: 1, accessory: 2 },
+    reverseMap: { 0: 'mic', 1: 'usb', 2: 'accessory' },
+  },
+  {
+    manufacturer: 'Yaesu',
+    modelNames: ['FT-991A', 'FT-991'],
+    sources: ['mic', 'usb', 'accessory'],
+    protocol: 'yaesu-composite',
+    yaesuCompositeCommands: {
+      SSB: { modSource: 'EX106', rearSelect: 'EX109' },
+      AM: { modSource: 'EX045', rearSelect: 'EX048' },
+      FM: { modSource: 'EX074', rearSelect: 'EX077' },
+      DATA: { modSource: 'EX070', rearSelect: 'EX072' },
+    },
+    yaesuCompositeValues: {
+      SSB: { mic: [0, 0], usb: [1, 1], accessory: [1, 0] },
+      AM: { mic: [0, 0], usb: [1, 1], accessory: [1, 0] },
+      FM: { mic: [0, 0], usb: [1, 2], accessory: [1, 1] },
+      DATA: { mic: [0, 1], usb: [1, 2], accessory: [1, 1] },
     },
     valueMap: { mic: 0, usb: 1, accessory: 2 },
     reverseMap: { 0: 'mic', 1: 'usb', 2: 'accessory' },
@@ -2906,20 +2933,27 @@ export class HamlibConnection
         const wire = `${command}${parameter === undefined ? '' : parameter};`;
         return this.rig!.sendRaw(Buffer.from(wire, 'ascii'), parameter === undefined ? 64 : 0, Buffer.from(';'));
       };
+      const modeKey = ((this.currentRadioMode ?? 'USB').toUpperCase().includes('PKT') || (this.currentRadioMode ?? '').toUpperCase().includes('DATA')
+        ? 'DATA' : (this.currentRadioMode ?? '').toUpperCase().includes('FM') ? 'FM'
+          : (this.currentRadioMode ?? '').toUpperCase().includes('AM') ? 'AM' : 'SSB') as 'SSB' | 'AM' | 'FM' | 'DATA';
+      const routeValues = provider.yaesuCompositeValues?.[modeKey];
       if (value === undefined) {
         const modReply = await send(commands.modSource);
         const rearReply = await send(commands.rearSelect);
         const mod = modReply.toString('ascii').match(new RegExp(`${commands.modSource}(\\d);`));
         const rear = rearReply.toString('ascii').match(new RegExp(`${commands.rearSelect}(\\d);`));
         if (!mod || !rear) return null;
-        if (Number(mod[1]) === 0) return 0;
-        return Number(rear[1]) === 1 ? 1 : 2;
+        const modValue = Number(mod[1]);
+        const rearValue = Number(rear[1]);
+        const match = Object.entries(routeValues ?? {}).find(([, pair]) => pair?.[0] === modValue && pair?.[1] === rearValue);
+        return match ? provider.valueMap[match[0] as TxAudioInputSource] ?? null : null;
       }
-      const mod = value === 0 ? 0 : 1;
-      const rear = value === 1 ? 1 : 0;
+      const source = Object.entries(provider.valueMap).find(([, mapped]) => mapped === value)?.[0] as TxAudioInputSource | undefined;
+      const pair = source ? routeValues?.[source] : undefined;
+      if (!pair) return null;
       // Composite route writes are ordered and remain inside the same queue.
-      await send(commands.modSource, mod);
-      await send(commands.rearSelect, rear);
+      await send(commands.modSource, pair[0]);
+      await send(commands.rearSelect, pair[1]);
       return null;
     }
 
