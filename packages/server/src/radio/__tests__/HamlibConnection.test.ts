@@ -222,6 +222,25 @@ describe('HamlibConnection', () => {
     expect(rig.sendRaw).toHaveBeenNthCalledWith(4, Buffer.from('EX010114;', 'ascii'), 64, Buffer.from(';'));
   });
 
+  it('writes FT-991A DATA USB using EX070 + EX072', async () => {
+    const { connection, rig } = createConnectedConnection({
+      sendRaw: vi.fn()
+        .mockResolvedValueOnce(Buffer.alloc(0))
+        .mockResolvedValueOnce(Buffer.alloc(0))
+        .mockResolvedValueOnce(Buffer.from('EX0701;', 'ascii'))
+        .mockResolvedValueOnce(Buffer.from('EX0722;', 'ascii')),
+    });
+    const testConnection = asTestConnection(connection);
+    testConnection.meterRigMetadata = { rigModel: 1035, mfgName: 'Yaesu', modelName: 'FT-991A' };
+    testConnection.currentRadioMode = 'PKTUSB';
+
+    await expect(connection.setTxAudioInputSource!('usb')).resolves.toMatchObject({ applied: 'usb' });
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(1, Buffer.from('EX0701;', 'ascii'), 0, Buffer.from(';'));
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(2, Buffer.from('EX0722;', 'ascii'), 0, Buffer.from(';'));
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(3, Buffer.from('EX070;', 'ascii'), 64, Buffer.from(';'));
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(4, Buffer.from('EX072;', 'ascii'), 64, Buffer.from(';'));
+  });
+
 
   it('reads DCD squelch state via low-priority Hamlib polling', async () => {
     const { connection, rig } = createConnectedConnection({
