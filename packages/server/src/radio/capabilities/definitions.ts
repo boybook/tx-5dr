@@ -19,6 +19,8 @@ import {
 } from './definition-builders.js';
 import type { CapabilitySupportSource, ProbeSupportResult } from './types.js';
 import type { CapabilityRuntimeValue } from './types.js';
+import type { CapabilityValue } from '@tx5dr/contracts';
+import { TX_AUDIO_INPUT_SOURCE_OPTIONS } from '../txAudioInput/TxAudioInputProvider.js';
 
 type DynamicConnectionMethod = (...args: unknown[]) => unknown;
 
@@ -292,6 +294,57 @@ function createRuntimeEnumDefinition(
 
 function createDefinitions(): CapabilityDefinition[] {
   return [
+    {
+      id: 'tx_audio_input_source',
+      descriptor: {
+        id: 'tx_audio_input_source',
+        category: 'audio',
+        valueType: 'enum',
+        options: TX_AUDIO_INPUT_SOURCE_OPTIONS.map((value) => createOption(value)),
+        readable: true,
+        writable: true,
+        updateMode: 'polling',
+        pollIntervalMs: 15000,
+        labelI18nKey: 'radio:capability.tx_audio_input_source.label',
+        descriptionI18nKey: 'radio:capability.tx_audio_input_source.description',
+        display: { mode: 'value', unit: 'state' },
+        hasSurfaceControl: false,
+      },
+      resolveDescriptor: async (conn) => {
+        const getOptions = getDynamicMethod(conn, 'getSupportedTxAudioInputSources');
+        if (!getOptions) return {
+          id: 'tx_audio_input_source', category: 'audio', valueType: 'enum',
+          options: [], readable: true, writable: true, updateMode: 'polling', pollIntervalMs: 15000,
+          labelI18nKey: 'radio:capability.tx_audio_input_source.label',
+          descriptionI18nKey: 'radio:capability.tx_audio_input_source.description',
+          display: { mode: 'value', unit: 'state' }, hasSurfaceControl: false,
+        };
+        const values = asOptionValues(await getOptions.call(conn), []);
+        return {
+          id: 'tx_audio_input_source', category: 'audio', valueType: 'enum',
+          options: values.map((value) => createOption(value)), readable: true, writable: true,
+          updateMode: 'polling', pollIntervalMs: 15000,
+          labelI18nKey: 'radio:capability.tx_audio_input_source.label',
+          descriptionI18nKey: 'radio:capability.tx_audio_input_source.description',
+          display: { mode: 'value', unit: 'state' }, hasSurfaceControl: false,
+        };
+      },
+      probeSupport: async (conn) => {
+        const getOptions = getDynamicMethod(conn, 'getSupportedTxAudioInputSources');
+        const reader = getDynamicMethod(conn, 'getTxAudioInputSource');
+        const writer = getDynamicMethod(conn, 'setTxAudioInputSource');
+        if (!getOptions || !reader || !writer) return false;
+        const values = await getOptions.call(conn);
+        return { supported: Array.isArray(values) && values.length > 0, source: 'backend-declared' };
+      },
+      read: async (conn) => asRuntimeValue(await requireDynamicMethod(conn, 'getTxAudioInputSource').call(conn)),
+      write: async (conn, value) => {
+        const result = await requireDynamicMethod(conn, 'setTxAudioInputSource').call(conn, value);
+        if (result && typeof result === 'object' && 'applied' in (result as Record<string, unknown>)) {
+          return { value: (result as { applied: CapabilityValue }).applied, meta: { acknowledgement: (result as { acknowledgement?: string }).acknowledgement } };
+        }
+      },
+    },
     {
       id: 'tuner_switch',
       descriptor: {

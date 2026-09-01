@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { HamlibConfigSchema } from './radio.schema.js';
 import { AudioDeviceSettingsSchema } from './audio.schema.js';
+import { TxAudioInputSourcePolicySchema } from './tx-audio-input.schema.js';
 
 /**
  * Radio Profile Schema
@@ -14,6 +15,8 @@ export const RadioProfileSchema = z.object({
   radio: HamlibConfigSchema,               // 电台连接配置
   audio: AudioDeviceSettingsSchema,        // 音频设备配置
   audioLockedToRadio: z.boolean(),         // ICOM WLAN = true，音频由电台决定
+  /** Optional policy for the radio's physical TX audio input selector. */
+  txAudioInputSource: TxAudioInputSourcePolicySchema.optional(),
   createdAt: z.number(),
   updatedAt: z.number(),
   description: z.string().optional(),
@@ -43,6 +46,7 @@ export const UpdateProfileRequestSchema = z.object({
   radio: HamlibConfigSchema.optional(),
   audio: AudioDeviceSettingsSchema.optional(),
   audioLockedToRadio: z.boolean().optional(),
+  txAudioInputSource: TxAudioInputSourcePolicySchema.optional(),
   description: z.string().optional(),
 });
 
