@@ -43,6 +43,11 @@ import {
 } from './ww-digi/index.js';
 
 import {
+  ftContestBuiltinPluginEntries,
+  FT_CONTEST_PLUGIN_NAMES,
+} from './ft-contests/index.js';
+
+import {
   snrFilterPlugin,
   snrFilterLocales,
   BUILTIN_SNR_FILTER_PLUGIN_NAME,
@@ -158,7 +163,20 @@ export {
   BUILTIN_AUTOCALL_IDLE_FREQUENCY_PLUGIN_NAME,
   BUILTIN_QSO_UDP_BROADCAST_PLUGIN_NAME,
   BUILTIN_NO_REPLY_MEMORY_FILTER_PLUGIN_NAME,
+  FT_CONTEST_PLUGIN_NAMES,
 };
+
+export { ftContestCatalog } from './ft-contests/index.js';
+export type {
+  ContestStationQso,
+  FTContestCatalogEntry,
+  FTContestPluginName,
+  GridContestQso,
+  GridSnrContestQso,
+  MemberAwareContestQso,
+  RoundupExchange,
+  RoundupQso,
+} from './ft-contests/index.js';
 
 export {
   createWWDigiContestEntry,
@@ -200,6 +218,7 @@ export const BUILTIN_PLUGINS: BuiltinPluginEntry[] = [
     enabledByDefault: false,
     dirPath: wwDigiDirPath,
   },
+  ...ftContestBuiltinPluginEntries,
   {
     definition: snrFilterPlugin,
     locales: snrFilterLocales,

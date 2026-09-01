@@ -1,5 +1,6 @@
 import {
   definePlugin,
+  type StrategyPluginContext,
   type PluginQuickSetting,
   type PluginSettingDescriptor,
   type TargetSelectionPriorityMode,
@@ -107,6 +108,24 @@ export const standardQSOQuickSettings: PluginQuickSetting[] = [
   { settingKey: 'skipTx1' },
 ];
 
+export function createStandardQSOPluginRuntime(ctx: StrategyPluginContext): StandardQSOPluginRuntime {
+  const runtime: StandardQSOPluginOperator = {
+    get config(): StandardQSOOperatorConfig {
+      return getStandardQSOConfig(ctx as Parameters<typeof getStandardQSOConfig>[0]);
+    },
+    async hasWorkedCallsign(callsign: string): Promise<boolean> {
+      const config = getStandardQSOConfig(ctx as Parameters<typeof getStandardQSOConfig>[0]);
+      return ctx.operator.hasWorkedCallsign(callsign, {
+        anyBand: config.distinguishWorkedStationsByBand === false,
+      });
+    },
+    isTargetBeingWorkedByOthers(targetCallsign: string): boolean {
+      return ctx.operator.isTargetBeingWorkedByOthers(targetCallsign);
+    },
+  };
+  return new StandardQSOPluginRuntime(runtime, ctx.log);
+}
+
 export const standardQSOStrategyPlugin = definePlugin({
   apiVersion: 2,
   name: BUILTIN_STANDARD_QSO_PLUGIN_NAME,
@@ -122,23 +141,8 @@ export const standardQSOStrategyPlugin = definePlugin({
   quickSettings: standardQSOQuickSettings,
 
   createStrategyRuntime(ctx) {
-    const operatorId = ctx.operator.id;
-    const runtime: StandardQSOPluginOperator = {
-      get config(): OperatorConfig {
-        return getStandardQSOConfig(ctx);
-      },
-      async hasWorkedCallsign(callsign: string): Promise<boolean> {
-        const config = getStandardQSOConfig(ctx);
-        return ctx.operator.hasWorkedCallsign(callsign, {
-          anyBand: config.distinguishWorkedStationsByBand === false,
-        });
-      },
-      isTargetBeingWorkedByOthers(targetCallsign: string): boolean {
-        return ctx.operator.isTargetBeingWorkedByOthers(targetCallsign);
-      },
-    };
-    const strategy = new StandardQSOPluginRuntime(runtime, ctx.log);
-    ctx.log.info('Standard QSO strategy initialized', { operatorId });
+    const strategy = createStandardQSOPluginRuntime(ctx);
+    ctx.log.info('Standard QSO strategy initialized', { operatorId: ctx.operator.id });
     return strategy;
   },
 
