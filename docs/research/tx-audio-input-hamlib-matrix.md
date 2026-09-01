@@ -15,6 +15,11 @@ Hamlib/wfview rig definitions and the ICOM CI-V profile implementation:
 | Manufacturer / models | Protocol command | Values used by provider | Status |
 | --- | --- | --- | --- |
 | ICOM IC-705, IC-905 | CI-V `1A 05 01 19` | `0 MIC`, `1 ACC`, `2 USB`, `3 WLAN` | implemented; raw frame + readback |
+| ICOM IC-7300 | CI-V `1A 05 00 66` (normal/Data-Off input) | `0 MIC`, `1 ACC`, `3 USB` | implemented; raw frame + readback |
+| ICOM IC-7300MK2 | CI-V `1A 05 00 84` (normal/Data-Off input) | `0 MIC`, `1 USB`, `2 ACC`, `5 LAN` | implemented; raw frame + readback |
+| ICOM IC-7610 | CI-V `1A 05 00 91` (normal/Data-Off input) | `0 MIC`, `1 ACC`, `3 USB`, `5 LAN` | implemented; raw frame + readback |
+| ICOM IC-9700 | CI-V `1A 05 01 15` (normal/Data-Off input) | `0 MIC`, `1 ACC`, `3 USB`, `5 LAN` | implemented; raw frame + readback |
+| ICOM IC-7760 | CI-V `1A 05 01 29` (normal/Data-Off input) | `0 MIC`, `3 ACC`, `1 USB`, `2 LINE`, `9 LAN` | implemented; raw frame + readback |
 | Yaesu FT-710, FTX-1 | New CAT `EX010114`, `EX010214`, `EX010313`, `EX010414` | `0 MIC`, `1 USB`, `2 REAR` (normalized `accessory`) | implemented; command selected by current mode |
 | Kenwood TS-890S | `MS0` (normal voice modulation source) | `0 MIC`, `1 ACC2`, `2 USB`, `3 LAN` | implemented; raw CAT + readback |
 
@@ -40,4 +45,3 @@ voice-input selector.
   PTT or other operating-state operations.
 - No live transmission is part of the validation; real-radio validation should
   query, set, and read back while the radio is in receive state.
-
