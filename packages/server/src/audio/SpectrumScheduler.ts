@@ -12,13 +12,13 @@ const logger = createLogger('SpectrumScheduler');
 export interface SpectrumConfig {
   /** 分析间隔（毫秒），默认100ms */
   analysisInterval: number;
-  /** FFT大小，默认4096 */
+  /** FFT大小，默认2048 */
   fftSize: number;
-  /** 窗口函数，默认'hann' */
-  windowFunction: 'hann' | 'hamming' | 'blackman' | 'none';
+  /** 窗口函数，默认 blackmanHarris */
+  windowFunction: 'hann' | 'hamming' | 'blackman' | 'blackmanHarris' | 'none';
   /** 是否启用频谱分析，默认true */
   enabled: boolean;
-  /** 目标采样率，默认8000Hz */
+  /** 目标采样率，默认6000Hz */
   targetSampleRate: number;
   /** Display-only IF halo reduction */
   haloReduce: boolean;
@@ -71,7 +71,7 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
 
     this.shouldSpectrumWhileTransmitting = shouldSpectrumWhileTransmitting;
     this.baseFftSize = config.fftSize ?? 2048;
-    this.baseWindowFunction = config.windowFunction ?? 'hann';
+    this.baseWindowFunction = config.windowFunction ?? 'blackmanHarris';
 
     this.config = {
       analysisInterval: config.analysisInterval ?? 100, // 100ms间隔
@@ -126,14 +126,14 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
     this.inputSignalType = nextType;
 
     if (nextType === 'icom-12k-if') {
-      // Blackman has much lower sidelobes than Hann — reduces strong-tone "halo".
+      // Blackman-Harris has much lower sidelobes than Hann — reduces strong-tone "halo".
       this.updateConfig({
-        windowFunction: 'blackman',
+        windowFunction: 'blackmanHarris',
         fftSize: this.baseFftSize,
         haloReduce: true,
       });
       logger.info('IF audio waterfall tuning enabled', {
-        windowFunction: 'blackman',
+        windowFunction: 'blackmanHarris',
         fftSize: this.baseFftSize,
         haloReduce: true,
       });
@@ -287,8 +287,11 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
     try {
       const startTime = performance.now();
 
-      // 计算需要的音频样本数（基于分析间隔）
-      const durationMs = this.config.analysisInterval;
+      // Read enough history to cover one full FFT window after resampling.
+      const durationMs = Math.max(
+        this.config.analysisInterval,
+        Math.ceil((this.config.fftSize / this.config.targetSampleRate) * 1000),
+      );
       const timestamp = this.audioProvider.getCurrentTimeMs?.() ?? Date.now();
 
       // 从音频缓冲区获取最新的音频数据

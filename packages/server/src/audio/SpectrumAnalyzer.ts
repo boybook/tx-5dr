@@ -4,7 +4,7 @@ import type { SpectrumFrame } from '@tx5dr/contracts';
 export interface SpectrumConfig {
   sampleRate: number;
   fftSize: number;
-  windowFunction?: 'hann' | 'hamming' | 'blackman' | 'none';
+  windowFunction?: 'hann' | 'hamming' | 'blackman' | 'blackmanHarris' | 'none';
   overlapRatio?: number; // 0.0 - 1.0
   targetSampleRate?: number; // 目标采样率
   /**
@@ -61,12 +61,12 @@ export class SpectrumAnalyzer {
   async analyze(audioData: Float32Array): Promise<SpectrumFrame> {
     // 首先进行降采样（如需要）
     const processData = this.resampleIfNeeded(audioData);
+    this.appendToRollingTarget(processData);
 
-    // IF (haloReduce): rolling FFT window avoids short-chunk zero-pad bricks.
-    // AF: keep the author's original short-segment / zero-pad path.
+    // Use the most recent full window when available. Rolling history is only
+    // needed for startup / under-filled reads or for halo reduction.
     let segment: Float32Array;
-    if (this.config.haloReduce) {
-      this.appendToRollingTarget(processData);
+    if (this.config.haloReduce || processData.length < this.config.fftSize) {
       segment = this.readRollingTargetWindow();
     } else {
       segment = processData.length >= this.config.fftSize
@@ -203,8 +203,8 @@ export class SpectrumAnalyzer {
 
   /**
    * 如果需要，对输入数据进行降采样。
-   * AF（作者原路径）: 短块零填充到 fftSize 整数倍。
-   * IF（haloReduce）: 不零填充，由 rolling buffer 攒满一整窗。
+   * Always keep the resampled data contiguous; padding belongs to the caller
+   * that decides what history window to analyze.
    */
   private resampleIfNeeded(audioData: Float32Array): Float32Array {
     if (this.config.sampleRate === this.config.targetSampleRate) {
@@ -213,10 +213,7 @@ export class SpectrumAnalyzer {
 
     const ratio = this.config.sampleRate / this.config.targetSampleRate;
     const outputLength = Math.ceil(audioData.length / ratio);
-    const paddedLength = this.config.haloReduce
-      ? outputLength
-      : Math.ceil(outputLength / this.config.fftSize) * this.config.fftSize;
-    const resampled = new Float32Array(paddedLength);
+    const resampled = new Float32Array(outputLength);
 
     for (let i = 0; i < outputLength; i++) {
       const sourceIndex = i * ratio;
@@ -229,10 +226,6 @@ export class SpectrumAnalyzer {
 
       const interpolated = sample1 + (sample2 - sample1) * fraction;
       resampled[i] = Math.max(-1, Math.min(1, interpolated));
-    }
-
-    if (outputLength < paddedLength) {
-      resampled.fill(0, outputLength);
     }
 
     return resampled;

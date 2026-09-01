@@ -262,7 +262,7 @@ describe('SpectrumAnalyzer', () => {
   });
 
   describe('analyze - window function', () => {
-    const windowTypes = ['hann', 'hamming', 'blackman', 'none'] as const;
+    const windowTypes = ['hann', 'hamming', 'blackman', 'blackmanHarris', 'none'] as const;
 
     it.each(windowTypes)('window function %s should work correctly', async (windowFunction) => {
       const analyzer = new SpectrumAnalyzer({

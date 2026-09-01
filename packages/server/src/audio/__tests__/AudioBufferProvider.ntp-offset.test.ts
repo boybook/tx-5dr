@@ -106,8 +106,9 @@ describe('SpectrumScheduler with a calibrated audio provider', () => {
       await spectrumReady;
 
       expect(getCurrentTimeMs).toHaveBeenCalled();
-      expect(getBuffer).toHaveBeenCalledWith(calibratedNow - 150, 150);
-      expect(getBuffer).not.toHaveBeenCalledWith(systemNow - 150, 150);
+      const expectedDurationMs = Math.max(150, Math.ceil((2048 / 6000) * 1000));
+      expect(getBuffer).toHaveBeenCalledWith(calibratedNow - expectedDurationMs, expectedDurationMs);
+      expect(getBuffer).not.toHaveBeenCalledWith(systemNow - expectedDurationMs, expectedDurationMs);
     } finally {
       scheduler.stop();
       await scheduler.destroy();

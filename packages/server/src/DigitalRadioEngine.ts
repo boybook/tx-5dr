@@ -307,7 +307,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private static readonly SPECTRUM_CONFIG = {
     ANALYSIS_INTERVAL_MS: 150,
     FFT_SIZE: 8192,
-    WINDOW_FUNCTION: 'hann' as const,
+    WINDOW_FUNCTION: 'blackmanHarris' as const,
     ENABLED: true,
     TARGET_SAMPLE_RATE: 6000
   };
@@ -623,7 +623,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       enabled: DigitalRadioEngine.SPECTRUM_CONFIG.ENABLED,
       targetSampleRate: DigitalRadioEngine.SPECTRUM_CONFIG.TARGET_SAMPLE_RATE
     }, () => ConfigManager.getInstance().getFT8Config().spectrumWhileTransmitting ?? true);
-    // IF-mode audio waterfall uses Blackman + baseline flatten (decode path unchanged).
+    // IF-mode audio waterfall uses Blackman-Harris + baseline flatten (decode path unchanged).
     this.audioStreamManager.on('inputSignalTypeChanged', (inputSignalType) => {
       this.spectrumScheduler.setInputSignalType(inputSignalType);
     });
