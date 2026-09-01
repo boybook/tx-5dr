@@ -3,7 +3,7 @@ import { Button, Input, Popover, PopoverContent, PopoverTrigger, Slider, Switch,
 import { addToast } from '@heroui/toast';
 import { ArrowsPointingOutIcon, ChevronDownIcon, ChevronUpIcon, Cog6ToothIcon, MinusIcon, PlusIcon } from '@heroicons/react/24/outline';
 import { useTranslation } from 'react-i18next';
-import type { AudioInputSignalType, EngineMode, SpectrumFrame, SpectrumKind, SpectrumSessionVoiceState, SystemStatus } from '@tx5dr/contracts';
+import type { AudioInputSignalType, EngineMode, SpectrumFrame, SpectrumKind, SpectrumLevelDescriptor, SpectrumLevelDomain, SpectrumSessionVoiceState, SystemStatus } from '@tx5dr/contracts';
 import { UserRole } from '@tx5dr/contracts';
 import { api, getBandFromFrequency } from '@tx5dr/core';
 import { useConnection, useCurrentOperatorId, useOperators, useProfiles, usePTTState, useRadioConnectionState, useRadioModeState, useRadioState, useCapabilityState, useCapabilityDescriptor, useSpectrum, useSplitState } from '../../../store/radioStore';
@@ -293,7 +293,7 @@ interface PersistedRangeSettings {
   showCycleMarkers: boolean;
   radioSdrCenterViewMode: RadioSdrCenterViewMode;
   audio: AudioRangeSettings;
-  radioSdr: ManualRangeSettings;
+  radioSdr: Record<SpectrumLevelDomain, ManualRangeSettings>;
   openWebRxSdr: {
     full: ManualRangeSettings;
     detail: ManualRangeSettings;
@@ -314,8 +314,24 @@ const AUDIO_RANGE_LIMITS = {
   max: 40,
 };
 
-export const RADIO_SDR_RANGE_LIMITS = {
-  min: -120,
+export const RADIO_SDR_RANGE_LIMITS: Record<SpectrumLevelDomain, { min: number; max: number }> = {
+  dbfs: { min: -120, max: 0 },
+  'calibrated-db': { min: -120, max: 0 },
+  raw: { min: 0, max: 255 },
+};
+
+export const DEFAULT_RADIO_SDR_RANGE_SETTINGS: Record<SpectrumLevelDomain, ManualRangeSettings> = {
+  dbfs: { minDb: -120, maxDb: -40 },
+  'calibrated-db': { minDb: -120, maxDb: 0 },
+  raw: { minDb: 0, maxDb: 255 },
+};
+
+const RAW_RADIO_SDR_LEVEL: SpectrumLevelDescriptor = {
+  domain: 'raw',
+  unit: 'Level',
+  reference: 'none',
+  calibrated: false,
+  min: 0,
   max: 255,
 };
 
@@ -347,8 +363,9 @@ const DEFAULT_PERSISTED_RANGE_SETTINGS: PersistedRangeSettings = {
     auto: DEFAULT_AUTO_CONFIG,
   },
   radioSdr: {
-    minDb: 0,
-    maxDb: 64,
+    dbfs: cloneManualRangeSettings(DEFAULT_RADIO_SDR_RANGE_SETTINGS.dbfs),
+    'calibrated-db': cloneManualRangeSettings(DEFAULT_RADIO_SDR_RANGE_SETTINGS['calibrated-db']),
+    raw: cloneManualRangeSettings(DEFAULT_RADIO_SDR_RANGE_SETTINGS.raw),
   },
   openWebRxSdr: {
     full: {
@@ -544,6 +561,16 @@ function cloneAudioRangeSettings(settings: AudioRangeSettings): AudioRangeSettin
   };
 }
 
+function cloneRadioSdrRangeSettings(
+  settings: Record<SpectrumLevelDomain, ManualRangeSettings>,
+): Record<SpectrumLevelDomain, ManualRangeSettings> {
+  return {
+    dbfs: cloneManualRangeSettings(settings.dbfs),
+    'calibrated-db': cloneManualRangeSettings(settings['calibrated-db']),
+    raw: cloneManualRangeSettings(settings.raw),
+  };
+}
+
 function normalizeManualRangeSettings(
   settings: Partial<ManualRangeSettings> | null | undefined,
   fallback: ManualRangeSettings
@@ -557,8 +584,41 @@ function normalizeManualRangeSettings(
   };
 }
 
+export function normalizeRadioSdrRangeSettings(settings: unknown): Record<SpectrumLevelDomain, ManualRangeSettings> {
+  const defaults = DEFAULT_RADIO_SDR_RANGE_SETTINGS;
+  if (!settings || typeof settings !== 'object') {
+    return cloneRadioSdrRangeSettings(defaults);
+  }
+
+  const value = settings as Record<string, unknown>;
+  const legacyRange = normalizeManualRangeSettings(value as Partial<ManualRangeSettings>, defaults.raw);
+  const hasLegacyShape = typeof value.minDb === 'number' || typeof value.maxDb === 'number';
+  if (hasLegacyShape) {
+    return {
+      dbfs: cloneManualRangeSettings(defaults.dbfs),
+      'calibrated-db': cloneManualRangeSettings(defaults['calibrated-db']),
+      raw: legacyRange,
+    };
+  }
+
+  return {
+    dbfs: normalizeManualRangeSettings(value.dbfs as Partial<ManualRangeSettings> | undefined, defaults.dbfs),
+    'calibrated-db': normalizeManualRangeSettings(value['calibrated-db'] as Partial<ManualRangeSettings> | undefined, defaults['calibrated-db']),
+    raw: normalizeManualRangeSettings(value.raw as Partial<ManualRangeSettings> | undefined, defaults.raw),
+  };
+}
+
 function clampRangeValue(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function constrainManualRangeSettings(
+  settings: ManualRangeSettings,
+  limits: { min: number; max: number },
+): ManualRangeSettings {
+  const minDb = clampRangeValue(settings.minDb, limits.min, limits.max - 1);
+  const maxDb = clampRangeValue(settings.maxDb, minDb + 1, limits.max);
+  return { minDb, maxDb };
 }
 
 function normalizeAudioRangeSettings(
@@ -587,7 +647,7 @@ function loadPersistedRangeSettings(): PersistedRangeSettings {
         showCycleMarkers: DEFAULT_PERSISTED_RANGE_SETTINGS.showCycleMarkers,
         radioSdrCenterViewMode: DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdrCenterViewMode,
         audio: cloneAudioRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.audio),
-        radioSdr: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr),
+        radioSdr: cloneRadioSdrRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr),
         openWebRxSdr: {
           full: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.openWebRxSdr.full),
           detail: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.openWebRxSdr.detail),
@@ -609,9 +669,8 @@ function loadPersistedRangeSettings(): PersistedRangeSettings {
           (parsed as Partial<PersistedRangeSettings>).audio,
           DEFAULT_PERSISTED_RANGE_SETTINGS.audio
         ),
-        radioSdr: normalizeManualRangeSettings(
+        radioSdr: normalizeRadioSdrRangeSettings(
           (parsed as Partial<PersistedRangeSettings>).radioSdr,
-          DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr
         ),
         openWebRxSdr: (() => {
           const rawOpenWebRX = (parsed as Partial<PersistedRangeSettings>).openWebRxSdr;
@@ -651,7 +710,7 @@ function loadPersistedRangeSettings(): PersistedRangeSettings {
         parsed as LegacyAudioRangeSettings,
         DEFAULT_PERSISTED_RANGE_SETTINGS.audio
       ),
-      radioSdr: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr),
+      radioSdr: cloneRadioSdrRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr),
       openWebRxSdr: {
         full: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.openWebRxSdr.full),
         detail: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.openWebRxSdr.detail),
@@ -664,7 +723,7 @@ function loadPersistedRangeSettings(): PersistedRangeSettings {
       showCycleMarkers: DEFAULT_PERSISTED_RANGE_SETTINGS.showCycleMarkers,
       radioSdrCenterViewMode: DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdrCenterViewMode,
       audio: cloneAudioRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.audio),
-      radioSdr: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr),
+      radioSdr: cloneRadioSdrRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr),
       openWebRxSdr: {
         full: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.openWebRxSdr.full),
         detail: cloneManualRangeSettings(DEFAULT_PERSISTED_RANGE_SETTINGS.openWebRxSdr.detail),
@@ -1123,18 +1182,33 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const spectrumReferenceFrequency = isRadioSdrSelected
     ? effectiveRadioSdrFrequency
     : null;
+  const radioSdrLevel = isRadioSdrSelected ? (streamStatus.level ?? RAW_RADIO_SDR_LEVEL) : null;
+  const radioSdrLevelDomain: SpectrumLevelDomain = radioSdrLevel?.domain ?? 'raw';
+  const radioSdrLevelUnit = radioSdrLevel?.unit ?? 'Level';
+  useEffect(() => {
+    actualRangeRef.current = null;
+  }, [radioSdrLevelDomain]);
   const frequencyAxisTransform = React.useMemo(
     () => (isRadioSdrSelected && typeof spectrumReferenceFrequency === 'number' && Number.isFinite(spectrumReferenceFrequency)
       ? createFrequencyAxisTransform(ICOM_RADIO_SDR_FREQUENCY_AXIS_CALIBRATION, spectrumReferenceFrequency)
       : IDENTITY_FREQUENCY_AXIS_TRANSFORM),
     [isRadioSdrSelected, spectrumReferenceFrequency],
   );
+  const radioSdrRangeLimits = radioSdrLevel
+    ? {
+        min: Number.isFinite(radioSdrLevel.min) ? radioSdrLevel.min : RADIO_SDR_RANGE_LIMITS[radioSdrLevelDomain].min,
+        max: Number.isFinite(radioSdrLevel.max) ? radioSdrLevel.max : RADIO_SDR_RANGE_LIMITS[radioSdrLevelDomain].max,
+      }
+    : RADIO_SDR_RANGE_LIMITS.raw;
   const currentManualRangeSettings = isOpenWebRXSdrSelected
     ? (isOpenWebRXDetailMode
         ? persistedRangeSettings.openWebRxSdr.detail
         : persistedRangeSettings.openWebRxSdr.full)
     : isRadioSdrSelected
-      ? persistedRangeSettings.radioSdr
+      ? constrainManualRangeSettings(
+          persistedRangeSettings.radioSdr[radioSdrLevelDomain],
+          radioSdrRangeLimits,
+        )
       : persistedRangeSettings.audio.manual;
   const selectedSpectrumThemeId = persistedRangeSettings.themeId;
   const showCycleMarkers = persistedRangeSettings.showCycleMarkers;
@@ -1150,13 +1224,14 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     referenceFrequencyHz: spectrumReferenceFrequency,
   }), [frequencyRangeMode, isRadioSdrSelected, radioSdrCenterViewMode, spectrumReferenceFrequency]);
   const cycleSlotMs = currentMode?.slotMs ?? null;
-  const waterfallViewKey = `${effectiveSelectedKind}:${isOpenWebRXDetailMode ? 'detail' : 'main'}`;
+  const waterfallViewKey = `${effectiveSelectedKind}:${isOpenWebRXDetailMode ? 'detail' : 'main'}:${isRadioSdrSelected ? radioSdrLevelDomain : ''}`;
   const audioRangeSettings = persistedRangeSettings.audio;
   const rangeLimits = isOpenWebRXSdrSelected
     ? OPENWEBRX_RANGE_LIMITS
-    : isRadioSdrSelected
-      ? RADIO_SDR_RANGE_LIMITS
+      : isRadioSdrSelected
+      ? radioSdrRangeLimits
       : AUDIO_RANGE_LIMITS;
+  const spectrumLevelUnit = isRadioSdrSelected ? radioSdrLevelUnit : 'dB';
   const topLeftOverlayStyle = topLeftOverlayInset
     ? {
         top: topLeftOverlayInset.top ?? 4,
@@ -1182,7 +1257,10 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       if (isRadioSdrSelected) {
         return {
           ...prev,
-          radioSdr: updater(prev.radioSdr),
+          radioSdr: {
+            ...prev.radioSdr,
+            [radioSdrLevelDomain]: updater(prev.radioSdr[radioSdrLevelDomain]),
+          },
         };
       }
 
@@ -1206,7 +1284,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         },
       };
     });
-  }, [isOpenWebRXDetailMode, isOpenWebRXSdrSelected, isRadioSdrSelected]);
+  }, [isOpenWebRXDetailMode, isOpenWebRXSdrSelected, isRadioSdrSelected, radioSdrLevelDomain]);
 
   const updateAudioRangeSettings = useCallback((updater: (current: AudioRangeSettings) => AudioRangeSettings) => {
     setPersistedRangeSettings(prev => ({
@@ -1696,7 +1774,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     setPersistedRangeSettings(prev => ({
       ...prev,
       radioSdrCenterViewMode: normalizeRadioSdrCenterViewMode(prev.radioSdrCenterViewMode),
-      radioSdr: normalizeManualRangeSettings(prev.radioSdr, DEFAULT_PERSISTED_RANGE_SETTINGS.radioSdr),
+      radioSdr: normalizeRadioSdrRangeSettings(prev.radioSdr),
     }));
   }, [selectedKind]);
 
@@ -2552,7 +2630,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                 {(isRadioSdrSelected || isOpenWebRXSdrSelected || audioRangeSettings.mode === 'manual') && (
                   <>
                 <Slider
-                  label={t('spectrum.minDb')}
+                  label={t('spectrum.minLevel', { unit: spectrumLevelUnit })}
                   size="sm"
                   step={1}
                   minValue={rangeLimits.min}
@@ -2567,7 +2645,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                   }}
                 />
                 <Input
-                  label={t('spectrum.minDb')}
+                  label={t('spectrum.minLevel', { unit: spectrumLevelUnit })}
                   type="number"
                   size="sm"
                   value={currentManualRangeSettings.minDb.toString()}
@@ -2583,7 +2661,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                   }}
                 />
                 <Slider
-                  label={t('spectrum.maxDb')}
+                  label={t('spectrum.maxLevel', { unit: spectrumLevelUnit })}
                   size="sm"
                   step={1}
                   minValue={Math.max(rangeLimits.min + 1, currentManualRangeSettings.minDb + 1)}
@@ -2598,7 +2676,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                   }}
                 />
                 <Input
-                  label={t('spectrum.maxDb')}
+                  label={t('spectrum.maxLevel', { unit: spectrumLevelUnit })}
                   type="number"
                   size="sm"
                   value={currentManualRangeSettings.maxDb.toString()}

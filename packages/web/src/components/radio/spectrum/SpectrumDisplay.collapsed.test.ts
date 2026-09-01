@@ -10,6 +10,7 @@ import {
   getRadioSdrDragFrequencyStepHz,
   isSpectrumEngineNotStarted,
   normalizeRadioSdrCenterViewMode,
+  normalizeRadioSdrRangeSettings,
   RADIO_SDR_RANGE_LIMITS,
   resolveAudioRangeSettingsForModeChange,
   resolveRadioSdrCenterViewContext,
@@ -23,7 +24,19 @@ import {
 
 describe('spectrum recovery state helpers', () => {
   it('allows the radio SDR floor to reach -120 dB', () => {
-    expect(RADIO_SDR_RANGE_LIMITS).toEqual({ min: -120, max: 255 });
+    expect(RADIO_SDR_RANGE_LIMITS).toEqual({
+      dbfs: { min: -120, max: 0 },
+      'calibrated-db': { min: -120, max: 0 },
+      raw: { min: 0, max: 255 },
+    });
+  });
+
+  it('migrates legacy radio SDR ranges into raw Level settings only', () => {
+    expect(normalizeRadioSdrRangeSettings({ minDb: 0, maxDb: 64 })).toEqual({
+      dbfs: { minDb: -120, maxDb: -40 },
+      'calibrated-db': { minDb: -120, maxDb: 0 },
+      raw: { minDb: 0, maxDb: 64 },
+    });
   });
 
   it('detects equivalent recovery states before scheduling React updates', () => {

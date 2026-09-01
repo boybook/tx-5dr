@@ -9,6 +9,7 @@ installation and operation manuals are maintained in
 
 - [Server startup and radio lifecycle](architecture/server-startup.md)
 - [Realtime audio ownership and transport](architecture/realtime-audio.md)
+- [Spectrum amplitude semantics](architecture/spectrum.md)
 - [Persistence durability](architecture/persistence-durability.md)
 
 These files describe invariants that implementation and guard tests are expected

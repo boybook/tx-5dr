@@ -212,6 +212,8 @@
     "expansionFactor": "范围扩展因子",
     "minDb": "最小值 (dB)",
     "maxDb": "最大值 (dB)",
+    "minLevel": "最小值 ({{unit}})",
+    "maxLevel": "最大值 ({{unit}})",
     "currentRange": "当前范围: {{min}} ~ {{max}} dB",
     "zoomIn": "缩小频谱范围",
     "zoomOut": "放大频谱范围",

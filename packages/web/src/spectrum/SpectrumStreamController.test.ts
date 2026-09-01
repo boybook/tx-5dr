@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Buffer } from 'node:buffer';
-import type { SpectrumFrame, SpectrumKind } from '@tx5dr/contracts';
+import type { SpectrumFrame, SpectrumKind, SpectrumLevelDescriptor } from '@tx5dr/contracts';
 import { SpectrumStreamController, cropSpectrumToRange } from './SpectrumStreamController';
 
 type ControllerInternals = {
@@ -30,7 +30,8 @@ function makeFrame(
   kind: SpectrumKind,
   timestamp: number,
   values: number[],
-  frequencyRange: { min: number; max: number } = { min: 0, max: 3000 }
+  frequencyRange: { min: number; max: number } = { min: 0, max: 3000 },
+  level?: SpectrumLevelDescriptor,
 ): SpectrumFrame {
   const pcm = new Int16Array(values);
   return {
@@ -49,6 +50,7 @@ function makeFrame(
     meta: {
       sourceBinCount: values.length,
       displayBinCount: values.length,
+      level,
     },
   };
 }
@@ -99,6 +101,23 @@ describe('SpectrumStreamController memory behavior', () => {
     expect(retained.values).toBeInstanceOf(Float32Array);
     expect(retained.frame.binaryData).toBeUndefined();
     expect(JSON.stringify(retained.frame)).not.toContain(sourceFrame.binaryData.data);
+  });
+
+  it('exposes the latest radio level descriptor and defaults old frames to raw Level', () => {
+    const controller = new SpectrumStreamController(3);
+    controller.updateContext({ selectedKind: 'radio-sdr' });
+    controller.pushFrame(makeFrame('radio-sdr', 1, [12, 24], { min: 0, max: 2 }));
+    expect(controller.getStatusSnapshot().level).toMatchObject({ domain: 'raw', unit: 'Level', min: 0, max: 255 });
+
+    controller.pushFrame(makeFrame(
+      'radio-sdr',
+      2,
+      [-110, -90],
+      { min: 0, max: 2 },
+      { domain: 'dbfs', unit: 'dBFS', reference: 'full-scale', calibrated: true, min: -120, max: 0 },
+    ));
+    expect(controller.getStatusSnapshot().level).toMatchObject({ domain: 'dbfs', unit: 'dBFS' });
+    expect(getInternals(controller).histories['radio-sdr']).toHaveLength(1);
   });
 
   it('trims each spectrum kind with its own history limit', () => {

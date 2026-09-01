@@ -1,9 +1,27 @@
-import type { SpectrumFrame } from '@tx5dr/contracts';
+import type { SpectrumFrame, SpectrumLevelDescriptor } from '@tx5dr/contracts';
 import type { IcomScopeFrame } from 'icom-wlan-node';
 import type { SpectrumLine } from 'hamlib/spectrum';
 import type { OpenWebRXSpectrumFrame } from '@openwebrx-js/api';
 
 export const SPECTRUM_DISPLAY_BIN_COUNT = 1024;
+
+export const RAW_SPECTRUM_LEVEL: SpectrumLevelDescriptor = {
+  domain: 'raw',
+  unit: 'Level',
+  reference: 'none',
+  calibrated: false,
+  min: 0,
+  max: 255,
+};
+
+export const TCI_DBFS_LEVEL: SpectrumLevelDescriptor = {
+  domain: 'dbfs',
+  unit: 'dBFS',
+  reference: 'full-scale',
+  calibrated: true,
+  min: -120,
+  max: 0,
+};
 
 export function resampleBins(input: ArrayLike<number>, targetLength: number): Int16Array {
   if (targetLength <= 0) {
@@ -88,6 +106,7 @@ export function createRadioSpectrumFrame(
       spanHz,
       profileId,
       radioModel,
+      level: RAW_SPECTRUM_LEVEL,
     },
   });
 }
@@ -98,7 +117,38 @@ export function createHamlibRadioSpectrumFrame(
   radioModel?: string
 ): SpectrumFrame {
   const sourceData = spectrumLine.data.subarray(0, spectrumLine.dataLength);
-  const resampledPixels = resampleBins(sourceData, SPECTRUM_DISPLAY_BIN_COUNT);
+  const hasCalibration = Number.isFinite(spectrumLine.dataLevelMin)
+    && Number.isFinite(spectrumLine.dataLevelMax)
+    && spectrumLine.dataLevelMax > spectrumLine.dataLevelMin
+    && Number.isFinite(spectrumLine.signalStrengthMin)
+    && Number.isFinite(spectrumLine.signalStrengthMax)
+    && spectrumLine.signalStrengthMax > spectrumLine.signalStrengthMin;
+  const level = hasCalibration
+    ? {
+        domain: 'calibrated-db' as const,
+        unit: 'dB' as const,
+        reference: 'device' as const,
+        calibrated: true,
+        min: spectrumLine.signalStrengthMin,
+        max: spectrumLine.signalStrengthMax,
+      }
+    : RAW_SPECTRUM_LEVEL;
+  const sourceValues = hasCalibration
+    ? Float64Array.from(sourceData, (raw) => {
+        const normalized = Math.min(
+          1,
+          Math.max(
+            0,
+            (raw - spectrumLine.dataLevelMin) /
+              (spectrumLine.dataLevelMax - spectrumLine.dataLevelMin),
+          ),
+        );
+        const signalDb = spectrumLine.signalStrengthMin
+          + normalized * (spectrumLine.signalStrengthMax - spectrumLine.signalStrengthMin);
+        return signalDb * 100;
+      })
+    : sourceData;
+  const resampledPixels = resampleBins(sourceValues, SPECTRUM_DISPLAY_BIN_COUNT);
 
   return normalizeSpectrumFrame({
     timestamp: spectrumLine.timestamp || Date.now(),
@@ -109,7 +159,7 @@ export function createHamlibRadioSpectrumFrame(
     },
     binaryData: {
       data: resampledPixels,
-      scale: 1,
+      scale: hasCalibration ? 0.01 : 1,
       offset: 0,
     },
     meta: {
@@ -119,6 +169,7 @@ export function createHamlibRadioSpectrumFrame(
       spanHz: spectrumLine.spanHz,
       profileId,
       radioModel,
+      level,
     },
   });
 }

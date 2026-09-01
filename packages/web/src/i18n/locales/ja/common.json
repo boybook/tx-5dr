@@ -212,6 +212,8 @@
     "expansionFactor": "レンジ拡大係数",
     "minDb": "最小値(dB)",
     "maxDb": "最大値(dB)",
+    "minLevel": "最小値({{unit}})",
+    "maxLevel": "最大値({{unit}})",
     "currentRange": "電流範囲: {{min}} ～ {{max}} dB",
     "zoomIn": "スペクトルを狭める",
     "zoomOut": "スペクトル範囲を拡大する",

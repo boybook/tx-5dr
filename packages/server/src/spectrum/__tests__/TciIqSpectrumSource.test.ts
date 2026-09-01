@@ -99,6 +99,14 @@ describe('TciIqSpectrumSource', () => {
         centerFrequency: 14_074_000,
         spanHz: 20_000,
         radioModel: 'TCI IQ',
+        level: {
+          domain: 'dbfs',
+          unit: 'dBFS',
+          reference: 'full-scale',
+          calibrated: true,
+          min: -120,
+          max: 0,
+        },
       },
     });
     const magnitudeBytes = Buffer.from(frames[0]!.binaryData.data, 'base64');

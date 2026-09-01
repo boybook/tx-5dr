@@ -43,6 +43,28 @@ export const SpectrumBinaryDataSchema = z.object({
   format: SpectrumBinaryFormatSchema,
 });
 
+export const SpectrumLevelDomainSchema = z.enum(['dbfs', 'calibrated-db', 'raw']);
+export type SpectrumLevelDomain = z.infer<typeof SpectrumLevelDomainSchema>;
+
+export const SpectrumLevelUnitSchema = z.enum(['dBFS', 'dB', 'Level']);
+export type SpectrumLevelUnit = z.infer<typeof SpectrumLevelUnitSchema>;
+
+export const SpectrumLevelReferenceSchema = z.enum(['full-scale', 'device', 'none']);
+export type SpectrumLevelReference = z.infer<typeof SpectrumLevelReferenceSchema>;
+
+export const SpectrumLevelDescriptorSchema = z.object({
+  domain: SpectrumLevelDomainSchema,
+  unit: SpectrumLevelUnitSchema,
+  reference: SpectrumLevelReferenceSchema,
+  calibrated: z.boolean(),
+  min: z.number().finite(),
+  max: z.number().finite(),
+}).refine((level) => level.max > level.min, {
+  message: 'Spectrum level maximum must be greater than minimum',
+  path: ['max'],
+});
+export type SpectrumLevelDescriptor = z.infer<typeof SpectrumLevelDescriptorSchema>;
+
 export const SpectrumFrameMetaSchema = z.object({
   sourceBinCount: z.number().int().positive(),
   displayBinCount: z.number().int().positive(),
@@ -50,6 +72,7 @@ export const SpectrumFrameMetaSchema = z.object({
   spanHz: z.number().optional(),
   profileId: z.string().nullable().optional(),
   radioModel: z.string().optional(),
+  level: SpectrumLevelDescriptorSchema.optional(),
 });
 
 export const SpectrumFrameSchema = z.object({

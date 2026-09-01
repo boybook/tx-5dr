@@ -1,4 +1,4 @@
-import type { SpectrumFrame, SpectrumKind } from '@tx5dr/contracts';
+import type { SpectrumFrame, SpectrumKind, SpectrumLevelDescriptor } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('SpectrumStreamController');
@@ -29,6 +29,7 @@ export interface SpectrumStreamStatus {
   hasData: boolean;
   selectedKind: SpectrumKind | null;
   fullRange: { min: number; max: number } | null;
+  level: SpectrumLevelDescriptor | null;
 }
 
 export interface SpectrumRenderBatch {
@@ -48,6 +49,7 @@ interface RetainedSpectrumFrame {
   kind: SpectrumKind;
   frequencyRange: { min: number; max: number };
   binCount: number;
+  level: SpectrumLevelDescriptor | null;
 }
 
 interface CanonicalSpectrumFrame {
@@ -86,6 +88,15 @@ const MAX_BATCH_SIZE = 8;
 const RADIO_SDR_OPTIMISTIC_TIMEOUT_MS = 2000;
 const RADIO_SDR_OPTIMISTIC_CONFIRM_MIN_HZ = 50;
 const RADIO_SDR_OPTIMISTIC_CONFIRM_SPAN_RATIO = 0.001;
+
+const RAW_RADIO_SDR_LEVEL: SpectrumLevelDescriptor = {
+  domain: 'raw',
+  unit: 'Level',
+  reference: 'none',
+  calibrated: false,
+  min: 0,
+  max: 255,
+};
 
 function createHistoryMap(): HistoryMap {
   return {
@@ -144,6 +155,29 @@ function normalizeRadioSdrReferenceFrequency(value: number | null | undefined): 
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+function resolveFrameLevel(frame: SpectrumFrame): SpectrumLevelDescriptor | null {
+  if (frame.meta.level) {
+    return frame.meta.level;
+  }
+  return frame.kind === 'radio-sdr' ? RAW_RADIO_SDR_LEVEL : null;
+}
+
+function areLevelDescriptorsEqual(
+  left: SpectrumLevelDescriptor | null,
+  right: SpectrumLevelDescriptor | null,
+): boolean {
+  return Boolean(
+    left
+    && right
+    && left.domain === right.domain
+    && left.unit === right.unit
+    && left.reference === right.reference
+    && left.calibrated === right.calibrated
+    && left.min === right.min
+    && left.max === right.max,
+  ) || (left === null && right === null);
+}
+
 function decodeFrameValues(frame: SpectrumFrame): Float32Array {
   const binaryString = atob(frame.binaryData.data);
   const bytes = new Uint8Array(binaryString.length);
@@ -173,6 +207,7 @@ function retainFrameMeta(frame: SpectrumFrame): RetainedSpectrumFrame {
       max: frame.frequencyRange.max,
     },
     binCount: getBinCount(frame),
+    level: resolveFrameLevel(frame),
   };
 }
 
@@ -266,6 +301,7 @@ export class SpectrumStreamController {
     hasData: false,
     selectedKind: null,
     fullRange: null,
+    level: null,
   };
   private pendingBatch: SpectrumRenderBatch | null = null;
   private rafId: number | null = null;
@@ -615,6 +651,15 @@ export class SpectrumStreamController {
     }
 
     const retainedFrame = retainFrameMeta(frame);
+    const previousRadioFrame = frame.kind === 'radio-sdr' ? this.histories['radio-sdr'][0]?.frame ?? null : null;
+    const radioSdrLevelChanged = frame.kind === 'radio-sdr'
+      && previousRadioFrame !== null
+      && !areLevelDescriptorsEqual(previousRadioFrame.level, retainedFrame.level);
+    if (radioSdrLevelChanged) {
+      this.histories['radio-sdr'].length = 0;
+      this.pendingByKind['radio-sdr'].length = 0;
+      this.invalidateCachedViews('radio-sdr');
+    }
     const isConfirmingRadioSdrOptimisticIntent = this.isRadioSdrOptimisticIntentConfirmed(retainedFrame);
     if (isConfirmingRadioSdrOptimisticIntent) {
       this.clearRadioSdrOptimisticIntent({ notify: false });
@@ -634,7 +679,7 @@ export class SpectrumStreamController {
       : false;
 
     if (frame.kind === this.context.selectedKind) {
-      if (radioSdrViewRangeChanged) {
+      if (radioSdrViewRangeChanged || radioSdrLevelChanged) {
         this.pendingByKind[frame.kind].length = 0;
         this.scheduleReplaceBatch();
       } else {
@@ -917,12 +962,14 @@ export class SpectrumStreamController {
       hasData: Boolean(selectedKind && this.histories[selectedKind].length > 0),
       selectedKind,
       fullRange,
+      level: selectedKind ? (this.histories[selectedKind][0]?.frame.level ?? null) : null,
     };
 
     if (
       this.statusSnapshot.hasData === nextStatus.hasData
       && this.statusSnapshot.selectedKind === nextStatus.selectedKind
       && areRangesEqual(this.statusSnapshot.fullRange, nextStatus.fullRange)
+      && areLevelDescriptorsEqual(this.statusSnapshot.level, nextStatus.level)
     ) {
       return;
     }

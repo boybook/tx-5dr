@@ -78,6 +78,16 @@ describe('SpectrumCoordinator', () => {
     scopeListener!(createScopeFrame());
 
     expect(frames).toHaveLength(2);
+    expect(frames[0]).toMatchObject({
+      meta: {
+        level: {
+          domain: 'raw',
+          unit: 'Level',
+          min: 0,
+          max: 255,
+        },
+      },
+    });
     await (coordinator as any).stopRadioScope();
   });
 

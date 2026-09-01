@@ -14,6 +14,7 @@ import type { SpectrumFrame, SpectrumSourceAvailability } from '@tx5dr/contracts
 import type { TciConnection } from '../radio/connections/TciConnection.js';
 import { createLogger } from '../utils/logger.js';
 import type { RadioSpectrumSource, RadioSpectrumSpanController } from './RadioSpectrumSource.js';
+import { TCI_DBFS_LEVEL } from './spectrumUtils.js';
 
 const logger = createLogger('TciIqSpectrumSource');
 const DEFAULT_IQ_SAMPLE_RATE = 96_000;
@@ -358,6 +359,7 @@ export class TciIqSpectrumSource implements RadioSpectrumSource, RadioSpectrumSp
           spanHz,
           profileId: null,
           radioModel: 'TCI IQ',
+          level: TCI_DBFS_LEVEL,
         },
       });
     } catch (error) {
