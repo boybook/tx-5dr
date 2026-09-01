@@ -15,14 +15,13 @@ import {
   Tooltip,
 } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faChevronDown, faRotateRight } from '@fortawesome/free-solid-svg-icons';
+import { faRotateRight } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
 import {
   CAPABILITY_CATEGORY_ORDER,
   type CapabilityCategorySection,
   getVisibleCapabilitySections,
   groupCapabilityDescriptors,
-  partitionCapabilityGroupsBySupport,
   splitCapabilitySectionsForColumns,
 } from '../../../radio-capability/capability-descriptors';
 import { getPanelComponent, useCapabilityWriter, useCapabilityRefresher } from '../../../radio-capability/CapabilityRegistry';
@@ -155,7 +154,6 @@ export const RadioControlPanel: React.FC<RadioControlPanelProps> = ({ isOpen, on
   }, []);
 
   const capabilityStates = useCapabilityStates();
-  const [showUnsupported, setShowUnsupported] = useState(false);
 
   // 按 category 分组，同一 compoundGroup 合并
   const groupedCapabilities = useMemo(() => {
@@ -163,31 +161,30 @@ export const RadioControlPanel: React.FC<RadioControlPanelProps> = ({ isOpen, on
     return groupCapabilityDescriptors(descriptors);
   }, [capabilityDescriptors]);
 
-  const { supportedGroups, unsupportedGroups } = useMemo(() => {
-    const { supported, unsupported } = partitionCapabilityGroupsBySupport(groupedCapabilities, capabilityStates);
-    return { supportedGroups: supported, unsupportedGroups: unsupported };
+  const supportedGroups = useMemo(() => {
+    const supported: typeof groupedCapabilities = {
+      antenna: [], rf: [], audio: [], operation: [], system: [],
+    };
+    for (const category of CAPABILITY_CATEGORY_ORDER) {
+      for (const entry of groupedCapabilities[category]) {
+        const isSupported = entry.type === 'single'
+          ? capabilityStates.get(entry.item.id)?.supported ?? false
+          : entry.items.some((item) => capabilityStates.get(item.id)?.supported ?? false);
+        if (isSupported) supported[category].push(entry);
+      }
+    }
+    return supported;
   }, [groupedCapabilities, capabilityStates]);
 
   const supportedSections = useMemo(
     () => getVisibleCapabilitySections(supportedGroups),
     [supportedGroups],
   );
-  const unsupportedSections = useMemo(
-    () => getVisibleCapabilitySections(unsupportedGroups),
-    [unsupportedGroups],
-  );
-
   const supportedColumns = useMemo(
     () => splitCapabilitySectionsForColumns(supportedSections),
     [supportedSections],
   );
-  const unsupportedColumns = useMemo(
-    () => splitCapabilitySectionsForColumns(unsupportedSections),
-    [unsupportedSections],
-  );
-
   const hasSupported = supportedSections.length > 0;
-  const hasUnsupported = unsupportedSections.length > 0;
 
   const categoryLabels = useMemo(
     () => Object.fromEntries(
@@ -291,27 +288,6 @@ export const RadioControlPanel: React.FC<RadioControlPanelProps> = ({ isOpen, on
                 <p className="text-sm text-default-400 text-center py-2">
                   {t('radio:capability.panel.noSupported')}
                 </p>
-              )}
-              {hasUnsupported && (
-                <div className="border-t border-divider pt-4">
-                  <button
-                    type="button"
-                    onClick={() => setShowUnsupported((prev) => !prev)}
-                    className="flex w-full items-center justify-between text-xs font-semibold text-default-500 uppercase tracking-wide hover:text-default-700 transition-colors"
-                    aria-expanded={showUnsupported}
-                  >
-                    <span>{t('radio:capability.panel.unsupportedGroup')}</span>
-                    <FontAwesomeIcon
-                      icon={faChevronDown}
-                      className={`text-xs transition-transform ${showUnsupported ? 'rotate-180' : ''}`}
-                    />
-                  </button>
-                  {showUnsupported && (
-                    <div className="mt-3">
-                      {renderSectionGroup(unsupportedSections, unsupportedColumns)}
-                    </div>
-                  )}
-                </div>
               )}
             </div>
           )}
