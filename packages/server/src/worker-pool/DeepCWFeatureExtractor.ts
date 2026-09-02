@@ -1,6 +1,6 @@
-export const DEEP_CW_FFT_LENGTH = 768;
-export const DEEP_CW_HOP_LENGTH = 192;
-export const DEEP_CW_SAMPLE_RATE = 9_600;
+export const DEEP_CW_FFT_LENGTH = 256;
+export const DEEP_CW_HOP_LENGTH = 48;
+export const DEEP_CW_SAMPLE_RATE = 3_200;
 export const DEEP_CW_BIN_RESOLUTION = DEEP_CW_SAMPLE_RATE / DEEP_CW_FFT_LENGTH;
 export const DEEP_CW_DECODABLE_MIN_FREQ_HZ = 400;
 export const DEEP_CW_DECODABLE_MAX_FREQ_HZ = 1_200;
@@ -407,19 +407,21 @@ export function analyzeDeepCWSignal(
 export function audioToDeepCWSpectrogramTensor(
   audio: Float32Array,
   inputType: DeepCWInputType,
-  targetFreqHz: number | null,
-  filterWidthHz: number,
+  _targetFreqHz: number | null,
+  _filterWidthHz: number,
 ): DeepCWSpectrogramTensor | null {
-  const timeSteps = stft.getFrameCount(audio.length);
+  // deepcw-engine's reference implementation uses reflection padding before
+  // framing. Keep the model input independent from the server's source rate;
+  // callers resample to DEEP_CW_SAMPLE_RATE at the decoder boundary.
+  const paddedAudio = reflectPad(audio, Math.floor(FFT_LENGTH / 2));
+  const timeSteps = stft.getFrameCount(paddedAudio.length);
   if (timeSteps === 0) return null;
 
   const flattened = new Float32Array(timeSteps * CROPPED_BINS);
-  if (targetFreqHz != null && filterWidthHz > 0) {
-    fillShiftedSpectrogram(audio, flattened, targetFreqHz, filterWidthHz);
-  } else {
-    fillWideSpectrogram(audio, flattened);
-  }
-  normalizeCmvn(flattened);
+  // The published model is trained on the complete 400-1200 Hz band. Tuning
+  // remains available for signal diagnostics and UI state, but shifting the
+  // spectrum would violate the model's documented preprocessing contract.
+  fillWideSpectrogram(paddedAudio, flattened);
 
   return {
     data: inputType === 'float16' ? float32ToFloat16Array(flattened) : flattened,
@@ -434,38 +436,20 @@ function fillWideSpectrogram(audio: Float32Array, output: Float32Array): void {
     for (let bin = START_BIN; bin < END_BIN; bin += 1) {
       const real = complexFrame[bin * 2]!;
       const imag = complexFrame[bin * 2 + 1]!;
-      output[offset + bin - START_BIN] = Math.sqrt(real * real + imag * imag);
+      output[offset + bin - START_BIN] = Math.log1p(Math.sqrt(real * real + imag * imag));
     }
   });
 }
 
-function fillShiftedSpectrogram(audio: Float32Array, output: Float32Array, targetFreqHz: number, filterWidthHz: number): void {
-  const { targetBin, halfWidthBins } = getDeepCWBandMapping(targetFreqHz, filterWidthHz);
-  const destCenterIdx = NORMAL_CENTER_BIN - START_BIN;
-  stft.forEachSpectrum(audio, (complexFrame, frameIndex) => {
-    const offset = frameIndex * CROPPED_BINS;
-    for (let delta = -halfWidthBins; delta <= halfWidthBins; delta += 1) {
-      const sourceBin = targetBin + delta;
-      const destIndex = destCenterIdx + delta;
-      if (sourceBin < 0 || sourceBin >= TOTAL_BINS || destIndex < 0 || destIndex >= CROPPED_BINS) continue;
-      const real = complexFrame[sourceBin * 2]!;
-      const imag = complexFrame[sourceBin * 2 + 1]!;
-      output[offset + destIndex] = Math.sqrt(real * real + imag * imag);
-    }
-  });
-}
-
-function normalizeCmvn(values: Float32Array): void {
-  let mean = 0;
-  for (let i = 0; i < values.length; i += 1) mean += values[i]!;
-  mean /= Math.max(values.length, 1);
-  let variance = 0;
-  for (let i = 0; i < values.length; i += 1) {
-    const centered = values[i]! - mean;
-    variance += centered * centered;
+function reflectPad(audio: Float32Array, pad: number): Float32Array {
+  if (pad <= 0 || audio.length === 0) return new Float32Array(audio);
+  const output = new Float32Array(audio.length + pad * 2);
+  for (let i = 0; i < pad; i += 1) {
+    output[i] = audio[Math.min(pad - i, audio.length - 1)] ?? 0;
+    output[pad + audio.length + i] = audio[Math.max(audio.length - 2 - i, 0)] ?? 0;
   }
-  const std = Math.max(Math.sqrt(variance / Math.max(values.length, 1)), 1e-5);
-  for (let i = 0; i < values.length; i += 1) values[i] = (values[i]! - mean) / std;
+  output.set(audio, pad);
+  return output;
 }
 
 function rootMeanSquare(values: Float32Array): number {

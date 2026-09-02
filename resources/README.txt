@@ -10,8 +10,9 @@ resources 目录用于承载随应用分发的便携 Node、native runtime 与�
   - bin/linux-arm64/node
 - app/ 打包后的 TX-5DR 工作区内容
 - licenses/ 随包第三方许可证与归属说明
-  - licenses/deepcw/web-deep-cw-decoder-GPL-3.0-LICENSE
-  - licenses/deepcw/NOTICE.txt
+  - licenses/deepcw-engine-AGPL-3.0-only-LICENSE
 - models/ 随包模型文件
+  - models/deepcw/model.onnx
+  - models/deepcw/model.onnx.json
 
 实时语音由 TX-5DR server 内置 rtc-data-audio DataChannel 提供；Electron 主进程不再启动额外的实时语音子进程。

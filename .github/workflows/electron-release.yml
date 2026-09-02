@@ -488,7 +488,8 @@ jobs:
           required_paths=(
             "$RESOURCES_DIR/app-update.yml"
             "$RESOURCES_DIR/bin/$TRIPLET/$NODE_EXE"
-            "$RESOURCES_DIR/models/deepcw"
+            "$RESOURCES_DIR/models/deepcw/model.onnx"
+            "$RESOURCES_DIR/models/deepcw/model.onnx.json"
             "$APP_ROOT/packages/electron-main/dist"
             "$APP_ROOT/packages/server/dist"
             "$APP_ROOT/packages/web/dist"

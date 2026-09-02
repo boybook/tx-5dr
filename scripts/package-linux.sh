@@ -354,7 +354,7 @@ fi
 if [[ -f "$PROJECT_ROOT/resources/README.txt" ]]; then
     cp "$PROJECT_ROOT/resources/README.txt" "$APP_ROOT/resources/"
 fi
-for model in en_tiny.onnx en_small.onnx; do
+for model in model.onnx model.onnx.json; do
     if [[ ! -f "$APP_ROOT/resources/models/deepcw/$model" ]]; then
         err "DeepCW model missing from package resources: resources/models/deepcw/$model"
         exit 1

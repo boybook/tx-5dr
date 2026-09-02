@@ -1,0 +1,8 @@
+DeepCW engine model and reference implementation
+
+Source: https://github.com/e04/deepcw-engine
+Pinned source commit: 8e264d2
+License: GNU Affero General Public License v3.0 only (AGPL-3.0-only)
+
+TX-5DR includes the model.onnx and model.onnx.json artifacts from that project.
+The corresponding source and license terms are provided with this distribution.

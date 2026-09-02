@@ -286,6 +286,8 @@ export class CWDecoderManager extends EventEmitter<CWDecoderManagerEvents> {
       ...DEFAULT_CW_DECODER_CONFIG,
       ...config,
       backend: config.backend ?? DEFAULT_CW_DECODER_CONFIG.backend,
+      modelSize: 'tiny',
+      language: 'en',
       inputSampleRate: positiveInteger(config.inputSampleRate, DEFAULT_CW_DECODER_CONFIG.inputSampleRate),
       decodeSampleRate: positiveInteger(config.decodeSampleRate, DEFAULT_CW_DECODER_CONFIG.decodeSampleRate),
       windowSeconds: positiveInteger(config.windowSeconds, DEFAULT_CW_DECODER_CONFIG.windowSeconds),

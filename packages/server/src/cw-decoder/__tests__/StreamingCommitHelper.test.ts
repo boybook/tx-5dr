@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { StreamingCommitHelper, type DetailedDecodeLike } from '../StreamingCommitHelper.js';
 
-const SAMPLE_RATE = 9_600;
+const SAMPLE_RATE = 3_200;
 
 function createHelper() {
   return new StreamingCommitHelper({
@@ -17,7 +17,7 @@ function createHelper() {
   });
 }
 
-function resultFor(text: string, startFrame = 90): DetailedDecodeLike {
+function resultFor(text: string, startFrame = 150): DetailedDecodeLike {
   const chars = Array.from(text);
   return {
     text,
@@ -43,9 +43,9 @@ describe('StreamingCommitHelper', () => {
 
   it('chooses the latest stable word-space split point outside the tail guard', () => {
     const helper = createHelper();
-    const split = helper.getConfirmedSplitPoint([{ startFrame: 100, endFrame: 105 }], 4 * SAMPLE_RATE);
+    const split = helper.getConfirmedSplitPoint([{ startFrame: 150, endFrame: 155 }], 4 * SAMPLE_RATE);
 
-    expect(split).toMatchObject({ sample: 20_064, endFrame: 105, forced: false });
+    expect(split).toMatchObject({ sample: 7_448, endFrame: 155, forced: false });
   });
 
   it('does not split before both minimum confirmed audio and tail guard are available', () => {
@@ -58,7 +58,7 @@ describe('StreamingCommitHelper', () => {
     const helper = createHelper();
     const split = helper.getForcedSplitPoint(30 * SAMPLE_RATE, 30 * SAMPLE_RATE, []);
 
-    expect(split).toEqual({ sample: 288_000, endFrame: Number.POSITIVE_INFINITY, forced: true });
+    expect(split).toEqual({ sample: 96_000, endFrame: Number.POSITIVE_INFINITY, forced: true });
   });
 
   it('normalizes and records committed text segments', () => {
@@ -111,7 +111,7 @@ describe('StreamingCommitHelper', () => {
     expect(evaluation.decision).toMatchObject({ commitSample: 30 * SAMPLE_RATE, forced: true });
     const retention = helper.acceptCommit(evaluation.decision!.commitSample);
 
-    expect(retention.retainedOverlapSamples).toBe(12_000);
-    expect(retention.dropSamples).toBe(276_000);
+    expect(retention.retainedOverlapSamples).toBe(4_000);
+    expect(retention.dropSamples).toBe(92_000);
   });
 });

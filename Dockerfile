@@ -155,8 +155,8 @@ COPY --from=builder /app/node_modules ./node_modules/
 COPY --from=builder /app/resources/models ./resources/models/
 COPY --from=builder /app/resources/licenses ./resources/licenses/
 COPY --from=builder /app/resources/README.txt ./resources/README.txt
-RUN test -f resources/models/deepcw/en_tiny.onnx \
-    && test -f resources/models/deepcw/en_small.onnx
+RUN test -f resources/models/deepcw/model.onnx \
+    && test -f resources/models/deepcw/model.onnx.json
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/yarn.lock ./yarn.lock
 COPY --from=builder /app/turbo.json ./turbo.json
