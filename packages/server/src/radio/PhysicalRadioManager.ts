@@ -57,6 +57,7 @@ import {
 import { RadioState, type RadioInput } from '../state-machines/types.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { buildFrequencyOperatingStateRequest } from './frequencyRadioMode.js';
+import { isCapabilityTemporarilyDisabled } from './capabilities/definitions.js';
 
 const logger = createLogger('PhysicalRadioManager');
 const NORMAL_FREQUENCY_POLL_MS = 2000;
@@ -1519,6 +1520,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   private async applyTxAudioInputSourcePolicy(): Promise<void> {
     const connection = this.connection;
     const policy: TxAudioInputSourcePolicy = this.configManager.getActiveProfile()?.txAudioInputSource ?? 'auto';
+    // Safety quarantine: do not apply configured TX-audio routing while the
+    // Hamlib/CI-V transaction boundary is being repaired. The capability
+    // implementation is intentionally retained for a later re-enable.
+    if (isCapabilityTemporarilyDisabled('tx_audio_input_source')) return;
     if (!connection?.setTxAudioInputSource || policy === 'unchanged') return;
 
     let source: TxAudioInputSource | null = policy === 'auto' ? null : policy as TxAudioInputSource;

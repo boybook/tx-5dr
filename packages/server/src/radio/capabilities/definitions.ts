@@ -22,6 +22,23 @@ import type { CapabilityRuntimeValue } from './types.js';
 import type { CapabilityValue } from '@tx5dr/contracts';
 import { TX_AUDIO_INPUT_SOURCE_OPTIONS } from '../txAudioInput/TxAudioInputProvider.js';
 
+/**
+ * Temporary safety quarantine for the TX audio input route capability.
+ *
+ * Hamlib/CI-V models can leave asynchronous spectrum frames and raw CAT
+ * replies interleaved on the same serial stream. Until the binding-level
+ * transaction boundary is fixed, this capability must not be advertised or
+ * dispatched for any radio model. The implementation remains in place for a
+ * later re-enable after protocol-level validation.
+ */
+const TEMPORARILY_DISABLED_CAPABILITIES: ReadonlySet<string> = new Set<string>([
+  'tx_audio_input_source',
+]);
+
+export function isCapabilityTemporarilyDisabled(id: string): boolean {
+  return TEMPORARILY_DISABLED_CAPABILITIES.has(id);
+}
+
 type DynamicConnectionMethod = (...args: unknown[]) => unknown;
 
 const VOICE_RADIO_MODE_ORDER = ['USB', 'LSB', 'FM', 'AM', 'WFM'] as const;
@@ -1331,5 +1348,28 @@ function createDefinitions(): CapabilityDefinition[] {
   ];
 }
 
-export const CAPABILITY_DEFINITIONS = createDefinitions();
+function applyTemporaryCapabilityQuarantine(definition: CapabilityDefinition): CapabilityDefinition {
+  if (!isCapabilityTemporarilyDisabled(definition.id)) return definition;
+
+  const disabledDescriptor = {
+    ...definition.descriptor,
+    options: [],
+    readable: false,
+    writable: false,
+  };
+
+  return {
+    ...definition,
+    descriptor: disabledDescriptor,
+    resolveDescriptor: async () => disabledDescriptor,
+    probeSupport: async () => false,
+    // Keep the protocol implementation in the adapter, but make it
+    // unreachable through the capability runtime while quarantined.
+    read: undefined,
+    write: undefined,
+    action: undefined,
+  };
+}
+
+export const CAPABILITY_DEFINITIONS = createDefinitions().map(applyTemporaryCapabilityQuarantine);
 export const CAPABILITY_DEFINITION_MAP = new Map(CAPABILITY_DEFINITIONS.map((definition) => [definition.id, definition]));
