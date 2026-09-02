@@ -10,7 +10,7 @@ import type {
 import { RadioConnectionStatus } from '@tx5dr/contracts';
 import { getBandFromFrequency } from '@tx5dr/core';
 import { RadioError } from '../utils/errors/RadioError.js';
-import type { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
+import type { PhysicalRadioManager, RadioFrequencyChangeMetadata } from '../radio/PhysicalRadioManager.js';
 import type { FrequencyManager } from '../radio/FrequencyManager.js';
 import type { SlotPackManager } from '../slot/SlotPackManager.js';
 import type { RadioOperatorManager } from '../operator/RadioOperatorManager.js';
@@ -63,6 +63,8 @@ export class RadioBridge {
   // 记录断开前是否在运行
   private _wasRunningBeforeDisconnect = false;
   private restoreStartInProgress = false;
+  private frequencyEventTail: Promise<void> = Promise.resolve();
+  private latestFrequencyRevision = 0;
 
   constructor(private deps: RadioBridgeDeps) {}
 
@@ -165,31 +167,72 @@ export class RadioBridge {
     });
 
     // 监听电台频率变化（自动同步）
-    this.lm.listen(radioManager, 'radioFrequencyChanged', async (...args: unknown[]) => {
+    this.lm.listen(radioManager, 'radioFrequencyChanged', (...args: unknown[]) => {
       const frequency = args[0] as number;
+      const metadata = (args[1] ?? {}) as Partial<RadioFrequencyChangeMetadata>;
+      const revision = typeof metadata.revision === 'number'
+        ? metadata.revision
+        : this.latestFrequencyRevision + 1;
       logger.debug(`Radio frequency changed: ${(frequency / 1000000).toFixed(3)} MHz`);
 
-      try {
-        const frequencyInfo = this.resolveFrequencyInfo(frequency, frequencyManager);
-        await this.persistFrequencyInfo(frequencyInfo);
+      this.frequencyEventTail = this.frequencyEventTail
+        .catch(() => undefined)
+        .then(async () => {
+          if (revision < this.latestFrequencyRevision) {
+            logger.debug('Ignoring stale radio frequency revision', {
+              revision,
+              latestFrequencyRevision: this.latestFrequencyRevision,
+              frequency,
+            });
+            return;
+          }
+          const currentGeneration = radioManager.getConnectionGeneration?.();
+          if (
+            metadata.connectionGeneration !== undefined
+            && currentGeneration !== undefined
+            && metadata.connectionGeneration < currentGeneration
+          ) {
+            logger.debug('Ignoring frequency event from an older CAT session', {
+              eventGeneration: metadata.connectionGeneration,
+              currentGeneration,
+              frequency,
+            });
+            return;
+          }
+          this.latestFrequencyRevision = revision;
 
-        slotPackManager.clearInMemory();
-        logger.debug('Cleared historical decode data');
+          try {
+            const frequencyInfo = this.resolveFrequencyInfo(frequency, frequencyManager, metadata.logicalState);
+            const confirmation = metadata.confirmation ?? 'confirmed';
+            if (confirmation === 'confirmed' || confirmation === 'offline') {
+              await this.persistFrequencyInfo(frequencyInfo);
+            }
 
-        engineEmitter.emit('frequencyChanged', {
-          frequency: frequencyInfo.frequency,
-          mode: frequencyInfo.mode,
-          band: frequencyInfo.band,
-          radioMode: frequencyInfo.radioMode,
-          description: frequencyInfo.description,
-          radioConnected: true,
-          source: 'radio',
+            slotPackManager.clearInMemory();
+            logger.debug('Cleared historical decode data');
+
+            engineEmitter.emit('frequencyChanged', {
+              frequency: frequencyInfo.frequency,
+              mode: frequencyInfo.mode,
+              band: frequencyInfo.band,
+              radioMode: frequencyInfo.radioMode,
+              description: frequencyInfo.description,
+              radioConnected: confirmation !== 'offline' && radioManager.isConnected(),
+              source: metadata.source === 'bootstrap' ? 'program' : metadata.source ?? 'radio',
+              revision,
+              connectionGeneration: metadata.connectionGeneration,
+              confirmation,
+              ...(metadata.observedFrequency !== undefined ? { observedFrequency: metadata.observedFrequency } : {}),
+              ...(metadata.requestedFrequency !== undefined ? { requestedFrequency: metadata.requestedFrequency } : {}),
+              ...(metadata.operationId ? { operationId: metadata.operationId } : {}),
+              ...(metadata.modeConfirmation ? { modeConfirmation: metadata.modeConfirmation } : {}),
+            });
+
+            logger.debug(`Frequency auto-sync complete: ${frequencyInfo.description}`);
+          } catch (error) {
+            logger.error('Failed to handle frequency change:', error);
+          }
         });
-
-        logger.debug(`Frequency auto-sync complete: ${frequencyInfo.description}`);
-      } catch (error) {
-        logger.error('Failed to handle frequency change:', error);
-      }
     });
 
     logger.info(`Registered ${this.lm.count} RadioManager event listeners`);
@@ -253,6 +296,7 @@ export class RadioBridge {
   private resolveFrequencyInfo(
     frequency: number,
     frequencyManager: FrequencyManager,
+    logicalState?: RadioFrequencyChangeMetadata['logicalState'],
   ): {
     frequency: number;
     mode: string;
@@ -273,10 +317,10 @@ export class RadioBridge {
       logger.debug(`Matched ${engineMode} preset frequency: ${preset.description}`);
       return {
         frequency: preset.frequency,
-        mode: preset.mode,
-        band: preset.band,
-        radioMode: preset.radioMode,
-        description: preset.description || `${(preset.frequency / 1000000).toFixed(3)} MHz`,
+        mode: logicalState?.mode ?? preset.mode,
+        band: logicalState?.band ?? preset.band,
+        radioMode: logicalState?.radioMode ?? preset.radioMode,
+        description: logicalState?.description ?? (preset.description || `${(preset.frequency / 1000000).toFixed(3)} MHz`),
         repeaterShift: supportsFmOptions ? preset.repeaterShift : undefined,
         repeaterOffsetHz: supportsFmOptions ? preset.repeaterOffsetHz : undefined,
         toneMode: supportsFmOptions ? preset.toneMode : undefined,
@@ -296,10 +340,10 @@ export class RadioBridge {
 
     return {
       frequency,
-      mode: isVoiceMode ? 'VOICE' : isCWMode ? 'CW' : digitalModeName,
-      band,
-      radioMode: isVoiceMode ? lastVoiceFrequency?.radioMode : isCWMode ? (lastCWFrequency?.radioMode || 'CW') : undefined,
-      description: `${(frequency / 1000000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`,
+      mode: logicalState?.mode ?? (isVoiceMode ? 'VOICE' : isCWMode ? 'CW' : digitalModeName),
+      band: logicalState?.band ?? band,
+      radioMode: logicalState?.radioMode ?? (isVoiceMode ? lastVoiceFrequency?.radioMode : isCWMode ? (lastCWFrequency?.radioMode || 'CW') : undefined),
+      description: logicalState?.description ?? `${(frequency / 1000000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`,
       repeaterShift: supportsFmOptions ? lastVoiceFrequency?.repeaterShift : undefined,
       repeaterOffsetHz: supportsFmOptions ? lastVoiceFrequency?.repeaterOffsetHz : undefined,
       toneMode: supportsFmOptions ? lastVoiceFrequency?.toneMode : undefined,

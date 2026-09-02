@@ -5,6 +5,75 @@ import type { BootstrapStatus, SystemStatus } from '@tx5dr/contracts';
 import { shouldShowServerStatusPage } from '../radio/connectionView';
 
 describe('radioStore connection reducer', () => {
+  it('keeps the latest physical operating-state snapshot and ignores stale revisions', () => {
+    const confirmed = radioReducer(initialRadioState, {
+      type: 'frequencyStateChanged',
+      payload: {
+        frequency: 14_080_000,
+        mode: 'FT4',
+        band: '20m',
+        description: '14.080 MHz',
+        radioConnected: true,
+        revision: 2,
+        connectionGeneration: 3,
+        confirmation: 'confirmed',
+        observedFrequency: 14_080_000,
+      },
+    });
+
+    const stale = radioReducer(confirmed, {
+      type: 'frequencyStateChanged',
+      payload: {
+        frequency: 14_074_000,
+        mode: 'FT8',
+        band: '20m',
+        description: '14.074 MHz',
+        radioConnected: true,
+        revision: 1,
+        connectionGeneration: 3,
+        confirmation: 'confirmed',
+        observedFrequency: 14_074_000,
+      },
+    });
+
+    expect(confirmed.currentRadioFrequency).toBe(14_080_000);
+    expect(stale).toBe(confirmed);
+  });
+
+  it('ignores snapshots from an older CAT connection generation', () => {
+    const current = radioReducer(initialRadioState, {
+      type: 'frequencyStateChanged',
+      payload: {
+        frequency: 14_080_000,
+        mode: 'FT4',
+        band: '20m',
+        description: '14.080 MHz',
+        radioConnected: true,
+        revision: 4,
+        connectionGeneration: 3,
+        confirmation: 'confirmed',
+        observedFrequency: 14_080_000,
+      },
+    });
+
+    const stale = radioReducer(current, {
+      type: 'frequencyStateChanged',
+      payload: {
+        frequency: 14_074_000,
+        mode: 'FT8',
+        band: '20m',
+        description: '14.074 MHz',
+        radioConnected: true,
+        revision: 5,
+        connectionGeneration: 2,
+        confirmation: 'confirmed',
+        observedFrequency: 14_074_000,
+      },
+    });
+
+    expect(stale).toBe(current);
+  });
+
   it('enters reconnecting state without clearing prior successful connection history', () => {
     const connectedState = connectionReducer(initialConnectionState, { type: 'connected' });
 

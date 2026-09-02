@@ -743,6 +743,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
     const isFrequencyChanged = !lastFrequency ||
       lastFrequency.frequency !== frequency ||
       lastMode !== effectiveMode;
+    const radioConnected = radioManager.isConnected();
 
     if (isFrequencyChanged) {
       logger.debug(`Frequency changed: ${lastFrequency?.frequency || 'null'} -> ${frequency}, mode: ${lastMode || 'null'} -> ${effectiveMode}`);
@@ -750,9 +751,8 @@ export async function radioRoutes(fastify: FastifyInstance) {
       logger.debug(`Frequency unchanged, skipping clear and broadcast: ${frequency} Hz, mode: ${effectiveMode}`);
     }
 
-    // 保存到配置文件（无论电台是否连接都要保存）
-    // Voice mode saves to separate lastVoiceFrequency to avoid overwriting digital frequency
-    if (effectiveMode && band) {
+    const persistFrequency = async (): Promise<void> => {
+      if (!effectiveMode || !band) return;
       try {
         if (effectiveMode === 'VOICE') {
           const previousVoiceFrequency = configManager.getLastVoiceFrequency();
@@ -782,7 +782,13 @@ export async function radioRoutes(fastify: FastifyInstance) {
             ...(normalizedRadioMode ? { radioMode: normalizedRadioMode } : {}),
           });
         } else if (effectiveMode === 'SSTV' || effectiveMode === 'FAX') {
-          await configManager.updateLastImageFrequency({ frequency, mode: effectiveMode, band, description, ...(normalizedRadioMode ? { radioMode: normalizedRadioMode } : {}) });
+          await configManager.updateLastImageFrequency({
+            frequency,
+            mode: effectiveMode,
+            band,
+            description,
+            ...(normalizedRadioMode ? { radioMode: normalizedRadioMode } : {}),
+          });
         } else {
           const previousFrequency = configManager.getLastSelectedFrequency();
           const nextFrequency: {
@@ -799,33 +805,32 @@ export async function radioRoutes(fastify: FastifyInstance) {
             description,
             radioMode: effectiveRadioMode,
           };
-          if (!effectiveRadioMode) {
-            delete nextFrequency.radioMode;
-          }
+          if (!effectiveRadioMode) delete nextFrequency.radioMode;
           await configManager.updateLastSelectedFrequency(nextFrequency);
         }
       } catch (configError) {
         logger.warn(`Failed to save frequency config: ${(configError as Error).message}`);
       }
-    }
+    };
+
+    if (!radioConnected) await persistFrequency();
 
     // 检查电台是否已连接
-    const radioConnected = radioManager.isConnected();
-
     if (!radioConnected) {
       // 电台未连接时，只记录频率但不实际设置
       logger.debug(`Radio not connected, recording frequency: ${(frequency / 1000000).toFixed(3)} MHz${effectiveRadioMode ? ` (${effectiveRadioMode})` : ''}`);
 
       // 只有在频率真正改变时才广播
       if (isFrequencyChanged) {
-        engine.emit('frequencyChanged', {
-          frequency,
-          mode: effectiveMode,
-          band: band || '',
-          description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
-          radioMode: effectiveRadioMode,
-          radioConnected: false,
-          source: 'program',
+        radioManager.publishOperatingStateSnapshot(frequency, {
+          confirmation: 'offline',
+          requestedFrequency: frequency,
+          logicalState: {
+            mode: effectiveMode,
+            band: band || '',
+            description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
+            ...(effectiveRadioMode ? { radioMode: effectiveRadioMode } : {}),
+          },
         });
       }
 
@@ -839,6 +844,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
         ctcssToneTenthsHz: toneSquelchToApply?.ctcssToneTenthsHz,
         dcsCode: toneSquelchToApply?.dcsCode,
         message: 'Frequency recorded (radio not connected)',
+        confirmation: 'offline',
         radioConnected: false
       });
     }
@@ -851,7 +857,6 @@ export async function radioRoutes(fastify: FastifyInstance) {
       engineMode: engine.getEngineMode(),
       digitalModeRadioMode: activeRadioConfig.digitalModeRadioMode,
     });
-
     const applyResult = await radioManager.applyOperatingState(operatingStateRequest);
     const frequencySuccess = applyResult.frequencyApplied;
 
@@ -866,6 +871,13 @@ export async function radioRoutes(fastify: FastifyInstance) {
           'Confirm frequency is within radio supported range',
           'Try reconnecting to the radio'
         ],
+      });
+    }
+
+    if (applyResult.frequencyConfirmed === false) {
+      logger.warn('Radio frequency write completed without physical readback confirmation', {
+        requestedFrequency: frequency,
+        observedFrequency: applyResult.observedFrequency,
       });
     }
 
@@ -886,25 +898,26 @@ export async function radioRoutes(fastify: FastifyInstance) {
       }
     }
 
-    // 只有在频率真正改变时才清空缓存和广播
-    if (isFrequencyChanged) {
-      // 基础动作：立即清空服务端内存中的历史接收缓存
+    if (radioConnected && applyResult.frequencyConfirmed !== false) await persistFrequency();
+
+    if (isFrequencyChanged || applyResult.frequencyConfirmed === false) {
       try {
         engine.getSlotPackManager().clearInMemory();
-        logger.debug('Frequency switched: SlotPack memory cache cleared');
       } catch (e) {
         logger.warn('Frequency switched: failed to clear SlotPack cache (continuing broadcast):', e);
       }
-
-      // 广播频率变化到所有客户端
-      engine.emit('frequencyChanged', {
-        frequency,
-        mode: effectiveMode,
-        band: band || '',
-        description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
-        radioMode: effectiveRadioMode,
-        radioConnected: true,
-        source: 'program',
+      radioManager.publishOperatingStateSnapshot(frequency, {
+        confirmation: applyResult.frequencyConfirmed === false ? 'mismatch' : 'confirmed',
+        ...(applyResult.observedFrequency !== undefined ? { observedFrequency: applyResult.observedFrequency } : {}),
+        requestedFrequency: frequency,
+        ...(applyResult.operationId ? { operationId: applyResult.operationId } : {}),
+        modeConfirmation: applyResult.modeError ? 'unconfirmed' : 'confirmed',
+        logicalState: {
+          mode: effectiveMode,
+          band: band || '',
+          description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
+          ...(effectiveRadioMode ? { radioMode: effectiveRadioMode } : {}),
+        },
       });
     }
 
@@ -917,7 +930,12 @@ export async function radioRoutes(fastify: FastifyInstance) {
       toneMode: toneSquelchToApply?.toneMode,
       ctcssToneTenthsHz: toneSquelchToApply?.ctcssToneTenthsHz,
       dcsCode: toneSquelchToApply?.dcsCode,
-      message: effectiveRadioMode ? `Frequency and mode set successfully (${effectiveRadioMode})` : 'Frequency set successfully',
+      message: applyResult.frequencyConfirmed === false
+        ? 'Frequency write sent but physical readback did not confirm the target'
+        : effectiveRadioMode ? `Frequency and mode set successfully (${effectiveRadioMode})` : 'Frequency set successfully',
+      confirmation: applyResult.frequencyConfirmed === false ? 'mismatch' : 'confirmed',
+      ...(applyResult.observedFrequency !== undefined ? { observedFrequency: applyResult.observedFrequency } : {}),
+      ...(applyResult.operationId ? { operationId: applyResult.operationId } : {}),
       radioConnected: true
     });
   });

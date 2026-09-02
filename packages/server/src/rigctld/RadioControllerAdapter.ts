@@ -113,6 +113,13 @@ export class RadioControllerAdapter implements RadioController {
     if (!result.frequencyApplied) {
       throw new RigctldProtocolError(RigErr.EIO, 'frequency write rejected');
     }
+    this.pm.publishOperatingStateSnapshot(Math.round(hz), {
+      confirmation: result.frequencyConfirmed === false ? 'mismatch' : 'confirmed',
+      ...(result.observedFrequency !== undefined ? { observedFrequency: result.observedFrequency } : {}),
+      requestedFrequency: Math.round(hz),
+      ...(result.operationId ? { operationId: result.operationId } : {}),
+      source: 'program',
+    });
   }
 
   async getMode(): Promise<RadioModeResult> {

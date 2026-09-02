@@ -134,6 +134,7 @@ describe('WSServer initial frequency snapshot', () => {
       radioMode: 'USB',
       radioConnected: true,
       source: 'radio',
+      confirmation: 'pending',
     });
   });
 

@@ -64,6 +64,8 @@
     "switchedLabel": "Switched to {{label}}",
     "switchSuccess": "Frequency switched",
     "switchFailed": "Frequency switch failed",
+    "confirmationPending": "Waiting for radio frequency confirmation",
+    "confirmationMismatch": "Radio frequency was not confirmed; showing the last observed frequency",
     "setFailed": "Set failed",
     "recorded": "📝 Frequency recorded",
     "recordedDetail": "{{message}} (radio not connected)",

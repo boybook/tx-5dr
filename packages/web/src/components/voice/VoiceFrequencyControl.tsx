@@ -357,25 +357,6 @@ export const VoiceFrequencyControl: React.FC<VoiceFrequencyControlProps> = ({ pr
     }
   }, [radio.state.currentRadioMode]);
 
-  // Listen for frequency changes from server
-  useEffect(() => {
-    const radioService = connection.state.radioService;
-    if (!radioService) return;
-    const wsClient = radioService.wsClientInstance;
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const handleFreqChanged = (data: any) => {
-      acceptServerFrequency(data?.frequency);
-      if (data?.radioMode) setCurrentRadioMode(data.radioMode);
-    };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    wsClient.onWSEvent('frequencyChanged', handleFreqChanged as any);
-    return () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      wsClient.offWSEvent('frequencyChanged', handleFreqChanged as any);
-    };
-  }, [connection.state.radioService, acceptServerFrequency]);
-
   // Group presets by band (with CASL frequency condition filtering)
   const groupedPresets = useMemo(() => {
     let filtered = presets;

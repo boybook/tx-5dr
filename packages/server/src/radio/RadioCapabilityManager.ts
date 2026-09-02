@@ -46,6 +46,10 @@ export class RadioCapabilityManager extends EventEmitter<RadioCapabilityManagerE
     this.runtime.setPTTActive(active);
   }
 
+  setOperatingStateMutation(active: boolean): void {
+    this.runtime.setOperatingStateMutation(active);
+  }
+
   async refreshAll(): Promise<void> {
     await this.runtime.refreshAll();
   }

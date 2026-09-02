@@ -446,47 +446,37 @@ describe('IcomWlanConnection', () => {
     expect(rig.readOperatingFrequency).toHaveBeenCalledTimes(1);
   });
 
-  it('limits ICOM WLAN CAT work to three concurrent queue tasks', async () => {
+  it('serializes ICOM WLAN CAT work on the CI-V queue', async () => {
     const frequencyRead = createDeferred<number>();
     const modeRead = createDeferred<any>();
-    const pttRead = createDeferred<string>();
     const gainRead = createDeferred<any>();
     const { connection, rig } = createConnectedConnection();
     rig.readOperatingFrequency.mockReturnValueOnce(frequencyRead.promise);
     rig.readOperatingMode.mockReturnValueOnce(modeRead.promise);
-    rig.readTransceiverState.mockReturnValueOnce(pttRead.promise);
     rig.getAFGain.mockReturnValueOnce(gainRead.promise);
 
     const frequencyPromise = connection.getFrequency();
     const modePromise = connection.getMode();
-    const pttPromise = connection.getPTT();
     const gainPromise = connection.getAFGain();
 
-    await vi.waitFor(() => {
-      expect(rig.readOperatingFrequency).toHaveBeenCalledTimes(1);
-      expect(rig.readOperatingMode).toHaveBeenCalledTimes(1);
-      expect(rig.readTransceiverState).toHaveBeenCalledTimes(1);
-    });
+    await vi.waitFor(() => expect(rig.readOperatingFrequency).toHaveBeenCalledTimes(1));
     expect(rig.getAFGain).not.toHaveBeenCalled();
     expect(connection.getRadioIoQueueSnapshot()).toMatchObject({
-      activeCount: 3,
-      pendingCount: 1,
-      backpressure: false,
+      activeCount: 1,
+      pendingCount: 2,
+      backpressure: true,
     });
 
     frequencyRead.resolve(7100000);
-    await vi.waitFor(() => {
-      expect(rig.getAFGain).toHaveBeenCalledTimes(1);
-    });
+    await vi.waitFor(() => expect(rig.readOperatingMode).toHaveBeenCalledTimes(1));
 
     modeRead.resolve({ mode: 1, modeName: 'USB', filterName: 'Normal' });
-    pttRead.resolve('RX');
+    await vi.waitFor(() => expect(rig.getAFGain).toHaveBeenCalledTimes(1));
     gainRead.resolve({ normalized: 0.25 });
 
-    await expect(Promise.all([frequencyPromise, modePromise, pttPromise, gainPromise])).resolves.toEqual([
+    await expect(Promise.all([frequencyPromise, modePromise, gainPromise])).resolves.toEqual([
       7100000,
       { mode: 'USB', bandwidth: 'Normal' },
-      false,
       0.25,
     ]);
   });
@@ -687,7 +677,7 @@ describe('IcomWlanConnection', () => {
     expect(emitted[0]?.swr).toMatchObject({ raw: 0, swr: 1 });
   });
 
-  it('allows low-priority meter polling while a critical ICOM UDP write is active', async () => {
+  it('skips low-priority meter polling while a critical ICOM UDP write is active', async () => {
     const firstWrite = createDeferred<void>();
     const { connection, rig } = createConnectedConnection();
     rig.setFrequency.mockReturnValueOnce(firstWrite.promise);
@@ -702,15 +692,15 @@ describe('IcomWlanConnection', () => {
     const writePromise = connection.setFrequency(7100000);
     await Promise.resolve();
 
-    expect(connection.isCriticalOperationActive()).toBe(false);
+    expect(connection.isCriticalOperationActive()).toBe(true);
     expect(connection.getRadioIoQueueSnapshot()).toMatchObject({
       busy: true,
-      backpressure: false,
+      backpressure: true,
     });
 
     await (connection as any).pollMeters();
 
-    expect(rig.getLevelMeter).toHaveBeenCalledTimes(1);
+    expect(rig.getLevelMeter).not.toHaveBeenCalled();
 
     firstWrite.resolve(undefined);
     await writePromise;

@@ -151,6 +151,9 @@ export const SetFrequencyResponseSchema = z.object({
   ctcssToneTenthsHz: z.number().optional(),
   dcsCode: z.number().optional(),
   radioConnected: z.boolean().optional(),
+  confirmation: z.enum(['confirmed', 'pending', 'mismatch', 'offline']).optional(),
+  observedFrequency: z.number().optional(),
+  operationId: z.string().optional(),
 });
 
 // ========== 时隙包相关响应 ==========

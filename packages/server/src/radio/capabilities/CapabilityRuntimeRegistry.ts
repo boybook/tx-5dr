@@ -64,6 +64,7 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
   // PTT state: pause capability polling during TX to reduce USB serial bus load
   private _isPTTActive = false;
   private _isPTTCooldown = false;
+  private _isOperatingStateMutation = false;
   private _pttCooldownTimer: ReturnType<typeof setTimeout> | null = null;
   private radioIoBackpressureStartedAt: number | null = null;
   private lastRadioIoBackpressureSeenAt = 0;
@@ -89,6 +90,11 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
       }, 2000);
       logger.debug('Capability polling cooldown started (PTT released)');
     }
+  }
+
+  setOperatingStateMutation(active: boolean): void {
+    this._isOperatingStateMutation = active;
+    logger.debug(`Capability polling ${active ? 'paused' : 'resumed'} for operating-state mutation`);
   }
 
   async onConnected(connection: IRadioConnection): Promise<void> {
@@ -125,6 +131,7 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
   onDisconnected(): void {
     this.stopAllPolling();
     this.clearPTTState();
+    this._isOperatingStateMutation = false;
     this.connection = null;
     this.supportedCapabilities.clear();
     this.supportSources.clear();
@@ -503,6 +510,11 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
           pttCooldown: this._isPTTCooldown,
         });
       }
+      return;
+    }
+
+    if (this._isOperatingStateMutation) {
+      logger.debug(`Skipping capability poll while operating-state mutation is active: ${id}`);
       return;
     }
 

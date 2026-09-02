@@ -30,6 +30,7 @@ import type {
   AudioSidecarStatusPayload,
   AndroidOperatorAudioStatus,
   BootstrapStatus,
+  FrequencyState,
 } from '@tx5dr/contracts';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import type { RadioService } from '../../services/radioService';
@@ -541,11 +542,8 @@ export function createRadioEventMap({
       };
     })(),
     frequencyChanged: (data: unknown) => {
-      const freqData = data as { frequency?: number; radioMode?: string };
-      radioDispatch({
-        type: 'setCurrentRadioFrequency',
-        payload: typeof freqData.frequency === 'number' && freqData.frequency > 0 ? freqData.frequency : null,
-      });
+      const freqData = data as FrequencyState;
+      radioDispatch({ type: 'frequencyStateChanged', payload: freqData });
       if (typeof freqData.radioMode === 'string' && freqData.radioMode.trim()) {
         radioDispatch({ type: 'voiceRadioModeChanged', payload: freqData.radioMode });
       }

@@ -35,6 +35,7 @@ import type {
   CWKeyerStatus,
   PTTStatus,
   CWKeyerConfig,
+  FrequencyState,
 } from '@tx5dr/contracts';
 import { RadioConnectionStatus } from '@tx5dr/contracts';
 import type { RadioService } from '../../services/radioService';
@@ -93,6 +94,7 @@ export interface RadioState {
   voicePttLock: VoicePTTLock | null;
   currentRadioMode: string | null;
   currentRadioFrequency: number | null;
+  operatingState: FrequencyState | null;
   spectrumSessionState: SpectrumSessionState | null;
   radioErrors: RadioErrorRecord[];
   latestRadioError: RadioErrorRecord | null;
@@ -180,7 +182,7 @@ export type RadioAction =
   | { type: 'setEngineMode'; payload: EngineMode }
   | { type: 'voicePttLockChanged'; payload: VoicePTTLock }
   | { type: 'voiceRadioModeChanged'; payload: string }
-  | { type: 'setCurrentRadioFrequency'; payload: number | null }
+  | { type: 'frequencyStateChanged'; payload: FrequencyState }
   | { type: 'setSpectrumSessionState'; payload: SpectrumSessionState | null }
   | { type: 'setStationInfo'; payload: StationInfo }
   | { type: 'setCapabilityList'; payload: CapabilityList }

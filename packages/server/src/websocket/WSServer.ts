@@ -2167,6 +2167,10 @@ export class WSServer extends WSMessageHandler {
     radioMode?: string;
     radioConnected: boolean;
     source: 'program' | 'radio';
+    revision?: number;
+    connectionGeneration?: number;
+    confirmation?: 'confirmed' | 'pending' | 'mismatch' | 'offline';
+    observedFrequency?: number;
   } | null {
     const radioManager = this.digitalRadioEngine.getRadioManager();
     const configManager = ConfigManager.getInstance();
@@ -2176,7 +2180,8 @@ export class WSServer extends WSMessageHandler {
       : engineMode === 'image'
         ? configManager.getLastImageFrequency()
         : configManager.getLastSelectedFrequency();
-    const knownFrequency = radioManager.getKnownFrequency();
+    const confirmedFrequency = radioManager.getLastConfirmedFrequency?.();
+    const knownFrequency = confirmedFrequency ?? radioManager.getKnownFrequency();
     const frequency = knownFrequency ?? savedFrequency?.frequency ?? null;
 
     if (typeof frequency !== 'number' || !Number.isFinite(frequency) || frequency <= 0) {
@@ -2194,6 +2199,14 @@ export class WSServer extends WSMessageHandler {
     const description = savedFrequency?.frequency === frequency
       ? (savedFrequency.description || `${(frequency / 1000000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`)
       : `${(frequency / 1000000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`;
+    const frequencyMetadata = radioManager.getFrequencyStateMetadata?.();
+    const radioConnected = radioManager.isConnected();
+    const confirmation = radioConnected
+      ? (frequencyMetadata?.confirmation && frequencyMetadata.confirmation !== 'offline'
+        ? frequencyMetadata.confirmation
+        : 'pending')
+      : 'offline';
+    const observedFrequency = frequencyMetadata?.observedFrequency ?? confirmedFrequency;
 
     return {
       frequency,
@@ -2201,8 +2214,15 @@ export class WSServer extends WSMessageHandler {
       band,
       description,
       radioMode: savedFrequency?.radioMode,
-      radioConnected: radioManager.isConnected(),
-      source: radioManager.isConnected() ? 'radio' : 'program',
+      radioConnected,
+      source: radioConnected ? 'radio' : 'program',
+      ...(frequencyMetadata?.revision !== undefined ? { revision: frequencyMetadata.revision } : {}),
+      ...(frequencyMetadata?.connectionGeneration !== undefined ? { connectionGeneration: frequencyMetadata.connectionGeneration } : {}),
+      confirmation,
+      ...(radioConnected && observedFrequency !== undefined
+        && observedFrequency !== null
+        ? { observedFrequency }
+        : {}),
     };
   }
 

@@ -647,17 +647,49 @@ describe('DigitalRadioEngine mode switching', () => {
       restoreLastVoiceOperatingState: (configManager: ConfigManager) => Promise<void>;
     }).restoreLastVoiceOperatingState.call(fakeEngine, configManager as unknown as ConfigManager);
 
-    expect(applyOperatingState).toHaveBeenCalledWith({
+    expect(applyOperatingState).toHaveBeenCalledWith(expect.objectContaining({
       frequency: 14270000,
       mode: 'USB',
       bandwidth: 'nochange',
       options: { intent: 'voice' },
       tolerateModeFailure: true,
-    });
+    }));
     expect(emit).toHaveBeenCalledWith('frequencyChanged', expect.objectContaining({
       frequency: 14270000,
       mode: 'VOICE',
       radioMode: 'USB',
+      source: 'program',
+    }));
+  });
+
+  it('keeps the current frequency when entering voice mode without saved voice state', async () => {
+    const applyOperatingState = vi.fn(async () => ({ frequencyApplied: true, modeApplied: false }));
+    const updateLastVoiceFrequency = vi.fn(async () => undefined);
+    const configManager = {
+      getLastVoiceFrequency: vi.fn(() => null),
+      updateLastVoiceFrequency,
+    };
+    const emit = vi.fn();
+    const fakeEngine = Object.assign(Object.create(DigitalRadioEngine.prototype), {
+      radioManager: {
+        isConnected: vi.fn(() => true),
+        getLastConfirmedFrequency: vi.fn(() => 7_074_000),
+        applyOperatingState,
+        applyRepeaterDuplexConfig: vi.fn(async () => ({ warning: false })),
+        applyToneSquelchConfig: vi.fn(async () => ({ warning: false })),
+      },
+      emit,
+    });
+
+    await (DigitalRadioEngine.prototype as unknown as {
+      restoreLastVoiceOperatingState: (configManager: ConfigManager) => Promise<void>;
+    }).restoreLastVoiceOperatingState.call(fakeEngine, configManager as unknown as ConfigManager);
+
+    expect(applyOperatingState).toHaveBeenCalledWith(expect.not.objectContaining({ frequency: 7_074_000 }));
+    expect(updateLastVoiceFrequency).toHaveBeenCalledWith(expect.objectContaining({ frequency: 7_074_000 }));
+    expect(emit).toHaveBeenCalledWith('frequencyChanged', expect.objectContaining({
+      frequency: 7_074_000,
+      mode: 'VOICE',
       source: 'program',
     }));
   });
@@ -688,13 +720,13 @@ describe('DigitalRadioEngine mode switching', () => {
       restoreLastCWOperatingState: (configManager: ConfigManager) => Promise<void>;
     }).restoreLastCWOperatingState.call(fakeEngine, configManager as unknown as ConfigManager);
 
-    expect(applyOperatingState).toHaveBeenCalledWith({
+    expect(applyOperatingState).toHaveBeenCalledWith(expect.objectContaining({
       frequency: 7030000,
       mode: 'CW',
       bandwidth: 'nochange',
       options: { intent: 'cw' },
       tolerateModeFailure: true,
-    });
+    }));
     expect(emit).toHaveBeenCalledWith('frequencyChanged', expect.objectContaining({
       frequency: 7030000,
       mode: 'CW',
@@ -869,13 +901,13 @@ describe('DigitalRadioEngine mode switching', () => {
       setMode: (mode: typeof MODES.FT4) => Promise<void>;
     }).setMode.call(fakeEngine, MODES.FT4);
 
-    expect(applyOperatingState).toHaveBeenCalledWith({
+    expect(applyOperatingState).toHaveBeenCalledWith(expect.objectContaining({
       frequency: 14_080_000,
       mode: 'USB',
       bandwidth: 'nochange',
       options: { intent: 'voice' },
       tolerateModeFailure: true,
-    });
+    }));
     const savedFrequency = (updateLastSelectedFrequency.mock.calls[0] as unknown[] | undefined)?.[0];
     expect(savedFrequency).toMatchObject({
       frequency: 14_080_000,
@@ -932,10 +964,10 @@ describe('DigitalRadioEngine mode switching', () => {
       setMode: (mode: typeof MODES.FT8) => Promise<void>;
     }).setMode.call(fakeEngine, MODES.FT8);
 
-    expect(applyOperatingState).toHaveBeenCalledWith({
+    expect(applyOperatingState).toHaveBeenCalledWith(expect.objectContaining({
       frequency: 14_074_000,
       tolerateModeFailure: true,
-    });
+    }));
   });
 
   it('preserves an explicit none preference when switching digital presets', async () => {
@@ -950,10 +982,10 @@ describe('DigitalRadioEngine mode switching', () => {
       setMode: (mode: typeof MODES.FT8) => Promise<void>;
     }).setMode.call(fakeEngine, MODES.FT8);
 
-    expect(applyOperatingState).toHaveBeenCalledWith({
+    expect(applyOperatingState).toHaveBeenCalledWith(expect.objectContaining({
       frequency: 14_074_000,
       tolerateModeFailure: true,
-    });
+    }));
   });
 
   it('uses the active profile USB preference when switching digital preset frequency', async () => {
@@ -968,13 +1000,13 @@ describe('DigitalRadioEngine mode switching', () => {
       setMode: (mode: typeof MODES.FT4) => Promise<void>;
     }).setMode.call(fakeEngine, MODES.FT4);
 
-    expect(applyOperatingState).toHaveBeenCalledWith({
+    expect(applyOperatingState).toHaveBeenCalledWith(expect.objectContaining({
       frequency: 14_080_000,
       mode: 'USB',
       bandwidth: 'nochange',
       options: { intent: 'voice' },
       tolerateModeFailure: true,
-    });
+    }));
     expect(updateLastSelectedFrequency).toHaveBeenCalledWith(expect.objectContaining({
       radioMode: 'USB',
     }));
@@ -995,13 +1027,13 @@ describe('DigitalRadioEngine mode switching', () => {
       setMode: (mode: typeof MODES.FT4) => Promise<void>;
     }).setMode.call(fakeEngine, MODES.FT4);
 
-    expect(applyOperatingState).toHaveBeenCalledWith({
+    expect(applyOperatingState).toHaveBeenCalledWith(expect.objectContaining({
       frequency: 14_080_000,
       mode: 'USB',
       bandwidth: 'nochange',
       options: { intent: 'digital' },
       tolerateModeFailure: true,
-    });
+    }));
     expect(updateLastSelectedFrequency).toHaveBeenCalledWith(expect.objectContaining({
       radioMode: 'USB-DATA',
     }));

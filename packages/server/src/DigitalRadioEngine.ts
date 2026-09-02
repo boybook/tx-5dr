@@ -455,11 +455,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       ),
       setRadioFrequency: async (freq) => {
         try {
-          const success = await this.radioManager.setFrequency(freq);
-          if (success) {
-            this.radioManager.emit('radioFrequencyChanged', freq);
-          }
-          return success;
+          return await this.radioManager.setFrequency(freq);
         } catch (e) {
           logger.error('Failed to set radio frequency', e);
           return false;
@@ -1737,9 +1733,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       // Handle CW mode
       if (typeof mode === 'object' && mode.name === 'CW') {
         if (this.engineMode === 'cw') {
-          await this.stopTuneTone('mode unchanged');
-          logger.info('Already in CW mode');
-          this.emitStatusSnapshot();
+          await this.runWithModeChangeGate(async () => {
+            if (this.radioManager.isConnected()) await this.radioManager.getFrequency?.();
+            logger.info('Already in CW mode');
+            this.emitStatusSnapshot();
+          });
           return;
         }
         await this.runWithModeChangeGate(() => this.switchEngineMode('cw', MODES.CW));
@@ -1749,9 +1747,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       // Handle voice mode (string 'VOICE')
       if (mode === 'VOICE' || (typeof mode === 'object' && mode.name === 'VOICE')) {
         if (this.engineMode === 'voice') {
-          await this.stopTuneTone('mode unchanged');
-          logger.info('Already in voice mode');
-          this.emitStatusSnapshot();
+          await this.runWithModeChangeGate(async () => {
+            if (this.radioManager.isConnected()) await this.radioManager.getFrequency?.();
+            logger.info('Already in voice mode');
+            this.emitStatusSnapshot();
+          });
           return;
         }
         await this.runWithModeChangeGate(() => this.switchEngineMode('voice', MODES.VOICE));
@@ -1760,8 +1760,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
       if (typeof mode === 'object' && (mode.name === 'SSTV' || mode.name === 'FAX')) {
         if (this.engineMode === 'image' && this.currentMode.name === mode.name) {
-          await this.stopTuneTone('mode unchanged');
-          this.emitStatusSnapshot();
+          await this.runWithModeChangeGate(async () => {
+            if (this.radioManager.isConnected()) await this.radioManager.getFrequency?.();
+            this.emitStatusSnapshot();
+          });
           return;
         }
         const target = mode.name === 'SSTV' ? MODES.SSTV : MODES.FAX;
@@ -1791,10 +1793,14 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
       // Normal digital mode switch (FT8 <-> FT4)
       if (this.currentMode.name === digitalMode.name) {
-        await this.stopTuneTone('mode unchanged');
-        logger.info(`Already in mode: ${digitalMode.name}`);
-        this.syncCurrentModeToRuntimeComponents('already-in-mode');
-        this.emitStatusSnapshot();
+        await this.runWithModeChangeGate(async () => {
+          if (this.radioManager.isConnected()) {
+            await this.radioManager.getFrequency?.();
+          }
+          logger.info(`Already in mode: ${digitalMode.name}`);
+          this.syncCurrentModeToRuntimeComponents('already-in-mode');
+          this.emitStatusSnapshot();
+        });
         return;
       }
 
@@ -1879,7 +1885,6 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
           const success = await this.radioManager.setFrequency(command.frequency);
           if (!success) throw new Error('Failed to set radio frequency');
-          this.radioManager.emit('radioFrequencyChanged', command.frequency);
           if (command.type === 'set-frequency' || command.autoTune !== true) return;
 
           if (!tunerSwitchEnabled) {
@@ -2010,6 +2015,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     const effectiveRadioMode = radioModeResolution.displayRadioMode;
 
     let syncResult: OperatingStateSyncResult = { status: 'skipped-offline' };
+    let frequencyConfirmed = !radioConnected;
+    let appliedOperatingState: Awaited<ReturnType<PhysicalRadioManager['applyOperatingState']>> | null = null;
     if (radioConnected) {
       const request = buildFrequencyOperatingStateRequest({
         frequency: preset.frequency,
@@ -2019,10 +2026,21 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         digitalModeRadioMode: activeRadioConfig.digitalModeRadioMode,
       });
       const applyResult = await this.applyModeOperatingState(request, expectedConnectionGeneration);
+      appliedOperatingState = applyResult;
 
       if (!applyResult.frequencyApplied) {
         throw new Error(`Failed to switch radio frequency to ${description}`);
       }
+
+      if (applyResult.frequencyConfirmed === false) {
+        syncResult = {
+          status: 'partially-applied',
+          detail: applyResult.observedFrequency === undefined
+            ? 'radio frequency write was not confirmed by readback'
+            : `radio readback remained at ${applyResult.observedFrequency} Hz`,
+        };
+      }
+      frequencyConfirmed = applyResult.frequencyConfirmed !== false;
 
       if (request.mode && (!applyResult.modeApplied || applyResult.modeError)) {
         logger.warn(
@@ -2032,7 +2050,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
           status: 'partially-applied',
           detail: applyResult.modeError?.message || 'radio mode write was not confirmed',
         };
-      } else {
+      } else if (syncResult.status !== 'partially-applied') {
         syncResult = { status: 'applied' };
       }
 
@@ -2066,17 +2084,29 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     if (!effectiveRadioMode) {
       delete nextFrequency.radioMode;
     }
-    await configManager.updateLastSelectedFrequency(nextFrequency);
+    if (!radioConnected || frequencyConfirmed) {
+      await configManager.updateLastSelectedFrequency(nextFrequency);
+    }
 
     this.slotPackManager.clearInMemory();
-    this.emit('frequencyChanged', {
+    this.emitProgramFrequencyState({
       frequency: preset.frequency,
       mode: preset.mode,
       band: preset.band,
       radioMode: effectiveRadioMode,
       description,
       radioConnected,
-      source: 'program',
+      confirmation: radioConnected
+        ? (frequencyConfirmed ? 'confirmed' : 'mismatch')
+        : 'offline',
+      ...(appliedOperatingState?.observedFrequency !== undefined
+        ? { observedFrequency: appliedOperatingState.observedFrequency }
+        : {}),
+      requestedFrequency: preset.frequency,
+      ...(appliedOperatingState?.operationId ? { operationId: appliedOperatingState.operationId } : {}),
+      modeConfirmation: radioConnected
+        ? this.resolveModeConfirmation(appliedOperatingState ?? undefined, effectiveRadioMode)
+        : 'unknown',
     });
     return syncResult;
   }
@@ -2088,7 +2118,53 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   ): Promise<OperatingStateSyncResult | null> {
     const lastDigital = configManager.getLastSelectedFrequency();
     if (!lastDigital?.frequency) {
-      return null;
+      if (!this.radioManager.isConnected()) {
+        return null;
+      }
+      const currentFrequency = this.radioManager.getLastConfirmedFrequency?.()
+        ?? await this.radioManager.getFrequency();
+      if (!currentFrequency || currentFrequency <= 0) {
+        return { status: 'failed', detail: 'current radio frequency is unavailable' };
+      }
+      try {
+        const request = buildFrequencyOperatingStateRequest({
+          frequency: currentFrequency,
+          effectiveMode: targetMode.name,
+          engineMode: 'digital',
+          digitalModeRadioMode: configManager.getRadioConfig().digitalModeRadioMode,
+        });
+        // There is no saved digital frequency to restore. The current
+        // confirmed dial is already the source of truth; only reconcile the
+        // profile's optional CAT mode instead of writing the same frequency.
+        delete request.frequency;
+        const result = await this.applyModeOperatingState(request, expectedConnectionGeneration);
+        const band = this.resolveBandLabel(currentFrequency);
+        this.emitProgramFrequencyState({
+          frequency: currentFrequency,
+          mode: targetMode.name,
+          band,
+          description: `${(currentFrequency / 1_000_000).toFixed(3)} MHz`,
+          radioConnected: true,
+          confirmation: result.frequencyConfirmed === false ? 'mismatch' : 'confirmed',
+          ...(result.observedFrequency !== undefined ? { observedFrequency: result.observedFrequency } : {}),
+          requestedFrequency: currentFrequency,
+          ...(result.operationId ? { operationId: result.operationId } : {}),
+          modeConfirmation: this.resolveModeConfirmation(result, request.mode),
+        });
+        if (result.frequencyConfirmed !== false) {
+          await configManager.updateLastSelectedFrequency({
+            frequency: currentFrequency,
+            mode: targetMode.name,
+            band,
+            description: `${(currentFrequency / 1_000_000).toFixed(3)} MHz`,
+          });
+        }
+        return result.frequencyConfirmed === false || result.modeError
+          ? { status: 'partially-applied', detail: result.modeError?.message ?? 'radio frequency write was not confirmed by readback' }
+          : { status: 'applied' };
+      } catch (error) {
+        return { status: 'failed', detail: error instanceof Error ? error.message : String(error) };
+      }
     }
 
     let targetFrequency: PresetFrequency = {
@@ -2425,17 +2501,49 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       return this.restoreLastCWOperatingState(configManager, expectedConnectionGeneration);
     } else if (engineMode === 'image') {
       const saved = configManager.getLastImageFrequency();
-      if (!saved) return null;
-      return this.applyModeOperatingState({
-        frequency: saved.frequency,
-        mode: saved.radioMode,
-        bandwidth: saved.radioMode ? 'nochange' : undefined,
-        options: saved.radioMode ? { intent: 'voice' } : undefined,
+      if (!this.radioManager.isConnected()) {
+        return saved ? { status: 'skipped-offline' } : null;
+      }
+      const targetFrequency = saved?.frequency
+        ?? this.radioManager.getLastConfirmedFrequency?.()
+        ?? await this.radioManager.getFrequency();
+      if (!targetFrequency || targetFrequency <= 0) {
+        return { status: 'failed', detail: 'current radio frequency is unavailable' };
+      }
+      const applyResult = await this.applyModeOperatingState({
+        ...(saved ? { frequency: targetFrequency } : {}),
+        mode: saved?.radioMode,
+        bandwidth: saved?.radioMode ? 'nochange' : undefined,
+        options: saved?.radioMode ? { intent: 'voice' } : undefined,
         tolerateModeFailure: true,
-      }, expectedConnectionGeneration).then((result) => ({
-        status: result.frequencyApplied && (!saved.radioMode || result.modeApplied) ? 'applied' : result.frequencyApplied ? 'partially-applied' : 'failed',
-        detail: result.modeError?.message,
-      }));
+      }, expectedConnectionGeneration);
+      const band = saved?.band || this.resolveBandLabel(targetFrequency);
+      const description = saved?.description || `${(targetFrequency / 1_000_000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`;
+      this.emitProgramFrequencyState({
+        frequency: targetFrequency,
+        mode: mode.name,
+        band,
+        description,
+        ...(saved?.radioMode ? { radioMode: saved.radioMode } : {}),
+        radioConnected: true,
+        confirmation: applyResult.frequencyConfirmed === false ? 'mismatch' : 'confirmed',
+        ...(applyResult.observedFrequency !== undefined ? { observedFrequency: applyResult.observedFrequency } : {}),
+        requestedFrequency: targetFrequency,
+        ...(applyResult.operationId ? { operationId: applyResult.operationId } : {}),
+        modeConfirmation: this.resolveModeConfirmation(applyResult, saved?.radioMode),
+      });
+      if (!saved && applyResult.frequencyConfirmed !== false) {
+        await configManager.updateLastImageFrequency({
+          frequency: targetFrequency,
+          mode: mode.name,
+          band,
+          description,
+        });
+      }
+      return {
+        status: (saved ? applyResult.frequencyApplied : true) && applyResult.frequencyConfirmed !== false && (!saved?.radioMode || applyResult.modeApplied) ? 'applied' : (saved ? applyResult.frequencyApplied : true) ? 'partially-applied' : 'failed',
+        detail: applyResult.modeError?.message ?? (applyResult.frequencyConfirmed === false ? 'radio frequency write was not confirmed by readback' : undefined),
+      };
     }
     return this.restoreLastDigitalOperatingState(configManager, mode, expectedConnectionGeneration);
   }
@@ -2497,25 +2605,28 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     expectedConnectionGeneration?: number,
   ): Promise<OperatingStateSyncResult | null> {
     const lastVoice = configManager.getLastVoiceFrequency();
-    if (!lastVoice?.frequency) {
-      return null;
-    }
     if (!this.radioManager.isConnected()) {
-      logger.info('Voice operating state skipped-offline', { frequencyHz: lastVoice.frequency });
-      return { status: 'skipped-offline' };
+      return lastVoice?.frequency ? { status: 'skipped-offline' } : null;
+    }
+
+    const targetFrequency = lastVoice?.frequency
+      ?? this.radioManager.getLastConfirmedFrequency?.()
+      ?? await this.radioManager.getFrequency();
+    if (!targetFrequency || targetFrequency <= 0) {
+      return { status: 'failed', detail: 'current radio frequency is unavailable' };
     }
 
     try {
       const applyResult = await this.applyModeOperatingState({
-        frequency: lastVoice.frequency,
-        mode: lastVoice.radioMode,
-        bandwidth: lastVoice.radioMode ? 'nochange' : undefined,
-        options: lastVoice.radioMode ? { intent: 'voice' } : undefined,
+        ...(lastVoice ? { frequency: targetFrequency } : {}),
+        mode: lastVoice?.radioMode,
+        bandwidth: lastVoice?.radioMode ? 'nochange' : undefined,
+        options: lastVoice?.radioMode ? { intent: 'voice' } : undefined,
         tolerateModeFailure: true,
       }, expectedConnectionGeneration);
 
-      if (!applyResult.frequencyApplied) {
-        logger.warn(`Failed to restore last voice frequency: ${(lastVoice.frequency / 1000000).toFixed(3)} MHz`);
+      if (lastVoice && !applyResult.frequencyApplied) {
+        logger.warn(`Failed to restore last voice frequency: ${(targetFrequency / 1000000).toFixed(3)} MHz`);
         return { status: 'failed', detail: 'frequency write was not confirmed' };
       }
 
@@ -2523,29 +2634,43 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         logger.warn(`Restored last voice frequency but failed to set radio mode: ${applyResult.modeError.message}`);
       }
 
-      const supportsFmOptions = lastVoice.radioMode?.toUpperCase() === 'FM';
+      const supportsFmOptions = lastVoice?.radioMode?.toUpperCase() === 'FM';
       await this.applyRepeaterDuplexConfigWithWarning({
-        repeaterShift: supportsFmOptions ? (lastVoice.repeaterShift ?? 'none') : 'none',
-        repeaterOffsetHz: supportsFmOptions ? lastVoice.repeaterOffsetHz : undefined,
-      }, lastVoice.frequency, supportsFmOptions && (lastVoice.repeaterShift === 'minus' || lastVoice.repeaterShift === 'plus'));
+        repeaterShift: supportsFmOptions ? (lastVoice?.repeaterShift ?? 'none') : 'none',
+        repeaterOffsetHz: supportsFmOptions ? lastVoice?.repeaterOffsetHz : undefined,
+      }, targetFrequency, supportsFmOptions && (lastVoice?.repeaterShift === 'minus' || lastVoice?.repeaterShift === 'plus'));
       await this.applyToneSquelchConfigWithWarning({
-        toneMode: supportsFmOptions ? (lastVoice.toneMode ?? 'none') : 'none',
-        ctcssToneTenthsHz: supportsFmOptions ? lastVoice.ctcssToneTenthsHz : undefined,
-        dcsCode: supportsFmOptions ? lastVoice.dcsCode : undefined,
-      }, lastVoice.frequency, supportsFmOptions && (lastVoice.toneMode === 'ctcss' || lastVoice.toneMode === 'dcs'));
+        toneMode: supportsFmOptions ? (lastVoice?.toneMode ?? 'none') : 'none',
+        ctcssToneTenthsHz: supportsFmOptions ? lastVoice?.ctcssToneTenthsHz : undefined,
+        dcsCode: supportsFmOptions ? lastVoice?.dcsCode : undefined,
+      }, targetFrequency, supportsFmOptions && (lastVoice?.toneMode === 'ctcss' || lastVoice?.toneMode === 'dcs'));
 
-      const band = lastVoice.band || this.resolveBandLabel(lastVoice.frequency);
-      const description = lastVoice.description || `${(lastVoice.frequency / 1000000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`;
-      this.emit('frequencyChanged', {
-        frequency: lastVoice.frequency,
+      const band = lastVoice?.band || this.resolveBandLabel(targetFrequency);
+      const description = lastVoice?.description || `${(targetFrequency / 1000000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`;
+      this.emitProgramFrequencyState({
+        frequency: targetFrequency,
         mode: 'VOICE',
         band,
         description,
-        radioMode: lastVoice.radioMode,
+        ...(lastVoice?.radioMode ? { radioMode: lastVoice.radioMode } : {}),
         radioConnected: true,
-        source: 'program',
+        confirmation: applyResult.frequencyConfirmed === false ? 'mismatch' : 'confirmed',
+        ...(applyResult.observedFrequency !== undefined ? { observedFrequency: applyResult.observedFrequency } : {}),
+        requestedFrequency: targetFrequency,
+        ...(applyResult.operationId ? { operationId: applyResult.operationId } : {}),
+        modeConfirmation: this.resolveModeConfirmation(applyResult, lastVoice?.radioMode),
       });
-      logger.info(`Restored last voice operating state: ${description}${lastVoice.radioMode ? ` (${lastVoice.radioMode})` : ''}`);
+      if (!lastVoice && applyResult.frequencyConfirmed !== false) {
+        await configManager.updateLastVoiceFrequency({
+          frequency: targetFrequency,
+          band,
+          description,
+        });
+      }
+      logger.info(`Restored last voice operating state: ${description}${lastVoice?.radioMode ? ` (${lastVoice.radioMode})` : ''}`);
+      if (applyResult.frequencyConfirmed === false) {
+        return { status: 'partially-applied', detail: 'radio frequency write was not confirmed by readback' };
+      }
       return applyResult.modeError
         ? { status: 'partially-applied', detail: applyResult.modeError.message }
         : { status: 'applied' };
@@ -2585,14 +2710,14 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     try {
       const applyResult = await this.applyModeOperatingState({
-        frequency: targetFrequency,
+        ...(lastCW?.frequency ? { frequency: targetFrequency } : {}),
         mode: targetRadioMode,
         bandwidth: targetRadioMode ? 'nochange' : undefined,
         options: targetRadioMode ? { intent: 'cw' } : undefined,
         tolerateModeFailure: true,
       }, expectedConnectionGeneration);
 
-      if (!applyResult.frequencyApplied) {
+      if (lastCW?.frequency && !applyResult.frequencyApplied) {
         logger.warn(`Failed to restore CW frequency: ${(targetFrequency / 1000000).toFixed(3)} MHz`);
         return { status: 'failed', detail: 'frequency write was not confirmed' };
       }
@@ -2603,16 +2728,31 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
       const band = this.resolveBandLabel(targetFrequency);
       const description = `${(targetFrequency / 1000000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`;
-      this.emit('frequencyChanged', {
+      this.emitProgramFrequencyState({
         frequency: targetFrequency,
         mode: 'CW',
         band,
         description,
         radioMode: targetRadioMode,
         radioConnected: true,
-        source: 'program',
+        confirmation: applyResult.frequencyConfirmed === false ? 'mismatch' : 'confirmed',
+        ...(applyResult.observedFrequency !== undefined ? { observedFrequency: applyResult.observedFrequency } : {}),
+        requestedFrequency: targetFrequency,
+        ...(applyResult.operationId ? { operationId: applyResult.operationId } : {}),
+        modeConfirmation: this.resolveModeConfirmation(applyResult, targetRadioMode),
       });
+      if (!lastCW && applyResult.modeApplied) {
+        await configManager.updateLastCWFrequency({
+          frequency: targetFrequency,
+          radioMode: targetRadioMode,
+          band,
+          description,
+        });
+      }
       logger.info(`Restored CW operating state: ${description}${targetRadioMode ? ` (${targetRadioMode})` : ''}`);
+      if (applyResult.frequencyConfirmed === false) {
+        return { status: 'partially-applied', detail: 'radio frequency write was not confirmed by readback' };
+      }
       return applyResult.modeError
         ? { status: 'partially-applied', detail: applyResult.modeError.message }
         : { status: 'applied' };
@@ -2806,6 +2946,63 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private emitModeAndStatusSnapshot(): void {
     this.emit('modeChanged', this.currentMode);
     this.emitStatusSnapshot();
+  }
+
+  private resolveModeConfirmation(
+    result: { modeApplied: boolean; modeError?: Error } | null | undefined,
+    requestedMode?: string,
+  ): 'confirmed' | 'unconfirmed' | 'unknown' {
+    if (!requestedMode) return 'unknown';
+    return result?.modeApplied && !result.modeError ? 'confirmed' : 'unconfirmed';
+  }
+
+  private emitProgramFrequencyState(payload: {
+    frequency: number;
+    mode: string;
+    band: string;
+    description: string;
+    radioMode?: string;
+    radioConnected: boolean;
+    confirmation: 'confirmed' | 'pending' | 'mismatch' | 'offline';
+    observedFrequency?: number;
+    requestedFrequency?: number;
+    operationId?: string;
+    modeConfirmation?: 'confirmed' | 'unconfirmed' | 'unknown';
+  }): void {
+    const {
+      frequency,
+      mode,
+      band,
+      description,
+      radioMode,
+      radioConnected: _radioConnected,
+      ...metadata
+    } = payload;
+    const publish = this.radioManager.publishOperatingStateSnapshot;
+    if (typeof publish === 'function') {
+      publish.call(this.radioManager, frequency, {
+        ...metadata,
+        source: 'program',
+        logicalState: {
+          mode,
+          band,
+          description,
+          ...(radioMode ? { radioMode } : {}),
+        },
+      });
+      return;
+    }
+
+    // Compatibility for lightweight test doubles and older embedders. The
+    // concrete manager always owns publication, so this branch is not part of
+    // the production event topology.
+    const revision = this.radioManager.nextFrequencyStateRevision?.();
+    this.emit('frequencyChanged', {
+      ...payload,
+      source: 'program',
+      ...(revision !== undefined ? { revision } : {}),
+      connectionGeneration: this.radioManager.getConnectionGeneration?.(),
+    });
   }
 
   private emitStatusSnapshot(): void {

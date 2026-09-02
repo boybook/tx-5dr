@@ -8,6 +8,7 @@ import {
   isAudioMonitorAvailableForInputSignal,
   isFakeFrequencySupportedMode,
   isCoreCapabilityAvailable,
+  resolveOperatingStateDisplayFrequency,
   shouldShowAntennaTuneEntry,
   shouldShowAutoTunerShortcut,
   shouldShowFakeFrequencyEntry,
@@ -15,6 +16,30 @@ import {
 } from '../radioControl';
 
 describe('radioControl utils', () => {
+  it('prefers the observed physical frequency over an unconfirmed logical target', () => {
+    expect(resolveOperatingStateDisplayFrequency({
+      frequency: 14_080_000,
+      observedFrequency: 14_074_000,
+      requestedFrequency: 14_080_000,
+      confirmation: 'mismatch',
+      mode: 'FT4',
+      band: '20m',
+      description: '14.080 MHz',
+      radioConnected: true,
+    }, null)).toBe(14_074_000);
+  });
+
+  it('uses the logical target when readback is not available', () => {
+    expect(resolveOperatingStateDisplayFrequency({
+      frequency: 14_080_000,
+      confirmation: 'pending',
+      mode: 'FT4',
+      band: '20m',
+      description: '14.080 MHz',
+      radioConnected: true,
+    }, 14_074_000)).toBe(14_080_000);
+  });
+
   it('allows audio monitoring for AF or legacy profiles but disables it for IF input', () => {
     expect(isAudioMonitorAvailableForInputSignal('af')).toBe(true);
     expect(isAudioMonitorAvailableForInputSignal(undefined)).toBe(true);

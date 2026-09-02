@@ -91,6 +91,15 @@ activation 负责长生命周期后台行为，只能在 bootstrap 完成后开�
 - `connect()` 只负责建链与最小初始化，不负责偷偷启动后台 polling
 - `startBackgroundTasks()` 只能在 bootstrap 完成后调用
 
+频率和模式的跨进程状态统一通过 `PhysicalRadioManager` 的 operating-state
+发布入口生成、再由 `RadioBridge` 投影为 `frequencyChanged` 快照。快照中的
+`revision` 用于丢弃乱序事件，`connectionGeneration` 用于隔离旧 CAT 会话，
+`confirmation` 区分 `confirmed`、`pending`、`mismatch` 和 `offline`。写入命令
+返回不等于物理确认；具备读回能力的连接必须在更新 `lastKnownFrequency` 前完成
+有限读回。RadioControl 及其他前端控件只消费 Store 中的快照，不在挂载时根据
+保存值再次写入电台。没有保存频率时沿用当前已确认频点，只执行可用的目标
+radio mode。
+
 ## 5. 新增逻辑时的放置规则
 
 ### 5.1 新增启动步骤

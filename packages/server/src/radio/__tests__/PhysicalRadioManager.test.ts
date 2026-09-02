@@ -23,6 +23,7 @@ type TestRadioConnection = {
   disconnect?: ReturnType<typeof vi.fn>;
   isHealthy?: ReturnType<typeof vi.fn>;
   isCriticalOperationActive?: ReturnType<typeof vi.fn>;
+  getRadioIoQueueSnapshot?: ReturnType<typeof vi.fn>;
   startBackgroundTasks?: ReturnType<typeof vi.fn>;
   getType?: ReturnType<typeof vi.fn>;
   getState?: ReturnType<typeof vi.fn>;
@@ -118,6 +119,34 @@ describe('PhysicalRadioManager', () => {
       'get mode failed: Optional radio operation unavailable (getMode): Feature not available'
     );
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('publishes operating-state snapshots with monotonic revisions for one CAT session', () => {
+    asTestManager(manager).connectionGeneration = 4;
+    const snapshots: Array<{ frequency: number; metadata: Record<string, unknown> }> = [];
+    manager.on('radioFrequencyChanged', (frequency, metadata) => {
+      snapshots.push({ frequency, metadata: metadata as unknown as Record<string, unknown> });
+    });
+
+    manager.publishOperatingStateSnapshot(14_074_000, {
+      confirmation: 'confirmed',
+      requestedFrequency: 14_074_000,
+    });
+    manager.publishOperatingStateSnapshot(14_080_000, {
+      confirmation: 'mismatch',
+      observedFrequency: 14_074_000,
+      requestedFrequency: 14_080_000,
+    });
+
+    expect(snapshots.map(({ frequency, metadata }) => ({
+      frequency,
+      revision: metadata.revision,
+      connectionGeneration: metadata.connectionGeneration,
+      source: metadata.source,
+    }))).toEqual([
+      { frequency: 14_074_000, revision: 1, connectionGeneration: 4, source: 'program' },
+      { frequency: 14_080_000, revision: 2, connectionGeneration: 4, source: 'program' },
+    ]);
   });
 
   it('marks read radio mode unsupported and short-circuits repeated reads', async () => {
@@ -251,7 +280,7 @@ describe('PhysicalRadioManager', () => {
     expect(diagnostics.writeFrequency?.stack).toContain('Caused by: Error: rig_set_freq invalid parameter');
   });
 
-  it('does not report recoverable setMode failures as connection health failures', async () => {
+  it('reports generic setMode failures without downgrading the core capability', async () => {
     asTestManager(manager).connection = {
       setMode: vi.fn().mockRejectedValue(new RadioError({
         code: RadioErrorCode.UNKNOWN_ERROR,
@@ -265,8 +294,11 @@ describe('PhysicalRadioManager', () => {
     await expect(manager.setMode('USB')).rejects.toThrow(
       'set mode failed: Hamlib unknown error (setMode): rig_set_mode returning(-11) Feature not available'
     );
-    expect(manager.getCoreCapabilities().writeRadioMode).toBe(false);
-    expect(send).not.toHaveBeenCalled();
+    expect(manager.getCoreCapabilities().writeRadioMode).toBe(true);
+    expect(send).toHaveBeenCalledWith({
+      type: 'HEALTH_CHECK_FAILED',
+      error: expect.any(Error),
+    });
   });
 
   it('marks write radio mode unsupported and short-circuits repeated writes', async () => {
@@ -761,6 +793,108 @@ describe('PhysicalRadioManager', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it('confirms a frequency write through physical readback', async () => {
+    const setKnownFrequency = vi.fn();
+    const applyOperatingState = vi.fn().mockResolvedValue({ frequencyApplied: true, modeApplied: false });
+    const getFrequency = vi.fn().mockResolvedValue(14_080_000);
+    asTestManager(manager).connection = {
+      applyOperatingState,
+      getFrequency,
+      getRadioIoQueueSnapshot: vi.fn().mockReturnValue({ busy: false, backpressure: false }),
+      setKnownFrequency,
+    };
+
+    const result = await manager.applyOperatingState({ frequency: 14_080_000 });
+
+    expect(result).toMatchObject({
+      frequencyApplied: true,
+      frequencyConfirmed: true,
+      observedFrequency: 14_080_000,
+    });
+    expect(manager.getLastConfirmedFrequency()).toBe(14_080_000);
+    expect(getFrequency).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a mismatch without advancing the confirmed frequency cache', async () => {
+    vi.useFakeTimers();
+    try {
+      const setKnownFrequency = vi.fn();
+      const applyOperatingState = vi.fn().mockResolvedValue({ frequencyApplied: true, modeApplied: false });
+      const getFrequency = vi.fn().mockResolvedValue(14_074_000);
+      asTestManager(manager).lastKnownFrequency = 14_074_000;
+      asTestManager(manager).connection = {
+        applyOperatingState,
+        getFrequency,
+        getRadioIoQueueSnapshot: vi.fn().mockReturnValue({ busy: false, backpressure: false }),
+        setKnownFrequency,
+      };
+
+      const resultPromise = manager.applyOperatingState({ frequency: 14_080_000 });
+      await vi.advanceTimersByTimeAsync(2_000);
+      const result = await resultPromise;
+
+      expect(result).toMatchObject({
+        frequencyApplied: true,
+        frequencyConfirmed: false,
+        observedFrequency: 14_074_000,
+      });
+      expect(manager.getLastConfirmedFrequency()).toBe(14_074_000);
+      expect(manager.getKnownFrequency()).toBe(14_074_000);
+      expect(setKnownFrequency).not.toHaveBeenCalledWith(14_080_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a mismatch pending until a later observation reaches the requested target', async () => {
+    vi.useFakeTimers();
+    try {
+      const setKnownFrequency = vi.fn();
+      const applyOperatingState = vi.fn().mockResolvedValue({ frequencyApplied: true, modeApplied: false });
+      const getFrequency = vi.fn().mockResolvedValue(14_075_000);
+      asTestManager(manager).lastKnownFrequency = 14_074_000;
+      asTestManager(manager).connection = {
+        applyOperatingState,
+        getFrequency,
+        getRadioIoQueueSnapshot: vi.fn().mockReturnValue({ busy: false, backpressure: false }),
+        setKnownFrequency,
+      };
+
+      const resultPromise = manager.applyOperatingState({ frequency: 14_080_000 });
+      await vi.advanceTimersByTimeAsync(2_000);
+      await resultPromise;
+
+      expect(manager.getKnownFrequency()).toBe(14_074_000);
+      getFrequency.mockResolvedValue(14_080_000);
+      await expect(manager.getFrequency()).resolves.toBe(14_080_000);
+      expect(manager.getKnownFrequency()).toBe(14_080_000);
+      expect(setKnownFrequency).toHaveBeenCalledWith(14_080_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('suppresses a programmatic adapter frequency echo during operating-state apply', async () => {
+    const connection = Object.assign(new EventEmitter(), {
+      applyOperatingState: vi.fn(async () => {
+        connection.emit('frequencyChanged', 14_080_000);
+        return { frequencyApplied: true, modeApplied: false };
+      }),
+      getFrequency: vi.fn().mockResolvedValue(14_080_000),
+      getRadioIoQueueSnapshot: vi.fn().mockReturnValue({ busy: false, backpressure: false }),
+      setKnownFrequency: vi.fn(),
+    });
+    asTestManager(manager).connection = connection as unknown as TestRadioConnection;
+    asTestManager(manager).setupConnectionEventForwarding();
+    const frequencyEvents: number[] = [];
+    manager.on('radioFrequencyChanged', (frequency) => frequencyEvents.push(frequency));
+
+    await manager.applyOperatingState({ frequency: 14_080_000 });
+
+    expect(frequencyEvents).toEqual([]);
+    expect(connection.applyOperatingState).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects an operating-state write when the physical session generation changed', async () => {
     const applyOperatingState = vi.fn().mockResolvedValue({
       frequencyApplied: true,
@@ -1071,7 +1205,11 @@ describe('PhysicalRadioManager', () => {
     expect(asTestManager(manager).connection.getFrequency).toHaveBeenCalledTimes(1);
     expect(setKnownFrequency).toHaveBeenCalledWith(14075000);
     expect(asTestManager(manager).lastKnownFrequency).toBe(14075000);
-    expect(emitSpy).toHaveBeenCalledWith('radioFrequencyChanged', 14075000);
+    expect(emitSpy).toHaveBeenCalledWith(
+      'radioFrequencyChanged',
+      14075000,
+      expect.objectContaining({ confirmation: 'confirmed', source: 'radio' }),
+    );
   });
 
   it('drops a frequency poll result that started before a frequency write', async () => {
@@ -1142,7 +1280,11 @@ describe('PhysicalRadioManager', () => {
     await asTestManager(manager).checkFrequencyChange();
 
     expect(asTestManager(manager).lastKnownFrequency).toBe(14074000);
-    expect(emitSpy).toHaveBeenCalledWith('radioFrequencyChanged', 14074000);
+    expect(emitSpy).toHaveBeenCalledWith(
+      'radioFrequencyChanged',
+      14074000,
+      expect.objectContaining({ confirmation: 'confirmed', source: 'radio' }),
+    );
     vi.useRealTimers();
   });
 

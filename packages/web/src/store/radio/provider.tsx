@@ -384,6 +384,7 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
       engineMode: radioState.engineMode,
       currentRadioMode: radioState.currentRadioMode,
       currentRadioFrequency: radioState.currentRadioFrequency,
+      operatingState: radioState.operatingState,
       spectrumSessionState: radioState.spectrumSessionState,
     }),
     [
@@ -394,6 +395,7 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
       radioState.engineMode,
       radioState.currentRadioMode,
       radioState.currentRadioFrequency,
+      radioState.operatingState,
       radioState.spectrumSessionState,
     ],
   );

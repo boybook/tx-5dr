@@ -452,4 +452,42 @@ describe('RadioBridge', () => {
       source: 'radio',
     }));
   });
+
+  it('drops stale radio frequency revisions after a newer event is queued', async () => {
+    const radioManager = createRadioManagerStub();
+    const engineEmitter = new EventEmitter();
+    const frequencyChanged = vi.fn();
+    engineEmitter.on('frequencyChanged', frequencyChanged);
+    vi.spyOn(ConfigManager.getInstance(), 'updateLastSelectedFrequency').mockResolvedValue();
+    const bridge = new RadioBridge({
+      engineEmitter: engineEmitter as any,
+      radioManager: radioManager as any,
+      frequencyManager: { getPresets: vi.fn().mockReturnValue([]) } as any,
+      slotPackManager: { clearInMemory: vi.fn() } as any,
+      operatorManager: { stopAllOperators: vi.fn() } as any,
+      getTransmissionPipeline: () => ({ getIsPTTActive: vi.fn().mockReturnValue(false) } as any),
+      getEngineLifecycle: () => ({ getIsRunning: vi.fn().mockReturnValue(false) } as any),
+      getEngineMode: () => 'digital',
+      getCurrentModeName: () => 'FT4',
+    });
+
+    bridge.setupListeners();
+    radioManager.emit('radioFrequencyChanged', 14_080_000, {
+      revision: 2,
+      connectionGeneration: 1,
+      confirmation: 'confirmed',
+    });
+    radioManager.emit('radioFrequencyChanged', 14_074_000, {
+      revision: 1,
+      connectionGeneration: 1,
+      confirmation: 'confirmed',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(frequencyChanged).toHaveBeenCalledTimes(1);
+    expect(frequencyChanged).toHaveBeenCalledWith(expect.objectContaining({
+      frequency: 14_080_000,
+      revision: 2,
+    }));
+  });
 });

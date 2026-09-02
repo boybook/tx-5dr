@@ -64,6 +64,8 @@
     "switchedLabel": "已切换到 {{label}}",
     "switchSuccess": "频率切换成功",
     "switchFailed": "频率切换失败",
+    "confirmationPending": "正在等待电台确认频率",
+    "confirmationMismatch": "电台频率未确认，当前显示最近一次读到的频率",
     "setFailed": "设置失败",
     "recorded": "📝 频率已记录",
     "recordedDetail": "{{message}} (电台未连接)",

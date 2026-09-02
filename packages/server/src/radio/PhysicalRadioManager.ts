@@ -64,6 +64,7 @@ const FAST_FREQUENCY_POLL_MS = 500;
 const FAST_FREQUENCY_POLL_WINDOW_MS = 5000;
 const FREQUENCY_WRITE_SETTLE_MS = 2000;
 const FREQUENCY_MATCH_TOLERANCE_HZ = 10;
+const FREQUENCY_READBACK_DELAYS_MS = [0, 100, 250, 500, 1000] as const;
 const HAMLIB_RIG_SCHEMA_TIMEOUT_MS = 3000;
 
 /** Hamlib valid frequency range: 1 kHz to 10 GHz */
@@ -151,6 +152,19 @@ function isRecoverableTciWriteTimeout(error: unknown): boolean {
   });
 }
 
+/**
+ * Only an adapter-declared optional capability failure may permanently
+ * downgrade a core capability. Generic strings such as "Feature not
+ * available" also appear in transient Hamlib/CI-V protocol traces; treating
+ * those as permanent would disable frequency control after one bad frame.
+ */
+function isExplicitOptionalRadioCapabilityError(error: unknown): boolean {
+  return error instanceof RadioError
+    && error.code === RadioErrorCode.INVALID_OPERATION
+    && error.context?.optional === true
+    && error.context?.recoverable === true;
+}
+
 function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
@@ -164,7 +178,7 @@ interface PhysicalRadioManagerEvents {
   disconnected: (reason?: string) => void;
   reconnecting: (attempt: number, maxAttempts: number, delayMs?: number) => void;
   error: (error: Error) => void;
-  radioFrequencyChanged: (frequency: number) => void;
+  radioFrequencyChanged: (frequency: number, metadata?: RadioFrequencyChangeMetadata) => void;
   meterData: (data: MeterData) => void;
   meterCapabilitiesChanged: (capabilities: MeterCapabilities) => void;
   tunerStatusChanged: (status: import('@tx5dr/contracts').TunerStatus) => void;
@@ -173,6 +187,24 @@ interface PhysicalRadioManagerEvents {
   capabilityList: (data: { descriptors: CapabilityDescriptor[]; capabilities: CapabilityState[] }) => void;
   /** 单个能力值变化 */
   capabilityChanged: (state: CapabilityState) => void;
+}
+
+export interface RadioFrequencyChangeMetadata {
+  revision: number;
+  connectionGeneration: number;
+  confirmation?: 'confirmed' | 'pending' | 'mismatch' | 'offline';
+  observedFrequency?: number;
+  requestedFrequency?: number;
+  operationId?: string;
+  source?: 'program' | 'radio' | 'bootstrap';
+  modeConfirmation?: 'confirmed' | 'unconfirmed' | 'unknown';
+  /** Optional logical display projection supplied by the operating-state coordinator. */
+  logicalState?: {
+    mode: string;
+    band: string;
+    description: string;
+    radioMode?: string;
+  };
 }
 
 type CoreCapabilityKey = keyof CoreRadioCapabilities;
@@ -414,7 +446,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   private activeFrequencyPollGeneration: number | null = null;
   private fastFrequencyPollingUntil = 0;
   private lastKnownFrequency: number | null = null;
+  private lastObservedFrequency: number | null = null;
+  private pendingFrequencyTarget: number | null = null;
+  private lastFrequencyConfirmation: RadioFrequencyChangeMetadata['confirmation'] = 'offline';
   private frequencyWriteEpoch = 0;
+  private frequencyStateRevision = 0;
+  private activeFrequencyOperation: { operationId: string; targetFrequency?: number } | null = null;
   private lastFrequencyWrite:
     | {
         epoch: number;
@@ -962,6 +999,39 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     return this.lastKnownFrequency;
   }
 
+  /** Last frequency confirmed by a physical read or an adapter state event. */
+  getLastConfirmedFrequency(): number | null {
+    return this.lastKnownFrequency;
+  }
+
+  /** Allocate a monotonic revision for the public operating-state stream. */
+  nextFrequencyStateRevision(): number {
+    this.frequencyStateRevision += 1;
+    return this.frequencyStateRevision;
+  }
+
+  getFrequencyStateMetadata(): RadioFrequencyChangeMetadata {
+    const frequency = this.lastObservedFrequency ?? this.lastKnownFrequency ?? undefined;
+    return {
+      revision: this.frequencyStateRevision,
+      connectionGeneration: this.connectionGeneration,
+      confirmation: this.lastFrequencyConfirmation,
+      ...(frequency !== undefined ? { observedFrequency: frequency } : {}),
+    };
+  }
+
+  /**
+   * Publish the one public operating-state event for a completed logical
+   * operation. Keeping revision allocation and connection identity here means
+   * Route/Engine callers cannot accidentally create a parallel event stream.
+   */
+  publishOperatingStateSnapshot(
+    frequency: number,
+    metadata: Omit<RadioFrequencyChangeMetadata, 'revision' | 'connectionGeneration'> = {},
+  ): void {
+    this.emitRadioFrequencyChanged(frequency, { source: 'program', ...metadata });
+  }
+
   /**
    * 获取当前连接会话的核心能力摘要。
    * 仅在明确判定 unsupported 时返回 false；unknown 与 supported 都返回 true。
@@ -1064,6 +1134,21 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 设置频率
    */
   async setFrequency(freq: number): Promise<boolean> {
+    return this.runSessionMutation('setFrequency', async () => {
+      const resumeFrequencyMonitoring = this.pauseFrequencyMonitoringForMutation();
+      this.capabilityManager.setOperatingStateMutation(true);
+      try {
+        return await this.setFrequencyInternal(freq);
+      } finally {
+        this.capabilityManager.setOperatingStateMutation(false);
+        if (resumeFrequencyMonitoring && this.connection) {
+          this.startFrequencyMonitoring();
+        }
+      }
+    });
+  }
+
+  private async setFrequencyInternal(freq: number): Promise<boolean> {
     if (!this.connection) {
       logger.error('Radio not connected, cannot set frequency');
       return false;
@@ -1075,15 +1160,41 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     }
 
     const write = this.beginFrequencyWrite(freq);
+    const operationId = `radio-${this.connectionGeneration + 1}-${this.frequencyStateRevision + 1}`;
+    this.activeFrequencyOperation = { operationId, targetFrequency: freq };
     try {
       await this.connection.setFrequency(freq);
       this.markCoreCapabilitySupported('writeFrequency');
-      this.completeFrequencyWrite(write);
+      const confirmation = await this.confirmFrequencyAfterWrite(freq);
+      if (!confirmation.confirmed) {
+        this.lastFrequencyConfirmation = 'mismatch';
+        this.pendingFrequencyTarget = freq;
+        if (!this.txDialOffsetActive) {
+          this.emitRadioFrequencyChanged(freq, {
+            confirmation: 'mismatch',
+            ...(confirmation.observedFrequency !== undefined ? { observedFrequency: confirmation.observedFrequency } : {}),
+            requestedFrequency: freq,
+            operationId,
+            source: 'program',
+          });
+        }
+        return false;
+      }
+      this.completeFrequencyWrite(write, confirmation.observedFrequency ?? freq);
       this.queuePostFrequencyCapabilityRefresh('setFrequency');
+      if (!this.txDialOffsetActive) {
+        this.emitRadioFrequencyChanged(freq, {
+          confirmation: 'confirmed',
+          observedFrequency: confirmation.observedFrequency ?? freq,
+          requestedFrequency: freq,
+          operationId,
+          source: 'program',
+        });
+      }
       logger.debug(`Frequency set: ${(freq / 1000000).toFixed(3)} MHz`);
       return true;
     } catch (error) {
-      if (isRecoverableOptionalRadioError(error)) {
+      if (isExplicitOptionalRadioCapabilityError(error)) {
         this.markCoreCapabilityUnsupported('writeFrequency', error);
         logger.warn(`Frequency write is unavailable for this radio: ${(error as Error).message}`);
         return false;
@@ -1099,6 +1210,8 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       logger.error(`Failed to set frequency: ${(error as Error).message}`);
       this.handleConnectionError(error as Error);
       return false;
+    } finally {
+      this.activeFrequencyOperation = null;
     }
   }
 
@@ -1226,6 +1339,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       }
 
       const resumeFrequencyMonitoring = this.pauseFrequencyMonitoringForMutation();
+      this.capabilityManager.setOperatingStateMutation(true);
       try {
         const result = await this.applyOperatingStateInternal(request);
         if (
@@ -1236,6 +1350,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         }
         return result;
       } finally {
+        this.capabilityManager.setOperatingStateMutation(false);
         if (resumeFrequencyMonitoring && this.connection) {
           this.startFrequencyMonitoring();
         }
@@ -1265,15 +1380,30 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     const frequencyWrite = request.frequency !== undefined
       ? this.beginFrequencyWrite(request.frequency)
       : null;
+    const operationId = `radio-${this.connectionGeneration + 1}-${this.frequencyStateRevision + 1}`;
+    this.activeFrequencyOperation = {
+      operationId,
+      ...(request.frequency !== undefined ? { targetFrequency: request.frequency } : {}),
+    };
     try {
       const result = await this.connection.applyOperatingState(request);
 
+      let frequencyConfirmed = request.frequency === undefined;
+      let observedFrequency: number | undefined;
       if (request.frequency !== undefined && result.frequencyApplied) {
         this.markCoreCapabilitySupported('writeFrequency');
-        if (frequencyWrite) {
-          this.completeFrequencyWrite(frequencyWrite);
+        const confirmation = await this.confirmFrequencyAfterWrite(request.frequency);
+        frequencyConfirmed = confirmation.confirmed;
+        observedFrequency = confirmation.observedFrequency;
+        if (frequencyWrite && confirmation.confirmed) {
+          this.completeFrequencyWrite(frequencyWrite, confirmation.observedFrequency ?? request.frequency);
+        } else {
+          this.lastFrequencyConfirmation = 'mismatch';
+          this.pendingFrequencyTarget = request.frequency;
         }
-        this.queuePostFrequencyCapabilityRefresh('applyOperatingState');
+        if (frequencyConfirmed) {
+          this.queuePostFrequencyCapabilityRefresh('applyOperatingState');
+        }
       }
 
       if (request.mode && result.modeApplied) {
@@ -1302,14 +1432,21 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       // never block PTT or invalidate an otherwise successful mode change.
       await this.applyTxAudioInputSourcePolicy();
 
-      return result;
+      const enrichedResult: ApplyOperatingStateResult = {
+        ...result,
+        frequencyConfirmed,
+        ...(observedFrequency !== undefined ? { observedFrequency } : {}),
+        modeConfirmed: result.modeApplied,
+        operationId,
+      };
+      return enrichedResult;
     } catch (error) {
-      if (request.mode && request.frequency === undefined && isRecoverableOptionalRadioError(error)) {
+      if (request.mode && request.frequency === undefined && isExplicitOptionalRadioCapabilityError(error)) {
         this.markCoreCapabilityUnsupported('writeRadioMode', error);
         throw new Error(`set mode failed: ${(error as Error).message}`);
       }
 
-      if (request.frequency !== undefined && isRecoverableOptionalRadioError(error)) {
+      if (request.frequency !== undefined && isExplicitOptionalRadioCapabilityError(error)) {
         this.markCoreCapabilityUnsupported('writeFrequency', error);
         return { frequencyApplied: false, modeApplied: false };
       }
@@ -1330,7 +1467,53 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
       this.handleConnectionError(error as Error);
       throw error;
+    } finally {
+      this.activeFrequencyOperation = null;
     }
+  }
+
+  private async confirmFrequencyAfterWrite(targetFrequency: number): Promise<{
+    confirmed: boolean;
+    observedFrequency?: number;
+  }> {
+    const connection = this.connection;
+    if (!connection?.getFrequency || !connection.getRadioIoQueueSnapshot) {
+      // Test doubles and legacy adapters without readback retain command-level
+      // acknowledgement semantics; concrete radio adapters all expose reads.
+      return { confirmed: true };
+    }
+
+    let observedFrequency: number | undefined;
+    for (const delayMs of FREQUENCY_READBACK_DELAYS_MS) {
+      if (delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+
+      try {
+        const current = await connection.getFrequency();
+        if (Number.isFinite(current) && current > 0) {
+          observedFrequency = current;
+          if (this.isSameFrequency(current, targetFrequency)) {
+            return { confirmed: true, observedFrequency: current };
+          }
+        }
+      } catch (error) {
+        logger.debug('Frequency readback attempt failed', {
+          targetFrequency,
+          delayMs,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    logger.warn('Radio frequency write was not confirmed by readback', {
+      targetFrequency,
+      observedFrequency,
+    });
+    return {
+      confirmed: false,
+      ...(observedFrequency !== undefined ? { observedFrequency } : {}),
+    };
   }
 
   private async applyTxAudioInputSourcePolicy(): Promise<void> {
@@ -1371,7 +1554,43 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 获取当前频率
    */
   async getFrequency(): Promise<number> {
-    return this.readFrequency({ updateKnownFrequency: true });
+    const previous = this.lastObservedFrequency;
+    // Readback used by the operating-state coordinator is authoritative for
+    // that mutation; do not let a concurrent public read create a second
+    // observation event or move the confirmed cache while the mutation gate
+    // is active.
+    const frequency = await this.readFrequency({ updateKnownFrequency: !this.activeFrequencyOperation });
+    const pendingTarget = this.pendingFrequencyTarget;
+    if (
+      !this.activeFrequencyOperation
+      && pendingTarget !== null
+      && frequency > 0
+      && !this.isSameFrequency(pendingTarget, frequency)
+    ) {
+      this.lastFrequencyConfirmation = 'mismatch';
+      if (previous === null || !this.isSameFrequency(previous, frequency)) {
+        this.emitRadioFrequencyChanged(frequency, {
+          confirmation: 'mismatch',
+          observedFrequency: frequency,
+          requestedFrequency: pendingTarget,
+          source: 'radio',
+        });
+      }
+      return frequency;
+    }
+    if (
+      !this.activeFrequencyOperation
+      && frequency > 0
+      && previous !== null
+      && !this.isSameFrequency(previous, frequency)
+    ) {
+      this.emitRadioFrequencyChanged(frequency, {
+        confirmation: 'confirmed',
+        observedFrequency: frequency,
+        source: 'radio',
+      });
+    }
+    return frequency;
   }
 
   private async readFrequency(options: { updateKnownFrequency: boolean }): Promise<number> {
@@ -1389,16 +1608,20 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       const observedWriteEpoch = this.frequencyWriteEpoch;
       const frequency = await this.connection.getFrequency();
       this.markCoreCapabilitySupported('readFrequency');
+      if (!this.activeFrequencyOperation && frequency > 0) {
+        this.lastObservedFrequency = frequency;
+      }
       if (
         options.updateKnownFrequency
         && frequency > 0
+        && (this.pendingFrequencyTarget === null || this.isSameFrequency(frequency, this.pendingFrequencyTarget))
         && !this.shouldIgnoreFrequencyObservation(frequency, observedWriteEpoch, 'readFrequency')
       ) {
         this.updateKnownFrequency(frequency);
       }
       return frequency;
     } catch (error) {
-      if (isRecoverableOptionalRadioError(error)) {
+      if (isExplicitOptionalRadioCapabilityError(error)) {
         this.markCoreCapabilityUnsupported('readFrequency', error);
         logger.warn(`Frequency read is unavailable for this radio: ${(error as Error).message}`);
         return 0;
@@ -1499,7 +1722,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         intent: options?.intent ?? 'unspecified',
       });
     } catch (error) {
-      if (isRecoverableOptionalRadioError(error)) {
+      if (isExplicitOptionalRadioCapabilityError(error)) {
         this.markCoreCapabilityUnsupported('writeRadioMode', error);
         throw new Error(`set mode failed: ${(error as Error).message}`);
       }
@@ -2464,8 +2687,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     await this.applyTxAudioInputSourcePolicy();
 
     if (restoredFrequency !== null) {
-      this.updateKnownFrequency(restoredFrequency);
-      this.emit('radioFrequencyChanged', restoredFrequency);
+      this.emitRadioFrequencyChanged(restoredFrequency, {
+        confirmation: this.lastFrequencyConfirmation,
+        ...(this.lastKnownFrequency !== null ? { observedFrequency: this.lastKnownFrequency } : {}),
+        requestedFrequency: restoredFrequency,
+        source: 'bootstrap',
+      });
       return;
     }
 
@@ -2590,12 +2817,44 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         logger.debug('Ignoring frequency event during TX dial offset', { frequency });
         return;
       }
+      if (this.activeFrequencyOperation) {
+        logger.debug('Ignoring programmatic frequency echo; operating-state coordinator owns publication', {
+          frequency,
+          operationId: this.activeFrequencyOperation.operationId,
+          targetFrequency: this.activeFrequencyOperation.targetFrequency,
+        });
+        return;
+      }
+      const previousObservedFrequency = this.lastObservedFrequency;
+      const pendingTarget = this.pendingFrequencyTarget;
+      if (pendingTarget !== null) {
+        this.lastObservedFrequency = frequency;
+        if (!this.isSameFrequency(frequency, pendingTarget)) {
+          this.lastFrequencyConfirmation = 'mismatch';
+          if (
+            previousObservedFrequency === null
+            || !this.isSameFrequency(previousObservedFrequency, frequency)
+          ) {
+            this.emitRadioFrequencyChanged(frequency, {
+              confirmation: 'mismatch',
+              observedFrequency: frequency,
+              requestedFrequency: pendingTarget,
+              source: 'radio',
+            });
+          }
+          return;
+        }
+      }
       if (this.shouldIgnoreFrequencyObservation(frequency, this.frequencyWriteEpoch, 'connection-event')) {
         return;
       }
       logger.debug(`Frequency changed: ${(frequency / 1000000).toFixed(3)} MHz`);
       this.updateKnownFrequency(frequency);
-      this.emit('radioFrequencyChanged', frequency);
+      this.emitRadioFrequencyChanged(frequency, {
+        confirmation: 'confirmed',
+        observedFrequency: frequency,
+        source: 'radio',
+      });
     };
     this.connection.on('frequencyChanged', onFrequencyChanged);
     this.connectionEventListeners.set('frequencyChanged', onFrequencyChanged);
@@ -2711,11 +2970,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       }
 
       const result = await this.applyOperatingStateInternal(saved.request);
-      if (!result.frequencyApplied) {
+      if ((saved.request.frequency !== undefined && !result.frequencyApplied) || result.frequencyConfirmed === false) {
         logger.warn('Bootstrap operating state failed', {
           engineMode: saved.engineMode,
           frequencyHz: saved.frequency,
           radioMode: saved.request.mode,
+          observedFrequency: result.observedFrequency,
         });
         return null;
       }
@@ -2775,7 +3035,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         engineMode,
         frequency,
         request: {
-          frequency,
+          ...(lastCW?.frequency ? { frequency } : {}),
           mode: radioMode,
           bandwidth: 'nochange',
           options: { intent: 'cw' },
@@ -2839,6 +3099,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       if (currentFrequency > 0) {
         logger.debug(`Captured initial frequency during bootstrap: ${(currentFrequency / 1000000).toFixed(3)} MHz`);
         this.updateKnownFrequency(currentFrequency);
+        this.emitRadioFrequencyChanged(currentFrequency, {
+          confirmation: 'confirmed',
+          observedFrequency: currentFrequency,
+          source: 'bootstrap',
+        });
       }
     } catch (error) {
       logger.debug(`Initial frequency capture skipped: ${(error as Error).message}`);
@@ -2851,8 +3116,31 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     }
 
     this.lastKnownFrequency = frequency;
+    this.lastObservedFrequency = frequency;
+    if (this.pendingFrequencyTarget !== null && this.isSameFrequency(frequency, this.pendingFrequencyTarget)) {
+      this.pendingFrequencyTarget = null;
+    }
+    this.lastFrequencyConfirmation = 'confirmed';
     this.connection.setKnownFrequency(frequency);
     void this.refreshRfPowerDescriptor();
+  }
+
+  private emitRadioFrequencyChanged(
+    frequency: number,
+    metadata: Omit<RadioFrequencyChangeMetadata, 'revision' | 'connectionGeneration'> = {},
+  ): void {
+    if (!Number.isFinite(frequency) || frequency <= 0) {
+      return;
+    }
+
+    const revision = this.nextFrequencyStateRevision();
+    this.emit('radioFrequencyChanged', frequency, {
+      revision,
+      connectionGeneration: metadata.source === 'bootstrap'
+        ? this.connectionGeneration + 1
+        : this.connectionGeneration,
+      ...metadata,
+    });
   }
 
   private beginFrequencyWrite(targetFrequency: number): {
@@ -2872,12 +3160,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     epoch: number;
     targetFrequency: number;
     previousFrequency: number | null;
-  }): void {
+  }, observedFrequency = write.targetFrequency): void {
     this.lastFrequencyWrite = {
       ...write,
       settleUntil: Date.now() + FREQUENCY_WRITE_SETTLE_MS,
     };
-    this.updateKnownFrequency(write.targetFrequency);
+    this.updateKnownFrequency(observedFrequency);
   }
 
   private isSameFrequency(left: number | null | undefined, right: number | null | undefined): boolean {
@@ -2911,10 +3199,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     if (
       write
       && Date.now() < write.settleUntil
-      && !this.isSameFrequency(frequency, write.targetFrequency)
-      && this.isSameFrequency(frequency, write.previousFrequency)
+      && (
+        this.isSameFrequency(frequency, write.targetFrequency)
+        || this.isSameFrequency(frequency, write.previousFrequency)
+      )
     ) {
-      logger.debug('Ignoring old frequency echo during post-write settle window', {
+      logger.debug('Ignoring frequency echo during post-write settle window', {
         source,
         frequency,
         targetFrequency: write.targetFrequency,
@@ -3121,6 +3411,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     }
     this.fastFrequencyPollingUntil = 0;
     this.lastKnownFrequency = null;
+    this.lastObservedFrequency = null;
+    this.pendingFrequencyTarget = null;
+    this.lastFrequencyConfirmation = 'offline';
+    this.activeFrequencyOperation = null;
   }
 
   private scheduleNextFrequencyPoll(delayMs = this.getFrequencyPollingDelayMs()): void {
@@ -3196,6 +3490,8 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     try {
       const previousKnownFrequency = this.lastKnownFrequency;
+      const previousObservedFrequency = this.lastObservedFrequency;
+      const pendingTarget = this.pendingFrequencyTarget;
       const observedWriteEpoch = this.frequencyWriteEpoch;
       const currentFrequency = await this.readFrequency({ updateKnownFrequency: false });
 
@@ -3208,6 +3504,25 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       }
 
       if (this.shouldIgnoreFrequencyObservation(currentFrequency, observedWriteEpoch, 'frequency-monitor')) {
+        return;
+      }
+
+      if (
+        pendingTarget !== null
+        && !this.isSameFrequency(currentFrequency, pendingTarget)
+      ) {
+        this.lastFrequencyConfirmation = 'mismatch';
+        if (
+          previousObservedFrequency === null
+          || !this.isSameFrequency(previousObservedFrequency, currentFrequency)
+        ) {
+          this.emitRadioFrequencyChanged(currentFrequency, {
+            confirmation: 'mismatch',
+            observedFrequency: currentFrequency,
+            requestedFrequency: pendingTarget,
+            source: 'radio',
+          });
+        }
         return;
       }
 
@@ -3230,7 +3545,11 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         this.updateKnownFrequency(currentFrequency);
 
         // 发射频率变化事件
-        this.emit('radioFrequencyChanged', currentFrequency);
+        this.emitRadioFrequencyChanged(currentFrequency, {
+          confirmation: 'confirmed',
+          observedFrequency: currentFrequency,
+          source: 'radio',
+        });
         this.queuePostFrequencyCapabilityRefresh('frequencyMonitor');
       } else if (previousKnownFrequency === null && currentFrequency > 0) {
         // 首次获取频率

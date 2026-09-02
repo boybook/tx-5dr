@@ -183,6 +183,7 @@ export const initialRadioState: RadioState = {
   voicePttLock: null,
   currentRadioMode: null,
   currentRadioFrequency: null,
+  operatingState: null,
   spectrumSessionState: null,
   radioErrors: [],
   latestRadioError: null,
@@ -226,11 +227,33 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
         bootstrapStatus: action.payload,
       };
 
-    case 'setCurrentRadioFrequency':
+    case 'frequencyStateChanged': {
+      const snapshot = action.payload;
+      const currentRevision = state.operatingState?.revision ?? -1;
+      const currentGeneration = state.operatingState?.connectionGeneration;
+      if (
+        snapshot.revision !== undefined
+        && snapshot.revision < currentRevision
+      ) {
+        return state;
+      }
+      if (
+        snapshot.connectionGeneration !== undefined
+        && currentGeneration !== undefined
+        && snapshot.connectionGeneration < currentGeneration
+      ) {
+        return state;
+      }
+      const physicalFrequency = snapshot.observedFrequency && snapshot.observedFrequency > 0
+        ? snapshot.observedFrequency
+        : snapshot.frequency;
       return {
         ...state,
-        currentRadioFrequency: action.payload && action.payload > 0 ? action.payload : state.currentRadioFrequency,
+        operatingState: snapshot,
+        currentRadioFrequency: physicalFrequency > 0 ? physicalFrequency : state.currentRadioFrequency,
+        currentRadioMode: snapshot.radioMode ?? state.currentRadioMode,
       };
+    }
 
     case 'setSpectrumSessionState':
       return {
@@ -356,6 +379,7 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
             ? new Map<string, CapabilityState>()
             : state.capabilityStates,
         currentRadioFrequency: action.payload.radioConnected ? state.currentRadioFrequency : null,
+        operatingState: action.payload.radioConnected ? state.operatingState : null,
         spectrumSessionState: action.payload.radioConnected ? state.spectrumSessionState : null,
         fakeFrequencyEffective: action.payload.fakeFrequencyEffective ?? state.fakeFrequencyEffective,
       };

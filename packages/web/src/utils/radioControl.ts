@@ -1,4 +1,4 @@
-import type { AudioInputSignalType, CapabilityState, CoreRadioCapabilities, EngineMode } from '@tx5dr/contracts';
+import type { AudioInputSignalType, CapabilityState, CoreRadioCapabilities, EngineMode, FrequencyState } from '@tx5dr/contracts';
 import { subject as caslSubject } from '@casl/ability';
 
 export interface FrequencyOptionLike {
@@ -9,6 +9,21 @@ export interface FrequencyOptionLike {
 export interface MonitorActivationCtaState {
   shouldShowActivationCta: boolean;
   hasUserActivation: boolean;
+}
+
+export function resolveOperatingStateDisplayFrequency(
+  snapshot: FrequencyState | null | undefined,
+  fallback: number | null | undefined,
+): number | null {
+  // The snapshot is the Store's canonical operating-state projection. When
+  // readback is unavailable, its logical target is still newer than any
+  // legacy fallback kept by the reducer, so prefer `frequency` before that
+  // fallback. This is what lets pending/mismatch states render immediately
+  // without reverting to the previous dial value.
+  const frequency = snapshot?.observedFrequency ?? snapshot?.frequency ?? fallback;
+  return typeof frequency === 'number' && Number.isFinite(frequency) && frequency > 0
+    ? frequency
+    : null;
 }
 
 export function isAudioMonitorAvailableForInputSignal(

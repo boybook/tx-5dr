@@ -215,6 +215,14 @@ export interface ApplyOperatingStateRequest {
 export interface ApplyOperatingStateResult {
   frequencyApplied: boolean;
   modeApplied: boolean;
+  /** Whether the requested frequency was confirmed by a physical readback. */
+  frequencyConfirmed?: boolean;
+  /** Most recent physical frequency observation used for confirmation. */
+  observedFrequency?: number;
+  /** Whether the requested radio mode was confirmed by a physical readback. */
+  modeConfirmed?: boolean;
+  /** Correlates the result with the public operating-state event. */
+  operationId?: string;
   modeError?: Error;
 }
 

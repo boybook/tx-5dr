@@ -64,6 +64,8 @@
     "switchedLabel": "{{label}} に切り替えました",
     "switchSuccess": "周波数切り替えが成功しました",
     "switchFailed": "周波数切り替えに失敗しました",
+    "confirmationPending": "無線機の周波数確認を待機しています",
+    "confirmationMismatch": "無線機の周波数を確認できないため、最後に観測した周波数を表示しています",
     "setFailed": "設定に失敗しました",
     "recorded": "📝 記録された周波数",
     "recordedDetail": "{{message}} (無線が接続されていません)",

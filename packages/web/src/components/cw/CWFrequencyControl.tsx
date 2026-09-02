@@ -207,22 +207,6 @@ export const CWFrequencyControl: React.FC = () => {
     };
   }, [canUseAuthenticatedRest, liveFrequency, activeProfileId]);
 
-  useEffect(() => {
-    const radioService = connection.state.radioService;
-    if (!radioService) return;
-    const wsClient = radioService.wsClientInstance;
-
-    const handleFreqChanged = (data: { frequency?: number; mode?: string }) => {
-      if (data?.mode && data.mode !== 'CW') return;
-      acceptServerFrequency(data?.frequency);
-    };
-
-    wsClient.onWSEvent('frequencyChanged', handleFreqChanged);
-    return () => {
-      wsClient.offWSEvent('frequencyChanged', handleFreqChanged);
-    };
-  }, [connection.state.radioService, acceptServerFrequency]);
-
   const frequencyDigits = useMemo(() => buildFrequencyDigits(currentFrequency), [currentFrequency]);
 
   const txFrequencyDigits = useMemo(() => buildFrequencyDigits(currentTxFrequency), [currentTxFrequency]);

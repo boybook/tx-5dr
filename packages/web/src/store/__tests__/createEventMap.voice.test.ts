@@ -134,8 +134,11 @@ describe('createRadioEventMap voice frequency sync', () => {
     });
 
     expect(radioDispatch).toHaveBeenNthCalledWith(1, {
-      type: 'setCurrentRadioFrequency',
-      payload: 14270000,
+      type: 'frequencyStateChanged',
+      payload: {
+        frequency: 14270000,
+        radioMode: 'USB',
+      },
     });
     expect(radioDispatch).toHaveBeenNthCalledWith(2, {
       type: 'voiceRadioModeChanged',

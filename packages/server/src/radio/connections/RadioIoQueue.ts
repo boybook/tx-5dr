@@ -80,7 +80,19 @@ export const PARALLEL_RADIO_IO_QUEUE_OPTIONS: Pick<
   busyBackpressure: false,
 };
 
-export const ICOM_WLAN_RADIO_IO_QUEUE_OPTIONS = PARALLEL_RADIO_IO_QUEUE_OPTIONS;
+/**
+ * ICOM control traffic shares one CI-V command/reply stream. Keep the main
+ * control queue strictly serial; isolated spectrum work has its own lane.
+ */
+export const ICOM_WLAN_RADIO_IO_QUEUE_OPTIONS: Pick<
+  RadioIoQueueOptions,
+  'maxConcurrent' | 'lowPrioritySkipsWhenBusy' | 'criticalBackpressure' | 'busyBackpressure'
+> = {
+  maxConcurrent: 1,
+  lowPrioritySkipsWhenBusy: true,
+  criticalBackpressure: true,
+  busyBackpressure: true,
+};
 
 export class RadioIoQueue {
   private queue: QueuedRadioIoTask<unknown>[] = [];

@@ -8,6 +8,7 @@ import type {
   CoreCapabilityDiagnostics,
   CoreRadioCapabilities,
   EngineMode,
+  FrequencyState,
   HamlibConfig,
   ModeDescriptor,
   OperatorStatus,
@@ -88,6 +89,7 @@ export const RadioModeContext = createContext<{
   engineMode: EngineMode;
   currentRadioMode: string | null;
   currentRadioFrequency: number | null;
+  operatingState: FrequencyState | null;
   spectrumSessionState: SpectrumSessionState | null;
 } | undefined>(undefined);
 

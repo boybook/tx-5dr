@@ -29,6 +29,7 @@ import {
   deriveMonitorActivationCtaState,
   filterDigitalFrequencyOptions,
   isAudioMonitorAvailableForInputSignal,
+  resolveOperatingStateDisplayFrequency,
   shouldShowFakeFrequencyEntry,
   shouldShowAntennaTuneEntry,
   shouldShowRadioControlEntry,
@@ -607,7 +608,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const radioMode = useRadioModeState();
   const { pttStatus, tuneToneStatus, voicePttLock } = usePTTState();
   const { state: radioState, dispatch: radioDispatch } = useRadioState();
-  const { activeProfile, activeProfileId } = useProfiles();
+  const { activeProfile } = useProfiles();
   const { latestError } = useRadioErrors();
   const { state: authState } = useAuth();
   const isAdmin = useHasMinRole(UserRole.ADMIN);
@@ -670,12 +671,23 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const [modeError, setModeError] = useState<string | null>(null);
   const [availableFrequencies, setAvailableFrequencies] = useState<FrequencyOption[]>([]);
   const [isLoadingFrequencies, setIsLoadingFrequencies] = useState(false);
-  const isRadioConnectedRef = React.useRef(connection.state.isConnected);
+  const [currentFrequency, setCurrentFrequency] = useState<string>(() => (
+    radioState.currentRadioFrequency && radioState.currentRadioFrequency > 0
+      ? String(radioState.currentRadioFrequency)
+      : ''
+  ));
 
   React.useEffect(() => {
-    isRadioConnectedRef.current = connection.state.isConnected;
-  }, [connection.state.isConnected]);
-  const [currentFrequency, setCurrentFrequency] = useState<string>('14074000');
+    const frequency = resolveOperatingStateDisplayFrequency(
+      radioState.operatingState,
+      radioState.currentRadioFrequency,
+    );
+    if (frequency !== null) {
+      setCurrentFrequency(String(frequency));
+    } else {
+      setCurrentFrequency('');
+    }
+  }, [radioState.currentRadioFrequency, radioState.operatingState]);
 
   // 简化的UI状态管理
   const [isTogglingListen, setIsTogglingListen] = useState(false);
@@ -1160,53 +1172,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     loadFrequencies();
   }, [canUseAuthenticatedRest, connection.state.isConnected, formatBandLabel]);
 
-  // 加载并恢复上次选择的频率
-  React.useEffect(() => {
-    const loadLastFrequency = async () => {
-      if (!isRadioConnectedRef.current || availableFrequencies.length === 0) {
-        return;
-      }
-      if (!canUseAuthenticatedRest) {
-        return;
-      }
-
-      try {
-        const response = await api.getLastFrequency();
-
-        if (response.success && response.lastFrequency) {
-          const lastFreq = response.lastFrequency;
-
-          // 查找匹配的频率选项
-          const matchingFreq = availableFrequencies.find(freq =>
-            freq.frequency === lastFreq.frequency && freq.mode === lastFreq.mode
-          );
-
-          if (matchingFreq && (!radioMode.currentMode || radioMode.currentMode.name === lastFreq.mode)) {
-            logger.debug(`Restoring last frequency: ${matchingFreq.label}`);
-            setCurrentFrequency(matchingFreq.key);
-            if (canWriteFrequency) {
-              // 自动设置频率到电台
-              await autoSetFrequency(matchingFreq);
-            }
-          }
-        }
-      } catch (error) {
-        logger.error('Failed to load last frequency:', error);
-        // 静默失败，不影响用户体验
-      }
-    };
-
-    // 延迟执行，等待频率列表和模式都加载完成
-    if (availableFrequencies.length > 0) {
-      const timeoutId = window.setTimeout(() => {
-        void loadLastFrequency();
-      }, 500);
-      return () => window.clearTimeout(timeoutId);
-    }
-  }, [availableFrequencies, radioMode.currentMode, connection.state.isConnected, canUseAuthenticatedRest, canWriteFrequency, activeProfileId]);
-
-
-
   // 简化的监听开关控制
   const handleListenToggle = async (isSelected: boolean) => {
     if (!connection.state.radioService) {
@@ -1667,6 +1632,12 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
 
   const frequencySelectLabel = selectedFrequencyOption?.label
     || (radioMode.currentMode ? `${radioMode.currentMode.name} ${t('control.frequency')}` : t('control.frequency'));
+  const frequencyConfirmation = radioState.operatingState?.confirmation;
+  const frequencyConfirmationWarning = frequencyConfirmation === 'mismatch'
+    ? t('frequency.confirmationMismatch')
+    : frequencyConfirmation === 'pending' || frequencyConfirmation === 'offline'
+      ? t('frequency.confirmationPending')
+      : null;
 
   const modeOptions = React.useMemo(() => {
     const modes = (availableModes || []).filter(mode => mode && mode.name);
@@ -1698,34 +1669,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     MODE_SELECT_MIN_WIDTH_PX,
     MODE_SELECT_MAX_WIDTH_PX,
   );
-
-  // 自动设置频率到后端（避免递归调用）
-  const autoSetFrequency = async (frequency: FrequencyOption) => {
-    if (!isRadioConnectedRef.current || !canWriteTargetFrequency(frequency.frequency)) return;
-
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const params: any = {
-        frequency: frequency.frequency,
-        mode: frequency.mode,
-        band: frequency.band,
-        description: frequency.label
-      };
-      if (frequency.radioMode) {
-        params.radioMode = frequency.radioMode;
-      }
-
-      const response = await setRadioFrequencyWithIntent(params);
-
-      if (!response.success) {
-        logger.debug('Auto set frequency failed:', response.message);
-        return;
-      }
-    } catch (error) {
-      logger.debug('Auto set frequency failed:', error);
-      // 自动设置失败，静默处理，不影响用户体验
-    }
-  };
 
   // 处理频率切换
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1850,45 +1793,30 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     audioMonitor.setVolume(targetDb);
   }, [audioMonitor, pttStatus.isTransmitting, voiceCaptureController?.isPTTActive, voicePttLock?.locked, voicePttLock?.lockedBy, radioMode.engineMode, monitorVolume, radioState.squelchStatus]);
 
-  // 监听频率变化事件
+  // The provider owns the WebSocket subscription. Derive the custom option
+  // from the canonical operating-state snapshot so layout remounts cannot
+  // lose the current physical frequency.
   useEffect(() => {
-    if (!connection.state.radioService) return;
+    const snapshot = radioState.operatingState;
+    const frequency = resolveOperatingStateDisplayFrequency(snapshot, radioState.currentRadioFrequency);
+    if (frequency === null) {
+      return;
+    }
 
-    // 直接订阅 WSClient 事件
-    const wsClient = connection.state.radioService.wsClientInstance;
+    const frequencyKey = String(frequency);
+    const isPreset = availableFrequencies.some(item => item.key === frequencyKey);
+    if (!isPreset) {
+      setCustomFrequencyOption(buildCurrentCustomFrequencyOption(
+        frequency,
+        snapshot?.mode || radioMode.currentMode?.name || 'FT8',
+        snapshot?.band || '',
+        snapshot?.radioMode,
+      ));
+      return;
+    }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const handleFrequencyChanged = (data: any) => {
-      const frequencyKey = String(data.frequency);
-      setCurrentFrequency(frequencyKey);
-
-      // 检查是否是预设频率（在所有可用频率中查找，不仅仅是已筛选的）
-      const isPreset = availableFrequencies.some(f => f.key === frequencyKey);
-
-      if (!isPreset) {
-        // 自定义频率：创建临时选项并添加到列表
-        const customOption = buildCurrentCustomFrequencyOption(
-          data.frequency,
-          data.mode || 'FT8',
-          data.band || '',
-          data.radioMode,
-        );
-        setCustomFrequencyOption(customOption);
-        logger.debug('Custom frequency option added:', customOption.label);
-      } else {
-        // 预设频率：清除自定义选项
-        setCustomFrequencyOption(null);
-      }
-    };
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    wsClient.onWSEvent('frequencyChanged', handleFrequencyChanged as any);
-
-    return () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      wsClient.offWSEvent('frequencyChanged', handleFrequencyChanged as any);
-    };
-  }, [buildCurrentCustomFrequencyOption, connection.state.radioService, availableFrequencies]);
+    setCustomFrequencyOption(null);
+  }, [availableFrequencies, buildCurrentCustomFrequencyOption, radioMode.currentMode?.name, radioState.currentRadioFrequency, radioState.operatingState]);
 
   return (
     <Card shadow="none" className="w-full overflow-visible border-none bg-content2 dark:bg-content1" classNames={{ base: 'overflow-visible border-none bg-content2 dark:bg-content1 shadow-none' }}>
@@ -2631,6 +2559,17 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                 {selectedFrequencyOption?.label || ''}
               </span>
             </div>
+          )}
+          {frequencyConfirmationWarning && (
+            <Tooltip content={frequencyConfirmationWarning}>
+              <span
+                className="flex items-center px-1 text-warning"
+                role="status"
+                aria-label={frequencyConfirmationWarning}
+              >
+                <FontAwesomeIcon icon={faTriangleExclamation} className="text-xs" />
+              </span>
+            </Tooltip>
           )}
           {canSwitchMode ? (
             <Select

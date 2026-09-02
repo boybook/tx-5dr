@@ -377,10 +377,11 @@ export const DecodeErrorInfoSchema = z.object({
 /**
  * Current dial-frequency projection broadcast to plugins and clients.
  *
- * `frequency` is RF dial frequency in hertz; `mode` is the TX-5DR engine mode;
- * `band` and `description` are display labels; `radioMode` is the underlying
- * modulation when known. `source` distinguishes application changes from
- * updates reported by the radio.
+ * `frequency` is the logical RF dial target in hertz; `mode` is the TX-5DR
+ * engine mode; `band` and `description` are display labels; `radioMode` is the
+ * underlying modulation when known. `observedFrequency` is the latest physical
+ * readback. `source` distinguishes application changes from radio observations;
+ * `revision` and `connectionGeneration` reject stale events.
  */
 export const FrequencyStateSchema = z.object({
   frequency: z.number(),
@@ -390,6 +391,20 @@ export const FrequencyStateSchema = z.object({
   radioMode: z.string().optional(),
   radioConnected: z.boolean(),
   source: z.enum(['program', 'radio']).optional(),
+  /** Monotonic operating-state revision for stale-event suppression. */
+  revision: z.number().int().nonnegative().optional(),
+  /** Physical CAT session identity associated with this snapshot. */
+  connectionGeneration: z.number().int().nonnegative().optional(),
+  /** Physical confirmation status for the requested operating state. */
+  confirmation: z.enum(['confirmed', 'pending', 'mismatch', 'offline']).optional(),
+  /** Last frequency read back from the physical radio, when available. */
+  observedFrequency: z.number().optional(),
+  /** Requested logical frequency when it differs from the observed value. */
+  requestedFrequency: z.number().optional(),
+  /** Correlates a snapshot with one programmatic operating-state mutation. */
+  operationId: z.string().optional(),
+  /** Physical radio-mode confirmation status. */
+  modeConfirmation: z.enum(['confirmed', 'unconfirmed', 'unknown']).optional(),
 });
 
 export const SpectrumControlInvocationSchema = z.object({
