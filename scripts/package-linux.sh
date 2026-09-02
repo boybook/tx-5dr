@@ -438,7 +438,7 @@ build_package() {
         --description "TX-5DR Digital Radio Server - Ham Radio FT8 Application" \
         --maintainer "BG5DRB <bg5drb@example.com>" \
         --url "https://tx5dr.com" \
-        --license "MIT" \
+        --license "GPL-3.0-only AND AGPL-3.0-only" \
         --category "hamradio" \
         --depends "nodejs >= 22" \
         --depends "nginx" \

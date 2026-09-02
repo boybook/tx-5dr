@@ -77,6 +77,8 @@ for pkg in builtin-plugins client-tools contracts core plugin-api rigctld-server
   fi
 done
 cp -R "$PROJECT_ROOT/resources/models" "$APP_ROOT/resources/models"
+cp -R "$PROJECT_ROOT/resources/licenses" "$APP_ROOT/resources/licenses"
+cp "$PROJECT_ROOT/resources/README.txt" "$APP_ROOT/resources/README.txt"
 cp "$PROJECT_ROOT/package.json" "$APP_ROOT/package.json"
 cp "$PROJECT_ROOT/yarn.lock" "$APP_ROOT/yarn.lock"
 
