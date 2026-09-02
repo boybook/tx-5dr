@@ -305,6 +305,43 @@ describe('SpectrumStreamController memory behavior', () => {
     expect(cropped).toBe(values);
   });
 
+  it('uses the radio level minimum when a dBFS range extends beyond the source frame', () => {
+    const values = new Float32Array([-110, -90, -70]);
+    const cropped = cropSpectrumToRange(
+      values,
+      { min: 900, max: 1100 },
+      { min: 800, max: 1200 },
+      -120,
+    );
+
+    expect(cropped[0]).toBe(-120);
+    expect(cropped[2]).toBe(-120);
+    expect(cropped[1]).toBe(-90);
+  });
+
+  it('fills remapped dBFS history with the dBFS floor instead of full-scale zero', () => {
+    const controller = new SpectrumStreamController(4);
+    const level: SpectrumLevelDescriptor = {
+      domain: 'dbfs',
+      unit: 'dBFS',
+      reference: 'full-scale',
+      calibrated: true,
+      min: -120,
+      max: 0,
+    };
+    controller.updateContext({ selectedKind: 'radio-sdr' });
+    controller.pushFrame(makeFrame('radio-sdr', 10, [-110, -90, -70], { min: 900, max: 1100 }, level));
+    flushNextAnimationFrame();
+    controller.consumeRenderBatch();
+
+    controller.pushFrame(makeFrame('radio-sdr', 11, [-105, -85, -65], { min: 1000, max: 1200 }, level));
+    flushNextAnimationFrame();
+    const batch = controller.consumeRenderBatch();
+
+    expect(batch?.mode).toBe('replace');
+    expect(Array.from(batch?.rows[1] ?? [])).toEqual([-90, -70, -120]);
+  });
+
   it('ignores stale radio SDR display ranges that do not overlap the incoming frame', () => {
     const controller = new SpectrumStreamController(4);
     const legacyController = controller as unknown as {

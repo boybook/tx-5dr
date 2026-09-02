@@ -214,7 +214,8 @@ function retainFrameMeta(frame: SpectrumFrame): RetainedSpectrumFrame {
 export function cropSpectrumToRange(
   values: Float32Array,
   fullRange: { min: number; max: number },
-  targetRange: { min: number; max: number }
+  targetRange: { min: number; max: number },
+  fillValue = 0,
 ): Float32Array {
   if (values.length === 0) {
     return values;
@@ -235,7 +236,7 @@ export function cropSpectrumToRange(
   for (let index = 0; index < values.length; index += 1) {
     const targetFrequency = targetRange.min + (index * (targetRange.max - targetRange.min)) / Math.max(values.length - 1, 1);
     if (targetFrequency < fullRange.min || targetFrequency > fullRange.max) {
-      output[index] = 0;
+      output[index] = fillValue;
       continue;
     }
 
@@ -894,7 +895,12 @@ export class SpectrumStreamController {
       if (!range) {
         return null;
       }
-      values = cropSpectrumToRange(frame.values, frame.frame.frequencyRange, range);
+      values = cropSpectrumToRange(
+        frame.values,
+        frame.frame.frequencyRange,
+        range,
+        frame.frame.level?.min ?? 0,
+      );
       axis = {
         minHz: range.min,
         maxHz: range.max,
