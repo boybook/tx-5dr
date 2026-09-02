@@ -14,7 +14,8 @@ Hamlib/wfview rig definitions and the ICOM CI-V profile implementation:
 
 | Manufacturer / models | Protocol command | Values used by provider | Status |
 | --- | --- | --- | --- |
-| ICOM IC-705, IC-905 | CI-V `1A 05 01 19` | `0 MIC`, `1 ACC`, `2 USB`, `3 WLAN` | implemented; raw frame + readback |
+| ICOM IC-705 | CI-V `1A 05 01 19` | `0 MIC`, `1 USB`, `2 MIC+USB`, `3 WLAN` (only `MIC`, `USB`, `WLAN` exposed) | implemented; raw frame + readback |
+| ICOM IC-905 | CI-V `1A 05 01 19` | `0 MIC`, `1 AV-IN`, `2 MIC+AV-IN`, `3 USB`, `4 MIC+USB`, `5 LAN` (mixed inputs not exposed) | implemented; raw frame + readback |
 | ICOM IC-7300 | CI-V `1A 05 00 66` (normal/Data-Off input) | `0 MIC`, `1 ACC`, `3 USB` | implemented; raw frame + readback |
 | ICOM IC-7300MK2 | CI-V `1A 05 00 84` (normal/Data-Off input) | `0 MIC`, `1 USB`, `2 ACC`, `5 LAN` | implemented; raw frame + readback |
 | ICOM IC-7610 | CI-V `1A 05 00 91` (normal/Data-Off input) | `0 MIC`, `1 ACC`, `3 USB`, `5 LAN` | implemented; raw frame + readback |
@@ -82,9 +83,9 @@ model definition provides a complete normal-input value table.
 
 - All raw CAT/CI-V I/O is executed inside `HamlibConnection`'s serialized
   `RadioIoQueue`; writes are marked critical.
-- Hamlib `sendRaw` is request/response oriented: fire-and-forget writes use a
-  one-byte reply buffer without a terminator (`sendRaw(data, 1)`), because
-  `replyMaxLen=0` with a terminator still enters the native read path.
+- Hamlib `sendRaw` is request/response oriented. Fire-and-forget writes use the
+  explicit `sendRawWrite(data)` API, which passes a null reply pointer through
+  the binding and therefore never enters Hamlib's read path.
 - A capability is advertised only when the exact Hamlib model metadata matches
   a provider. A write is followed by a readback and fails closed on mismatch.
 - Provider failures make the dynamic capability unavailable but do not block

@@ -32,6 +32,7 @@ type MockRig = {
   getPassbandWide: ReturnType<typeof vi.fn>;
   getRfPowerStepTable: ReturnType<typeof vi.fn>;
   sendRaw: ReturnType<typeof vi.fn>;
+  sendRawWrite: ReturnType<typeof vi.fn>;
   getConf?: ReturnType<typeof vi.fn>;
 };
 
@@ -123,6 +124,7 @@ function createConnectedConnection(rigOverrides: Partial<MockRig> = {}): {
     ]),
     getRfPowerStepTable: vi.fn().mockResolvedValue(null),
     sendRaw: vi.fn().mockResolvedValue(Buffer.alloc(0)),
+    sendRawWrite: vi.fn().mockResolvedValue(undefined),
     getConf: vi.fn().mockResolvedValue('0'),
     getPassbandNarrow: vi.fn().mockResolvedValue(1800),
     getPassbandNormal: vi.fn().mockResolvedValue(2400),
@@ -150,41 +152,56 @@ describe('HamlibConnection', () => {
 
   it('exposes Yaesu FT-710 TX audio routing through model-specific EX CAT', async () => {
     const { connection, rig } = createConnectedConnection();
-    // Model the native Hamlib contract: replyMaxLen=0 is not a valid
-    // fire-and-forget request when a terminator is supplied.
-    rig.sendRaw.mockImplementation((_data, replyMaxLen) => {
-      if (replyMaxLen === 0) {
-        return Promise.reject(new Error('sendRaw attempted a zero-length reply read'));
-      }
-      return Promise.resolve(
-        replyMaxLen === 1 ? Buffer.alloc(0) : Buffer.from('EX0101141;', 'ascii'),
-      );
-    });
+    rig.sendRaw.mockResolvedValue(Buffer.from('EX0101141;', 'ascii'));
     const testConnection = asTestConnection(connection);
     testConnection.meterRigMetadata = { rigModel: 1049, mfgName: 'Yaesu', modelName: 'FT-710' };
     testConnection.currentRadioMode = 'USB';
 
     await expect(connection.getSupportedTxAudioInputSources!()).resolves.toEqual(['mic', 'usb', 'accessory']);
     await expect(connection.setTxAudioInputSource!('usb')).resolves.toMatchObject({ applied: 'usb', acknowledgement: 'readback' });
-    expect(rig.sendRaw).toHaveBeenNthCalledWith(1, Buffer.from('EX0101141;', 'ascii'), 1);
-    expect(rig.sendRaw).toHaveBeenNthCalledWith(2, Buffer.from('EX010114;', 'ascii'), 64, Buffer.from(';'));
+    expect(rig.sendRawWrite).toHaveBeenCalledWith(Buffer.from('EX0101141;', 'ascii'));
+    expect(rig.sendRaw).toHaveBeenCalledWith(Buffer.from('EX010114;', 'ascii'), 64, Buffer.from(';'));
   });
 
   it('uses the ICOM CI-V connector extension for IC-705 through Hamlib raw CAT', async () => {
     const { connection, rig } = createConnectedConnection({
       getConf: vi.fn().mockResolvedValue('164'),
       sendRaw: vi.fn().mockResolvedValue(Buffer.from([
-        0xfe, 0xfe, 0xa4, 0xe0, 0x1a, 0x05, 0x01, 0x19, 0x02, 0xfd,
+        0xfe, 0xfe, 0xa4, 0xe0, 0x1a, 0x05, 0x01, 0x19, 0x01, 0xfd,
       ])),
     });
     const testConnection = asTestConnection(connection);
     testConnection.meterRigMetadata = { rigModel: 3085, mfgName: 'Icom', modelName: 'IC-705' };
 
+    await expect(connection.getSupportedTxAudioInputSources!()).resolves.toEqual(['mic', 'usb', 'network']);
     await expect(connection.getTxAudioInputSource!()).resolves.toBe('usb');
     expect(rig.sendRaw).toHaveBeenCalledWith(
       Buffer.from([0xfe, 0xfe, 0xa4, 0xe0, 0x1a, 0x05, 0x01, 0x19, 0xfd]),
       64,
       Buffer.from([0xfd]),
+    );
+
+    await expect(connection.setTxAudioInputSource!('usb')).resolves.toMatchObject({ applied: 'usb' });
+    expect(rig.sendRawWrite).toHaveBeenCalledWith(
+      Buffer.from([0xfe, 0xfe, 0xa4, 0xe0, 0x1a, 0x05, 0x01, 0x19, 0x01, 0xfd]),
+    );
+  });
+
+  it('uses the IC-905-specific CI-V value map', async () => {
+    const { connection, rig } = createConnectedConnection({
+      getConf: vi.fn().mockResolvedValue('164'),
+      sendRaw: vi.fn().mockResolvedValue(Buffer.from([
+        0xfe, 0xfe, 0xa4, 0xe0, 0x1a, 0x05, 0x01, 0x19, 0x03, 0xfd,
+      ])),
+    });
+    const testConnection = asTestConnection(connection);
+    testConnection.meterRigMetadata = { rigModel: 3090, mfgName: 'Icom', modelName: 'IC-905' };
+
+    await expect(connection.getSupportedTxAudioInputSources!()).resolves.toEqual(['mic', 'accessory', 'usb', 'network']);
+    await expect(connection.getTxAudioInputSource!()).resolves.toBe('usb');
+    await expect(connection.setTxAudioInputSource!('usb')).resolves.toMatchObject({ applied: 'usb' });
+    expect(rig.sendRawWrite).toHaveBeenCalledWith(
+      Buffer.from([0xfe, 0xfe, 0xa4, 0xe0, 0x1a, 0x05, 0x01, 0x19, 0x03, 0xfd]),
     );
   });
 
@@ -201,17 +218,15 @@ describe('HamlibConnection', () => {
 
   it('writes TS-990S USB audio as the documented MS composite source', async () => {
     const { connection, rig } = createConnectedConnection({
-      sendRaw: vi.fn()
-        .mockResolvedValueOnce(Buffer.alloc(0))
-        .mockResolvedValueOnce(Buffer.from('MS00010;', 'ascii')),
+      sendRaw: vi.fn().mockResolvedValue(Buffer.from('MS00010;', 'ascii')),
     });
     const testConnection = asTestConnection(connection);
     testConnection.meterRigMetadata = { rigModel: 2039, mfgName: 'Kenwood', modelName: 'TS-990S' };
     testConnection.currentRadioMode = 'USB';
 
     await expect(connection.setTxAudioInputSource!('usb')).resolves.toMatchObject({ applied: 'usb' });
-    expect(rig.sendRaw).toHaveBeenNthCalledWith(1, Buffer.from('MS00010;', 'ascii'), 1);
-    expect(rig.sendRaw).toHaveBeenNthCalledWith(2, Buffer.from('MS0;', 'ascii'), 64, Buffer.from(';'));
+    expect(rig.sendRawWrite).toHaveBeenCalledWith(Buffer.from('MS00010;', 'ascii'));
+    expect(rig.sendRaw).toHaveBeenCalledWith(Buffer.from('MS0;', 'ascii'), 64, Buffer.from(';'));
   });
 
   it('does not advertise raw TX audio commands for unknown Hamlib models', async () => {
@@ -227,8 +242,6 @@ describe('HamlibConnection', () => {
   it('writes FTDX10 USB as an ordered MOD SOURCE + REAR SELECT transaction', async () => {
     const { connection, rig } = createConnectedConnection({
       sendRaw: vi.fn()
-        .mockResolvedValueOnce(Buffer.alloc(0))
-        .mockResolvedValueOnce(Buffer.alloc(0))
         .mockResolvedValueOnce(Buffer.from('EX0101131;', 'ascii'))
         .mockResolvedValueOnce(Buffer.from('EX0101141;', 'ascii')),
     });
@@ -237,17 +250,15 @@ describe('HamlibConnection', () => {
 
     await expect(connection.getSupportedTxAudioInputSources!()).resolves.toEqual(['mic', 'usb', 'accessory']);
     await expect(connection.setTxAudioInputSource!('usb')).resolves.toMatchObject({ applied: 'usb', acknowledgement: 'readback' });
-    expect(rig.sendRaw).toHaveBeenNthCalledWith(1, Buffer.from('EX0101131;', 'ascii'), 1);
-    expect(rig.sendRaw).toHaveBeenNthCalledWith(2, Buffer.from('EX0101141;', 'ascii'), 1);
-    expect(rig.sendRaw).toHaveBeenNthCalledWith(3, Buffer.from('EX010113;', 'ascii'), 64, Buffer.from(';'));
-    expect(rig.sendRaw).toHaveBeenNthCalledWith(4, Buffer.from('EX010114;', 'ascii'), 64, Buffer.from(';'));
+    expect(rig.sendRawWrite).toHaveBeenNthCalledWith(1, Buffer.from('EX0101131;', 'ascii'));
+    expect(rig.sendRawWrite).toHaveBeenNthCalledWith(2, Buffer.from('EX0101141;', 'ascii'));
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(1, Buffer.from('EX010113;', 'ascii'), 64, Buffer.from(';'));
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(2, Buffer.from('EX010114;', 'ascii'), 64, Buffer.from(';'));
   });
 
   it('writes FT-991A DATA USB using EX070 + EX072', async () => {
     const { connection, rig } = createConnectedConnection({
       sendRaw: vi.fn()
-        .mockResolvedValueOnce(Buffer.alloc(0))
-        .mockResolvedValueOnce(Buffer.alloc(0))
         .mockResolvedValueOnce(Buffer.from('EX0701;', 'ascii'))
         .mockResolvedValueOnce(Buffer.from('EX0722;', 'ascii')),
     });
@@ -256,17 +267,15 @@ describe('HamlibConnection', () => {
     testConnection.currentRadioMode = 'PKTUSB';
 
     await expect(connection.setTxAudioInputSource!('usb')).resolves.toMatchObject({ applied: 'usb' });
-    expect(rig.sendRaw).toHaveBeenNthCalledWith(1, Buffer.from('EX0701;', 'ascii'), 1);
-    expect(rig.sendRaw).toHaveBeenNthCalledWith(2, Buffer.from('EX0722;', 'ascii'), 1);
-    expect(rig.sendRaw).toHaveBeenNthCalledWith(3, Buffer.from('EX070;', 'ascii'), 64, Buffer.from(';'));
-    expect(rig.sendRaw).toHaveBeenNthCalledWith(4, Buffer.from('EX072;', 'ascii'), 64, Buffer.from(';'));
+    expect(rig.sendRawWrite).toHaveBeenNthCalledWith(1, Buffer.from('EX0701;', 'ascii'));
+    expect(rig.sendRawWrite).toHaveBeenNthCalledWith(2, Buffer.from('EX0722;', 'ascii'));
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(1, Buffer.from('EX070;', 'ascii'), 64, Buffer.from(';'));
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(2, Buffer.from('EX072;', 'ascii'), 64, Buffer.from(';'));
   });
 
   it('writes FTDX101D USB using its distinct composite EX slots', async () => {
     const { connection, rig } = createConnectedConnection({
       sendRaw: vi.fn()
-        .mockResolvedValueOnce(Buffer.alloc(0))
-        .mockResolvedValueOnce(Buffer.alloc(0))
         .mockResolvedValueOnce(Buffer.from('EX0101111;', 'ascii'))
         .mockResolvedValueOnce(Buffer.from('EX0101121;', 'ascii')),
     });
@@ -275,8 +284,8 @@ describe('HamlibConnection', () => {
     testConnection.currentRadioMode = 'USB';
 
     await expect(connection.setTxAudioInputSource!('usb')).resolves.toMatchObject({ applied: 'usb' });
-    expect(rig.sendRaw).toHaveBeenNthCalledWith(1, Buffer.from('EX0101111;', 'ascii'), 1);
-    expect(rig.sendRaw).toHaveBeenNthCalledWith(2, Buffer.from('EX0101121;', 'ascii'), 1);
+    expect(rig.sendRawWrite).toHaveBeenNthCalledWith(1, Buffer.from('EX0101111;', 'ascii'));
+    expect(rig.sendRawWrite).toHaveBeenNthCalledWith(2, Buffer.from('EX0101121;', 'ascii'));
   });
 
   it('supports only MIC/REAR on FT-891 and never advertises USB', async () => {

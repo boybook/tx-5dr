@@ -100,19 +100,29 @@ type HamlibTxAudioProvider = {
   reverseMap: Readonly<Record<number, TxAudioInputSource>>;
 };
 
-const ICOM_TX_AUDIO_VALUE_MAP = { mic: 0, accessory: 1, usb: 2, network: 3 } as const;
+const ICOM_IC705_TX_AUDIO_VALUE_MAP = { mic: 0, usb: 1, network: 3 } as const;
+const ICOM_IC905_TX_AUDIO_VALUE_MAP = { mic: 0, accessory: 1, usb: 3, network: 5 } as const;
 const YAESU_TX_AUDIO_VALUE_MAP = { mic: 0, usb: 1, accessory: 2 } as const;
 const KENWOOD_TX_AUDIO_VALUE_MAP = { mic: 0, accessory: 1, usb: 2, network: 3 } as const;
 
 const HAMLIB_TX_AUDIO_PROVIDERS: readonly HamlibTxAudioProvider[] = [
   {
     manufacturer: 'Icom',
-    modelNames: ['IC-705', 'IC-905'],
+    modelNames: ['IC-705'],
+    sources: ['mic', 'usb', 'network'],
+    protocol: 'icom-civ',
+    civExtension: [0x01, 0x19],
+    valueMap: ICOM_IC705_TX_AUDIO_VALUE_MAP,
+    reverseMap: { 0: 'mic', 1: 'usb', 3: 'network' },
+  },
+  {
+    manufacturer: 'Icom',
+    modelNames: ['IC-905'],
     sources: ['mic', 'accessory', 'usb', 'network'],
     protocol: 'icom-civ',
     civExtension: [0x01, 0x19],
-    valueMap: ICOM_TX_AUDIO_VALUE_MAP,
-    reverseMap: { 0: 'mic', 1: 'accessory', 2: 'usb', 3: 'network' },
+    valueMap: ICOM_IC905_TX_AUDIO_VALUE_MAP,
+    reverseMap: { 0: 'mic', 1: 'accessory', 3: 'usb', 5: 'network' },
   },
   {
     manufacturer: 'Icom',
@@ -2982,14 +2992,13 @@ export class HamlibConnection
       if (!commands) return null;
       const send = async (command: string, parameter?: number) => {
         const wire = `${command}${parameter === undefined ? '' : parameter};`;
-        // Hamlib's sendRaw API is request/response oriented. A zero-length
-        // reply buffer with a terminator still enters its read path and can
-        // consume an unrelated CAT frame. Use a one-byte, unterminated read
-        // for fire-and-forget writes; Hamlib returns immediately without
-        // waiting for a reply.
-        return parameter === undefined
-          ? this.rig!.sendRaw(Buffer.from(wire, 'ascii'), 64, Buffer.from(';'))
-          : this.rig!.sendRaw(Buffer.from(wire, 'ascii'), 1);
+        // Use the binding's explicit write-only API for fire-and-forget CAT
+        // commands so Hamlib never enters its response read path.
+        if (parameter === undefined) {
+          return this.rig!.sendRaw(Buffer.from(wire, 'ascii'), 64, Buffer.from(';'));
+        }
+        await this.rig!.sendRawWrite(Buffer.from(wire, 'ascii'));
+        return Buffer.alloc(0);
       };
       const modeKey = ((this.currentRadioMode ?? 'USB').toUpperCase().includes('PKT') || (this.currentRadioMode ?? '').toUpperCase().includes('DATA')
         ? 'DATA' : (this.currentRadioMode ?? '').toUpperCase().includes('FM') ? 'FM'
@@ -3018,27 +3027,25 @@ export class HamlibConnection
     if (provider.protocol === 'yaesu-ex') {
       const prefix = this.getYaesuTxAudioCommand(provider);
       const command = `${prefix}${value === undefined ? '' : value};`;
-      const reply = value === undefined
-        ? await this.rig!.sendRaw(Buffer.from(command, 'ascii'), 64, Buffer.from(';'))
-        : await this.rig!.sendRaw(Buffer.from(command, 'ascii'), 1);
       if (value === undefined) {
+        const reply = await this.rig!.sendRaw(Buffer.from(command, 'ascii'), 64, Buffer.from(';'));
         const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const match = reply.toString('ascii').match(new RegExp(`${escapedPrefix}(\\d);`));
         return match ? Number.parseInt(match[1]!, 10) : null;
       }
+      await this.rig!.sendRawWrite(Buffer.from(command, 'ascii'));
       return null;
     }
 
     if (provider.protocol === 'kenwood-ms') {
       const register = provider.kenwoodRegister ?? 0;
       const command = `MS${register}${value === undefined ? '' : value};`;
-      const reply = value === undefined
-        ? await this.rig!.sendRaw(Buffer.from(command, 'ascii'), 64, Buffer.from(';'))
-        : await this.rig!.sendRaw(Buffer.from(command, 'ascii'), 1);
       if (value === undefined) {
+        const reply = await this.rig!.sendRaw(Buffer.from(command, 'ascii'), 64, Buffer.from(';'));
         const match = reply.toString('ascii').match(new RegExp(`MS${register}([0-3]);`));
         return match ? Number.parseInt(match[1]!, 10) : null;
       }
+      await this.rig!.sendRawWrite(Buffer.from(command, 'ascii'));
       return null;
     }
 
@@ -3049,9 +3056,11 @@ export class HamlibConnection
       const values = provider.kenwoodCompositeValues ?? {};
       const send = async (tuple?: readonly [number, number, number, number, number]) => {
         const wire = tuple ? `MS${p1}${tuple[1]}${tuple[2]}${tuple[3]}${tuple[4]};` : `MS${p1};`;
-        return tuple
-          ? this.rig!.sendRaw(Buffer.from(wire, 'ascii'), 1)
-          : this.rig!.sendRaw(Buffer.from(wire, 'ascii'), 64, Buffer.from(';'));
+        if (tuple) {
+          await this.rig!.sendRawWrite(Buffer.from(wire, 'ascii'));
+          return Buffer.alloc(0);
+        }
+        return this.rig!.sendRaw(Buffer.from(wire, 'ascii'), 64, Buffer.from(';'));
       };
       if (value === undefined) {
         const reply = await send();
@@ -3073,15 +3082,14 @@ export class HamlibConnection
     const extension = provider.civExtension ?? [0x01, 0x19];
     const payload = [0x1a, 0x05, ...extension];
     const frame = Buffer.from([0xfe, 0xfe, civAddress, 0xe0, ...payload, ...(value === undefined ? [] : [value]), 0xfd]);
-    const reply = value === undefined
-      ? await this.rig!.sendRaw(frame, 64, Buffer.from([0xfd]))
-      : await this.rig!.sendRaw(frame, 1);
     if (value === undefined) {
+      const reply = await this.rig!.sendRaw(frame, 64, Buffer.from([0xfd]));
       const marker = Buffer.from(payload);
       const markerIndex = reply.indexOf(marker);
       if (markerIndex >= 0 && markerIndex + marker.length < reply.length) return reply[markerIndex + marker.length]!;
       return null;
     }
+    await this.rig!.sendRawWrite(frame);
     return null;
   }
 
