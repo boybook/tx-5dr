@@ -49,4 +49,52 @@ describe('SlotPackPersistence', () => {
 
     await persistence.cleanup();
   });
+
+  it('indexes the latest persisted snapshot for each slot', async () => {
+    if (!tempDataDir) {
+      throw new Error('tempDataDir missing');
+    }
+
+    const framesLogDir = join(tempDataDir, 'frames-logs');
+    await mkdir(framesLogDir, { recursive: true });
+    const slotPack = (slotId: string, lastUpdated: number, message: string) => ({
+      slotId,
+      startMs: lastUpdated - 15_000,
+      endMs: lastUpdated,
+      frames: [{ message, snr: -10, dt: 0, freq: 1500, confidence: 1 }],
+      stats: {
+        totalDecodes: 1,
+        successfulDecodes: 1,
+        totalFramesBeforeDedup: 1,
+        totalFramesAfterDedup: 1,
+        lastUpdated,
+      },
+      decodeHistory: [],
+    });
+    const records = [
+      {
+        storedAt: 1_780_000_000_000,
+        operation: 'updated',
+        slotPack: slotPack('slot-a', 1_780_000_001_000, 'old'),
+        version: '1.0.0',
+      },
+      {
+        storedAt: 1_780_000_000_100,
+        operation: 'updated',
+        slotPack: slotPack('slot-a', 1_780_000_002_000, 'new'),
+        version: '1.0.0',
+      },
+    ];
+    await writeFile(
+      join(framesLogDir, 'frames-2026-06-01.jsonl'),
+      `${records.map(record => JSON.stringify(record)).join('\n')}\n`,
+    );
+
+    const { SlotPackPersistence } = await import('../SlotPackPersistence.js');
+    const persistence = new SlotPackPersistence();
+    await expect(persistence.readLatestRecords('2026-06-01')).resolves.toMatchObject([
+      { slotPack: { slotId: 'slot-a', frames: [{ message: 'new' }] } },
+    ]);
+    await persistence.cleanup();
+  });
 });

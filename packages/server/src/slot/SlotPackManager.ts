@@ -26,7 +26,7 @@ export interface SlotPackManagerEvents {
 type SlotPackPersistenceLike = Pick<
   SlotPackPersistence,
   'store' | 'getStorageStats' | 'flush' | 'cleanup' | 'readRecords' | 'getAvailableDates'
->;
+> & Partial<Pick<SlotPackPersistence, 'readLatestRecords'>>;
 
 interface DecodeWindowCompletionState {
   expectedWindowCount: number;
@@ -609,8 +609,14 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
   /**
    * 获取当前所有活跃的时隙包
    */
-  getActiveSlotPacks(): SlotPack[] {
-    return Array.from(this.slotPacks.values()).map(pack => this.snapshotSlotPack(pack));
+  getActiveSlotPacks(startMs?: number, endMs?: number): SlotPack[] {
+    return Array.from(this.slotPacks.values())
+      .filter((pack) => (
+        startMs === undefined
+        || endMs === undefined
+        || (pack.startMs <= endMs && pack.endMs >= startMs)
+      ))
+      .map(pack => this.snapshotSlotPack(pack));
   }
   
   /**
@@ -814,6 +820,26 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
    */
   async readStoredRecords(dateStr: string) {
     return this.persistence.readRecords(dateStr);
+  }
+
+  /** Returns the newest persisted snapshot for each slot on a date. */
+  async readLatestStoredRecords(dateStr: string) {
+    if (this.persistence.readLatestRecords) {
+      return this.persistence.readLatestRecords(dateStr);
+    }
+
+    const records = await this.persistence.readRecords(dateStr);
+    const latest = new Map<string, (typeof records)[number]>();
+    for (const record of records) {
+      const previous = latest.get(record.slotPack.slotId);
+      if (!previous
+        || record.slotPack.stats.lastUpdated > previous.slotPack.stats.lastUpdated
+        || (record.slotPack.stats.lastUpdated === previous.slotPack.stats.lastUpdated
+          && record.storedAt >= previous.storedAt)) {
+        latest.set(record.slotPack.slotId, record);
+      }
+    }
+    return [...latest.values()];
   }
 
   /**

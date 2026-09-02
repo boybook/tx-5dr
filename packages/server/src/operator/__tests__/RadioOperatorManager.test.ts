@@ -1092,10 +1092,11 @@ describe('RadioOperatorManager automatic QSO logging', () => {
       getStatistics: vi.fn().mockResolvedValue({ totalQSOs: 2 }),
     };
 
-    const { manager, eventEmitter } = createManager({
+    const { manager, eventEmitter, slotPackManager } = createManager({
       logBook: { id: 'log-1', name: 'Test Log', provider },
       callsign: 'BG5DRB',
       activeSlotPacks: [
+        buildSlotPack(`ft8-${base - MODES.FT8.slotMs}`, base - MODES.FT8.slotMs, []),
         buildSlotPack(`ft8-${base}`, base, [
           {
             message: 'BG5DRB N0CALL -09',
@@ -1148,6 +1149,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
       'BG5DRB N0CALL -09',
       'N0CALL BG5DRB -12',
     ]);
+    expect(slotPackManager.readStoredRecords).not.toHaveBeenCalled();
     expect(provider.addQSO.mock.calls[0]?.[0]?.comment).toBe('FT8  Sent: -12  Rcvd: -09');
     expect(autoSync).toHaveBeenCalledTimes(1);
     expect(notifyQSOComplete).toHaveBeenCalledTimes(1);

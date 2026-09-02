@@ -36,6 +36,8 @@ export class SlotPackPersistence {
   private isWriting = false;
   private processingPromise: Promise<void> | null = null;
   private writeQueue: SlotPackStorageRecord[] = [];
+  /** Latest snapshot per slot, used by QSO history reconstruction. */
+  private readonly latestRecordsCache = new Map<string, Map<string, SlotPackStorageRecord>>();
   private readonly maxRetries = 3;
   private readonly version = '1.0.0';
   private unregisterPersistence: (() => void) | null = null;
@@ -130,6 +132,7 @@ export class SlotPackPersistence {
 
       // 强制刷新到磁盘（确保数据不丢失）
       await this.currentFileHandle.sync();
+      this.cacheRecord(record);
 
       const dataSizeKB = (Buffer.byteLength(jsonLine, 'utf8') / 1024).toFixed(2);
       logger.info(`Saved: ${record.slotPack.slotId} (${record.operation}, ${record.slotPack.frames.length} frames, ${dataSizeKB}KB)`);
@@ -276,6 +279,7 @@ export class SlotPackPersistence {
 
     // 清空队列
     this.writeQueue.length = 0;
+    this.latestRecordsCache.clear();
     this.unregisterPersistence?.();
     this.unregisterPersistence = null;
 
@@ -305,6 +309,7 @@ export class SlotPackPersistence {
       }
 
       logger.info(`Read ${records.length} records for ${dateStr}`);
+      this.rebuildLatestRecordsCache(dateStr, records);
       return records;
 
     } catch (error) {
@@ -314,6 +319,47 @@ export class SlotPackPersistence {
       }
       logger.error('read records failed', error);
       throw error;
+    }
+  }
+
+  /**
+   * Returns the newest persisted snapshot for each slot on a date. The first
+   * call may parse the date file; subsequent calls are served from the index.
+   */
+  async readLatestRecords(dateStr: string): Promise<SlotPackStorageRecord[]> {
+    const indexed = this.latestRecordsCache.get(dateStr);
+    if (indexed) return [...indexed.values()];
+
+    const records = await this.readRecords(dateStr);
+    const loaded = this.latestRecordsCache.get(dateStr);
+    if (loaded) return [...loaded.values()];
+
+    const fallback = new Map<string, SlotPackStorageRecord>();
+    for (const record of records) this.updateLatestRecord(fallback, record);
+    this.latestRecordsCache.set(dateStr, fallback);
+    return [...fallback.values()];
+  }
+
+  private cacheRecord(record: SlotPackStorageRecord): void {
+    const dateStr = this.getDateString(record.storedAt);
+    const indexed = this.latestRecordsCache.get(dateStr);
+    if (indexed) this.updateLatestRecord(indexed, record);
+  }
+
+  private rebuildLatestRecordsCache(dateStr: string, records: readonly SlotPackStorageRecord[]): void {
+    const indexed = new Map<string, SlotPackStorageRecord>();
+    for (const record of records) this.updateLatestRecord(indexed, record);
+    this.latestRecordsCache.set(dateStr, indexed);
+  }
+
+  private updateLatestRecord(indexed: Map<string, SlotPackStorageRecord>, record: SlotPackStorageRecord): void {
+    const slotId = record.slotPack.slotId;
+    const previous = indexed.get(slotId);
+    if (!previous
+      || record.slotPack.stats.lastUpdated > previous.slotPack.stats.lastUpdated
+      || (record.slotPack.stats.lastUpdated === previous.slotPack.stats.lastUpdated
+        && record.storedAt >= previous.storedAt)) {
+      indexed.set(slotId, record);
     }
   }
 

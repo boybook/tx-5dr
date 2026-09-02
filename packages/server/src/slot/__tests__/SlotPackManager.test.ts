@@ -140,6 +140,20 @@ describe('SlotPackManager event routing', () => {
     expect(manager.getStatus().lastSlotPack?.slotId).toBe(`slot-${SLOT_PACK_HISTORY_LIMIT * 15_000}`);
   });
 
+  it('filters active slot packs to a requested history window', () => {
+    const manager = new SlotPackManager();
+    manager.setPersistenceEnabled(false);
+
+    manager.processDecodeResult(buildDecodeResult(15_000, [{ message: 'CQ OLD PM00', snr: -10 }]));
+    manager.processDecodeResult(buildDecodeResult(30_000, [{ message: 'CQ TARGET PM00', snr: -10 }]));
+    manager.processDecodeResult(buildDecodeResult(45_000, [{ message: 'CQ NEW PM00', snr: -10 }]));
+
+    expect(manager.getActiveSlotPacks(30_001, 45_000).map((slotPack) => slotPack.slotId)).toEqual([
+      'slot-30000',
+      'slot-45000',
+    ]);
+  });
+
   it('does not count empty slot packs toward the effective history limit and trims old empty packs', () => {
     const manager = new SlotPackManager();
     manager.setPersistenceEnabled(false);

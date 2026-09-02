@@ -3232,17 +3232,36 @@ export class RadioOperatorManager {
 
   private async collectRelevantSlotPacks(startMs: number, endMs: number): Promise<SlotPack[]> {
     const merged = new Map<string, SlotPack>();
-    const activeSlotPacks = this.slotPackManager.getActiveSlotPacks();
+    const activeSlotPacks = this.slotPackManager
+      .getActiveSlotPacks(startMs, endMs)
+      .filter((slotPack) => slotPack.startMs <= endMs && slotPack.endMs >= startMs);
 
     for (const slotPack of activeSlotPacks) {
-      if (slotPack.startMs <= endMs && slotPack.endMs >= startMs) {
-        merged.set(slotPack.slotId, slotPack);
-      }
+      merged.set(slotPack.slotId, slotPack);
+    }
+
+    // Recent QSO history is already retained in memory. Avoid reading and
+    // parsing the entire daily JSONL file while the TX timing path is active.
+    // Fall back to persistence only when the active cache cannot cover both
+    // ends of the requested history window (for example after a restart or
+    // an explicit in-memory cache clear).
+    const cacheCoversWindow = activeSlotPacks.some((slotPack) => slotPack.startMs <= startMs)
+      && activeSlotPacks.some((slotPack) => slotPack.endMs >= endMs);
+    if (cacheCoversWindow) {
+      return Array.from(merged.values()).sort((left, right) => {
+        if (left.startMs !== right.startMs) return left.startMs - right.startMs;
+        return left.slotId.localeCompare(right.slotId);
+      });
     }
 
     const dateStrings = this.getDateStringsBetween(startMs, endMs);
     for (const dateStr of dateStrings) {
-      const records = await this.slotPackManager.readStoredRecords(dateStr);
+      const readLatestStoredRecords = (this.slotPackManager as SlotPackManager & {
+        readLatestStoredRecords?: (date: string) => Promise<Array<{ slotPack: SlotPack; storedAt?: number }>>;
+      }).readLatestStoredRecords;
+      const records = typeof readLatestStoredRecords === 'function'
+        ? await readLatestStoredRecords.call(this.slotPackManager, dateStr)
+        : await this.slotPackManager.readStoredRecords(dateStr);
       const latestBySlot = new Map<string, SlotPack>();
 
       for (const record of records) {
