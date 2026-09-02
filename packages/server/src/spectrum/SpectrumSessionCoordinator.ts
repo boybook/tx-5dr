@@ -33,8 +33,6 @@ const RADIO_FRAME_SESSION_STATE_MIN_INTERVAL_MS = 2000;
 const ZOOM_CONFIRM_TIMEOUT_MS = 2000;
 const STANDARD_FREQUENCY_TOLERANCE_HZ = 1500;
 const ACTIVE_WINDOW_TOLERANCE_HZ = 10;
-const DIGITAL_WINDOW_LOW_OFFSET_HZ = -1000;
-const DIGITAL_WINDOW_HIGH_OFFSET_HZ = 4000;
 const DIGITAL_WINDOW_PENDING_TIMEOUT_MS = 3000;
 const OPENWEBRX_DETAIL_OFFSET_HZ = 1500;
 const VOICE_FREQUENCY_GESTURE_STEP_HZ = 1000;
@@ -95,6 +93,12 @@ interface PendingDigitalTransition {
   lowHz: number | null;
   highHz: number | null;
   expiresAt: number;
+}
+
+interface SplitInteractionState {
+  enabled: boolean;
+  txFrequency: number | null;
+  writable: boolean;
 }
 
 const EMPTY_VOICE_STATE: CachedVoiceState = {
@@ -240,7 +244,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
   ): Promise<void> {
     switch (id) {
       case 'zoom-step':
-        if (kind === 'radio-sdr' && (action === 'in' || action === 'out')) {
+        if (kind === 'radio-sdr' && !this.isTciRadioActive() && (action === 'in' || action === 'out')) {
           await this.stepRadioZoom(action);
         }
         break;
@@ -352,8 +356,12 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       return;
     }
 
-    const lowHz = standardFrequencyHz + DIGITAL_WINDOW_LOW_OFFSET_HZ;
-    const highHz = standardFrequencyHz + DIGITAL_WINDOW_HIGH_OFFSET_HZ;
+    const lowHz = digitalWindowState.lowHz;
+    const highHz = digitalWindowState.highHz;
+    if (lowHz === null || highHz === null) {
+      this.markDirty();
+      return;
+    }
     this.setPendingDigitalTransition({
       mode: 'activate',
       lowHz,
@@ -395,6 +403,14 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
           spanHz: null,
           voice,
           interaction: {
+            viewMode: 'radio-center',
+            viewport: {
+              enabled: false,
+              canZoom: false,
+              canPan: false,
+              canTuneAtEdge: false,
+              bounds: null,
+            },
             showTxMarkers: this.engine.getEngineMode() === 'digital',
             showRxMarkers: this.engine.getEngineMode() === 'digital',
             canDragTx: this.engine.getEngineMode() === 'digital',
@@ -404,6 +420,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
             frequencyGestureTarget: this.engine.getEngineMode() === 'digital' ? 'operator-tx' : null,
             frequencyStepHz: this.engine.getEngineMode() === 'digital' ? 1 : null,
             presetMarkers: [],
+            frequencyOverlays: [],
             canDragVoiceOverlay: false,
             showVoiceOverlay: false,
             canLocalViewportZoom: false,
@@ -432,6 +449,14 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
           spanHz: null,
           voice,
           interaction: {
+            viewMode: 'radio-center',
+            viewport: {
+              enabled: false,
+              canZoom: false,
+              canPan: false,
+              canTuneAtEdge: false,
+              bounds: null,
+            },
             showTxMarkers: false,
             showRxMarkers: false,
             canDragTx: false,
@@ -441,6 +466,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
             frequencyGestureTarget: null,
             frequencyStepHz: null,
             presetMarkers: [],
+            frequencyOverlays: [],
             canDragVoiceOverlay: false,
             showVoiceOverlay: false,
             canLocalViewportZoom: false,
@@ -465,22 +491,31 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     const engineMode = this.engine.getEngineMode();
     const isVoiceMode = engineMode === 'voice';
     const isCwMode = engineMode === 'cw';
+    const isImageMode = engineMode === 'image';
     const sourceMode = this.mapRadioDisplayModeToSourceMode(display.mode);
     const isFixed = sourceMode === 'fixed' || sourceMode === 'scroll-fixed';
     const isDigital = engineMode === 'digital';
+    const viewMode = this.isTciRadioActive() ? 'wide' as const : 'radio-center' as const;
+    const viewportBounds = viewMode === 'wide'
+      ? (this.lastRadioFrame?.meta.nativeFrequencyRange ?? display.displayRange)
+      : null;
     const canVoiceSetFrequency = isVoiceMode
+      && currentRadioFrequency !== null
+      && display.displayRange !== null;
+    const canImageSetFrequency = isImageMode
       && currentRadioFrequency !== null
       && display.displayRange !== null;
     const canCwSetFrequency = isCwMode
       && currentRadioFrequency !== null
       && display.displayRange !== null;
-    const canSetRadioFrequency = canVoiceSetFrequency || canCwSetFrequency;
+    const canSetRadioFrequency = canVoiceSetFrequency || canImageSetFrequency || canCwSetFrequency;
+    const split = this.resolveSplitInteractionState();
     const presetMarkers = isVoiceMode && display.displayRange
       ? this.resolveVoicePresetMarkers(display.displayRange.min, display.displayRange.max, canVoiceSetFrequency)
       : [];
 
     const controls: SpectrumSessionControl[] = [];
-    if (zoom.visible) {
+    if (zoom.visible && !this.isTciRadioActive()) {
       controls.push({
         id: 'zoom-step',
         action: 'out',
@@ -501,7 +536,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       });
     }
 
-    if (digitalWindow.supported) {
+    if (digitalWindow.supported && !this.isTciRadioActive()) {
       controls.push({
         id: 'digital-window-toggle',
         action: 'toggle',
@@ -526,6 +561,14 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       spanHz: display.spanHz,
       voice,
       interaction: {
+        viewMode,
+        viewport: {
+          enabled: viewMode === 'wide',
+          canZoom: viewMode === 'wide',
+          canPan: viewMode === 'wide',
+          canTuneAtEdge: viewMode === 'wide',
+          bounds: viewportBounds,
+        },
         showTxMarkers: isDigital,
         showRxMarkers: isDigital,
         canDragTx: isDigital,
@@ -533,10 +576,21 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
         canDoubleClickSetFrequency: canSetRadioFrequency,
         canDragFrequency: canSetRadioFrequency && !isFixed,
         frequencyGestureTarget: isDigital ? 'operator-tx' : (canSetRadioFrequency ? 'radio-frequency' : null),
-        frequencyStepHz: isDigital ? 1 : (canVoiceSetFrequency ? VOICE_FREQUENCY_GESTURE_STEP_HZ : (canCwSetFrequency ? 10 : null)),
+        frequencyStepHz: isDigital ? 1 : ((canVoiceSetFrequency || canImageSetFrequency) ? VOICE_FREQUENCY_GESTURE_STEP_HZ : (canCwSetFrequency ? 10 : null)),
         // Voice preset markers are negotiated here so SDR preset rendering stays on the
         // same capability/session-state channel as the rest of the spectrum interactions.
         presetMarkers,
+        frequencyOverlays: [
+          ...this.buildRadioSdrFrequencyOverlays(digitalWindow),
+          ...this.buildCarrierFrequencyOverlays({
+            engineMode,
+            viewMode,
+            currentRadioFrequency,
+            voice,
+            split,
+            canSetRadioFrequency,
+          }),
+        ],
         canDragVoiceOverlay: false,
         showVoiceOverlay: isVoiceMode,
         canLocalViewportZoom: false,
@@ -547,6 +601,153 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       },
       controls,
     };
+  }
+
+  private resolveSplitInteractionState(): SplitInteractionState {
+    const snapshot = this.engine.getRadioManager().getCapabilitySnapshot?.();
+    const state = snapshot?.capabilities.find((capability) => capability.id === 'split_enabled');
+    const meta = state?.meta as { txFrequency?: unknown; txFrequencyWritable?: unknown } | undefined;
+    const txFrequency = typeof meta?.txFrequency === 'number'
+      && Number.isFinite(meta.txFrequency)
+      && meta.txFrequency > 0
+      ? meta.txFrequency
+      : null;
+    return {
+      enabled: state?.value === true,
+      txFrequency,
+      writable: meta?.txFrequencyWritable === true,
+    };
+  }
+
+  private buildCarrierFrequencyOverlays({
+    engineMode,
+    viewMode,
+    currentRadioFrequency,
+    voice,
+    split,
+    canSetRadioFrequency,
+  }: {
+    engineMode: 'digital' | 'voice' | 'cw' | 'image';
+    viewMode: 'wide' | 'radio-center';
+    currentRadioFrequency: number | null;
+    voice: VoiceState;
+    split: SplitInteractionState;
+    canSetRadioFrequency: boolean;
+  }): SpectrumSessionState['interaction']['frequencyOverlays'] {
+    if (currentRadioFrequency === null || engineMode === 'digital') return [];
+
+    const canDragCarrier = viewMode === 'wide' && canSetRadioFrequency;
+    const canDragSplit = split.enabled && split.txFrequency !== null && split.writable;
+    const overlays: SpectrumSessionState['interaction']['frequencyOverlays'] = [];
+
+    const addOverlay = (
+      id: string,
+      label: string,
+      lineFrequency: number,
+      rangeStartFrequency: number,
+      rangeEndFrequency: number,
+      variant: 'tx' | 'rx',
+      frequencyTarget: 'radio-frequency' | 'split-frequency' | null,
+      draggable: boolean,
+    ) => {
+      overlays.push({
+        id,
+        label,
+        lineFrequency,
+        rangeStartFrequency,
+        rangeEndFrequency,
+        variant,
+        draggable,
+        frequencyTarget,
+      });
+    };
+
+    if (engineMode === 'voice' && voice.offsetModel && voice.occupiedBandwidthHz && voice.occupiedBandwidthHz > 0) {
+      const getRange = (frequency: number): [number, number] => {
+        switch (voice.offsetModel) {
+          case 'upper': return [frequency, frequency + voice.occupiedBandwidthHz!];
+          case 'lower': return [frequency - voice.occupiedBandwidthHz!, frequency];
+          case 'symmetric': return [frequency - voice.occupiedBandwidthHz! / 2, frequency + voice.occupiedBandwidthHz! / 2];
+        }
+        return [frequency, frequency];
+      };
+      const [rxStart, rxEnd] = getRange(currentRadioFrequency);
+      addOverlay(
+        split.enabled ? 'voice-current-rx' : 'voice-current-tx',
+        split.enabled ? 'RX' : 'TX',
+        currentRadioFrequency,
+        rxStart!,
+        rxEnd!,
+        split.enabled ? 'rx' : 'tx',
+        split.enabled ? null : 'radio-frequency',
+        canDragCarrier && !split.enabled,
+      );
+      if (split.enabled && split.txFrequency !== null) {
+        const [txStart, txEnd] = getRange(split.txFrequency);
+        addOverlay('voice-split-tx', 'TX', split.txFrequency, txStart!, txEnd!, 'tx', 'split-frequency', canDragSplit);
+      }
+      return overlays;
+    }
+
+    if (engineMode === 'cw') {
+      addOverlay(
+        split.enabled ? 'cw-current-rx' : 'cw-current-tx',
+        split.enabled ? 'RX' : 'TX',
+        currentRadioFrequency,
+        currentRadioFrequency,
+        currentRadioFrequency,
+        split.enabled ? 'rx' : 'tx',
+        split.enabled ? null : 'radio-frequency',
+        canDragCarrier && !split.enabled,
+      );
+      if (split.enabled && split.txFrequency !== null) {
+        addOverlay('cw-split-tx', 'TX', split.txFrequency, split.txFrequency, split.txFrequency, 'tx', 'split-frequency', canDragSplit);
+      }
+      return overlays;
+    }
+
+    addOverlay(
+      'image-current-tx',
+      'TX',
+      currentRadioFrequency,
+      currentRadioFrequency,
+      currentRadioFrequency,
+      'tx',
+      split.enabled ? null : 'radio-frequency',
+      canDragCarrier && !split.enabled,
+    );
+    if (split.enabled && split.txFrequency !== null) {
+      addOverlay('image-split-tx', 'TX', split.txFrequency, split.txFrequency, split.txFrequency, 'tx', 'split-frequency', canDragSplit);
+    }
+    return overlays;
+  }
+
+  private buildRadioSdrFrequencyOverlays(
+    digitalWindow: DigitalWindowState,
+  ): SpectrumSessionState['interaction']['frequencyOverlays'] {
+    if (
+      !digitalWindow.supported
+      || digitalWindow.standardFrequencyHz === null
+      || digitalWindow.lowHz === null
+      || digitalWindow.highHz === null
+    ) {
+      return [];
+    }
+
+    return [{
+      id: 'digital-usb-window',
+      label: '',
+      lineFrequency: digitalWindow.standardFrequencyHz,
+      rangeStartFrequency: digitalWindow.lowHz,
+      rangeEndFrequency: digitalWindow.highHz,
+      variant: 'window',
+      // Session policy has already established this is the FT8/FT4 operating
+      // window. The browser still gates the gesture with its frequency-write
+      // permission, so digital users can drag the base-frequency line without
+      // exposing a TX marker interaction.
+      draggable: true,
+      frequencyTarget: 'radio-frequency',
+    }];
   }
 
   private async buildOpenWebRXState(
@@ -655,6 +856,14 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       spanHz: displayRange ? displayRange.max - displayRange.min : null,
       voice,
       interaction: {
+        viewMode: 'radio-center',
+        viewport: {
+          enabled: false,
+          canZoom: false,
+          canPan: false,
+          canTuneAtEdge: false,
+          bounds: null,
+        },
         showTxMarkers: detailEnabled,
         showRxMarkers: detailEnabled,
         canDragTx: detailEnabled && isDigitalMode,
@@ -664,6 +873,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
         frequencyGestureTarget: detailEnabled && isDigitalMode ? 'operator-tx' : null,
         frequencyStepHz: detailEnabled && isDigitalMode ? 1 : null,
         presetMarkers,
+        frequencyOverlays: [],
         canDragVoiceOverlay: false,
         showVoiceOverlay: false,
         canLocalViewportZoom: !detailEnabled,
@@ -940,6 +1150,10 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     this.clearSpectrumDisplayStateCache();
   }
 
+  private isTciRadioActive(): boolean {
+    return this.engine.getRadioManager().getConfig?.().type === 'tci';
+  }
+
   private getZoomCapableConnection(): RadioSpectrumSpanController | null {
     const registeredSource = this.spectrumCoordinator.getActiveRadioSpectrumSource?.();
     if (registeredSource?.spanController) {
@@ -1093,7 +1307,8 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     }
 
     const connection = this.getDisplayConfigurableConnection();
-    const supported = Boolean(connection?.configureSpectrumDisplay && connection?.getSpectrumDisplayState);
+    const tciRadio = this.isTciRadioActive();
+    const supported = tciRadio || Boolean(connection?.configureSpectrumDisplay && connection?.getSpectrumDisplayState);
     if (!supported) {
       this.clearPendingDigitalTransition();
       const empty = this.createEmptyDigitalWindowState();
@@ -1109,8 +1324,19 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       return empty;
     }
 
-    const lowHz = standardFrequencyHz + DIGITAL_WINDOW_LOW_OFFSET_HZ;
-    const highHz = standardFrequencyHz + DIGITAL_WINDOW_HIGH_OFFSET_HZ;
+    const filterOffsets = tciRadio
+      ? await this.resolveTciRxFilterBand()
+      : await this.resolveHamlibFilterOffsets();
+    if (!filterOffsets) {
+      this.clearPendingDigitalTransition();
+      const empty = this.createEmptyDigitalWindowState();
+      this.cachedDigitalWindowState = empty;
+      return empty;
+    }
+    const lowOffsetHz = filterOffsets[0];
+    const highOffsetHz = filterOffsets[1];
+    const lowHz = standardFrequencyHz + lowOffsetHz;
+    const highHz = standardFrequencyHz + highOffsetHz;
     const fixedMode = display.mode === 'fixed' || display.mode === 'scroll-fixed';
     const active = fixedMode
       && this.isWithinTolerance(display.edgeLowHz, lowHz, ACTIVE_WINDOW_TOLERANCE_HZ)
@@ -1121,7 +1347,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       supported: true,
       active,
       pending,
-      canToggle: !pending,
+      canToggle: !pending && !tciRadio,
       standardFrequencyHz,
       lowHz,
       highHz,
@@ -1293,6 +1519,31 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       return null;
     }
     return connection;
+  }
+
+  private async resolveTciRxFilterBand(): Promise<[number, number] | null> {
+    const connection = this.engine.getRadioManager().getActiveConnection() as {
+      getTciRxFilterBand?: () => Promise<[number, number] | null>;
+    } | null;
+    const band = await connection?.getTciRxFilterBand?.() ?? null;
+    if (!band || !Number.isFinite(band[0]) || !Number.isFinite(band[1]) || band[1] < band[0]) {
+      return null;
+    }
+    return [band[0], band[1]];
+  }
+
+  private async resolveHamlibFilterOffsets(): Promise<[number, number] | null> {
+    const connection = this.engine.getRadioManager().getActiveConnection();
+    if (!connection?.getMode) return null;
+    const modeInfo = await connection.getMode().catch(() => null);
+    const bandwidth = typeof modeInfo?.bandwidth === 'number' && Number.isFinite(modeInfo.bandwidth)
+      ? Math.round(modeInfo.bandwidth)
+      : null;
+    if (!modeInfo || bandwidth === null || bandwidth <= 0) return null;
+    const mode = modeInfo.mode.toUpperCase();
+    if (mode === 'USB' || mode === 'DIGU' || mode === 'USB-D' || mode === 'PKTUSB') return [0, bandwidth];
+    if (mode === 'LSB' || mode === 'DIGL' || mode === 'LSB-D' || mode === 'PKTLSB') return [-bandwidth, 0];
+    return null;
   }
 
   private isWithinTolerance(actual: number | null, expected: number, tolerance: number): boolean {

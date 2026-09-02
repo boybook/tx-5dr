@@ -18,11 +18,12 @@ import {
   type TciRxMeterFrame,
   type TciTxMeterFrame,
 } from 'tci-client-node';
-import type { MeterCapabilities, TunerCapabilities, TunerStatus } from '@tx5dr/contracts';
+import type { MeterCapabilities, TciSpectrumSettings, TunerCapabilities, TunerStatus } from '@tx5dr/contracts';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
 import { createLogger } from '../../utils/logger.js';
 import { buildLevelMeterReading, formatSValue } from './meterUtils.js';
 import { RadioIoQueue } from './RadioIoQueue.js';
+import { ConfigManager } from '../../config/config-manager.js';
 import {
   type ApplyOperatingStateRequest,
   type ApplyOperatingStateResult,
@@ -99,6 +100,15 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
   private txFallbackCopiedSamples = 0;
   private txFallbackMissingSamples = 0;
   private readonly options: { writeTimeoutMs?: number };
+  private tciIqSpectrumController: {
+    getSupportedSpans(): Promise<readonly number[]>;
+    getCurrentSpan(): Promise<number | null>;
+    setSpan(spanHz: number): Promise<number>;
+    isActive?: () => boolean;
+    getTciSpectrumSettings?: () => TciSpectrumSettings;
+    setTciSpectrumSettings?: (settings: TciSpectrumSettings) => Promise<TciSpectrumSettings>;
+  } | null = null;
+  private tciRxFilterBandReadPromise: Promise<[number, number] | null> | null = null;
 
   constructor(options: { writeTimeoutMs?: number } = {}) {
     super();
@@ -546,6 +556,68 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     };
   }
 
+  registerTciIqSpectrumController(controller: {
+    getSupportedSpans(): Promise<readonly number[]>;
+    getCurrentSpan(): Promise<number | null>;
+    setSpan(spanHz: number): Promise<number>;
+  }): void {
+    this.tciIqSpectrumController = controller;
+  }
+
+  unregisterTciIqSpectrumController(controller: object): void {
+    if (this.tciIqSpectrumController === controller) {
+      this.tciIqSpectrumController = null;
+    }
+  }
+
+  async getTciIqSampleRates(): Promise<number[]> {
+    // Capability negotiation must expose the protocol's actual IQ sample-rate
+    // options.  The spectrum controller's `getSupportedSpans()` is a view
+    // concern (it may reject rates that cannot satisfy a local display window),
+    // so using it here would make the radio capability panel advertise an
+    // incomplete and session-dependent set of values.
+    const rates = this.getTciIqSupport().supportedSampleRates;
+    return Array.from(new Set(rates.filter((rate) => Number.isFinite(rate) && rate > 0))).sort((a, b) => a - b);
+  }
+
+  async getTciIqSampleRate(): Promise<number | null> {
+    const current = await this.tciIqSpectrumController?.getCurrentSpan().catch(() => null);
+    if (typeof current === 'number' && Number.isFinite(current) && current > 0) return current;
+    const configured = ConfigManager.getInstance().getTciIqSampleRate();
+    if (configured !== null) return configured;
+    const observed = this.getTciIqSupport().currentSampleRate;
+    return typeof observed === 'number' && Number.isFinite(observed) && observed > 0 ? observed : null;
+  }
+
+  async setTciIqSampleRate(sampleRate: number): Promise<number> {
+    const supported = await this.getTciIqSampleRates();
+    const requested = Math.round(sampleRate);
+    if (!supported.includes(requested)) throw new Error(`Unsupported TCI IQ sample rate: ${sampleRate}`);
+    if (!this.tciIqSpectrumController || this.tciIqSpectrumController.isActive?.() === false) {
+      // Persist the desired global rate even while the optional spectrum
+      // stream is stopped. The next source start will negotiate it with TCI.
+      await ConfigManager.getInstance().updateTciIqSampleRate(requested);
+      return requested;
+    }
+    const applied = await this.tciIqSpectrumController.setSpan(requested);
+    await ConfigManager.getInstance().updateTciIqSampleRate(applied);
+    return applied;
+  }
+
+  async getTciSpectrumSettings(): Promise<TciSpectrumSettings> {
+    return this.tciIqSpectrumController?.getTciSpectrumSettings?.()
+      ?? ConfigManager.getInstance().getTciSpectrumSettings();
+  }
+
+  async setTciSpectrumSettings(settings: TciSpectrumSettings): Promise<TciSpectrumSettings> {
+    const applied = await this.tciIqSpectrumController?.setTciSpectrumSettings?.(settings);
+    if (applied) return applied;
+    // Persist while the optional stream is stopped; the source reads this
+    // global configuration when it is created or restarted.
+    await ConfigManager.getInstance().updateTciSpectrumSettings(settings);
+    return ConfigManager.getInstance().getTciSpectrumSettings();
+  }
+
   getAudioSampleRate(): number {
     return this.currentConfig?.tci?.audioSampleRate ?? DEFAULT_TCI_AUDIO_RATE;
   }
@@ -561,6 +633,33 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
       supported: Boolean(dialect?.supportsIqStream),
       supportedSampleRates: [...(dialect?.iqSampleRates ?? [])],
     };
+  }
+
+  getTciIqIfLimits(): [number, number] | null {
+    const limits = this.client?.getState().ifLimits;
+    if (!limits || !Number.isFinite(limits[0]) || !Number.isFinite(limits[1]) || limits[1] <= limits[0]) {
+      return null;
+    }
+    return [limits[0], limits[1]];
+  }
+
+  async getTciRxFilterBand(): Promise<[number, number] | null> {
+    if (!this.client) return null;
+    const receiver = this.currentConfig?.tci?.receiver ?? 0;
+    const cached = this.client.getState().rxFilterBands[String(receiver)];
+    if (cached) return [cached[0], cached[1]];
+    if (this.tciRxFilterBandReadPromise) return this.tciRxFilterBandReadPromise;
+    this.tciRxFilterBandReadPromise = this.client.getRxFilterBand(receiver)
+      .catch(() => undefined)
+      .then((band) => band && Number.isFinite(band[0]) && Number.isFinite(band[1]) && band[1] >= band[0]
+        ? [band[0], band[1]] as [number, number]
+        : null)
+      .finally(() => {
+        this.tciRxFilterBandReadPromise = null;
+      });
+    const band = await this.tciRxFilterBandReadPromise;
+    if (!band || !Number.isFinite(band[0]) || !Number.isFinite(band[1]) || band[1] < band[0]) return null;
+    return [band[0], band[1]];
   }
 
   getTciIqClientOptions(): TciClientOptions | null {

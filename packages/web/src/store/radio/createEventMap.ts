@@ -312,10 +312,12 @@ export function createRadioEventMap({
       spectrumNegotiation.applySpectrumSelection(data as SpectrumCapabilities);
     },
     spectrumFrame: (data: unknown) => {
-      const profileId = (data as SpectrumFrame).meta.profileId;
+      const frame = data as SpectrumFrame;
+      const profileId = frame.meta.profileId;
       if (!spectrumNegotiation.shouldAcceptSpectrumProfile(profileId)) {
         return;
       }
+      spectrumNegotiation.onSpectrumFrame(frame);
     },
     spectrumSessionStateChanged: (data: unknown) => {
       spectrumNegotiation.onSpectrumSessionStateChanged(data as SpectrumSessionState);

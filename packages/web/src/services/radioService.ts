@@ -2,6 +2,7 @@ import { api, WSClient } from '@tx5dr/core';
 import type {
   OperatorRuntimeSlot,
   SpectrumKind,
+  SpectrumViewport,
   WSSpectrumSubscriptionChangedMessage,
   WSSelectedFrame,
   WSSetOperatorContextMessage,
@@ -18,6 +19,19 @@ const logger = createLogger('RadioService');
 const SPECTRUM_SUBSCRIPTION_ACK_TIMEOUT_MS = 5000;
 const SPECTRUM_SUBSCRIPTION_MAX_RETRIES = 3;
 
+function areSpectrumViewportsEqual(
+  left: SpectrumViewport | null,
+  right: SpectrumViewport | null,
+): boolean {
+  return left === right || Boolean(
+    left
+    && right
+    && left.min === right.min
+    && left.max === right.max
+    && left.displayBinCount === right.displayBinCount,
+  );
+}
+
 /**
  * 无线电数据服务
  * 专注于WebSocket连接和实时数据流管理
@@ -29,6 +43,7 @@ export class RadioService {
   private providerEventHandlers: Array<{ event: string; handler: (data?: unknown) => void }> = [];
   private providerEventOwner: symbol | null = null;
   private desiredSpectrumKind: SpectrumKind | null = null;
+  private desiredSpectrumViewport: SpectrumViewport | null = null;
   private pendingSpectrumAckKind: SpectrumKind | null = null;
   private spectrumAckTimer: ReturnType<typeof setTimeout> | null = null;
   private spectrumAckRetryCount = 0;
@@ -157,6 +172,21 @@ export class RadioService {
     }
   }
 
+  /**
+   * Set the browser-local radio SDR viewport.  The viewport is retained as
+   * desired state so reconnects and subscription retries negotiate it again;
+   * it never changes the radio or the shared IQ sample rate.
+   */
+  setSpectrumViewport(viewport: SpectrumViewport | null): void {
+    if (areSpectrumViewportsEqual(this.desiredSpectrumViewport, viewport)) {
+      return;
+    }
+    this.desiredSpectrumViewport = viewport;
+    if (this.isConnected && this.desiredSpectrumKind === 'radio-sdr') {
+      this.wsClient.setSpectrumViewport(viewport);
+    }
+  }
+
   replaySpectrumSubscription(): void {
     if (!this.isConnected || !this.desiredSpectrumKind) {
       return;
@@ -231,7 +261,11 @@ export class RadioService {
       return;
     }
 
-    this.wsClient.subscribeSpectrum(kind);
+    if (kind === 'radio-sdr' && this.desiredSpectrumViewport) {
+      this.wsClient.subscribeSpectrum(kind, this.desiredSpectrumViewport);
+    } else {
+      this.wsClient.subscribeSpectrum(kind);
+    }
     this.pendingSpectrumAckKind = kind;
 
     if (!kind) {

@@ -20,6 +20,12 @@ import { findOwnedUsbAudioHardwareId } from './linux-usb-audio-identity.js';
 import { IcomIfSsbDemodulator } from './IcomIfSsbDemodulator.js';
 import type { AudioInputSignalType } from '@tx5dr/contracts';
 import { VIRTUAL_AUDIO_INGRESS_TOKEN } from '../virtual-radio/virtualAudioIngress.js';
+import {
+  applyTxAudioEnvelope,
+  createTxAudioReleaseTail,
+  FT8_FT4_TX_ENVELOPE_POLICY,
+  type TxAudioEnvelopeProfile,
+} from './TxAudioEnvelope.js';
 
 const logger = createLogger('AudioStreamManager');
 // RtAudioFormat 是 const enum，isolatedModules 下无法直接导入，使用数值常量
@@ -273,6 +279,8 @@ export interface PlayAudioOptions {
   onPlaybackStarted?: () => void;
   /** Best-effort tap of PCM submitted by this playback session. Observer failures never fail physical output. */
   onPlaybackChunk?: (samples: Float32Array, sampleRate: number) => void;
+  /** Explicit opt-in envelope profile for a digital TX waveform. */
+  txEnvelopeProfile?: TxAudioEnvelopeProfile;
 }
 
 export type PlaybackKind = 'digital' | 'voice-keyer' | 'sstv' | 'tune-tone';
@@ -358,6 +366,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private playbackStartTime: number = 0;        // 播放开始时间戳
   private currentPlaybackPromise: Promise<void> | null = null;  // 当前播放的Promise
   private currentPlaybackKind: PlaybackKind | null = null;
+  private currentPlaybackEnvelopeProfile: TxAudioEnvelopeProfile | null = null;
   /**
    * Playback is allowed to overlap briefly while a timed-out cleanup settles.
    * Keep cancellation scoped to the playback that requested it; a global flag
@@ -390,6 +399,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    */
   private readonly rtAudioPlaybackStartWaiters: RtAudioPlaybackStartWaiter[] = [];
   private readonly rtAudioOutputDrainWaiters = new Set<RtAudioOutputDrainWaiter>();
+  private readonly playbackFadeOutRequested = new Set<number>();
   private readonly now: AudioClock;
   private inputSignalType: AudioInputSignalType = 'af';
   private ifCenterHz = 12000;
@@ -2258,9 +2268,15 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     const elapsedTime = now - this.playbackStartTime;
     const playbackId = this.playbackSequence;
     const playbackPromise = this.currentPlaybackPromise;
+    const shouldDrainEnvelope = this.currentPlaybackEnvelopeProfile === 'ft8-ft4';
 
     logger.debug(`stopping current playback, elapsed: ${elapsedTime}ms`);
 
+    // Digital FT8/FT4 playback gets one bounded release tail before the
+    // producer exits. Other playback kinds retain the existing hard stop.
+    if (this.currentPlaybackKind === 'digital') {
+      this.playbackFadeOutRequested.add(playbackId);
+    }
     // 设置停止标志,让播放循环自动退出
     this.stopRequestedPlaybackIds.add(playbackId);
 
@@ -2274,11 +2290,24 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       }
     }
 
+    if (shouldDrainEnvelope) {
+      try {
+        await this.waitForOutputDrain({ timeoutMs: 1_000 });
+      } catch (error) {
+        logger.warn('FT8/FT4 release tail output drain did not settle before timeout', {
+          playbackId,
+          error: this.describeError(error),
+        });
+      }
+    }
+
     this.stopRequestedPlaybackIds.delete(playbackId);
+    this.playbackFadeOutRequested.delete(playbackId);
     if (this.playbackSequence === playbackId && this.currentPlaybackPromise === playbackPromise) {
       this.playing = false;
       this.currentPlaybackPromise = null;
       this.currentPlaybackKind = null;
+      this.currentPlaybackEnvelopeProfile = null;
     }
 
     logger.debug(`playback stopped, elapsed: ${elapsedTime}ms`);
@@ -2394,6 +2423,40 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
   private isPlaybackStopRequested(playbackId: number): boolean {
     return this.stopRequestedPlaybackIds.has(playbackId);
+  }
+
+  private shouldFadeOutPlayback(playbackId: number): boolean {
+    return this.playbackFadeOutRequested.has(playbackId);
+  }
+
+  private getTxEnvelopePolicy(profile?: TxAudioEnvelopeProfile) {
+    return profile === FT8_FT4_TX_ENVELOPE_POLICY.profile
+      ? FT8_FT4_TX_ENVELOPE_POLICY
+      : null;
+  }
+
+  private prepareTxPlaybackData(
+    audioData: Float32Array,
+    sampleRate: number,
+    profile?: TxAudioEnvelopeProfile,
+  ): Float32Array {
+    const policy = this.getTxEnvelopePolicy(profile);
+    return policy ? applyTxAudioEnvelope(audioData, sampleRate, policy) : audioData;
+  }
+
+  private async writeTxReleaseTail(
+    playbackId: number,
+    lastSample: number,
+    sampleRate: number,
+    profile?: TxAudioEnvelopeProfile,
+    writer?: (samples: Float32Array) => Promise<void>,
+  ): Promise<void> {
+    if (!this.shouldFadeOutPlayback(playbackId)) return;
+    const policy = this.getTxEnvelopePolicy(profile);
+    if (!policy) return;
+    const tail = createTxAudioReleaseTail(lastSample, sampleRate, policy);
+    if (tail.length === 0) return;
+    await writer?.(tail);
   }
 
   public openDeterministicPlayback(options: PlayAudioOptions & { playbackKind: 'sstv' }): DeterministicPlaybackSession {
@@ -2551,6 +2614,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           this.playing = false;
           this.currentPlaybackKind = null;
           this.currentPlaybackPromise = null;
+          this.currentPlaybackEnvelopeProfile = null;
         }
       }
     };
@@ -2599,6 +2663,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     const playStartTime = Date.now();
     const playbackKind = options.playbackKind ?? 'digital';
     const playbackId = ++this.playbackSequence;
+    this.currentPlaybackEnvelopeProfile = options.txEnvelopeProfile ?? null;
     const diagnosticContext = options.diagnosticContext ?? {};
 
     const radioAudioOutput = this.usingIcomWlanOutput && this.icomWlanAudioAdapter
@@ -2611,8 +2676,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       const radioAudioAdapter = radioAudioOutput.adapter;
       const tciRadioAudioAdapter = radioAudioOutput.kind === 'tci' ? radioAudioOutput.adapter : null;
       const playbackStreamGeneration = this.outputStreamGeneration;
+      const playbackData = this.prepareTxPlaybackData(audioData, targetSampleRate, options.txEnvelopeProfile);
       logger.info(
-        `playing audio via ${radioAudioOutput.label} output (zero-resample) playbackId=${playbackId} frameId=${diagnosticContext.frameId ?? 'none'} operators=${Array.isArray(diagnosticContext.operatorIds) ? diagnosticContext.operatorIds.join(',') || 'none' : 'unknown'} samples=${audioData.length} sampleRate=${targetSampleRate} duration=${(audioData.length / targetSampleRate).toFixed(2)}s volumeGain=${this.volumeGain.toFixed(2)}`,
+        `playing audio via ${radioAudioOutput.label} output (zero-resample) playbackId=${playbackId} frameId=${diagnosticContext.frameId ?? 'none'} operators=${Array.isArray(diagnosticContext.operatorIds) ? diagnosticContext.operatorIds.join(',') || 'none' : 'unknown'} samples=${playbackData.length} sampleRate=${targetSampleRate} duration=${(playbackData.length / targetSampleRate).toFixed(2)}s volumeGain=${this.volumeGain.toFixed(2)}`,
       );
 
       this.playing = true;
@@ -2628,6 +2694,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         let targetLeadMs = ICOM_WLAN_TX_TARGET_BUFFER_LEAD_MS;
         let waitSliceMs = ICOM_WLAN_TX_MAX_WAIT_SLICE_MS;
         let playbackStarted = false;
+        let lastOutputSample = 0;
+        let releaseTailSent = false;
         const signalPlaybackStarted = () => {
           if (playbackStarted) return;
           playbackStarted = true;
@@ -2644,15 +2712,37 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           }
         };
 
+        const sendReleaseTail = async () => {
+          if (releaseTailSent || !this.shouldFadeOutPlayback(playbackId)) return;
+          releaseTailSent = true;
+          await this.writeTxReleaseTail(
+            playbackId,
+            lastOutputSample,
+            targetSampleRate,
+            options.txEnvelopeProfile,
+            async (tail) => radioAudioAdapter.sendAudio(tail),
+          );
+        };
+
         const waitRespectingStop = async (ms: number): Promise<void> => {
           let remainingMs = Math.max(0, ms);
           while (remainingMs > 0) {
-            assertNotStopped();
+            try {
+              assertNotStopped();
+            } catch (error) {
+              await sendReleaseTail();
+              throw error;
+            }
             const sleepMs = Math.min(waitSliceMs, remainingMs);
             await new Promise<void>(res => setTimeout(res, sleepMs));
             remainingMs -= sleepMs;
           }
-          assertNotStopped();
+          try {
+            assertNotStopped();
+          } catch (error) {
+            await sendReleaseTail();
+            throw error;
+          }
         };
 
         const getBufferedLeadMs = () => {
@@ -2673,7 +2763,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               `TCI paced send engaged playbackId=${playbackId} samplesPerFrame=${txSync?.samplesPerFrame ?? chunkSize} targetLeadMs=${targetLeadMs} recommendedPumpIntervalMs=${waitSliceMs} queuedSamples=${txSync?.queuedSamples ?? 0} queuedAudioMs=${(txSync?.queuedAudioMs ?? 0).toFixed(3)} sampleRate=${txSync?.sampleRate ?? targetSampleRate}`,
             );
           }
-          const totalChunks = Math.ceil(audioData.length / chunkSize);
+          const totalChunks = Math.ceil(playbackData.length / chunkSize);
           logger.debug(
             `${radioAudioOutput.label} chunked send playbackId=${playbackId} totalChunks=${totalChunks} chunkSize=${chunkSize} targetLeadMs=${targetLeadMs} waitSliceMs=${waitSliceMs}`,
           );
@@ -2683,18 +2773,20 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               assertNotStopped();
             } catch (error) {
               logger.debug(`${radioAudioOutput.label} stop signal received, aborting playback (sent ${i}/${totalChunks} chunks)`);
+              await sendReleaseTail();
               throw error;
             }
 
             const start = i * chunkSize;
-            const end = Math.min(start + chunkSize, audioData.length);
-            const sourceChunk = audioData.subarray(start, end);
+            const end = Math.min(start + chunkSize, playbackData.length);
+            const sourceChunk = playbackData.subarray(start, end);
             const chunk = new Float32Array(sourceChunk.length);
             const gain = this.volumeGain;
             for (let j = 0; j < sourceChunk.length; j++) {
               const sample = sourceChunk[j] * gain;
               chunk[j] = sample > 1 ? 1 : (sample < -1 ? -1 : sample);
             }
+            if (chunk.length > 0) lastOutputSample = chunk[chunk.length - 1]!;
 
             const leadMs = getBufferedLeadMs();
             if (leadMs > targetLeadMs) {
@@ -2711,7 +2803,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
           const remainingBufferedMs = getBufferedLeadMs();
           if (tciRadioAudioAdapter) {
-            const drainTimeoutMs = Math.max(1000, Math.ceil(audioData.length / targetSampleRate * 1000) + 1000);
+            const drainTimeoutMs = Math.max(1000, Math.ceil(playbackData.length / targetSampleRate * 1000) + 1000);
             await tciRadioAudioAdapter.drainTransmission(drainTimeoutMs);
           } else if (remainingBufferedMs > 0) {
             await waitRespectingStop(remainingBufferedMs);
@@ -2750,6 +2842,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           this.playing = false;
           this.currentPlaybackPromise = null;
           this.currentPlaybackKind = null;
+          this.currentPlaybackEnvelopeProfile = null;
           this.currentAudioData = null;
           this.currentSampleRate = 0;
         }
@@ -2766,19 +2859,41 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.currentPlaybackKind = playbackKind;
       const playbackStreamGeneration = this.outputStreamGeneration;
       const playbackPromise = (async () => {
-        const playbackData = targetSampleRate === this.outputSampleRate
+        const resampledData = targetSampleRate === this.outputSampleRate
           ? audioData
           : await resampleAudioProfessional(audioData, targetSampleRate, this.outputSampleRate, 1);
+        const playbackData = this.prepareTxPlaybackData(resampledData, this.outputSampleRate, options.txEnvelopeProfile);
         const chunkSize = Math.max(64, this.outputBufferSize || 1024);
         const hrStart = performance.now();
         let samplesWritten = 0;
         let playbackStarted = false;
+        let lastSourceSample = 0;
+        let releaseTailSent = false;
+        const sendReleaseTail = async () => {
+          if (releaseTailSent || !this.shouldFadeOutPlayback(playbackId)) return;
+          releaseTailSent = true;
+          await this.writeTxReleaseTail(
+            playbackId,
+            lastSourceSample,
+            this.outputSampleRate,
+            options.txEnvelopeProfile,
+            async (tail) => {
+              if (!this.androidAudioOutput || !await this.androidAudioOutput.write(tail, this.volumeGain)) {
+                throw new Error('Android audio output release tail failed');
+              }
+            },
+          );
+        };
         for (let offset = 0; offset < playbackData.length; offset += chunkSize) {
           if (this.outputRuntimeIssueError?.audioIssue.streamGeneration === playbackStreamGeneration) {
             throw this.outputRuntimeIssueError;
           }
-          if (this.isPlaybackStopRequested(playbackId)) throw new Error('playback interrupted');
+          if (this.isPlaybackStopRequested(playbackId)) {
+            await sendReleaseTail();
+            throw new Error('playback interrupted');
+          }
           const chunk = playbackData.subarray(offset, Math.min(offset + chunkSize, playbackData.length));
+          if (chunk.length > 0) lastSourceSample = chunk[chunk.length - 1]!;
           const wrote = await this.androidAudioOutput?.write(chunk, this.volumeGain);
           if (this.outputRuntimeIssueError?.audioIssue.streamGeneration === playbackStreamGeneration) {
             throw this.outputRuntimeIssueError;
@@ -2820,6 +2935,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           this.playing = false;
           this.currentPlaybackPromise = null;
           this.currentPlaybackKind = null;
+          this.currentPlaybackEnvelopeProfile = null;
           this.currentAudioData = null;
         }
       }
@@ -2874,6 +2990,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         logger.debug('sample rate matches, no resample needed');
         playbackData = audioData;
       }
+      playbackData = this.prepareTxPlaybackData(playbackData, this.outputSampleRate, options.txEnvelopeProfile);
 
       // 保存当前播放的音频数据（仅用于调试/查询，不再原地修改）
       this.currentAudioData = playbackData;
@@ -2911,7 +3028,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.resetOutputConsumeDiagnostics();
       const playbackStreamGeneration = this.outputStreamGeneration;
       const watchdogGeneration = this.outputWatchdogGeneration;
-      const consumeDiagnosticsEnabled = this.shouldRunRtAudioConsumeDiagnostics();
+      const consumeDiagnosticsEnabled = this.shouldRunRtAudioConsumeDiagnostics()
+        || options.txEnvelopeProfile === FT8_FT4_TX_ENVELOPE_POLICY.profile;
       let submittedChunks = 0;
       let submittedSamples = 0;
       let writeFailCount = 0;
@@ -2990,6 +3108,43 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         let cursor = 0;
         let samplesWritten = 0;
         let lastProgressSec = -1;
+        let lastOutputSample = 0;
+        let releaseTailSent = false;
+        let stopHandling = false;
+
+        const sendReleaseTail = async () => {
+          if (releaseTailSent || !this.shouldFadeOutPlayback(playbackId)) return;
+          releaseTailSent = true;
+          await this.writeTxReleaseTail(
+            playbackId,
+            lastOutputSample,
+            this.outputSampleRate,
+            options.txEnvelopeProfile,
+            async (tail) => {
+              if (!this.rtAudioOutput) throw new Error('audio output stream unavailable during release tail');
+              for (let offset = 0; offset < tail.length; offset += chunkSize) {
+                const encoded = this.encodeRtAudioOutputChunk(
+                  tail.subarray(offset, Math.min(offset + chunkSize, tail.length)),
+                  chunkSize,
+                  this.volumeGain,
+                  Boolean(options.injectIntoMonitor),
+                );
+                this.noteRtAudioChunkPending(playbackStartWaiter!);
+                try {
+                  this.rtAudioOutput.write(encoded.buffer);
+                } catch (error) {
+                  this.rollbackRtAudioChunkPending(playbackStartWaiter!);
+                  throw error;
+                }
+                if (encoded.monitorChunk && encoded.monitorChunk.length > 0) {
+                  this.emit('txMonitorAudioData', { samples: encoded.monitorChunk, sampleRate: this.outputSampleRate });
+                }
+                submittedChunks += 1;
+                submittedSamples += encoded.sourceSamples;
+              }
+            },
+          );
+        };
 
         const writeChunk = (idx: number): boolean => {
           if (!this.rtAudioOutput) {
@@ -3036,6 +3191,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             consecutiveWriteFailCount = 0;
             if (encoded.monitorChunk && encoded.monitorChunk.length > 0) {
               this.emit('txMonitorAudioData', { samples: encoded.monitorChunk, sampleRate: this.outputSampleRate });
+            }
+            if (encoded.sourceSamples > 0) {
+              // Keep the pre-gain source sample because the release-tail
+              // writer applies volumeGain exactly once during encoding.
+              lastOutputSample = chunk[chunk.length - 1]!;
             }
             samplesWritten += encoded.sourceSamples;
             submittedChunks++;
@@ -3102,7 +3262,12 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             if (this.isPlaybackStopRequested(playbackId)) {
               clearInterval(interval);
               logger.debug(`stop signal received, aborting playback (submitted ${cursor}/${totalChunks} chunks)`);
-              reject(new Error('playback interrupted'));
+              if (stopHandling) return;
+              stopHandling = true;
+              void sendReleaseTail().then(
+                () => reject(new Error('playback interrupted')),
+                (error) => reject(error),
+              );
               return;
             }
 
@@ -3247,6 +3412,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           logger.info('audio playback consume complete', consumeSummary);
         } else {
           logger.warn('RtAudio output did not consume all submitted playback chunks before timeout', consumeSummary);
+          if (options.txEnvelopeProfile === FT8_FT4_TX_ENVELOPE_POLICY.profile) {
+            throw new Error('RtAudio output drain timed out after FT8/FT4 envelope playback');
+          }
         }
       } else {
         stopWatchdog();
@@ -3272,6 +3440,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           this.currentAudioData = null;
           this.currentPlaybackPromise = null;
           this.currentPlaybackKind = null;
+          this.currentPlaybackEnvelopeProfile = null;
         }
       }
     })();

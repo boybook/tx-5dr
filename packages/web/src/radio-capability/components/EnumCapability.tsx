@@ -5,6 +5,8 @@ import { faCircleInfo } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
 import type { CapabilityComponentProps } from '../CapabilityRegistry';
 import { useCan } from '../../store/authStore';
+import { useHasMinRole } from '../../store/authStore';
+import { UserRole } from '@tx5dr/contracts';
 import { formatCapabilityOption } from '../display-utils';
 import { getCapabilityUnavailableText, isCapabilityInteractive } from '../availability';
 
@@ -16,9 +18,14 @@ export const EnumCapabilityPanel: React.FC<CapabilityComponentProps> = ({
 }) => {
   const { t } = useTranslation();
   const canControl = useCan('execute', 'RadioControl');
+  const isAdmin = useHasMinRole(UserRole.ADMIN);
   const isSupported = state?.supported ?? false;
   const canWrite = descriptor.writable;
-  const isInteractive = isCapabilityInteractive(state, canControl, canWrite);
+  const isInteractive = isCapabilityInteractive(
+    state,
+    canControl,
+    canWrite && (capabilityId === 'tci_iq_sample_rate' ? isAdmin : true),
+  );
   const unavailableText = getCapabilityUnavailableText(state, t, capabilityId);
   const options = descriptor.options ?? [];
 

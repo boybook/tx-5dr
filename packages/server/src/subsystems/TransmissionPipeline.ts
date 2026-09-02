@@ -19,6 +19,8 @@ import { ListenerManager } from './ListenerManager.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('TransmissionPipeline');
+// RF/protocol guard after the audio release envelope; this is not the
+// sample-level envelope itself.
 const DIGITAL_TAIL_HOLD_MS = 500;
 
 class CompleteFrameBudgetExceededError extends Error {
@@ -631,6 +633,7 @@ export class TransmissionPipeline {
         operatorIds: audioForTransmission.operatorIds,
         reason: 'digital slot frame audio',
         playbackOptions: {
+          txEnvelopeProfile: 'ft8-ft4',
           diagnosticContext: {
             frameId: prepared.frameId,
             operatorIds: audioForTransmission.operatorIds,
@@ -756,6 +759,7 @@ export class TransmissionPipeline {
       audioData: aligned.audioData,
       sampleRate: aligned.sampleRate,
       playbackOptions: {
+        txEnvelopeProfile: 'ft8-ft4',
         diagnosticContext: { frameId, operatorIds: aligned.operatorIds, mixMetrics: aligned.mixMetrics },
       },
       tailHoldMs: DIGITAL_TAIL_HOLD_MS,

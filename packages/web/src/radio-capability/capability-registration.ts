@@ -70,6 +70,7 @@ registerCapabilityComponent('split_enabled', BooleanCapabilityPanel);
 registerCapabilityComponent('vfo_select', EnumCapabilityPanel);
 registerCapabilityComponent('audio_if_mode', EnumCapabilityPanel);
 registerCapabilityComponent('tx_audio_input_source', EnumCapabilityPanel);
+registerCapabilityComponent('tci_iq_sample_rate', EnumCapabilityPanel);
 registerCapabilityComponent('rit_offset', NumberLevelCapabilityPanel);
 registerCapabilityComponent('xit_offset', NumberLevelCapabilityPanel);
 registerCapabilityComponent('tuning_step', EnumCapabilityPanel);

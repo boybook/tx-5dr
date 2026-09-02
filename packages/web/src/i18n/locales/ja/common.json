@@ -196,6 +196,8 @@
     "popOut": "別ウィンドウで表示",
     "rangeSettings": "スペクトル設定",
     "viewSettings": "ビュー",
+    "analysisSettings": "解析",
+    "interactionSettings": "操作",
     "displaySettings": "表示範囲",
     "inputSignalAfLabel": "AF",
     "inputSignalIfLabel": "IF",

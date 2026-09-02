@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { SpectrumFrameSchema, SpectrumLevelDescriptorSchema } from '../spectrum.schema.js';
+import { SpectrumFrameSchema, SpectrumLevelDescriptorSchema, SpectrumSessionInteractionStateSchema } from '../spectrum.schema.js';
 import {
   SpectrumSettingsResponseSchema,
   SpectrumSettingsUpdateRequestSchema,
+  TciSpectrumSettingsSchema,
   getSpectrumPresetDefinition,
 } from '../spectrum-config.schema.js';
 
@@ -44,6 +45,40 @@ describe('spectrum level descriptor schema', () => {
     });
     expect(result.success).toBe(true);
   });
+
+  it('defaults legacy interaction state to radio-center and accepts split TX targets', () => {
+    const interaction = SpectrumSessionInteractionStateSchema.parse({
+      showTxMarkers: false,
+      showRxMarkers: false,
+      canDragTx: false,
+      canRightClickSetFrequency: false,
+      canDoubleClickSetFrequency: false,
+      canDragFrequency: false,
+      frequencyGestureTarget: null,
+      frequencyStepHz: null,
+      presetMarkers: [],
+      frequencyOverlays: [{
+        id: 'split',
+        label: 'TX',
+        lineFrequency: 14_052_500,
+        rangeStartFrequency: 14_052_500,
+        rangeEndFrequency: 14_052_500,
+        variant: 'tx',
+        draggable: true,
+        frequencyTarget: 'split-frequency',
+      }],
+      canDragVoiceOverlay: false,
+      showVoiceOverlay: false,
+      canLocalViewportZoom: false,
+      canLocalViewportPan: false,
+      supportsManualRange: true,
+      supportsAutoRange: false,
+      defaultRangeMode: 'manual',
+    });
+    expect(interaction.viewMode).toBe('radio-center');
+    expect(interaction.viewport.enabled).toBe(false);
+    expect(interaction.frequencyOverlays[0]?.frequencyTarget).toBe('split-frequency');
+  });
 });
 
 describe('spectrum analysis settings schemas', () => {
@@ -72,5 +107,13 @@ describe('spectrum analysis settings schemas', () => {
         haloReduce: true,
       },
     }).preset).toBe('custom');
+  });
+
+  it('accepts high-performance TCI analysis settings within the supported bounds', () => {
+    expect(TciSpectrumSettingsSchema.parse({
+      fftSize: 65536,
+      displayBinCount: 16384,
+      analysisIntervalMs: 20,
+    })).toEqual({ fftSize: 65536, displayBinCount: 16384, analysisIntervalMs: 20 });
   });
 });

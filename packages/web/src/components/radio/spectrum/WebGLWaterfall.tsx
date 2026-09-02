@@ -48,6 +48,15 @@ export interface InteractionFrequencyRange {
   max: number;
 }
 
+export interface WaterfallViewportInteraction {
+  mode: 'none' | 'local-pan-zoom' | 'radio-center';
+  range?: InteractionFrequencyRange | null;
+  bounds?: InteractionFrequencyRange | null;
+  canZoom?: boolean;
+  canPan?: boolean;
+  onChange?: (range: InteractionFrequencyRange, source: 'pan' | 'zoom') => void;
+}
+
 export interface TxBandOverlay {
   id: string;
   label: string;
@@ -55,7 +64,8 @@ export interface TxBandOverlay {
   rangeStartFrequency: number;
   rangeEndFrequency: number;
   draggable?: boolean;
-  variant?: 'tx' | 'rx';
+  variant?: 'tx' | 'rx' | 'window';
+  frequencyTarget?: 'radio-frequency' | 'operator-tx' | 'split-frequency' | null;
 }
 
 export interface FrequencyBandOverlay {
@@ -121,6 +131,12 @@ interface WebGLWaterfallProps {
   basebandInteractionRange?: BasebandInteractionRange;
   interactionFrequencyMode?: 'baseband' | 'absolute';
   interactionFrequencyRange?: InteractionFrequencyRange | null;
+  viewportInteraction?: WaterfallViewportInteraction;
+  /** Absolute viewport panning/zooming for wide-band IQ sources (TCI). */
+  enableLocalViewportPanZoom?: boolean;
+  localViewportRange?: InteractionFrequencyRange | null;
+  localViewportBounds?: InteractionFrequencyRange | null;
+  onLocalViewportChange?: (range: InteractionFrequencyRange, source: 'pan' | 'zoom') => void;
   interactionFrequencyStepHz?: number | null;
   onTxFrequencyChange?: (operatorId: string, frequency: number) => void;
   onTxBandOverlayFrequencyChange?: (id: string, frequency: number) => void;
@@ -181,7 +197,11 @@ const WATERFALL_BASEBAND_RULER_MAX_HZ = 3000;
 const WATERFALL_BASEBAND_RULER_MINOR_STEP_HZ = 100;
 const WATERFALL_BASEBAND_RULER_MAJOR_STEP_HZ = 500;
 const WATERFALL_RULER_MIN_LABEL_SPACING_PX = 56;
-const WATERFALL_MAX_HISTORY_ROWS = 1024;
+export const WATERFALL_MAX_HISTORY_ROWS = 1024;
+const WATERFALL_WHEEL_AXIS_EPSILON = 0.1;
+const WATERFALL_ZOOM_REFERENCE_FACTOR = 1.05;
+const WATERFALL_ZOOM_MAC_PIXELS_PER_STEP = 10;
+const WATERFALL_ZOOM_WINDOWS_PIXELS_PER_STEP = 120;
 
 export function getWaterfallDragCommitDelayMs(
   nowMs: number,
@@ -225,15 +245,58 @@ export function normalizeWaterfallWheelDeltaX(
   }
 }
 
+export function normalizeWaterfallWheelDeltaY(
+  event: Pick<WheelEvent, 'deltaY' | 'deltaMode'>,
+  pageHeightPx: number,
+): number {
+  if (!Number.isFinite(event.deltaY) || event.deltaY === 0) return 0;
+  switch (event.deltaMode) {
+    case WATERFALL_WHEEL_DELTA_LINE:
+      return event.deltaY * 16;
+    case WATERFALL_WHEEL_DELTA_PAGE:
+      return event.deltaY * Math.max(1, pageHeightPx);
+    case WATERFALL_WHEEL_DELTA_PIXEL:
+    default:
+      return event.deltaY;
+  }
+}
+
+export function getWaterfallLocalZoomFactor(
+  event: Pick<WheelEvent, 'deltaY' | 'deltaMode'>,
+  options: { isMac?: boolean; pageHeightPx?: number } = {},
+): number {
+  const deltaPixels = normalizeWaterfallWheelDeltaY(event, options.pageHeightPx ?? 800);
+  if (!Number.isFinite(deltaPixels) || deltaPixels === 0) return 1;
+  const pixelsPerStep = options.isMac ? WATERFALL_ZOOM_MAC_PIXELS_PER_STEP : WATERFALL_ZOOM_WINDOWS_PIXELS_PER_STEP;
+  return Math.exp((deltaPixels / pixelsPerStep) * Math.log(WATERFALL_ZOOM_REFERENCE_FACTOR));
+}
+
 export function shouldHandleWaterfallHorizontalWheel(
-  event: Pick<WheelEvent, 'deltaX' | 'deltaY' | 'ctrlKey'>,
+  event: Pick<WheelEvent, 'deltaX' | 'deltaY' | 'ctrlKey'> & { shiftKey?: boolean },
 ): boolean {
   if (event.ctrlKey) {
     return false;
   }
   const absX = Math.abs(event.deltaX);
   const absY = Math.abs(event.deltaY);
-  return absX >= 0.5 && absX > absY * 1.25;
+  // macOS maps Shift+wheel to horizontal scrolling while keeping deltaX at 0.
+  if (event.shiftKey && (absX >= WATERFALL_WHEEL_AXIS_EPSILON || absY >= WATERFALL_WHEEL_AXIS_EPSILON)) {
+    return true;
+  }
+  return absX >= WATERFALL_WHEEL_AXIS_EPSILON && absX > absY;
+}
+
+/** Classifies the vertical component separately so diagonal trackpad gestures
+ * cannot trigger both zoom and horizontal tuning in the same wheel event. */
+export function shouldHandleWaterfallVerticalWheel(
+  event: Pick<WheelEvent, 'deltaX' | 'deltaY' | 'ctrlKey'> & { shiftKey?: boolean },
+): boolean {
+  if (event.ctrlKey || event.shiftKey) {
+    return false;
+  }
+  const absX = Math.abs(event.deltaX);
+  const absY = Math.abs(event.deltaY);
+  return absY >= WATERFALL_WHEEL_AXIS_EPSILON && (absX < WATERFALL_WHEEL_AXIS_EPSILON || absY >= absX);
 }
 
 export function getWaterfallHorizontalWheelTunedFrequency(
@@ -243,6 +306,19 @@ export function getWaterfallHorizontalWheelTunedFrequency(
   scale = WATERFALL_HORIZONTAL_WHEEL_FREQUENCY_SCALE,
 ): number {
   return startFrequency + accumulatedDeltaXPx * hzPerPixel * scale;
+}
+
+export function resolveWaterfallLocalViewportRange(
+  localRange: InteractionFrequencyRange | null,
+  renderedAxis: SpectrumAxis | null,
+): InteractionFrequencyRange | null {
+  if (localRange && Number.isFinite(localRange.min) && Number.isFinite(localRange.max) && localRange.max > localRange.min) {
+    return { ...localRange };
+  }
+  if (renderedAxis && Number.isFinite(renderedAxis.minHz) && Number.isFinite(renderedAxis.maxHz) && renderedAxis.maxHz > renderedAxis.minHz) {
+    return { min: renderedAxis.minHz, max: renderedAxis.maxHz };
+  }
+  return null;
 }
 
 export function getWaterfallCanvasPixelRatio(devicePixelRatio: number | null | undefined): number {
@@ -689,6 +765,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   basebandInteractionRange = { min: 0, max: 3000 },
   interactionFrequencyMode = 'baseband',
   interactionFrequencyRange = null,
+  viewportInteraction,
+  enableLocalViewportPanZoom = false,
+  localViewportRange = null,
+  localViewportBounds = null,
+  onLocalViewportChange,
   interactionFrequencyStepHz = null,
   onTxFrequencyChange,
   onTxBandOverlayFrequencyChange,
@@ -718,6 +799,15 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   onEnableFakeFrequency,
   onDismissLowPowerWarning,
 }) => {
+  const effectiveViewportMode = viewportInteraction?.mode
+    ?? (enableLocalViewportPanZoom ? 'local-pan-zoom' : 'none');
+  const localViewportInteractionEnabled = effectiveViewportMode === 'local-pan-zoom'
+    && (viewportInteraction?.canPan ?? true);
+  const effectiveLocalViewportRange = viewportInteraction?.range ?? localViewportRange;
+  const effectiveLocalViewportBounds = viewportInteraction?.bounds ?? localViewportBounds;
+  const effectiveLocalViewportChange = viewportInteraction?.onChange ?? onLocalViewportChange;
+  const localViewportZoomEnabled = localViewportInteractionEnabled
+    && (viewportInteraction?.canZoom ?? true);
   const { t } = useTranslation('common');
   const { t: tRadio } = useTranslation('radio');
   const [hoveredWarningOperatorId, setHoveredWarningOperatorId] = React.useState<string | null>(null);
@@ -741,6 +831,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const cycleMarkersRef = useRef<CycleMarkerPosition[]>([]);
   const [rulerWidthPx, setRulerWidthPx] = React.useState(0);
   const [hoverCursor, setHoverCursor] = React.useState<{ ratio: number; frequency: number; clientX: number; containerTop: number } | null>(null);
+  const localViewportGestureRef = useRef<{ pointerId: number; startX: number; startRange: InteractionFrequencyRange; hzPerPixel: number } | null>(null);
+  const localViewportRangeRef = useRef<InteractionFrequencyRange | null>(null);
 
   // TX拖动状态
   const [draggingOperatorId, setDraggingOperatorId] = React.useState<string | null>(null);
@@ -1631,7 +1723,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     updateCurrentAxisUniform(nextAxis);
 
     const canvasHeight = canvasRef.current?.height ?? 0;
-    const textureHeight = Math.max(1, canvasHeight || totalRows || 1);
+    const textureHeight = Math.max(1, totalRows ?? canvasHeight ?? 1);
     const visibleSpectrumData = spectrumData.slice(0, textureHeight);
     const actualHeight = visibleSpectrumData.length;
     const width = Math.min(sourceWidth, maxTextureSizeRef.current);
@@ -1764,7 +1856,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const spectrumData = displayRowsRef.current;
     const actualHeight = spectrumData.length;
     const previousTextureHeight = textureHeightRef.current;
-    const textureHeight = Math.max(1, canvasRef.current?.height ?? 0, totalRows ?? 0);
+    const textureHeight = Math.max(1, totalRows ?? canvasRef.current?.height ?? 1);
     const width = Math.min(sourceWidth, maxTextureSizeRef.current);
     const previousTextureWidth = textureWidthRef.current;
 
@@ -2041,7 +2133,12 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
     if (batch.mode === 'replace') {
       const previousAxis = currentAxisRef.current;
-      if (displayRowsRef.current.length > 0 && previousAxis && !areAxesEqual(previousAxis, nextAxis)) {
+      if (
+        batch.axisTransition !== 'immediate'
+        && displayRowsRef.current.length > 0
+        && previousAxis
+        && !areAxesEqual(previousAxis, nextAxis)
+      ) {
         startAxisTransition(previousAxis, nextAxis);
       } else {
         stopAxisTransition(false);
@@ -2161,14 +2258,23 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   }, [refreshCycleMarkers]);
 
   useEffect(() => {
+    controller.setRenderRowLimit(totalRows ?? null);
+    // A larger window needs more historical rows to preserve one texture row
+    // per rendered pixel. The controller retains the bounded history
+    // independently; priming on resize makes already-received rows immediately
+    // available instead of waiting for new frames.
     processRenderBatchRef.current(controller.primeRenderBatch());
 
     const handleFrameTick = () => {
       processRenderBatchRef.current(controller.consumeRenderBatch());
     };
 
-    return controller.subscribeFrameTick(handleFrameTick);
-  }, [controller]);
+    const unsubscribe = controller.subscribeFrameTick(handleFrameTick);
+    return () => {
+      unsubscribe();
+      controller.setRenderRowLimit(null, { schedule: false });
+    };
+  }, [controller, totalRows]);
 
   useEffect(() => {
     if (!viewState.hasData) {
@@ -2564,6 +2670,150 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     };
   }, [FREQ_POSITION_OFFSET, frequencyAxisTransform, getInteractionFrequencyFromMousePosition, snapBandValue]);
 
+  const handleLocalViewportPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!localViewportInteractionEnabled || !effectiveLocalViewportChange || event.button !== 0 || !event.isPrimary || !hasAxis) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('[data-waterfall-marker-interactive="true"]')) return;
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const range = viewStateRef.current.axis
+      ? { min: viewStateRef.current.axis.minHz, max: viewStateRef.current.axis.maxHz }
+      : { min: minFrequency, max: maxFrequency };
+    const span = range.max - range.min;
+    if (rect.width <= 0 || !Number.isFinite(span) || span <= 0) return;
+    event.preventDefault();
+    localViewportGestureRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startRange: range,
+      hzPerPixel: span / rect.width,
+    };
+  }, [effectiveLocalViewportChange, hasAxis, localViewportInteractionEnabled, maxFrequency, minFrequency]);
+
+  useEffect(() => {
+    if (!localViewportInteractionEnabled) {
+      localViewportRangeRef.current = null;
+      return;
+    }
+    if (!localViewportGestureRef.current) {
+      if (effectiveLocalViewportRange && effectiveLocalViewportRange.max > effectiveLocalViewportRange.min) {
+        localViewportRangeRef.current = { ...effectiveLocalViewportRange };
+        return;
+      }
+      const axis = viewStateRef.current.axis;
+      if (axis) {
+        localViewportRangeRef.current = { min: axis.minHz, max: axis.maxHz };
+      }
+    }
+  }, [effectiveLocalViewportRange, localViewportInteractionEnabled, viewState.axis?.maxHz, viewState.axis?.minHz]);
+
+  useEffect(() => {
+    if (!localViewportInteractionEnabled || !effectiveLocalViewportChange) return;
+    const handleMove = (event: PointerEvent) => {
+      const gesture = localViewportGestureRef.current;
+      if (!gesture || gesture.pointerId !== event.pointerId) return;
+      const deltaHz = (event.clientX - gesture.startX) * gesture.hzPerPixel;
+      effectiveLocalViewportChange({
+        min: gesture.startRange.min - deltaHz,
+        max: gesture.startRange.max - deltaHz,
+      }, 'pan');
+    };
+    const handleUp = (event: PointerEvent) => {
+      if (localViewportGestureRef.current?.pointerId === event.pointerId) localViewportGestureRef.current = null;
+    };
+    document.addEventListener('pointermove', handleMove);
+    document.addEventListener('pointerup', handleUp);
+    document.addEventListener('pointercancel', handleUp);
+    return () => {
+      document.removeEventListener('pointermove', handleMove);
+      document.removeEventListener('pointerup', handleUp);
+      document.removeEventListener('pointercancel', handleUp);
+    };
+  }, [effectiveLocalViewportChange, localViewportInteractionEnabled]);
+
+  useEffect(() => {
+    if (!localViewportZoomEnabled || !effectiveLocalViewportChange) return;
+    const container = containerRef.current;
+    if (!container) return;
+    const handleWheel = (event: WheelEvent) => {
+      // Safari/macOS trackpad pinch is delivered as ctrl+wheel. Treat a
+      // vertical-dominant pinch as local zoom, while regular ctrl+wheel remains
+      // ignored by the frequency-scrolling path.
+      const isPinchZoom = event.ctrlKey
+        && Math.abs(event.deltaY) >= WATERFALL_WHEEL_AXIS_EPSILON
+        && Math.abs(event.deltaY) >= Math.abs(event.deltaX);
+      const verticalCandidate = isPinchZoom || shouldHandleWaterfallVerticalWheel(event);
+      if (!verticalCandidate) return;
+      const currentRange = resolveWaterfallLocalViewportRange(
+        localViewportRangeRef.current,
+        viewStateRef.current.axis,
+      );
+      if (!currentRange) return;
+      const rect = container.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      event.preventDefault();
+      const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+      const span = currentRange.max - currentRange.min;
+      if (!Number.isFinite(span) || span <= 0) {
+        logger.warn(
+          `Rejected invalid local viewport range min=${currentRange.min} max=${currentRange.max} span=${span}`,
+        );
+        localViewportRangeRef.current = null;
+        return;
+      }
+      const maxViewportSpan = effectiveLocalViewportBounds && effectiveLocalViewportBounds.max > effectiveLocalViewportBounds.min
+        ? effectiveLocalViewportBounds.max - effectiveLocalViewportBounds.min
+        : Number.POSITIVE_INFINITY;
+      const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent);
+      const zoomFactor = getWaterfallLocalZoomFactor(event, {
+        isMac,
+        pageHeightPx: typeof window !== 'undefined' ? window.innerHeight : 800,
+      });
+      const nextSpan = Math.max(200, Math.min(maxViewportSpan, span * zoomFactor));
+      const anchor = currentRange.min + ratio * span;
+      let nextMin = anchor - ratio * nextSpan;
+      if (effectiveLocalViewportBounds && effectiveLocalViewportBounds.max > effectiveLocalViewportBounds.min) {
+        const minAllowed = effectiveLocalViewportBounds.min;
+        const maxAllowed = effectiveLocalViewportBounds.max - nextSpan;
+        nextMin = Math.max(minAllowed, Math.min(maxAllowed, nextMin));
+      }
+      const nextRange = { min: nextMin, max: nextMin + nextSpan };
+      localViewportRangeRef.current = nextRange;
+      effectiveLocalViewportChange(nextRange, 'zoom');
+    };
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    return () => container.removeEventListener('wheel', handleWheel);
+  }, [effectiveLocalViewportBounds, effectiveLocalViewportChange, effectiveLocalViewportRange, localViewportZoomEnabled]);
+
+  useEffect(() => {
+    if (!localViewportInteractionEnabled || !effectiveLocalViewportChange) return;
+    const container = containerRef.current;
+    if (!container) return;
+    const handleWheel = (event: WheelEvent) => {
+      if (!shouldHandleWaterfallHorizontalWheel(event)) return;
+      const currentRange = resolveWaterfallLocalViewportRange(localViewportRangeRef.current, viewStateRef.current.axis);
+      if (!currentRange) return;
+      const rect = container.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      const rawDeltaX = Math.abs(event.deltaX) >= WATERFALL_WHEEL_AXIS_EPSILON
+        ? event.deltaX
+        : (event.shiftKey ? event.deltaY : 0);
+      if (!Number.isFinite(rawDeltaX) || rawDeltaX === 0) return;
+      event.preventDefault();
+      const span = currentRange.max - currentRange.min;
+      const deltaHz = rawDeltaX * span / rect.width;
+      const nextRange = {
+        min: currentRange.min + deltaHz,
+        max: currentRange.max + deltaHz,
+      };
+      localViewportRangeRef.current = nextRange;
+      effectiveLocalViewportChange(nextRange, 'pan');
+    };
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    return () => container.removeEventListener('wheel', handleWheel);
+  }, [effectiveLocalViewportChange, localViewportInteractionEnabled]);
+
   const handleGenericFrequencyDragPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (!onDragFrequencyChange || event.button !== 0 || !event.isPrimary || !hasAxis) {
       return;
@@ -2948,7 +3198,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const horizontalWheelFrequencyEnabled = enableHorizontalWheelFrequency && Boolean(onDragFrequencyChange) && hasAxis;
 
   horizontalWheelRuntimeRef.current = {
-    enabled: horizontalWheelFrequencyEnabled,
+    enabled: horizontalWheelFrequencyEnabled && !localViewportInteractionEnabled,
     hasAxis,
     minFrequency,
     maxFrequency,
@@ -3073,7 +3323,6 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       ) {
         return;
       }
-
       const container = containerRef.current;
       if (!container) {
         return;
@@ -3108,7 +3357,13 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       }
 
       const wheelState = horizontalWheelStateRef.current;
-      wheelState.accumulatedDeltaXPx += normalizeWaterfallWheelDeltaX(event, rect.width);
+      const horizontalDeltaX = Math.abs(event.deltaX) >= WATERFALL_WHEEL_AXIS_EPSILON
+        ? event.deltaX
+        : (event.shiftKey ? event.deltaY : 0);
+      wheelState.accumulatedDeltaXPx += normalizeWaterfallWheelDeltaX(
+        { deltaX: horizontalDeltaX, deltaMode: event.deltaMode },
+        rect.width,
+      );
       wheelState.hzPerPixel = hzPerPixel;
       const nextRawSemanticFrequency = getWaterfallFrequencyAfterVisualDelta(
         wheelState.startFrequency,
@@ -3158,8 +3413,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     <div
       ref={containerRef}
       className={`relative ${className}`}
-      style={{ height: `${height}px`, touchAction: onDragFrequencyChange ? 'none' : undefined }}
-      onPointerDown={onDragFrequencyChange ? handleGenericFrequencyDragPointerDown : undefined}
+      style={{ height: `${height}px`, touchAction: (onDragFrequencyChange || localViewportInteractionEnabled) ? 'none' : undefined }}
+      onPointerDown={localViewportInteractionEnabled ? handleLocalViewportPointerDown : (onDragFrequencyChange ? handleGenericFrequencyDragPointerDown : undefined)}
       onPointerEnter={updateHoverCursorFromPointer}
       onPointerMove={updateHoverCursorFromPointer}
       onPointerLeave={clearHoverCursor}
@@ -3369,11 +3624,14 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
           const isDragging = draggingBandOverlayId === overlay.id;
           const variant = overlay.variant ?? 'tx';
           const isRx = variant === 'rx';
-          const bandClassName = isRx ? 'bg-green-500/15' : 'bg-red-500/15';
-          const lineClassName = isRx
-            ? (isDragging ? 'bg-green-500' : 'bg-green-500/50')
-            : (isDragging ? 'bg-red-500' : 'bg-red-500/50');
-          const labelClassName = isRx ? 'text-green-500' : 'text-red-500';
+          const isWindow = variant === 'window';
+          const bandClassName = isWindow ? 'bg-sky-300/10' : isRx ? 'bg-green-500/15' : 'bg-red-500/15';
+          const lineClassName = isWindow
+            ? (isDragging ? 'bg-sky-200/80' : 'bg-sky-200/40')
+            : isRx
+              ? (isDragging ? 'bg-green-500' : 'bg-green-500/50')
+              : (isDragging ? 'bg-red-500' : 'bg-red-500/50');
+          const labelClassName = isWindow ? 'text-sky-200/80' : isRx ? 'text-green-500' : 'text-red-500';
 
           return (
             <div
@@ -3409,9 +3667,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
                 } : undefined}
               >
                 <div className={`w-0.5 h-full ${lineClassName}`} />
-                <div className={`absolute bottom-1 left-1/2 -translate-x-1/2 px-1 text-xs font-semibold bg-black/60 rounded select-none ${labelClassName}`}>
-                  {overlay.label}
-                </div>
+                {overlay.label && (
+                  <div className={`absolute bottom-1 left-1/2 -translate-x-1/2 px-1 text-xs font-semibold bg-black/60 rounded select-none ${labelClassName}`}>
+                    {overlay.label}
+                  </div>
+                )}
               </div>
             </div>
           );

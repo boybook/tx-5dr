@@ -82,7 +82,7 @@ export const SpectrumAnalysisSettings: React.FC<SpectrumAnalysisSettingsProps> =
   };
 
   return (
-    <section className="space-y-3 rounded-lg bg-default-100/50 px-3 py-3 dark:bg-default-50/10">
+    <section className="space-y-3 rounded-lg bg-default-100/50 px-2 py-2 dark:bg-default-50/10">
       <div>
         <div className="text-xs font-medium text-default-700">{t('spectrum.analysisPreset')}</div>
         <div className="text-[11px] leading-tight text-default-400">
@@ -118,7 +118,7 @@ export const SpectrumAnalysisSettings: React.FC<SpectrumAnalysisSettingsProps> =
       </div>
 
       {customEditing && (
-        <div className="space-y-3 border-t border-divider pt-3">
+        <div className="space-y-3 rounded-lg bg-default-50/40 px-2 py-2">
           <Input
             label={t('spectrum.customRefreshInterval')}
             type="number"
@@ -182,7 +182,7 @@ export const SpectrumAnalysisSettings: React.FC<SpectrumAnalysisSettingsProps> =
             {t('spectrum.customBaselineFlatten')}
           </Switch>
 
-          <div className="grid grid-cols-2 gap-x-3 gap-y-1 border-t border-divider pt-2 text-[11px] text-default-500">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1 rounded-lg bg-default-50/40 px-2 py-2 text-[11px] text-default-500">
             <span>{t('spectrum.customTimeWindow')}</span><span className="text-right tabular-nums">{derived.windowMs.toFixed(1)} ms</span>
             <span>{t('spectrum.customResolution')}</span><span className="text-right tabular-nums">{formatResolution(derived.resolutionHz)}</span>
             <span>{t('spectrum.customFrequencyRange')}</span><span className="text-right tabular-nums">0 - {derived.maxFrequencyHz} Hz</span>

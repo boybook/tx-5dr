@@ -51,6 +51,7 @@ describe('TciConnection', () => {
       currentSampleRate: 48_000,
       supportedSampleRates: [48_000, 96_000, 192_000, 384_000],
     });
+    await expect(connection.getTciRxFilterBand()).resolves.toEqual([30, 2700]);
     expect(connection.getTciIqClientOptions()).toMatchObject({
       url: new URL(server.url()).toString(),
       receiver: 0,

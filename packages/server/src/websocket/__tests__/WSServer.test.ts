@@ -828,6 +828,7 @@ describe('WSServer spectrum subscriptions', () => {
       isAlive: true,
       isHandshakeCompleted: () => true,
       getBufferedAmount: () => bufferedAmount,
+      getSpectrumViewport: () => null,
       send,
     };
     const server = Object.create(WSServer.prototype) as any;

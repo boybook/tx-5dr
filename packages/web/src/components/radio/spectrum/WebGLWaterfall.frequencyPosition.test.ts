@@ -22,7 +22,11 @@ import {
   getWaterfallSemanticFrequencyPositionPercent,
   interpolateSpectrumAxis,
   normalizeWaterfallWheelDeltaX,
+  normalizeWaterfallWheelDeltaY,
+  getWaterfallLocalZoomFactor,
+  resolveWaterfallLocalViewportRange,
   shouldHandleWaterfallHorizontalWheel,
+  shouldHandleWaterfallVerticalWheel,
 } from './WebGLWaterfall';
 import { createFrequencyAxisTransform } from '../../../spectrum/frequencyAxisCalibration';
 
@@ -171,6 +175,28 @@ describe('WebGLWaterfall frequency positioning', () => {
     expect(shouldHandleWaterfallHorizontalWheel({ deltaX: 10, deltaY: 1, ctrlKey: false })).toBe(true);
     expect(shouldHandleWaterfallHorizontalWheel({ deltaX: 1, deltaY: 10, ctrlKey: false })).toBe(false);
     expect(shouldHandleWaterfallHorizontalWheel({ deltaX: 10, deltaY: 1, ctrlKey: true })).toBe(false);
+    expect(shouldHandleWaterfallHorizontalWheel({ deltaX: 0, deltaY: 10, ctrlKey: false, shiftKey: true })).toBe(true);
+    expect(shouldHandleWaterfallVerticalWheel({ deltaX: 1, deltaY: 10, ctrlKey: false })).toBe(true);
+    expect(shouldHandleWaterfallVerticalWheel({ deltaX: 10, deltaY: 1, ctrlKey: false })).toBe(false);
+    expect(shouldHandleWaterfallVerticalWheel({ deltaX: 10, deltaY: 10, ctrlKey: false })).toBe(true);
+    expect(shouldHandleWaterfallVerticalWheel({ deltaX: 1, deltaY: 10, ctrlKey: false, shiftKey: true })).toBe(false);
+    expect(shouldHandleWaterfallVerticalWheel({ deltaX: 0, deltaY: 10, ctrlKey: true })).toBe(false);
+  });
+
+  it('maps pixel and line wheel deltas to continuous zoom factors', () => {
+    expect(normalizeWaterfallWheelDeltaY({ deltaY: 2, deltaMode: WATERFALL_WHEEL_DELTA_LINE }, 800)).toBe(32);
+    expect(normalizeWaterfallWheelDeltaY({ deltaY: 0.5, deltaMode: WATERFALL_WHEEL_DELTA_PIXEL }, 800)).toBe(0.5);
+    expect(getWaterfallLocalZoomFactor({ deltaY: 0, deltaMode: WATERFALL_WHEEL_DELTA_PIXEL })).toBe(1);
+    expect(getWaterfallLocalZoomFactor({ deltaY: 90, deltaMode: WATERFALL_WHEEL_DELTA_PIXEL }, { isMac: true })).toBeGreaterThan(1);
+    expect(getWaterfallLocalZoomFactor({ deltaY: -90, deltaMode: WATERFALL_WHEEL_DELTA_PIXEL }, { isMac: true })).toBeLessThan(1);
+    expect(getWaterfallLocalZoomFactor({ deltaY: 90, deltaMode: WATERFALL_WHEEL_DELTA_PIXEL }, { isMac: true }))
+      .toBeGreaterThan(getWaterfallLocalZoomFactor({ deltaY: 60, deltaMode: WATERFALL_WHEEL_DELTA_PIXEL }, { isMac: false }));
+  });
+
+  it('normalizes local viewport ranges without mixing min/max with minHz/maxHz fields', () => {
+    expect(resolveWaterfallLocalViewportRange({ min: 14_073_000, max: 14_075_000 }, { minHz: 14_070_000, maxHz: 14_080_000, binCount: 1024 })).toEqual({ min: 14_073_000, max: 14_075_000 });
+    expect(resolveWaterfallLocalViewportRange(null, { minHz: 14_070_000, maxHz: 14_080_000, binCount: 1024 })).toEqual({ min: 14_070_000, max: 14_080_000 });
+    expect(resolveWaterfallLocalViewportRange({ min: 10, max: 10 }, null)).toBeNull();
   });
 
   it('maps horizontal wheel distance to a slower fine-tuning frequency delta', () => {

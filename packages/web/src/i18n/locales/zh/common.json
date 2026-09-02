@@ -196,6 +196,8 @@
     "popOut": "在独立窗口中显示",
     "rangeSettings": "频谱设置",
     "viewSettings": "视图",
+    "analysisSettings": "分析",
+    "interactionSettings": "交互",
     "displaySettings": "显示范围",
     "inputSignalAfLabel": "AF",
     "inputSignalIfLabel": "IF",

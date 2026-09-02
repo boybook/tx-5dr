@@ -1,4 +1,4 @@
-import type { SpectrumFrame, SpectrumKind, SpectrumLevelDescriptor } from '@tx5dr/contracts';
+import type { SpectrumFrame, SpectrumFrameSupplement, SpectrumKind, SpectrumLevelDescriptor } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('SpectrumStreamController');
@@ -29,6 +29,7 @@ export interface SpectrumStreamStatus {
   hasData: boolean;
   selectedKind: SpectrumKind | null;
   fullRange: { min: number; max: number } | null;
+  displayRange: { min: number; max: number } | null;
   level: SpectrumLevelDescriptor | null;
 }
 
@@ -40,6 +41,8 @@ export interface SpectrumRenderBatch {
   frameToken: number | null;
   hasBacklog: boolean;
   totalRows: number;
+  /** Viewport gestures should switch axes immediately instead of restarting an animation per event. */
+  axisTransition?: 'animate' | 'immediate';
 }
 
 export type SpectrumHistoryLimits = number | Partial<Record<SpectrumKind, number>>;
@@ -48,13 +51,20 @@ interface RetainedSpectrumFrame {
   timestamp: number;
   kind: SpectrumKind;
   frequencyRange: { min: number; max: number };
+  nativeFrequencyRange: { min: number; max: number };
   binCount: number;
   level: SpectrumLevelDescriptor | null;
+}
+
+interface RetainedSpectrumSupplement {
+  frequencyRange: { min: number; max: number };
+  values: Float32Array;
 }
 
 interface CanonicalSpectrumFrame {
   frame: RetainedSpectrumFrame;
   values: Float32Array;
+  supplement: RetainedSpectrumSupplement | null;
   receivedAt: number;
   cachedViewKey: string | null;
   cachedViewValues: Float32Array | null;
@@ -72,6 +82,8 @@ interface StreamContext {
   radioSdrCenterViewMode: RadioSdrCenterViewMode;
   radioSdrReferenceFrequencyHz: number | null;
   radioSdrViewRange: { min: number; max: number } | null;
+  /** Optional client-side absolute viewport used by wide-band IQ sources. */
+  radioSdrViewport: { min: number; max: number } | null;
 }
 
 type HistoryMap = Record<SpectrumKind, CanonicalSpectrumFrame[]>;
@@ -193,6 +205,22 @@ function decodeFrameValues(frame: SpectrumFrame): Float32Array {
   return output;
 }
 
+function decodeSupplementValues(supplement: SpectrumFrameSupplement): Float32Array {
+  const binaryString = atob(supplement.binaryData.data);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let index = 0; index < binaryString.length; index += 1) {
+    bytes[index] = binaryString.charCodeAt(index);
+  }
+
+  const int16Array = new Int16Array(bytes.buffer);
+  const { scale = 1, offset = 0 } = supplement.binaryData.format;
+  const output = new Float32Array(int16Array.length);
+  for (let index = 0; index < int16Array.length; index += 1) {
+    output[index] = int16Array[index] * scale + offset;
+  }
+  return output;
+}
+
 function getBinCount(frame: SpectrumFrame): number {
   return frame.meta.displayBinCount ?? frame.meta.sourceBinCount ?? frame.binaryData.format.length;
 }
@@ -204,6 +232,10 @@ function retainFrameMeta(frame: SpectrumFrame): RetainedSpectrumFrame {
     frequencyRange: {
       min: frame.frequencyRange.min,
       max: frame.frequencyRange.max,
+    },
+    nativeFrequencyRange: {
+      min: frame.meta.nativeFrequencyRange?.min ?? frame.frequencyRange.min,
+      max: frame.meta.nativeFrequencyRange?.max ?? frame.frequencyRange.max,
     },
     binCount: getBinCount(frame),
     level: resolveFrameLevel(frame),
@@ -247,6 +279,32 @@ export function cropSpectrumToRange(
     output[index] = values[leftIndex] + (values[rightIndex] - values[leftIndex]) * factor;
   }
 
+  return output;
+}
+
+function cropSpectrumWithSupplement(
+  values: Float32Array,
+  fullRange: { min: number; max: number },
+  supplement: RetainedSpectrumSupplement,
+  targetRange: { min: number; max: number },
+  fillValue = 0,
+): Float32Array {
+  if (values.length === 0 || fullRange.max <= fullRange.min) return values;
+  const output = new Float32Array(values.length);
+  const sample = (source: Float32Array, range: { min: number; max: number }, frequency: number): number | null => {
+    if (source.length === 0 || range.max <= range.min || frequency < range.min || frequency > range.max) return null;
+    const position = ((frequency - range.min) / (range.max - range.min)) * (source.length - 1);
+    const left = Math.floor(position);
+    const right = Math.min(source.length - 1, left + 1);
+    const factor = position - left;
+    return source[left]! + (source[right]! - source[left]!) * factor;
+  };
+  for (let index = 0; index < output.length; index += 1) {
+    const frequency = targetRange.min + (index * (targetRange.max - targetRange.min)) / Math.max(output.length - 1, 1);
+    output[index] = sample(values, fullRange, frequency)
+      ?? sample(supplement.values, supplement.frequencyRange, frequency)
+      ?? fillValue;
+  }
   return output;
 }
 
@@ -296,16 +354,20 @@ export class SpectrumStreamController {
     radioSdrCenterViewMode: 'full',
     radioSdrReferenceFrequencyHz: null,
     radioSdrViewRange: null,
+    radioSdrViewport: null,
   };
   private statusSnapshot: SpectrumStreamStatus = {
     hasData: false,
     selectedKind: null,
     fullRange: null,
+    displayRange: null,
     level: null,
   };
   private pendingBatch: SpectrumRenderBatch | null = null;
   private rafId: number | null = null;
   private replaceRafId: number | null = null;
+  private pendingReplaceAxisTransition: 'animate' | 'immediate' = 'animate';
+  private renderRowLimit: number | null = null;
   private radioSdrOptimisticTimer: ReturnType<typeof setTimeout> | null = null;
   private radioSdrOptimisticIntent: {
     targetFrequencyHz: number;
@@ -347,13 +409,24 @@ export class SpectrumStreamController {
       : null;
   }
 
+  setRenderRowLimit(limit: number | null, options: { schedule?: boolean } = {}): void {
+    const normalized = typeof limit === 'number' && Number.isFinite(limit) && limit > 0
+      ? Math.floor(limit)
+      : null;
+    if (normalized === this.renderRowLimit) return;
+    this.renderRowLimit = normalized;
+    if (options.schedule !== false && this.context.selectedKind) {
+      this.scheduleReplaceBatch('immediate');
+    }
+  }
+
   getFullRange = (kind: SpectrumKind | null): { min: number; max: number } | null => {
     if (!kind) {
       return null;
     }
 
     const latest = this.histories[kind][0]?.frame ?? null;
-    return latest ? latest.frequencyRange : null;
+    return latest ? latest.nativeFrequencyRange : null;
   };
 
   setRadioSdrServerSyncHoldUntil(untilMs: number | null): void {
@@ -428,6 +501,7 @@ export class SpectrumStreamController {
     this.context = {
       ...this.context,
       radioSdrViewRange: null,
+      radioSdrViewport: null,
     };
     this.pendingBatch = {
       mode: 'reset',
@@ -522,7 +596,7 @@ export class SpectrumStreamController {
 
   private deriveRadioSdrNativeRange(): { min: number; max: number } | null {
     const latestFrame = this.histories['radio-sdr'][0]?.frame ?? null;
-    return latestFrame ? { ...latestFrame.frequencyRange } : null;
+    return latestFrame ? { ...latestFrame.nativeFrequencyRange } : null;
   }
 
   private deriveRadioSdrOptimisticRange(): { min: number; max: number } | null {
@@ -576,7 +650,17 @@ export class SpectrumStreamController {
     const fullRange = this.radioSdrOptimisticIntent
       ? this.deriveRadioSdrOptimisticRange()
       : this.deriveRadioSdrNativeRange();
-    return this.applyRadioSdrCenterViewRange(fullRange);
+    if (this.context.radioSdrViewport) {
+      return this.context.radioSdrViewport;
+    }
+    const latestFrame = this.histories['radio-sdr'][0];
+    // TCI frames may advertise a broad native envelope plus a cropped detail
+    // payload. Keep the initial render on the detail payload; the supplement
+    // remains available when the user explicitly expands the viewport.
+    const defaultRange = !this.radioSdrOptimisticIntent && latestFrame?.supplement
+      ? latestFrame.frame.frequencyRange
+      : fullRange;
+    return this.applyRadioSdrCenterViewRange(defaultRange);
   }
 
   private applyRadioSdrViewRange(
@@ -594,22 +678,29 @@ export class SpectrumStreamController {
       ...this.context,
       radioSdrViewRange: normalizedRange,
     };
-    this.invalidateCachedViews('radio-sdr');
+    // The view key contains the complete target range, so changing the range
+    // naturally invalidates each frame's single cached projection. Avoid
+    // walking the entire history on every trackpad event.
     if (options.notify !== false) {
       this.rebuildSelectedViewIfNeeded('radio-sdr');
     }
     return true;
   }
 
-  private scheduleReplaceBatch(): void {
+  private scheduleReplaceBatch(axisTransition: 'animate' | 'immediate' = 'animate'): void {
     this.pendingBatch = null;
+    if (axisTransition === 'immediate') {
+      this.pendingReplaceAxisTransition = 'immediate';
+    }
     if (this.replaceRafId !== null) {
       return;
     }
 
     this.replaceRafId = requestAnimationFrame(() => {
       this.replaceRafId = null;
-      this.pendingBatch = this.buildReplaceBatch();
+      const nextTransition = this.pendingReplaceAxisTransition;
+      this.pendingReplaceAxisTransition = 'animate';
+      this.pendingBatch = this.buildReplaceBatch(nextTransition);
       this.notifyFrameListeners();
     });
   }
@@ -619,14 +710,21 @@ export class SpectrumStreamController {
       cancelAnimationFrame(this.replaceRafId);
       this.replaceRafId = null;
     }
+    this.pendingReplaceAxisTransition = 'animate';
   }
 
-  updateContext(nextContext: Partial<StreamContext>): void {
+  updateContext(
+    nextContext: Partial<StreamContext>,
+    options: { axisTransition?: 'animate' | 'immediate' } = {},
+  ): void {
     const previous = this.context;
     this.context = {
       ...previous,
       ...nextContext,
       radioSdrCenterViewMode: nextContext.radioSdrCenterViewMode ?? previous.radioSdrCenterViewMode,
+      radioSdrViewport: 'radioSdrViewport' in nextContext
+        ? (nextContext.radioSdrViewport ?? null)
+        : previous.radioSdrViewport,
       radioSdrReferenceFrequencyHz: 'radioSdrReferenceFrequencyHz' in nextContext
         ? normalizeRadioSdrReferenceFrequency(nextContext.radioSdrReferenceFrequencyHz)
         : previous.radioSdrReferenceFrequencyHz,
@@ -637,7 +735,8 @@ export class SpectrumStreamController {
     const detailModeChanged = previous.isOpenWebRXDetailMode !== this.context.isOpenWebRXDetailMode;
     const radioSdrCenterViewChanged = previous.radioSdrCenterViewMode !== this.context.radioSdrCenterViewMode
       || previous.radioSdrReferenceFrequencyHz !== this.context.radioSdrReferenceFrequencyHz;
-    if (radioSdrCenterViewChanged) {
+    const radioSdrViewportChanged = !areRangesEqual(previous.radioSdrViewport, this.context.radioSdrViewport);
+    if (radioSdrCenterViewChanged || radioSdrViewportChanged) {
       this.applyRadioSdrViewRange(this.resolveRadioSdrViewRange(), { notify: false });
     }
     const radioSdrViewRangeChanged = !areRangesEqual(previous.radioSdrViewRange, this.context.radioSdrViewRange);
@@ -655,6 +754,20 @@ export class SpectrumStreamController {
     const selectedKind = this.context.selectedKind;
     if (selectedKind) {
       this.pendingByKind[selectedKind].length = 0;
+    }
+
+    // Trackpad/wheel viewport updates can arrive many times per frame. Defer
+    // the history resampling to one animation frame so a gesture cannot run
+    // the O(history × binCount) rebuild repeatedly in the same frame.
+    if (
+      radioSdrViewportChanged
+      && !selectedKindChanged
+      && !openWebRXViewportChanged
+      && !detailModeChanged
+      && !radioSdrCenterViewChanged
+    ) {
+      this.scheduleReplaceBatch(options.axisTransition ?? 'immediate');
+      return;
     }
 
     this.cancelScheduledReplaceBatch();
@@ -679,6 +792,17 @@ export class SpectrumStreamController {
     }
 
     const retainedFrame = retainFrameMeta(frame);
+    let supplement: RetainedSpectrumSupplement | null = null;
+    if (frame.supplement) {
+      try {
+        supplement = {
+          frequencyRange: { ...frame.supplement.frequencyRange },
+          values: decodeSupplementValues(frame.supplement),
+        };
+      } catch (error) {
+        logger.warn('Failed to decode spectrum frame supplement', error);
+      }
+    }
     const previousRadioFrame = frame.kind === 'radio-sdr' ? this.histories['radio-sdr'][0]?.frame ?? null : null;
     const radioSdrLevelChanged = frame.kind === 'radio-sdr'
       && previousRadioFrame !== null
@@ -696,6 +820,7 @@ export class SpectrumStreamController {
     const canonicalFrame = this.storeCanonicalFrame({
       frame: retainedFrame,
       values,
+      supplement,
       receivedAt,
       cachedViewKey: null,
       cachedViewValues: null,
@@ -786,7 +911,11 @@ export class SpectrumStreamController {
         axis,
         frameToken,
         hasBacklog: pendingQueue.length > 0,
-        totalRows: Math.min(this.histories[selectedKind].length, historyLimit),
+          totalRows: Math.min(
+            this.histories[selectedKind].length,
+            historyLimit,
+            this.renderRowLimit ?? Number.POSITIVE_INFINITY,
+          ),
       };
       this.notifyFrameListeners();
     }
@@ -855,7 +984,7 @@ export class SpectrumStreamController {
     return nextFrame;
   }
 
-  private buildReplaceBatch(): SpectrumRenderBatch {
+  private buildReplaceBatch(axisTransition: 'animate' | 'immediate' = 'animate'): SpectrumRenderBatch {
     const selectedKind = this.context.selectedKind;
     if (!selectedKind) {
       return {
@@ -869,7 +998,9 @@ export class SpectrumStreamController {
       };
     }
 
-    const history = this.histories[selectedKind];
+    const history = this.renderRowLimit === null
+      ? this.histories[selectedKind]
+      : this.histories[selectedKind].slice(0, this.renderRowLimit);
     const rows: Float32Array[] = [];
     const rowTimestamps: number[] = [];
     let axis: SpectrumAxis | null = null;
@@ -894,6 +1025,7 @@ export class SpectrumStreamController {
       frameToken: history[0]?.frame.timestamp ?? null,
       hasBacklog: false,
       totalRows: rows.length,
+      axisTransition,
     };
   }
 
@@ -925,12 +1057,20 @@ export class SpectrumStreamController {
       if (!range) {
         return null;
       }
-      values = cropSpectrumToRange(
-        frame.values,
-        frame.frame.frequencyRange,
-        range,
-        frame.frame.level?.min ?? 0,
-      );
+      values = frame.supplement
+        ? cropSpectrumWithSupplement(
+            frame.values,
+            frame.frame.frequencyRange,
+            frame.supplement,
+            range,
+            frame.frame.level?.min ?? 0,
+          )
+        : cropSpectrumToRange(
+            frame.values,
+            frame.frame.frequencyRange,
+            range,
+            frame.frame.level?.min ?? 0,
+          );
       axis = {
         minHz: range.min,
         maxHz: range.max,
@@ -998,6 +1138,7 @@ export class SpectrumStreamController {
       hasData: Boolean(selectedKind && this.histories[selectedKind].length > 0),
       selectedKind,
       fullRange,
+      displayRange: selectedKind ? (this.histories[selectedKind][0]?.frame.frequencyRange ?? null) : null,
       level: selectedKind ? (this.histories[selectedKind][0]?.frame.level ?? null) : null,
     };
 
@@ -1005,6 +1146,7 @@ export class SpectrumStreamController {
       this.statusSnapshot.hasData === nextStatus.hasData
       && this.statusSnapshot.selectedKind === nextStatus.selectedKind
       && areRangesEqual(this.statusSnapshot.fullRange, nextStatus.fullRange)
+      && areRangesEqual(this.statusSnapshot.displayRange, nextStatus.displayRange)
       && areLevelDescriptorsEqual(this.statusSnapshot.level, nextStatus.level)
     ) {
       return;

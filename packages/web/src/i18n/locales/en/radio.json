@@ -7,6 +7,16 @@
     "disconnected": "Disconnected",
     "failed": "Connection Failed"
   },
+  "spectrum": {
+    "tciSettings": {
+      "title": "TCI SDR Spectrum",
+      "description": "Adjust the shared TCI spectrum analysis resolution and refresh rate.",
+      "fftSize": "FFT resolution",
+      "displayBins": "Display resolution",
+      "refreshInterval": "Refresh interval",
+      "updateFailed": "Failed to update TCI spectrum settings"
+    }
+  },
   "status": {
     "txDisconnected": "⚠️ Radio disconnected during TX",
     "suggestion": "💡 Suggestion",
@@ -668,6 +678,10 @@
     "tx_audio_input_source": {
       "label": "TX Audio Input",
       "description": "Select the physical audio input routed to the transmitter (microphone, USB, network, or accessory)."
+    },
+    "tci_iq_sample_rate": {
+      "label": "TCI IQ Sample Rate",
+      "description": "Set the shared TCI IQ spectrum sample rate. Higher rates show a wider radio spectrum but use more radio and server bandwidth."
     },
     "rf_power": {
       "label": "TX Power",

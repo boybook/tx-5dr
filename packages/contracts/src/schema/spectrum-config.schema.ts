@@ -64,6 +64,32 @@ export const SpectrumRenderConfigSchema = z.object({
 });
 export type SpectrumRenderConfig = z.infer<typeof SpectrumRenderConfigSchema>;
 
+export const TciIqSampleRateSchema = z.number().int().positive();
+export type TciIqSampleRate = z.infer<typeof TciIqSampleRateSchema>;
+
+export const TciSpectrumSettingsSchema = z.object({
+  fftSize: z.union([
+    z.literal(4096), z.literal(8192), z.literal(16384), z.literal(32768), z.literal(65536),
+  ]),
+  displayBinCount: z.number().int().min(1024).max(16384),
+  analysisIntervalMs: z.number().int().min(20).max(1000),
+});
+export type TciSpectrumSettings = z.infer<typeof TciSpectrumSettingsSchema>;
+
+export const TciSpectrumSettingsResponseSchema = z.object({
+  success: z.boolean(),
+  settings: TciSpectrumSettingsSchema,
+});
+export type TciSpectrumSettingsResponse = z.infer<typeof TciSpectrumSettingsResponseSchema>;
+
+export const TciIqSpectrumSettingsResponseSchema = z.object({
+  success: z.boolean(),
+  configuredSampleRate: TciIqSampleRateSchema.nullable(),
+  appliedSampleRate: TciIqSampleRateSchema.nullable(),
+  supportedSampleRates: z.array(TciIqSampleRateSchema),
+});
+export type TciIqSpectrumSettingsResponse = z.infer<typeof TciIqSpectrumSettingsResponseSchema>;
+
 export const SpectrumPresetDefinitionSchema = SpectrumRenderConfigSchema.omit({
   revision: true,
 });

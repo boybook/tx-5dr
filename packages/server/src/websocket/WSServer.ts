@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // WebSocket服务器 - 事件处理和消息传递需要使用any类型以保持灵活性
 
-import { ServerMessageKey, WSMessageType, RadioConnectionStatus, UserRole, WriteCapabilityPayloadSchema, SetSplitFrequencyPayloadSchema, TuneToneStartPayloadSchema, SstvTxStartCommandSchema, SstvTxCancelCommandSchema, FaxCalibrationSetCommandSchema, FaxCalibrationResetCommandSchema, SLOT_PACK_HISTORY_LIMIT, type AppAction, type AppSubject } from '@tx5dr/contracts';
+import { ServerMessageKey, WSMessageType, RadioConnectionStatus, UserRole, WriteCapabilityPayloadSchema, SetSplitFrequencyPayloadSchema, TuneToneStartPayloadSchema, SstvTxStartCommandSchema, SstvTxCancelCommandSchema, FaxCalibrationSetCommandSchema, FaxCalibrationResetCommandSchema, SpectrumViewportSchema, SLOT_PACK_HISTORY_LIMIT, type AppAction, type AppSubject } from '@tx5dr/contracts';
 import type {
   ClockStatusSummary,
   DecodeErrorInfo,
@@ -15,6 +15,7 @@ import type {
   SpectrumCapabilities,
   SpectrumFrame,
   SpectrumKind,
+  SpectrumViewport,
   SubWindowInfo,
   SystemStatus,
   WSLogbookHealthChangedMessage,
@@ -34,6 +35,7 @@ import { createLogger } from '../utils/logger.js';
 import { bootstrapCoordinator } from '../services/BootstrapCoordinator.js';
 import { SpectrumCoordinator } from '../spectrum/SpectrumCoordinator.js';
 import { SpectrumSessionCoordinator } from '../spectrum/SpectrumSessionCoordinator.js';
+import { projectSpectrumFrame } from '../spectrum/spectrumProjection.js';
 import { buildRadioStatusPayload } from '../radio/buildRadioStatusPayload.js';
 import { OperatorScopedSlotPackProjectionService } from './OperatorScopedSlotPackProjectionService.js';
 import { canReadFullProfiles, redactHamlibConfigForRead, redactProfileForRead, redactProfilesForRead } from '../security/profileRedaction.js';
@@ -83,6 +85,7 @@ export class WSConnection extends WSMessageHandler {
   // 记录WebSocket事件监听器,用于清理 (修复内存泄漏)
   private wsListeners: Map<string, (...args: unknown[]) => void> = new Map();
   private spectrumSubscription: SpectrumKind | null = null;
+  private spectrumViewport: SpectrumViewport | null = null;
   private imageRxSubscribed = false;
   private imageSnapshotRequired = false;
 
@@ -228,6 +231,14 @@ export class WSConnection extends WSMessageHandler {
 
   getSpectrumSubscription(): SpectrumKind | null {
     return this.spectrumSubscription;
+  }
+
+  setSpectrumViewport(viewport: SpectrumViewport | null): void {
+    this.spectrumViewport = viewport;
+  }
+
+  getSpectrumViewport(): SpectrumViewport | null {
+    return this.spectrumViewport;
   }
 
   // ===== 认证方法 =====
@@ -390,6 +401,8 @@ export class WSServer extends WSMessageHandler {
   private slotPackProjectionService: OperatorScopedSlotPackProjectionService;
   private lastRadioConnectedForToast: boolean | null = null;
   private sstvTxOwners = new Map<string, { sessionId: string; operatorId: string }>();
+  private spectrumProjectionCache = new Map<string, SpectrumFrame>();
+  private spectrumProjectionFrame: SpectrumFrame | null = null;
   private commandHandlers: Partial<Record<WSMessageType, (data: unknown, connectionId: string) => Promise<void> | void>>;
 
   static getInstance(): WSServer | null {
@@ -422,6 +435,7 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.SET_MODE]: (data) => this.handleSetMode((data as any)?.mode),
       [WSMessageType.GET_PLUGIN_RUNTIME_LOG_HISTORY]: (data, id) => this.handleGetPluginRuntimeLogHistory(id, data),
       [WSMessageType.SUBSCRIBE_SPECTRUM]: (data, id) => this.handleSubscribeSpectrum(id, data),
+      [WSMessageType.SPECTRUM_VIEWPORT_CHANGED]: (data, id) => this.handleSpectrumViewportChanged(id, data),
       [WSMessageType.SUBSCRIBE_IMAGE_RX]: (data, id) => this.handleSubscribeImageRx(id, data),
       [WSMessageType.SSTV_TX_START]: (data, id) => this.handleSstvTxStart(id, data),
       [WSMessageType.SSTV_TX_CANCEL]: (data, id) => this.handleSstvTxCancel(id, data),
@@ -850,6 +864,7 @@ export class WSServer extends WSMessageHandler {
     [WSMessageType.SET_CLIENT_ENABLED_OPERATORS]: { publicViewer: true, requiresHandshake: true },
     [WSMessageType.SET_CLIENT_SELECTED_OPERATOR]: { publicViewer: true, requiresHandshake: true },
     [WSMessageType.SUBSCRIBE_SPECTRUM]: { publicViewer: true, requiresHandshake: true },
+    [WSMessageType.SPECTRUM_VIEWPORT_CHANGED]: { publicViewer: true, requiresHandshake: true },
     [WSMessageType.SUBSCRIBE_IMAGE_RX]: { publicViewer: true, requiresHandshake: true },
     [WSMessageType.GET_PLUGIN_RUNTIME_LOG_HISTORY]: { minRole: UserRole.ADMIN },
     // Capability-based (delegatable from admin)
@@ -1180,6 +1195,8 @@ export class WSServer extends WSMessageHandler {
     }
 
     const requestedKind = (data as { kind?: SpectrumKind | null } | undefined)?.kind ?? null;
+    const requestedViewportResult = SpectrumViewportSchema.safeParse((data as { viewport?: unknown } | undefined)?.viewport);
+    const requestedViewport = requestedViewportResult.success ? requestedViewportResult.data : null;
 
     if (requestedKind && (!connection.isHandshakeCompleted() || !connection.hasMinRole(UserRole.VIEWER))) {
       connection.send(WSMessageType.SPECTRUM_SUBSCRIPTION_CHANGED, {
@@ -1219,6 +1236,7 @@ export class WSServer extends WSMessageHandler {
     try {
       await this.spectrumCoordinator.setConnectionSubscription(connectionId, effectiveKind);
       connection.setSpectrumSubscription(effectiveKind);
+      connection.setSpectrumViewport(effectiveKind === 'radio-sdr' ? requestedViewport : null);
 
       if (requestedKind && effectiveKind === null) {
         connection.send(WSMessageType.SPECTRUM_CAPABILITIES, capabilities);
@@ -1243,6 +1261,13 @@ export class WSServer extends WSMessageHandler {
         capabilities,
       });
     }
+  }
+
+  private handleSpectrumViewportChanged(connectionId: string, data: unknown): void {
+    const connection = this.getConnection(connectionId);
+    if (!connection || connection.getSpectrumSubscription() !== 'radio-sdr') return;
+    const parsed = data === null ? null : SpectrumViewportSchema.safeParse(data);
+    connection.setSpectrumViewport(parsed === null ? null : parsed.success ? parsed.data : connection.getSpectrumViewport());
   }
 
   private handleSubscribeImageRx(connectionId: string, data: unknown): void {
@@ -2644,6 +2669,16 @@ export class WSServer extends WSMessageHandler {
   }
 
   broadcastSpectrumFrame(frame: SpectrumFrame): void {
+    // SpectrumCoordinator emits a new immutable frame object for each FFT.
+    // Use object identity as the cache generation so equal timestamps or
+    // payload lengths cannot accidentally reuse a stale projection.
+    // Keep this defensive initialization for lightweight Object.create-based
+    // test doubles and any future deserialization path that bypasses the ctor.
+    this.spectrumProjectionCache ??= new Map<string, SpectrumFrame>();
+    if (this.spectrumProjectionFrame !== frame) {
+      this.spectrumProjectionFrame = frame;
+      this.spectrumProjectionCache.clear();
+    }
     const targetConnectionIds = this.spectrumCoordinator.getSubscribedConnectionIds(frame.kind);
     for (const connectionId of targetConnectionIds) {
       const connection = this.getConnection(connectionId);
@@ -2653,7 +2688,18 @@ export class WSServer extends WSMessageHandler {
       if (connection.getBufferedAmount() > SPECTRUM_SLOW_CLIENT_BYTES) {
         continue;
       }
-      connection.send(WSMessageType.SPECTRUM_FRAME, frame);
+      const viewport = frame.kind === 'radio-sdr' ? connection.getSpectrumViewport() : null;
+      const cacheKey = viewport
+        ? `${viewport.min}:${viewport.max}:${viewport.displayBinCount}`
+        : null;
+      const projected = cacheKey
+        ? (this.spectrumProjectionCache.get(cacheKey) ?? (() => {
+            const next = projectSpectrumFrame(frame, viewport);
+            this.spectrumProjectionCache.set(cacheKey, next);
+            return next;
+          })())
+        : frame;
+      connection.send(WSMessageType.SPECTRUM_FRAME, projected);
     }
   }
 
@@ -2977,6 +3023,10 @@ export class WSServer extends WSMessageHandler {
   private async handleWriteRadioCapability(connectionId: string, data: unknown): Promise<void> {
     try {
       const payload = WriteCapabilityPayloadSchema.parse(data);
+
+      if (payload.id === 'tci_iq_sample_rate' && !this.getConnection(connectionId)?.hasMinRole(UserRole.ADMIN)) {
+        throw new Error('TCI IQ sample rate changes require administrator access');
+      }
 
       logger.info('writeRadioCapability command', { id: payload.id, value: payload.value, action: payload.action });
 

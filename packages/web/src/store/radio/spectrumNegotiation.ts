@@ -1,6 +1,7 @@
 import type React from 'react';
 import type {
   SpectrumCapabilities,
+  SpectrumFrame,
   SpectrumKind,
   SpectrumSessionState,
 } from '@tx5dr/contracts';
@@ -34,6 +35,7 @@ export function createSpectrumNegotiator({
   logger,
 }: SpectrumNegotiationDeps) {
   const SPECTRUM_PRIORITY: SpectrumKind[] = ['openwebrx-sdr', 'radio-sdr', 'audio'];
+  let radioFramePromotionInFlight = false;
 
   const isSpectrumKindAvailable = (capabilities: SpectrumCapabilities, kind: SpectrumKind | null): boolean => {
     if (!kind) {
@@ -83,6 +85,7 @@ export function createSpectrumNegotiator({
   };
 
   const resetSpectrumNegotiation = (profileId: string | null, clearSpectrumState: boolean): void => {
+    radioFramePromotionInFlight = false;
     activeProfileIdRef.current = profileId;
     spectrumAutoPriorityPendingRef.current = true;
     pendingDefaultOpenWebRXDetailProfileRef.current = null;
@@ -98,6 +101,7 @@ export function createSpectrumNegotiator({
   };
 
   const applySpectrumSelection = (capabilities: SpectrumCapabilities) => {
+    radioFramePromotionInFlight = false;
     if (!shouldAcceptSpectrumProfile(capabilities.profileId)) {
       logger.debug('Ignoring stale spectrum capabilities', {
         activeProfileId: activeProfileIdRef.current,
@@ -157,6 +161,7 @@ export function createSpectrumNegotiator({
   };
 
   const applyModeDrivenSpectrumNegotiation = () => {
+    radioFramePromotionInFlight = false;
     pendingDefaultOpenWebRXDetailProfileRef.current = null;
     radioDispatch({ type: 'setSelectedSpectrumKind', payload: null });
     radioDispatch({ type: 'setSubscribedSpectrumKind', payload: null });
@@ -206,11 +211,59 @@ export function createSpectrumNegotiator({
     }
   };
 
+  const onSpectrumFrame = (frame: SpectrumFrame) => {
+    if (frame.kind !== 'radio-sdr' || !spectrumAutoPriorityPendingRef.current || radioFramePromotionInFlight) {
+      return;
+    }
+    if (!shouldAcceptSpectrumProfile(frame.meta.profileId)) {
+      return;
+    }
+
+    const preferredKind = getPreferredSpectrumKind(
+      capabilitiesRef.current?.profileId ?? activeProfileIdRef.current,
+    );
+    // A persisted non-radio preference is an explicit user choice. A radio
+    // preference (or no preference) may still be promoted by a real frame.
+    if (preferredKind && preferredKind !== 'radio-sdr') {
+      spectrumAutoPriorityPendingRef.current = false;
+      return;
+    }
+
+    const currentSelectedKind = radioStateRef.current.selectedSpectrumKind;
+    if (currentSelectedKind === 'radio-sdr') {
+      radioFramePromotionInFlight = false;
+      spectrumAutoPriorityPendingRef.current = false;
+      return;
+    }
+
+    const currentSelectedPriority = currentSelectedKind
+      ? SPECTRUM_PRIORITY.indexOf(currentSelectedKind)
+      : SPECTRUM_PRIORITY.length;
+    if (currentSelectedPriority < SPECTRUM_PRIORITY.indexOf('radio-sdr')) {
+      return;
+    }
+
+    radioFramePromotionInFlight = true;
+    spectrumAutoPriorityPendingRef.current = capabilitiesRef.current
+      ? shouldContinueAutoPriority(capabilitiesRef.current, 'radio-sdr')
+      : false;
+    radioDispatch({ type: 'setSelectedSpectrumKind', payload: 'radio-sdr' });
+    radioDispatch({
+      type: 'setSubscribedSpectrumKind',
+      payload: isSpectrumSubscriptionPaused() ? null : 'radio-sdr',
+    });
+    if (!isSpectrumSubscriptionPaused()) {
+      radioService.subscribeSpectrum('radio-sdr');
+    }
+    logger.info('Promoted spectrum selection after receiving a radio SDR frame');
+  };
+
   return {
     applySpectrumSelection,
     applyProfileDrivenSpectrumNegotiation,
     applyModeDrivenSpectrumNegotiation,
     onSpectrumSessionStateChanged,
+    onSpectrumFrame,
     shouldAcceptSpectrumProfile,
   };
 }

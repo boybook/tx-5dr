@@ -6,7 +6,7 @@ import type { ComplexSpectrumResult } from 'rubato-fft-node';
 import type { TciConnection } from '../../radio/connections/TciConnection.js';
 import { TciIqSpectrumSource } from '../TciIqSpectrumSource.js';
 
-const FFT_SIZE = 4096;
+const FFT_SIZE = 16_384;
 
 function createTone(offsetHz: number, sampleRate: number): Float32Array {
   const samples = new Float32Array(FFT_SIZE * 2);
@@ -62,7 +62,7 @@ describe('TciIqSpectrumSource', () => {
     await server.start();
     server.onCommand(({ server: currentServer, command }) => {
       if (command.name === 'iq_start') {
-        currentServer.sendIqFrame({ samples: createTone(6_000, 48_000) });
+        currentServer.sendIqFrame({ samples: createTone(6_000, 384_000) });
       }
     });
 
@@ -79,25 +79,26 @@ describe('TciIqSpectrumSource', () => {
     await source.start((frame) => frames.push(frame));
     server.broadcast('IF_LIMITS:-10000,10000;');
     await new Promise((resolve) => setTimeout(resolve, 20));
-    server.sendIqFrame({ samples: createTone(6_000, 48_000) });
+    server.sendIqFrame({ samples: createTone(6_000, 384_000) });
     await waitFor(() => frames.length > 0);
 
     expect(clientCount).toBe(1);
     expect(server.receivedCommands.some((command) => command.name === 'iq_start')).toBe(true);
-    expect(server.receivedCommands.some((command) => command.name === 'iq_samplerate')).toBe(false);
-    expect(await source.getCurrentSpan()).toBe(48_000);
-    expect(await source.getSupportedSpans()).toEqual([48_000]);
+    expect(server.receivedCommands.some((command) => command.name === 'iq_samplerate')).toBe(true);
+    expect(await source.getCurrentSpan()).toBe(384_000);
+    expect(await source.getSupportedSpans()).toEqual([384_000]);
     expect(frames[0]).toMatchObject({
       kind: 'radio-sdr',
       frequencyRange: { min: 14_064_000, max: 14_084_000 },
       binaryData: {
-        format: { type: 'int16', length: 1024, scale: 0.01, offset: 0 },
+        format: { type: 'int16', length: 16_384, scale: 0.01, offset: 0 },
       },
       meta: {
-        sourceBinCount: 4096,
-        displayBinCount: 1024,
+        sourceBinCount: 16_384,
+        displayBinCount: 16_384,
         centerFrequency: 14_074_000,
         spanHz: 20_000,
+        nativeFrequencyRange: { min: 13_882_000, max: 14_266_000 },
         radioModel: 'TCI IQ',
         level: {
           domain: 'dbfs',
@@ -108,9 +109,14 @@ describe('TciIqSpectrumSource', () => {
           max: 0,
         },
       },
+      supplement: {
+        frequencyRange: { min: 13_882_000, max: 14_266_000 },
+        binaryData: { format: { type: 'int16', length: 512, scale: 0.01, offset: 0 } },
+      },
     });
+    expect(frames[0]!.supplement?.binaryData.format.length).toBe(512);
     const magnitudeBytes = Buffer.from(frames[0]!.binaryData.data, 'base64');
-    expect(magnitudeBytes).toHaveLength(2048);
+    expect(magnitudeBytes).toHaveLength(32_768);
     const magnitudeView = new DataView(
       magnitudeBytes.buffer,
       magnitudeBytes.byteOffset,
@@ -118,18 +124,42 @@ describe('TciIqSpectrumSource', () => {
     );
     let peakIndex = 0;
     let peakValue = -32768;
-    for (let index = 0; index < 1024; index++) {
+    for (let index = 0; index < 16_384; index++) {
       const value = magnitudeView.getInt16(index * 2, true);
       if (value > peakValue) {
         peakValue = value;
         peakIndex = index;
       }
     }
-    expect(peakIndex).toBeGreaterThanOrEqual(810);
-    expect(peakIndex).toBeLessThanOrEqual(830);
+    expect(peakIndex).toBeGreaterThanOrEqual(13_000);
+    expect(peakIndex).toBeLessThanOrEqual(13_200);
 
     await source.stop();
     expect(server.receivedCommands.some((command) => command.name === 'iq_stop')).toBe(true);
+  });
+
+  it('uses power-domain aggregation for the wide fallback without max-pool floor lift', () => {
+    const source = new TciIqSpectrumSource({} as TciConnection);
+    const input = new Int16Array([-8_000, -8_000, -8_000, -2_000]);
+    const encoded = Buffer.from(input.buffer).toString('base64');
+    const compress = (source as unknown as {
+      cropAndCompressMagnitudes: (
+        base64: string,
+        inputLength: number,
+        sampleRate: number,
+        window: { minOffsetHz: number; maxOffsetHz: number },
+        outputBinCount: number,
+        aggregation?: 'max' | 'power-mean-percentile',
+        scale?: number,
+        offset?: number,
+      ) => Int16Array;
+    }).cropAndCompressMagnitudes.bind(source);
+    const maximum = compress(encoded, input.length, 4_000, { minOffsetHz: -2_000, maxOffsetHz: 2_000 }, 1, 'max', 0.01, 0);
+    const fallback = compress(encoded, input.length, 4_000, { minOffsetHz: -2_000, maxOffsetHz: 2_000 }, 1, 'power-mean-percentile', 0.01, 0);
+
+    expect(maximum[0]).toBe(-2_000);
+    expect(fallback[0]).toBeGreaterThan(-8_000);
+    expect(fallback[0]).toBeLessThan(maximum[0]!);
   });
 
   it('uses sample-rate readback for zoom and suppresses stale analyzer output', async () => {
@@ -157,7 +187,7 @@ describe('TciIqSpectrumSource', () => {
     const frame = frames.find((candidate) => candidate.meta.spanHz === 192_000)!;
     expect(await source.getCurrentSpan()).toBe(192_000);
     expect(frame.frequencyRange).toEqual({ min: 13_978_000, max: 14_170_000 });
-    expect(frame.binaryData.format.length).toBe(1024);
+    expect(frame.binaryData.format.length).toBe(16_384);
   });
 
   it('reconnects the dedicated IQ connection and restarts streaming after a drop', async () => {
@@ -186,7 +216,7 @@ describe('TciIqSpectrumSource', () => {
     await waitFor(() => server.receivedCommands.filter((command) => command.name === 'iq_start').length >= 2);
 
     expect(clientCount).toBe(2);
-    expect(await source.getCurrentSpan()).toBe(48_000);
+    expect(await source.getCurrentSpan()).toBe(384_000);
   });
 
   it('rejects a false text echo when IQ frame headers keep the previous sample rate', async () => {

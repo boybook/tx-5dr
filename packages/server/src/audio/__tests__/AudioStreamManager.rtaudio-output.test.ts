@@ -289,6 +289,42 @@ describe('AudioStreamManager RtAudio output diagnostics', () => {
     );
   });
 
+  it('applies the explicit FT8/FT4 envelope at the RtAudio output boundary', async () => {
+    const manager = new AudioStreamManager();
+    manager.setVolumeGain(1);
+    await manager.startOutput();
+
+    await manager.playAudio(new Float32Array(2_400).fill(0.5), 48_000, {
+      playbackKind: 'digital',
+      txEnvelopeProfile: 'ft8-ft4',
+    });
+
+    const first = mockRtAudioState.writes[0]!.readFloatLE(0);
+    const middle = mockRtAudioState.writes[Math.floor(mockRtAudioState.writes.length / 2)]!.readFloatLE(0);
+    const lastWrite = mockRtAudioState.writes.at(-1)!;
+    const last = lastWrite.readFloatLE(lastWrite.length - 4);
+    expect(first).toBeCloseTo(0);
+    expect(middle).toBeGreaterThan(0.49);
+    expect(last).toBeCloseTo(0);
+  });
+
+  it('sends a bounded release tail before stopping an FT8/FT4 playback', async () => {
+    const manager = new AudioStreamManager();
+    manager.setVolumeGain(1);
+    await manager.startOutput();
+    const playback = manager.playAudio(new Float32Array(48_000).fill(0.5), 48_000, {
+      playbackKind: 'digital',
+      txEnvelopeProfile: 'ft8-ft4',
+    }).catch((error) => error);
+
+    await vi.waitFor(() => expect(mockRtAudioState.writes.length).toBeGreaterThan(0));
+    await manager.stopCurrentPlayback({ kind: 'digital' });
+    const result = await playback;
+    expect(result).toBeInstanceOf(Error);
+    const lastWrite = mockRtAudioState.writes.at(-1)!;
+    expect(lastWrite.readFloatLE(lastWrite.length - 4)).toBeCloseTo(0);
+  });
+
   it('opens the default RtAudio output as Float32 mono', async () => {
     const manager = new AudioStreamManager();
     await manager.startOutput();

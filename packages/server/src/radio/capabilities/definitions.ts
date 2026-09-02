@@ -363,6 +363,55 @@ function createDefinitions(): CapabilityDefinition[] {
       },
     },
     {
+      id: 'tci_iq_sample_rate',
+      descriptor: {
+        id: 'tci_iq_sample_rate',
+        category: 'system',
+        valueType: 'enum',
+        options: [],
+        readable: true,
+        writable: true,
+        updateMode: 'polling',
+        pollIntervalMs: 5000,
+        labelI18nKey: 'radio:capability.tci_iq_sample_rate.label',
+        descriptionI18nKey: 'radio:capability.tci_iq_sample_rate.description',
+        display: { mode: 'value', unit: 'state' },
+        hasSurfaceControl: false,
+      },
+      resolveDescriptor: async (conn) => {
+        const getOptions = getDynamicMethod(conn, 'getTciIqSampleRates');
+        const values = getOptions ? asOptionValues(await getOptions.call(conn), []) : [];
+        return {
+          id: 'tci_iq_sample_rate',
+          category: 'system',
+          valueType: 'enum',
+          options: values.map((value) => createOption(value)),
+          readable: true,
+          writable: true,
+          updateMode: 'polling',
+          pollIntervalMs: 5000,
+          labelI18nKey: 'radio:capability.tci_iq_sample_rate.label',
+          descriptionI18nKey: 'radio:capability.tci_iq_sample_rate.description',
+          display: { mode: 'value', unit: 'state' },
+          hasSurfaceControl: false,
+        };
+      },
+      probeSupport: async (conn) => {
+        if (conn.getType() !== RadioConnectionType.TCI) return false;
+        const getOptions = getDynamicMethod(conn, 'getTciIqSampleRates');
+        const reader = getDynamicMethod(conn, 'getTciIqSampleRate');
+        const writer = getDynamicMethod(conn, 'setTciIqSampleRate');
+        if (!getOptions || !reader || !writer) return false;
+        const values = await getOptions.call(conn);
+        return { supported: Array.isArray(values) && values.length > 0, source: 'backend-declared' };
+      },
+      read: async (conn) => asRuntimeValue(await requireDynamicMethod(conn, 'getTciIqSampleRate').call(conn)),
+      write: async (conn, value) => {
+        const applied = await requireDynamicMethod(conn, 'setTciIqSampleRate').call(conn, value as number);
+        return typeof applied === 'number' ? { value: applied } : undefined;
+      },
+    },
+    {
       id: 'tuner_switch',
       descriptor: {
         id: 'tuner_switch',

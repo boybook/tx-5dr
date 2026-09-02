@@ -16,6 +16,9 @@ import {
   type SpectrumPreset,
   type SpectrumCustomSettings,
   SpectrumCustomSettingsSchema,
+  TciIqSampleRateSchema,
+  TciSpectrumSettingsSchema,
+  type TciSpectrumSettings,
   SpectrumPresetSchema,
   UpdateNtpServerListRequestSchema,
   sanitizeCallsignInput,
@@ -167,6 +170,8 @@ export interface AppConfig {
   spectrum: {
     preset: SpectrumPreset;
     customSettings?: SpectrumCustomSettings;
+    tciIqSampleRate?: number;
+    tciSpectrum?: TciSpectrumSettings;
   };
   /** Persisted NTP server order. When absent, built-in defaults are used. */
   ntp?: {
@@ -244,6 +249,8 @@ const DEFAULT_CONFIG: AppConfig = {
   cwDecoder: CWDecoderConfigSchema.parse({}),
   spectrum: {
     preset: 'balanced',
+    tciIqSampleRate: undefined,
+    tciSpectrum: { fftSize: 16_384, displayBinCount: 16_384, analysisIntervalMs: 100 },
   },
   observability: {
     enabled: true,
@@ -368,6 +375,12 @@ export function validateAppConfigCandidate(value: unknown): Record<string, unkno
     SpectrumPresetSchema.parse(value.spectrum.preset);
     if (value.spectrum.preset === 'custom') {
       SpectrumCustomSettingsSchema.parse(value.spectrum.customSettings);
+    }
+    if (value.spectrum.tciIqSampleRate !== undefined) {
+      TciIqSampleRateSchema.parse(value.spectrum.tciIqSampleRate);
+    }
+    if (value.spectrum.tciSpectrum !== undefined) {
+      TciSpectrumSettingsSchema.parse(value.spectrum.tciSpectrum);
     }
   }
   if (isPlainObject(value.observability)) {
@@ -572,6 +585,8 @@ export class ConfigManager {
     this.config = this.mergeConfig(DEFAULT_CONFIG, parsedConfig);
     const parsedSpectrumPreset = SpectrumPresetSchema.safeParse(this.config.spectrum?.preset);
     const parsedCustomSettings = SpectrumCustomSettingsSchema.safeParse(this.config.spectrum?.customSettings);
+    const parsedTciIqSampleRate = TciIqSampleRateSchema.safeParse(this.config.spectrum?.tciIqSampleRate);
+    const parsedTciSpectrum = TciSpectrumSettingsSchema.safeParse(this.config.spectrum?.tciSpectrum);
     this.config.spectrum = parsedSpectrumPreset.success && (
       parsedSpectrumPreset.data !== 'custom' || parsedCustomSettings.success
     )
@@ -580,6 +595,8 @@ export class ConfigManager {
           ...(parsedSpectrumPreset.data === 'custom' && parsedCustomSettings.success
             ? { customSettings: parsedCustomSettings.data }
             : {}),
+          ...(parsedTciIqSampleRate.success ? { tciIqSampleRate: parsedTciIqSampleRate.data } : {}),
+          ...(parsedTciSpectrum.success ? { tciSpectrum: parsedTciSpectrum.data } : {}),
         }
       : { preset: DEFAULT_CONFIG.spectrum.preset };
     if (migrated) {
@@ -1226,11 +1243,48 @@ export class ConfigManager {
     return this.config.spectrum.preset;
   }
 
-  getSpectrumSettings(): { preset: SpectrumPreset; customSettings?: SpectrumCustomSettings } {
+  getSpectrumSettings(): { preset: SpectrumPreset; customSettings?: SpectrumCustomSettings; tciIqSampleRate?: number; tciSpectrum?: TciSpectrumSettings } {
     return {
       preset: this.config.spectrum.preset,
+      ...(this.config.spectrum.tciIqSampleRate ? { tciIqSampleRate: this.config.spectrum.tciIqSampleRate } : {}),
+      ...(this.config.spectrum.tciSpectrum ? { tciSpectrum: { ...this.config.spectrum.tciSpectrum } } : {}),
       ...(this.config.spectrum.customSettings ? { customSettings: { ...this.config.spectrum.customSettings } } : {}),
     };
+  }
+
+  getTciIqSampleRate(): number | null {
+    const value = this.config.spectrum.tciIqSampleRate;
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+  }
+
+  async updateTciIqSampleRate(sampleRate: number): Promise<void> {
+    if (!Number.isFinite(sampleRate) || sampleRate <= 0) {
+      throw new Error('Invalid TCI IQ sample rate');
+    }
+    const previous = this.config.spectrum.tciIqSampleRate;
+    this.config.spectrum.tciIqSampleRate = Math.round(sampleRate);
+    try {
+      await this.saveConfig();
+    } catch (error) {
+      this.config.spectrum.tciIqSampleRate = previous;
+      throw error;
+    }
+  }
+
+  getTciSpectrumSettings(): TciSpectrumSettings {
+    return { ...(this.config.spectrum.tciSpectrum ?? DEFAULT_CONFIG.spectrum.tciSpectrum!) };
+  }
+
+  async updateTciSpectrumSettings(settings: TciSpectrumSettings): Promise<void> {
+    const parsed = TciSpectrumSettingsSchema.parse(settings);
+    const previous = this.config.spectrum.tciSpectrum;
+    this.config.spectrum.tciSpectrum = parsed;
+    try {
+      await this.saveConfig();
+    } catch (error) {
+      this.config.spectrum.tciSpectrum = previous;
+      throw error;
+    }
   }
 
   async updateSpectrumPreset(preset: SpectrumPreset): Promise<void> {

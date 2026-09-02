@@ -131,6 +131,25 @@ describe('AudioStreamManager ICOM WLAN output pacing', () => {
     expect(adapter.sendAudio).toHaveBeenCalledTimes(10);
   });
 
+  it('applies the explicit FT8/FT4 envelope before ICOM WLAN sends', async () => {
+    const adapter: MockIcomAdapter = {
+      sendAudio: vi.fn().mockResolvedValue(undefined),
+      getSampleRate: vi.fn().mockReturnValue(12000),
+    };
+    const manager = createIcomManager(adapter);
+    manager.setVolumeGain(1);
+    await manager.playAudio(new Float32Array(2_400).fill(0.5), 12_000, {
+      playbackKind: 'digital',
+      txEnvelopeProfile: 'ft8-ft4',
+    });
+
+    const firstChunk = adapter.sendAudio.mock.calls[0]![0] as Float32Array;
+    const lastChunk = adapter.sendAudio.mock.calls.at(-1)![0] as Float32Array;
+    expect(firstChunk[0]).toBeCloseTo(0);
+    expect(firstChunk[500]).toBeGreaterThan(0.49);
+    expect(lastChunk[lastChunk.length - 1]).toBeCloseTo(0);
+  });
+
   it('acknowledges playback start only after the first ICOM audio write succeeds', async () => {
     const firstWrite = deferred<void>();
     const adapter: MockIcomAdapter = {

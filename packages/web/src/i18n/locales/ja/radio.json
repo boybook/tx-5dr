@@ -7,6 +7,16 @@
     "disconnected": "切断済み",
     "failed": "接続失敗"
   },
+  "spectrum": {
+    "tciSettings": {
+      "title": "TCI SDR スペクトラム",
+      "description": "共有 TCI スペクトラム解析の解像度と更新速度を調整します。",
+      "fftSize": "FFT 解像度",
+      "displayBins": "表示解像度",
+      "refreshInterval": "更新間隔",
+      "updateFailed": "TCI スペクトラム設定の更新に失敗しました"
+    }
+  },
   "status": {
     "txDisconnected": "⚠️ 無線機が接続を中断します",
     "suggestion": "💡 提案",
@@ -656,6 +666,10 @@
     "tx_audio_input_source": {
       "label": "送信オーディオ入力",
       "description": "送信に使用する物理オーディオ入力（マイク、USB、ネットワーク、アクセサリ）を選択します。"
+    },
+    "tci_iq_sample_rate": {
+      "label": "TCI IQ サンプルレート",
+      "description": "共有 TCI IQ スペクトラムのサンプルレートを設定します。高いレートでは広い周波数範囲を表示できますが、無線機とサーバーの帯域幅を多く使用します。"
     },
     "rf_power": {
       "label": "送信出力",

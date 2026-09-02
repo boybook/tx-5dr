@@ -694,7 +694,10 @@ export async function createServer() {
   // Viewer+ 路由：操作员（内部根据角色过滤）、电台状态、模式、时隙包、语音
   await registerRoleScope(fastify, UserRole.VIEWER, async (scope) => {
     const { spectrumSettingsReadRoutes } = await import('./routes/spectrum-settings.js');
+    const { tciSpectrumSettingsReadRoutes, tciSpectrumSettingsWriteRoutes } = await import('./routes/tci-spectrum-settings.js');
     await scope.register(spectrumSettingsReadRoutes, { prefix: '/api/audio/spectrum-settings' });
+    await scope.register(tciSpectrumSettingsReadRoutes, { prefix: '/api/tci/spectrum-settings' });
+    await scope.register(tciSpectrumSettingsWriteRoutes, { prefix: '/api/tci/spectrum-settings' });
     await scope.register(operatorRoutes, { prefix: '/api/operators' });
     await scope.register(radioRoutes, { prefix: '/api/radio' });
     await scope.register(powerRoutes, { prefix: '/api/radio/power' });

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SpectrumCapabilities } from '@tx5dr/contracts';
+import type { SpectrumCapabilities, SpectrumFrame } from '@tx5dr/contracts';
 import { getSpectrumPresetDefinition, MODES } from '@tx5dr/contracts';
 import { createSpectrumNegotiator } from '../radio/spectrumNegotiation';
 import { initialRadioState, radioReducer, type RadioState } from '../radioStore';
@@ -156,6 +156,50 @@ describe('spectrum negotiation', () => {
     expect(harness.radioStateRef.current.subscribedSpectrumKind).toBe('radio-sdr');
     expect(harness.spectrumAutoPriorityPendingRef.current).toBe(false);
     expect(harness.radioService.subscribeSpectrum).toHaveBeenLastCalledWith('radio-sdr');
+  });
+
+  it('promotes audio to radio SDR when the first valid SDR frame wins the capability race', () => {
+    const harness = createHarness();
+    harness.negotiator.applySpectrumSelection(createCapabilities({
+      radioSupported: true,
+      radioAvailable: false,
+    }));
+
+    const frame: SpectrumFrame = {
+      timestamp: 1,
+      kind: 'radio-sdr',
+      frequencyRange: { min: 14_070_000, max: 14_080_000 },
+      binaryData: {
+        data: 'AA==',
+        format: { type: 'int16', length: 1 },
+      },
+      meta: { sourceBinCount: 1, displayBinCount: 1, profileId: null },
+    };
+    harness.negotiator.onSpectrumFrame(frame);
+
+    expect(harness.radioStateRef.current.selectedSpectrumKind).toBe('radio-sdr');
+    expect(harness.radioStateRef.current.subscribedSpectrumKind).toBe('radio-sdr');
+    expect(harness.radioService.subscribeSpectrum).toHaveBeenLastCalledWith('radio-sdr');
+    expect(harness.spectrumAutoPriorityPendingRef.current).toBe(false);
+  });
+
+  it('does not override an explicit non-radio Profile preference when an SDR frame arrives', () => {
+    const profileId = 'profile-1';
+    setPreferredSpectrumKind(profileId, 'audio');
+    const harness = createHarness(profileId);
+    harness.negotiator.applySpectrumSelection(createCapabilities({ profileId, radioSupported: true, radioAvailable: false }));
+    harness.spectrumAutoPriorityPendingRef.current = true;
+
+    harness.negotiator.onSpectrumFrame({
+      timestamp: 1,
+      kind: 'radio-sdr',
+      frequencyRange: { min: 14_070_000, max: 14_080_000 },
+      binaryData: { data: 'AA==', format: { type: 'int16', length: 1 } },
+      meta: { sourceBinCount: 1, displayBinCount: 1, profileId },
+    });
+
+    expect(harness.radioStateRef.current.selectedSpectrumKind).toBe('audio');
+    expect(harness.radioService.subscribeSpectrum).toHaveBeenLastCalledWith('audio');
   });
 
   it('continues auto-upgrading from radio SDR to OpenWebRX when OpenWebRX becomes available later', () => {

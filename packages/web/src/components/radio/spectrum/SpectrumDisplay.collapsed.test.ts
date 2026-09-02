@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   areSpectrumRecoveryStatesEqual,
   buildRadioSdrFrequencyRequest,
-  buildRadioSdrTxBandOverlays,
   canShowRadioSdrCenterViewSetting,
   canUseRadioSdrFrequencyRequest,
   clampCollapsedSpectrumFrequency,
@@ -18,6 +17,7 @@ import {
   resolveSpectrumRecoveryStateAfterFrame,
   resolveCollapsedSpectrumMarkerFrequencies,
   resolveSpectrumMarkerFrequencies,
+  resolveTciDigitalAutoZoomRange,
   SPECTRUM_RECOVERY_IDLE_STATE,
   shouldPauseSpectrumNoFrameRecovery,
 } from './SpectrumDisplay';
@@ -230,6 +230,11 @@ describe('radio SDR center view settings', () => {
       isRadioSdrSelected: true,
       frequencyRangeMode: 'absolute-center',
     })).toBe(true);
+    expect(canShowRadioSdrCenterViewSetting({
+      isRadioSdrSelected: true,
+      frequencyRangeMode: 'absolute-center',
+      viewMode: 'wide',
+    })).toBe(false);
 
     for (const frequencyRangeMode of ['absolute-fixed', 'absolute-windowed', 'baseband'] as const) {
       expect(canShowRadioSdrCenterViewSetting({
@@ -246,6 +251,17 @@ describe('radio SDR center view settings', () => {
 });
 
 describe('collapsed spectrum positioning', () => {
+  it('expands the TCI digital RX range without exceeding the native IQ bounds', () => {
+    expect(resolveTciDigitalAutoZoomRange(
+      { min: 14_000_000, max: 14_100_000 },
+      { min: 14_050_000, max: 14_054_000 },
+    )).toEqual({ min: 14_049_000, max: 14_055_000 });
+    expect(resolveTciDigitalAutoZoomRange(
+      { min: 14_000_000, max: 14_052_000 },
+      { min: 14_050_000, max: 14_054_000 },
+    )).toEqual({ min: 14_049_000, max: 14_052_000 });
+  });
+
   it('clamps digital baseband frequencies to 0-3000 Hz', () => {
     expect(clampCollapsedSpectrumFrequency(-100)).toBe(0);
     expect(clampCollapsedSpectrumFrequency(1500)).toBe(1500);
@@ -392,163 +408,6 @@ describe('collapsed spectrum positioning', () => {
     });
   });
 
-  it('builds a current RF TX overlay for CW radio SDR only', () => {
-    expect(buildRadioSdrTxBandOverlays({
-      engineMode: 'cw',
-      isRadioSdrSelected: true,
-      currentRadioFrequency: 14_050_000,
-      voice: null,
-      voiceOverlayIsInteractive: false,
-    })).toEqual([{
-      id: 'cw-current-tx',
-      label: 'TX',
-      lineFrequency: 14_050_000,
-      rangeStartFrequency: 14_050_000,
-      rangeEndFrequency: 14_050_000,
-      draggable: false,
-      variant: 'tx',
-    }]);
-
-    expect(buildRadioSdrTxBandOverlays({
-      engineMode: 'cw',
-      isRadioSdrSelected: false,
-      currentRadioFrequency: 14_050_000,
-      voice: null,
-      voiceOverlayIsInteractive: false,
-    })).toEqual([]);
-  });
-
-  it('keeps the existing voice SDR occupied-band TX overlay shape', () => {
-    expect(buildRadioSdrTxBandOverlays({
-      engineMode: 'voice',
-      isRadioSdrSelected: true,
-      currentRadioFrequency: 14_200_000,
-      voice: {
-        radioMode: 'USB',
-        bandwidthLabel: '2400 Hz',
-        occupiedBandwidthHz: 2400,
-        offsetModel: 'upper',
-      },
-      voiceOverlayIsInteractive: true,
-    })).toEqual([{
-      id: 'voice-current-tx',
-      label: 'TX',
-      lineFrequency: 14_200_000,
-      rangeStartFrequency: 14_200_000,
-      rangeEndFrequency: 14_202_400,
-      draggable: true,
-      variant: 'tx',
-    }]);
-  });
-
-  it('renders separate RX and TX RF overlays when Split is enabled', () => {
-    expect(buildRadioSdrTxBandOverlays({
-      engineMode: 'cw',
-      isRadioSdrSelected: true,
-      currentRadioFrequency: 14_050_000,
-      splitEnabled: true,
-      splitTxFrequency: 14_052_500,
-      voice: null,
-      voiceOverlayIsInteractive: false,
-    })).toEqual([
-      {
-        id: 'cw-current-rx',
-        label: 'RX',
-        lineFrequency: 14_050_000,
-        rangeStartFrequency: 14_050_000,
-        rangeEndFrequency: 14_050_000,
-        draggable: false,
-        variant: 'rx',
-      },
-      {
-        id: 'cw-split-tx',
-        label: 'TX',
-        lineFrequency: 14_052_500,
-        rangeStartFrequency: 14_052_500,
-        rangeEndFrequency: 14_052_500,
-        draggable: false,
-        variant: 'tx',
-      },
-    ]);
-
-    expect(buildRadioSdrTxBandOverlays({
-      engineMode: 'voice',
-      isRadioSdrSelected: true,
-      currentRadioFrequency: 14_200_000,
-      splitEnabled: true,
-      splitTxFrequency: 14_205_000,
-      voice: {
-        radioMode: 'USB',
-        bandwidthLabel: '2400 Hz',
-        occupiedBandwidthHz: 2400,
-        offsetModel: 'upper',
-      },
-      voiceOverlayIsInteractive: true,
-    })).toEqual([
-      {
-        id: 'voice-current-rx',
-        label: 'RX',
-        lineFrequency: 14_200_000,
-        rangeStartFrequency: 14_200_000,
-        rangeEndFrequency: 14_202_400,
-        draggable: true,
-        variant: 'rx',
-      },
-      {
-        id: 'voice-split-tx',
-        label: 'TX',
-        lineFrequency: 14_205_000,
-        rangeStartFrequency: 14_205_000,
-        rangeEndFrequency: 14_207_400,
-        draggable: false,
-        variant: 'tx',
-      },
-    ]);
-  });
-
-  it('does not synthesize a Split TX overlay before TX frequency metadata arrives', () => {
-    expect(buildRadioSdrTxBandOverlays({
-      engineMode: 'cw',
-      isRadioSdrSelected: true,
-      currentRadioFrequency: 14_050_000,
-      splitEnabled: true,
-      splitTxFrequency: null,
-      voice: null,
-      voiceOverlayIsInteractive: false,
-    })).toEqual([{
-      id: 'cw-current-rx',
-      label: 'RX',
-      lineFrequency: 14_050_000,
-      rangeStartFrequency: 14_050_000,
-      rangeEndFrequency: 14_050_000,
-      draggable: false,
-      variant: 'rx',
-    }]);
-
-    expect(buildRadioSdrTxBandOverlays({
-      engineMode: 'voice',
-      isRadioSdrSelected: true,
-      currentRadioFrequency: 14_200_000,
-      splitEnabled: true,
-      splitTxFrequency: null,
-      voice: {
-        radioMode: 'USB',
-        bandwidthLabel: '2400 Hz',
-        occupiedBandwidthHz: 2400,
-        offsetModel: 'upper',
-      },
-      voiceOverlayIsInteractive: true,
-    })).toEqual([{
-      id: 'voice-current-rx',
-      label: 'RX',
-      lineFrequency: 14_200_000,
-      rangeStartFrequency: 14_200_000,
-      rangeEndFrequency: 14_202_400,
-      draggable: true,
-      variant: 'rx',
-    }]);
-  });
-
   it('builds CW SDR frequency requests with CW mode and 10 Hz snapping', () => {
     expect(buildRadioSdrFrequencyRequest({
       engineMode: 'cw',
@@ -572,6 +431,31 @@ describe('collapsed spectrum positioning', () => {
       mode: 'VOICE',
       band: 'Custom',
       description: '14.200 MHz',
+    });
+  });
+
+  it('keeps SSTV SDR frequency requests in SSTV mode', () => {
+    expect(buildRadioSdrFrequencyRequest({
+      engineMode: 'image',
+      frequency: 14_230_499,
+      stepHz: 1000,
+    })).toEqual({
+      frequency: 14_230_000,
+      mode: 'SSTV',
+      band: 'Custom',
+      description: '14.230 MHz',
+    });
+  });
+
+  it('preserves FAX mode when building image SDR frequency requests', () => {
+    expect(buildRadioSdrFrequencyRequest({
+      engineMode: 'image',
+      frequency: 3_850_499,
+      stepHz: 1000,
+      radioMode: 'FAX',
+    })).toMatchObject({
+      frequency: 3_850_000,
+      mode: 'FAX',
     });
   });
 

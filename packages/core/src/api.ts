@@ -11,6 +11,8 @@ import type {
   AudioSettingsResolveResponse,
   SpectrumSettingsResponse,
   SpectrumSettingsUpdateRequest,
+  TciSpectrumSettings,
+  TciSpectrumSettingsResponse,
   ModeDescriptor,
   CreateRadioOperatorRequest,
   UpdateRadioOperatorRequest,
@@ -939,6 +941,17 @@ export const api = {
     apiBase?: string,
   ): Promise<SpectrumSettingsResponse> {
     return apiRequest<SpectrumSettingsResponse>('/audio/spectrum-settings', {
+      method: 'POST',
+      body: JSON.stringify(settings),
+    }, apiBase);
+  },
+
+  async getTciSpectrumSettings(apiBase?: string): Promise<TciSpectrumSettingsResponse> {
+    return apiRequest<TciSpectrumSettingsResponse>('/tci/spectrum-settings', undefined, apiBase);
+  },
+
+  async updateTciSpectrumSettings(settings: TciSpectrumSettings, apiBase?: string): Promise<TciSpectrumSettingsResponse> {
+    return apiRequest<TciSpectrumSettingsResponse>('/tci/spectrum-settings', {
       method: 'POST',
       body: JSON.stringify(settings),
     }, apiBase);
@@ -2729,6 +2742,8 @@ export const {
   resetAudioSettings,
   getSpectrumSettings,
   updateSpectrumSettings,
+  getTciSpectrumSettings,
+  updateTciSpectrumSettings,
   getAvailableModes,
   getCurrentMode,
   switchMode,

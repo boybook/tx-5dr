@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { Button, Input, Popover, PopoverContent, PopoverTrigger, Slider, Switch, Tab, Tabs, Tooltip } from '@heroui/react';
+import { Accordion, AccordionItem, Button, Input, Popover, PopoverContent, PopoverTrigger, Slider, Switch, Tab, Tabs, Tooltip } from '@heroui/react';
 import { addToast } from '@heroui/toast';
 import { ArrowsPointingOutIcon, ChevronDownIcon, ChevronUpIcon, Cog6ToothIcon, MinusIcon, PlusIcon } from '@heroicons/react/24/outline';
 import { useTranslation } from 'react-i18next';
-import type { AudioInputSignalType, EngineMode, SpectrumCustomSettings, SpectrumFrame, SpectrumKind, SpectrumLevelDescriptor, SpectrumLevelDomain, SpectrumPreset, SpectrumSessionVoiceState, SystemStatus } from '@tx5dr/contracts';
+import type { AudioInputSignalType, EngineMode, SpectrumCustomSettings, SpectrumFrame, SpectrumKind, SpectrumLevelDescriptor, SpectrumLevelDomain, SpectrumPreset, SpectrumSessionFrequencyOverlay, SpectrumSessionViewMode, SpectrumViewport, SystemStatus, TciSpectrumSettings } from '@tx5dr/contracts';
 import { UserRole } from '@tx5dr/contracts';
 import { api, getBandFromFrequency } from '@tx5dr/core';
 import { useConnection, useCurrentOperatorId, useOperators, useProfiles, usePTTState, useRadioConnectionState, useRadioModeState, useRadioState, useCapabilityState, useCapabilityDescriptor, useSpectrum, useSplitState } from '../../../store/radioStore';
@@ -11,8 +11,9 @@ import { useAbility, useCan, useHasMinRole } from '../../../store/authStore';
 import { createLogger } from '../../../utils/logger';
 import { setPreferredSpectrumKind } from '../../../utils/spectrumPreferences';
 import { useTargetRxFrequencies, type RxFrequency } from '../../../hooks/useTargetRxFrequencies';
+import { useCapabilityWriter } from '../../../radio-capability/CapabilityRegistry';
 import { useTxFrequencies, type TxFrequency } from '../../../hooks/useTxFrequencies';
-import { WebGLWaterfall, WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ } from './WebGLWaterfall';
+import { getWaterfallCanvasPixelRatio, WebGLWaterfall, WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ, WATERFALL_MAX_HISTORY_ROWS } from './WebGLWaterfall';
 import type { AutoRangeConfig, FrequencyBandOverlay, FrequencyBandOverlayChange, PresetMarker, TxBandOverlay } from './WebGLWaterfall';
 import { SpectrumStreamController, type RadioSdrCenterViewMode } from '../../../spectrum/SpectrumStreamController';
 import {
@@ -25,6 +26,7 @@ import { resetOperatorsForOperatingStateChange } from '../../../utils/operatorRe
 import { canExecuteRadioFrequency, canWriteRadioFrequency, isFakeFrequencySupportedMode } from '../../../utils/radioControl';
 import { setRadioFrequencyWithIntent, subscribeRadioFrequencyIntent, type SetRadioFrequencyParams } from '../../../utils/radioFrequencyIntent';
 import { deriveSpectrumCustomSettings, SpectrumAnalysisSettings } from './SpectrumAnalysisSettings';
+import { TciSpectrumSettingsPanel } from './TciSpectrumSettings';
 import {
   RADIO_SDR_OPTIMISTIC_DISPLAY_HOLD_TIMEOUT_MS,
   RADIO_SDR_OPTIMISTIC_DISPLAY_IDLE,
@@ -53,6 +55,9 @@ const logger = createLogger('SpectrumDisplay');
 const SPECTRUM_NO_FRAME_STALE_MS = 10_000;
 const SPECTRUM_NO_FRAME_CHECK_MS = 1_000;
 const SPECTRUM_NO_FRAME_MAX_RETRIES = 3;
+const TCI_DIGITAL_AUTO_ZOOM_DELAY_MS = 1000;
+const TCI_DIGITAL_AUTO_ZOOM_PADDING_RATIO = 0.25;
+const TCI_DIGITAL_AUTO_ZOOM_MIN_PADDING_HZ = 200;
 
 type ElectronWindowHelper = Window & {
   electronAPI?: {
@@ -63,12 +68,19 @@ type ElectronWindowHelper = Window & {
 };
 
 const AUDIO_WATERFALL_HISTORY_ROWS = 1024;
-const WATERFALL_HISTORY_ROWS = 120;
+const RADIO_SDR_WATERFALL_HISTORY_ROWS = WATERFALL_MAX_HISTORY_ROWS;
+const OPENWEBRX_WATERFALL_HISTORY_ROWS = 40;
 const SPECTRUM_HISTORY_LIMITS = {
   audio: AUDIO_WATERFALL_HISTORY_ROWS,
-  'radio-sdr': WATERFALL_HISTORY_ROWS,
-  'openwebrx-sdr': 40,
+  'radio-sdr': RADIO_SDR_WATERFALL_HISTORY_ROWS,
+  'openwebrx-sdr': OPENWEBRX_WATERFALL_HISTORY_ROWS,
 } satisfies Partial<Record<SpectrumKind, number>>;
+
+function resolveSpectrumHistoryRows(kind: SpectrumKind | null, height: number): number {
+  const capacity = kind ? SPECTRUM_HISTORY_LIMITS[kind] ?? WATERFALL_MAX_HISTORY_ROWS : WATERFALL_MAX_HISTORY_ROWS;
+  const pixelRatio = typeof window === 'undefined' ? 1 : getWaterfallCanvasPixelRatio(window.devicePixelRatio);
+  return Math.max(1, Math.min(capacity, Math.ceil(Math.max(1, height) * pixelRatio)));
+}
 const SETTINGS_STORAGE_KEY = 'spectrum-range-settings';
 // 虚拟频差低功率弱警告相关常量
 const FAKE_FREQ_COMFORT_MIN_HZ = 500;   // 发射音频甜区下界（baseband Hz）
@@ -89,6 +101,9 @@ const RADIO_SDR_VOICE_DRAG_FREQUENCY_STEP_HZ = 1000;
 const RADIO_SDR_CW_DRAG_FREQUENCY_STEP_HZ = 10;
 const RADIO_SDR_DRAG_FREQUENCY_COMMIT_INTERVAL_MS = 80;
 const RADIO_SDR_DRAG_SERVER_SYNC_RELEASE_HOLD_MS = 1000;
+const TCI_MIN_LOCAL_VIEWPORT_SPAN_HZ = 200;
+const TCI_CLIENT_VIEWPORT_DISPLAY_BINS = 4096;
+const TCI_VIEWPORT_SYNC_DEBOUNCE_MS = 60;
 
 const DEFAULT_AUTO_CONFIG: AutoRangeConfig = {
   updateInterval: 10,
@@ -248,11 +263,13 @@ export function normalizeRadioSdrCenterViewMode(value: unknown): RadioSdrCenterV
 export function canShowRadioSdrCenterViewSetting({
   isRadioSdrSelected,
   frequencyRangeMode,
+  viewMode = 'radio-center',
 }: {
   isRadioSdrSelected: boolean;
   frequencyRangeMode: SpectrumFrequencyRangeMode;
+  viewMode?: SpectrumSessionViewMode;
 }): boolean {
-  return isRadioSdrSelected && frequencyRangeMode === 'absolute-center';
+  return isRadioSdrSelected && viewMode === 'radio-center' && frequencyRangeMode === 'absolute-center';
 }
 
 export function resolveRadioSdrCenterViewContext({
@@ -260,14 +277,16 @@ export function resolveRadioSdrCenterViewContext({
   frequencyRangeMode,
   centerViewMode,
   referenceFrequencyHz,
+  viewMode = 'radio-center',
 }: {
   isRadioSdrSelected: boolean;
   frequencyRangeMode: SpectrumFrequencyRangeMode;
   centerViewMode: RadioSdrCenterViewMode;
   referenceFrequencyHz: number | null;
+  viewMode?: SpectrumSessionViewMode;
 }): { centerViewMode: RadioSdrCenterViewMode; referenceFrequencyHz: number | null } {
   if (
-    !canShowRadioSdrCenterViewSetting({ isRadioSdrSelected, frequencyRangeMode })
+    !canShowRadioSdrCenterViewSetting({ isRadioSdrSelected, frequencyRangeMode, viewMode })
     || centerViewMode === 'full'
     || typeof referenceFrequencyHz !== 'number'
     || !Number.isFinite(referenceFrequencyHz)
@@ -400,19 +419,23 @@ export function buildRadioSdrFrequencyRequest({
   engineMode,
   frequency,
   stepHz,
+  radioMode,
 }: {
   engineMode: EngineMode;
   frequency: number;
   stepHz: number | null | undefined;
+  radioMode?: string | null;
 }): SetRadioFrequencyParams | null {
   const snappedFrequency = snapFrequencyToStep(frequency, stepHz);
   const roundedFrequency = Math.round(snappedFrequency);
   const description = `${(snappedFrequency / 1_000_000).toFixed(3)} MHz`;
 
-  if (engineMode === 'voice') {
+  if (engineMode === 'voice' || engineMode === 'image') {
     return {
       frequency: roundedFrequency,
-      mode: 'VOICE',
+      mode: engineMode === 'image'
+        ? (radioMode?.toUpperCase() === 'FAX' ? 'FAX' : 'SSTV')
+        : 'VOICE',
       band: 'Custom',
       description,
     };
@@ -437,115 +460,38 @@ export function canUseRadioSdrFrequencyRequest(
   return request !== null && canWriteTargetFrequency(request.frequency);
 }
 
-export function buildRadioSdrTxBandOverlays({
-  engineMode,
-  isRadioSdrSelected,
-  currentRadioFrequency,
-  splitEnabled = false,
-  splitTxFrequency,
-  voice,
-  voiceOverlayIsInteractive,
-}: {
-  engineMode: EngineMode;
-  isRadioSdrSelected: boolean;
-  currentRadioFrequency: number | null | undefined;
-  splitEnabled?: boolean;
-  splitTxFrequency?: number | null;
-  voice: SpectrumSessionVoiceState | null | undefined;
-  voiceOverlayIsInteractive: boolean;
-}): TxBandOverlay[] {
-  if (!isRadioSdrSelected || typeof currentRadioFrequency !== 'number' || !Number.isFinite(currentRadioFrequency)) {
-    return [];
-  }
-
-  if (engineMode === 'cw') {
-    const overlays: TxBandOverlay[] = [{
-      id: splitEnabled ? 'cw-current-rx' : 'cw-current-tx',
-      label: splitEnabled ? 'RX' : 'TX',
-      lineFrequency: currentRadioFrequency,
-      rangeStartFrequency: currentRadioFrequency,
-      rangeEndFrequency: currentRadioFrequency,
-      draggable: false,
-      variant: splitEnabled ? 'rx' : 'tx',
-    }];
-
-    if (splitEnabled && typeof splitTxFrequency === 'number' && Number.isFinite(splitTxFrequency)) {
-      overlays.push({
-        id: 'cw-split-tx',
-        label: 'TX',
-        lineFrequency: splitTxFrequency,
-        rangeStartFrequency: splitTxFrequency,
-        rangeEndFrequency: splitTxFrequency,
-        draggable: false,
-        variant: 'tx',
-      });
-    }
-
-    return overlays;
-  }
-
-  if (engineMode !== 'voice' || !voice?.offsetModel || !voice.occupiedBandwidthHz) {
-    return [];
-  }
-
-  const buildVoiceOverlay = (
-    id: string,
-    label: string,
-    lineFrequency: number,
-    draggable: boolean,
-    variant: 'tx' | 'rx',
-  ): TxBandOverlay => {
-    const bandwidthHz = voice.occupiedBandwidthHz!;
-    let rangeStartFrequency = lineFrequency;
-    let rangeEndFrequency = lineFrequency;
-
-    switch (voice.offsetModel) {
-    case 'upper':
-      rangeStartFrequency = lineFrequency;
-      rangeEndFrequency = lineFrequency + bandwidthHz;
-      break;
-    case 'lower':
-      rangeStartFrequency = lineFrequency - bandwidthHz;
-      rangeEndFrequency = lineFrequency;
-      break;
-    case 'symmetric':
-      rangeStartFrequency = lineFrequency - bandwidthHz / 2;
-      rangeEndFrequency = lineFrequency + bandwidthHz / 2;
-      break;
-    }
-
-    return {
-      id,
-      label,
-      lineFrequency,
-      rangeStartFrequency,
-      rangeEndFrequency,
-      draggable,
-      variant,
-    };
+function mapSessionFrequencyOverlay(overlay: SpectrumSessionFrequencyOverlay): TxBandOverlay {
+  return {
+    id: overlay.id,
+    label: overlay.label,
+    lineFrequency: overlay.lineFrequency,
+    rangeStartFrequency: overlay.rangeStartFrequency,
+    rangeEndFrequency: overlay.rangeEndFrequency,
+    draggable: overlay.draggable,
+    variant: overlay.variant,
+    frequencyTarget: overlay.frequencyTarget,
   };
+}
 
-  const overlays: TxBandOverlay[] = [
-    buildVoiceOverlay(
-      splitEnabled ? 'voice-current-rx' : 'voice-current-tx',
-      splitEnabled ? 'RX' : 'TX',
-      currentRadioFrequency,
-      voiceOverlayIsInteractive,
-      splitEnabled ? 'rx' : 'tx',
-    ),
-  ];
-
-  if (splitEnabled && typeof splitTxFrequency === 'number' && Number.isFinite(splitTxFrequency)) {
-    overlays.push(buildVoiceOverlay(
-      'voice-split-tx',
-      'TX',
-      splitTxFrequency,
-      false,
-      'tx',
-    ));
-  }
-
-  return overlays;
+export function resolveTciDigitalAutoZoomRange(
+  bounds: { min: number; max: number },
+  rxRange: { min: number; max: number },
+): { min: number; max: number } | null {
+  if (
+    !Number.isFinite(bounds.min)
+    || !Number.isFinite(bounds.max)
+    || bounds.max <= bounds.min
+    || !Number.isFinite(rxRange.min)
+    || !Number.isFinite(rxRange.max)
+    || rxRange.max <= rxRange.min
+  ) return null;
+  const span = rxRange.max - rxRange.min;
+  const padding = Math.max(TCI_DIGITAL_AUTO_ZOOM_MIN_PADDING_HZ, span * TCI_DIGITAL_AUTO_ZOOM_PADDING_RATIO);
+  const nextRange = {
+    min: Math.max(bounds.min, rxRange.min - padding),
+    max: Math.min(bounds.max, rxRange.max + padding),
+  };
+  return nextRange.max > nextRange.min ? nextRange : null;
 }
 
 function cloneManualRangeSettings(settings: ManualRangeSettings): ManualRangeSettings {
@@ -1025,9 +971,14 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const radioConnection = useRadioConnectionState();
   const { currentMode, currentRadioFrequency, engineMode, isEngineRunning, engineState } = useRadioModeState();
   const { pttStatus } = usePTTState();
-  const { splitEnabled, splitTxFrequency } = useSplitState();
+  const { splitTxFrequencyWritable } = useSplitState();
   const canSetFrequency = useCan('execute', 'RadioFrequency');
   const canControlRadio = useCan('execute', 'RadioControl');
+  const tciIqSampleRateState = useCapabilityState('tci_iq_sample_rate');
+  const tciIqSampleRateDescriptor = useCapabilityDescriptor('tci_iq_sample_rate');
+  const writeRadioCapability = useCapabilityWriter();
+  const [tciSpectrumSettings, setTciSpectrumSettings] = useState<TciSpectrumSettings | null>(null);
+  const [tciSpectrumSettingsPending, setTciSpectrumSettingsPending] = useState(false);
   const canToggleInputSignal = useHasMinRole(UserRole.ADMIN);
   const canConfigureSpectrum = useHasMinRole(UserRole.ADMIN);
   const ability = useAbility();
@@ -1067,6 +1018,14 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const actualRangeRef = useRef<{ min: number; max: number } | null>(null);
   const [persistedRangeSettings, setPersistedRangeSettings] = useState<PersistedRangeSettings>(() => loadPersistedRangeSettings());
   const [openWebRXViewport, setOpenWebRXViewport] = useState<OpenWebRXViewport | null>(() => readOpenWebRXViewport(activeProfileId));
+  const [radioSdrViewport, setRadioSdrViewport] = useState<{ min: number; max: number } | null>(null);
+  const tciViewportSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingTciViewportRef = useRef<SpectrumViewport | null>(null);
+  const tciDigitalAutoZoomTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tciDigitalAutoZoomModeRef = useRef<string | null>(null);
+  const tciDigitalAutoZoomCancelledModeRef = useRef<string | null>(null);
+  const tciDigitalAutoZoomTransitionRef = useRef(false);
+  const lastTciViewportTuneRef = useRef<number | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(() => readSpectrumSubscriptionPaused());
   const [radioSdrOptimisticDisplayState, setRadioSdrOptimisticDisplayState] = useState<RadioSdrOptimisticDisplayState>(RADIO_SDR_OPTIMISTIC_DISPLAY_IDLE);
   const openWebRXPanStateRef = useRef<{ startX: number; startCenterHz: number; width: number } | null>(null);
@@ -1135,9 +1094,28 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   }, []);
   const effectiveSelectedKind = selectedKind ?? capabilities?.defaultKind ?? AUDIO_SOURCE;
   const activeSpectrumKind = subscribedKind ?? effectiveSelectedKind;
+  const renderHistoryRows = resolveSpectrumHistoryRows(effectiveSelectedKind, height);
   const isAudioSpectrumSelected = effectiveSelectedKind === AUDIO_SOURCE;
   const isRadioSdrSelected = effectiveSelectedKind === RADIO_SDR_SOURCE;
+  const isTciRadioSdr = isRadioSdrSelected && radioConnection.radioConfig?.type === 'tci';
   const isOpenWebRXSdrSelected = effectiveSelectedKind === OPENWEBRX_SDR_SOURCE;
+  const canConfigureTciSpectrum = isTciRadioSdr && canControlRadio;
+  useEffect(() => {
+    if (!canConfigureTciSpectrum) {
+      setTciSpectrumSettings(null);
+      return;
+    }
+    let active = true;
+    void api.getTciSpectrumSettings().then((response) => {
+      if (active) setTciSpectrumSettings(response.settings);
+    }).catch((error) => {
+      logger.warn('Failed to load TCI spectrum settings', error);
+      if (active) setTciSpectrumSettings(null);
+    });
+    return () => {
+      active = false;
+    };
+  }, [canConfigureTciSpectrum]);
   const visualFrequencyOffsetHz = isAudioSpectrumSelected
     ? WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ
     : 0;
@@ -1156,9 +1134,20 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   });
   const isVoiceMode = engineMode === 'voice';
   const isCwMode = engineMode === 'cw';
+  const isTciDigitalMode = isTciRadioSdr && engineMode === 'digital'
+    && (currentMode?.name === 'FT8' || currentMode?.name === 'FT4');
   const sourceMode = sessionState?.sourceMode ?? 'unknown';
   const isFixedSpectrumMode = sourceMode === 'fixed' || sourceMode === 'scroll-fixed';
   const isOpenWebRXDetailMode = isOpenWebRXSdrSelected && sourceMode === 'detail';
+  const spectrumViewMode = sessionState?.interaction.viewMode ?? (isTciRadioSdr ? 'wide' : 'radio-center');
+  const viewportInteraction = sessionState?.interaction.viewport ?? {
+    enabled: isTciRadioSdr,
+    canZoom: isTciRadioSdr,
+    canPan: isTciRadioSdr,
+    canTuneAtEdge: isTciRadioSdr,
+    bounds: null,
+  };
+  const isWideRadioSdr = isRadioSdrSelected && spectrumViewMode === 'wide' && viewportInteraction.enabled;
   const canOpenWebRXLocalViewportZoom = Boolean(sessionState?.interaction.canLocalViewportZoom);
   const canOpenWebRXLocalViewportPan = Boolean(sessionState?.interaction.canLocalViewportPan);
   const canDragTxMarker = Boolean(sessionState?.interaction.canDragTx);
@@ -1186,6 +1175,39 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const effectiveRadioSdrFrequency = isRadioSdrSelected && !isFixedSpectrumMode
     ? resolveRadioSdrOptimisticDisplayFrequencyHz(radioSdrOptimisticDisplayState, baseRadioSdrFrequency)
     : baseRadioSdrFrequency;
+  const radioSdrNativeRange = streamStatus.fullRange;
+  const radioSdrDisplayRange = streamStatus.displayRange;
+  const radioSdrViewportBounds = viewportInteraction.bounds ?? radioSdrNativeRange;
+  useEffect(() => {
+    if (!isWideRadioSdr) {
+      setRadioSdrViewport(null);
+      connection.state.radioService?.setSpectrumViewport(null);
+      pendingTciViewportRef.current = null;
+      if (tciViewportSyncTimerRef.current) {
+        clearTimeout(tciViewportSyncTimerRef.current);
+        tciViewportSyncTimerRef.current = null;
+      }
+      lastTciViewportTuneRef.current = null;
+      return;
+    }
+    if (!radioSdrNativeRange) return;
+    setRadioSdrViewport((current) => {
+      const nativeSpan = radioSdrNativeRange.max - radioSdrNativeRange.min;
+      if (!current || current.max <= current.min) {
+        const initialRange = radioSdrDisplayRange ?? radioSdrNativeRange;
+        return { ...initialRange };
+      }
+      if (current.max < radioSdrNativeRange.min || current.min > radioSdrNativeRange.max) {
+        return { ...radioSdrNativeRange };
+      }
+      const span = Math.min(nativeSpan, Math.max(TCI_MIN_LOCAL_VIEWPORT_SPAN_HZ, current.max - current.min));
+      const center = (current.min + current.max) / 2;
+      return { min: center - span / 2, max: center + span / 2 };
+    });
+  }, [connection.state.radioService, isWideRadioSdr, radioSdrDisplayRange?.max, radioSdrDisplayRange?.min, radioSdrNativeRange?.max, radioSdrNativeRange?.min]);
+  useEffect(() => () => {
+    if (tciViewportSyncTimerRef.current) clearTimeout(tciViewportSyncTimerRef.current);
+  }, []);
   const spectrumReferenceFrequency = isRadioSdrSelected
     ? effectiveRadioSdrFrequency
     : null;
@@ -1196,10 +1218,13 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     actualRangeRef.current = null;
   }, [radioSdrLevelDomain]);
   const frequencyAxisTransform = React.useMemo(
-    () => (isRadioSdrSelected && typeof spectrumReferenceFrequency === 'number' && Number.isFinite(spectrumReferenceFrequency)
+    () => (isRadioSdrSelected
+      && !isTciRadioSdr
+      && typeof spectrumReferenceFrequency === 'number'
+      && Number.isFinite(spectrumReferenceFrequency)
       ? createFrequencyAxisTransform(ICOM_RADIO_SDR_FREQUENCY_AXIS_CALIBRATION, spectrumReferenceFrequency)
       : IDENTITY_FREQUENCY_AXIS_TRANSFORM),
-    [isRadioSdrSelected, spectrumReferenceFrequency],
+    [isRadioSdrSelected, isTciRadioSdr, spectrumReferenceFrequency],
   );
   const radioSdrRangeLimits = radioSdrLevel
     ? {
@@ -1223,13 +1248,15 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const showRadioSdrCenterViewSettings = canShowRadioSdrCenterViewSetting({
     isRadioSdrSelected,
     frequencyRangeMode,
+    viewMode: spectrumViewMode,
   });
   const radioSdrCenterViewContext = React.useMemo(() => resolveRadioSdrCenterViewContext({
     isRadioSdrSelected,
     frequencyRangeMode,
+    viewMode: spectrumViewMode,
     centerViewMode: radioSdrCenterViewMode,
     referenceFrequencyHz: spectrumReferenceFrequency,
-  }), [frequencyRangeMode, isRadioSdrSelected, radioSdrCenterViewMode, spectrumReferenceFrequency]);
+  }), [frequencyRangeMode, isRadioSdrSelected, radioSdrCenterViewMode, spectrumReferenceFrequency, spectrumViewMode]);
   const cycleSlotMs = currentMode?.slotMs ?? null;
   const waterfallViewKey = `${effectiveSelectedKind}:${isOpenWebRXDetailMode ? 'detail' : 'main'}:${isRadioSdrSelected ? radioSdrLevelDomain : ''}:${spectrumRenderConfig?.revision ?? 0}`;
   const audioRangeSettings = persistedRangeSettings.audio;
@@ -1350,6 +1377,20 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     setCustomSpectrumEditing(spectrumRenderConfig?.preset === 'custom');
   }, [spectrumRenderConfig]);
 
+  const handleTciSpectrumSettingsChange = useCallback(async (settings: TciSpectrumSettings) => {
+    if (!canConfigureTciSpectrum || tciSpectrumSettingsPending) return;
+    setTciSpectrumSettingsPending(true);
+    try {
+      const response = await api.updateTciSpectrumSettings(settings);
+      setTciSpectrumSettings(response.settings);
+    } catch (error) {
+      logger.error('Failed to update TCI spectrum settings', error);
+      addToast({ title: t('radio:spectrum.tciSettings.updateFailed'), color: 'danger' });
+    } finally {
+      setTciSpectrumSettingsPending(false);
+    }
+  }, [canConfigureTciSpectrum, t, tciSpectrumSettingsPending]);
+
   const handleCycleMarkersChange = useCallback((enabled: boolean) => {
     setPersistedRangeSettings(prev => ({
       ...prev,
@@ -1453,6 +1494,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       engineMode,
       frequency,
       stepHz: options.stepHz ?? frequencyGestureStepHz,
+      radioMode: currentMode?.name,
     });
     if (!canUseRadioSdrFrequencyRequest(request, canWriteTargetFrequency)) {
       addToast({
@@ -1471,7 +1513,77 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     } catch (error) {
       logger.error('Failed to set radio frequency from SDR overlay', error);
     }
-  }, [canWriteFrequency, canWriteTargetFrequency, connection.state.isConnected, engineMode, frequencyGestureStepHz, frequencyGestureTarget, resetOperatorsAfterOperatingStateChange, t]);
+  }, [canWriteFrequency, canWriteTargetFrequency, connection.state.isConnected, currentMode?.name, engineMode, frequencyGestureStepHz, frequencyGestureTarget, resetOperatorsAfterOperatingStateChange, t]);
+
+  const handleDigitalBaseFrequencyGesture = useCallback(async (frequency: number) => {
+    if (!connection.state.isConnected || !canWriteFrequency || !Number.isFinite(frequency)) return;
+    const roundedFrequency = Math.round(frequency);
+    if (!canWriteTargetFrequency(roundedFrequency)) return;
+    try {
+      const response = await setRadioFrequencyWithIntent({
+        frequency: roundedFrequency,
+        band: getBandFromFrequency(roundedFrequency),
+        description: `${(roundedFrequency / 1_000_000).toFixed(3)} MHz`,
+      });
+      if (response.success) resetOperatorsAfterOperatingStateChange();
+    } catch (error) {
+      logger.error('Failed to set digital base frequency from SDR overlay', error);
+    }
+  }, [canWriteFrequency, canWriteTargetFrequency, connection.state.isConnected, resetOperatorsAfterOperatingStateChange]);
+
+  const handleSpectrumCenterFrequencyGesture = useCallback((frequency: number) => {
+    if (frequencyGestureTarget === 'radio-frequency') {
+      void handleRadioSdrFrequencyGesture(frequency);
+      return;
+    }
+    void handleDigitalBaseFrequencyGesture(frequency);
+  }, [frequencyGestureTarget, handleDigitalBaseFrequencyGesture, handleRadioSdrFrequencyGesture]);
+
+  const queueTciViewportSync = useCallback((range: { min: number; max: number }) => {
+    pendingTciViewportRef.current = {
+      min: range.min,
+      max: range.max,
+      displayBinCount: TCI_CLIENT_VIEWPORT_DISPLAY_BINS,
+    };
+    if (!tciViewportSyncTimerRef.current) {
+      tciViewportSyncTimerRef.current = setTimeout(() => {
+        tciViewportSyncTimerRef.current = null;
+        const viewport = pendingTciViewportRef.current;
+        pendingTciViewportRef.current = null;
+        if (viewport) connection.state.radioService?.setSpectrumViewport(viewport);
+      }, TCI_VIEWPORT_SYNC_DEBOUNCE_MS);
+    }
+  }, [connection.state.radioService]);
+
+  const handleTciViewportChange = useCallback((next: { min: number; max: number }, source: 'pan' | 'zoom') => {
+    if (!isWideRadioSdr || !radioSdrViewportBounds) return;
+    if (tciDigitalAutoZoomTimerRef.current) {
+      clearTimeout(tciDigitalAutoZoomTimerRef.current);
+      tciDigitalAutoZoomTimerRef.current = null;
+      tciDigitalAutoZoomCancelledModeRef.current = currentMode?.name ?? null;
+    }
+    const nativeSpan = radioSdrViewportBounds.max - radioSdrViewportBounds.min;
+    if (!Number.isFinite(nativeSpan) || nativeSpan <= 0) return;
+    const requestedSpan = Math.min(nativeSpan, Math.max(TCI_MIN_LOCAL_VIEWPORT_SPAN_HZ, next.max - next.min));
+    let center = (next.min + next.max) / 2;
+    const half = requestedSpan / 2;
+    const outOfBounds = center - half < radioSdrViewportBounds.min || center + half > radioSdrViewportBounds.max;
+    const canTuneAtEdge = viewportInteraction.canTuneAtEdge && canWriteFrequency;
+    if (source === 'pan' && outOfBounds && canTuneAtEdge) {
+      const tunedCenter = Math.round(center);
+      const tuneStep = isCwMode ? 10 : 1000;
+      if (lastTciViewportTuneRef.current === null || Math.abs(tunedCenter - lastTciViewportTuneRef.current) >= tuneStep) {
+        lastTciViewportTuneRef.current = tunedCenter;
+        handleSpectrumCenterFrequencyGesture(tunedCenter);
+      }
+    }
+    if (source === 'zoom' || (source === 'pan' && outOfBounds && !canTuneAtEdge)) {
+      center = Math.max(radioSdrViewportBounds.min + half, Math.min(radioSdrViewportBounds.max - half, center));
+    }
+    const nextRange = { min: center - half, max: center + half };
+    setRadioSdrViewport(nextRange);
+    queueTciViewportSync(nextRange);
+  }, [canWriteFrequency, currentMode?.name, handleSpectrumCenterFrequencyGesture, isCwMode, isWideRadioSdr, queueTciViewportSync, radioSdrViewportBounds, viewportInteraction.canTuneAtEdge]);
 
   const handleRadioFrequencyGesture = useCallback((frequency: number) => {
     if (!canWriteFrequency || frequencyGestureTarget !== 'radio-frequency') {
@@ -1640,6 +1752,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       if (hasActiveSpectrumSubscriptionRef.current) {
         radioServiceRef.current?.subscribeSpectrum(null);
       }
+      radioServiceRef.current?.setSpectrumViewport(null);
       streamController.destroy();
     };
   }, [streamController]);
@@ -1753,19 +1866,24 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   }, [connection.state.isReady, connection.state.radioService, isCollapsed, pauseNoFrameRecovery, resetSpectrumRecoveryState, subscribedKind, updateSpectrumRecoveryState]);
 
   useLayoutEffect(() => {
+    const axisTransition = tciDigitalAutoZoomTransitionRef.current ? 'animate' as const : 'immediate' as const;
+    tciDigitalAutoZoomTransitionRef.current = false;
     streamController.updateContext({
       selectedKind: effectiveSelectedKind,
       openWebRXViewport: isOpenWebRXSdrSelected && !isOpenWebRXDetailMode ? openWebRXViewport : null,
       isOpenWebRXDetailMode,
       radioSdrCenterViewMode: radioSdrCenterViewContext.centerViewMode,
       radioSdrReferenceFrequencyHz: radioSdrCenterViewContext.referenceFrequencyHz,
-    });
+      radioSdrViewport: isWideRadioSdr ? radioSdrViewport : null,
+    }, { axisTransition });
   }, [
     effectiveSelectedKind,
     isOpenWebRXDetailMode,
     isOpenWebRXSdrSelected,
     openWebRXViewport,
     radioSdrCenterViewContext,
+    radioSdrViewport,
+    isWideRadioSdr,
     streamController,
   ]);
 
@@ -1865,7 +1983,6 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const shouldShowSourceTabs = availableSources.length > 1;
   const sourceTabOrder: SpectrumKind[] = [OPENWEBRX_SDR_SOURCE, RADIO_SDR_SOURCE, AUDIO_SOURCE];
   const visibleSourceTabs = sourceTabOrder.filter(kind => availableSources.some(source => source.kind === kind));
-  const voiceOverlayIsInteractive = canWriteFrequency && Boolean(sessionState?.interaction.canDragVoiceOverlay);
   const displaySpectrumMarkers = React.useMemo(() => resolveSpectrumMarkerFrequencies({
     isOpenWebRXSdrSelected,
     isOpenWebRXDetailMode,
@@ -1902,15 +2019,95 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   ]);
   const effectiveHoverFrequency = hoverFrequency;
   const openWebRXFullRange = isOpenWebRXSdrSelected ? (streamStatus.fullRange ?? openWebRXStreamRange) : null;
-  const radioSdrTxBandOverlays = React.useMemo(() => buildRadioSdrTxBandOverlays({
-    engineMode,
-    isRadioSdrSelected,
-    currentRadioFrequency: effectiveRadioSdrFrequency,
-    splitEnabled,
-    splitTxFrequency,
-    voice: sessionState?.voice,
-    voiceOverlayIsInteractive,
-  }), [effectiveRadioSdrFrequency, engineMode, isRadioSdrSelected, sessionState?.voice, splitEnabled, splitTxFrequency, voiceOverlayIsInteractive]);
+  const radioSdrFrequencyOverlays = React.useMemo(() => (
+    (sessionState?.interaction.frequencyOverlays ?? []).map(mapSessionFrequencyOverlay)
+  ), [sessionState?.interaction.frequencyOverlays]);
+  const tciDigitalRxOverlay = React.useMemo(() => (
+    sessionState?.interaction.frequencyOverlays?.find((overlay) => (
+      overlay.id === 'digital-usb-window'
+      && overlay.frequencyTarget === 'radio-frequency'
+      && Number.isFinite(overlay.rangeStartFrequency)
+      && Number.isFinite(overlay.rangeEndFrequency)
+      && overlay.rangeEndFrequency > overlay.rangeStartFrequency
+    )) ?? null
+  ), [sessionState?.interaction.frequencyOverlays]);
+  useEffect(() => {
+    const modeName = currentMode?.name ?? null;
+    if (
+      !isTciDigitalMode
+      || !isWideRadioSdr
+      || !radioSdrViewportBounds
+      || !tciDigitalRxOverlay
+    ) {
+      if (tciDigitalAutoZoomTimerRef.current) {
+        clearTimeout(tciDigitalAutoZoomTimerRef.current);
+        tciDigitalAutoZoomTimerRef.current = null;
+      }
+      tciDigitalAutoZoomModeRef.current = null;
+      tciDigitalAutoZoomCancelledModeRef.current = null;
+      return;
+    }
+    if (tciDigitalAutoZoomCancelledModeRef.current === modeName) return;
+    if (tciDigitalAutoZoomModeRef.current === modeName) return;
+
+    tciDigitalAutoZoomModeRef.current = modeName;
+    const fullRange = radioSdrViewportBounds;
+    setRadioSdrViewport((current) => (
+      current
+      && current.min === fullRange.min
+      && current.max === fullRange.max
+        ? current
+        : { ...fullRange }
+    ));
+
+    tciDigitalAutoZoomTimerRef.current = setTimeout(() => {
+      tciDigitalAutoZoomTimerRef.current = null;
+      const nextRange = resolveTciDigitalAutoZoomRange(fullRange, {
+        min: tciDigitalRxOverlay.rangeStartFrequency,
+        max: tciDigitalRxOverlay.rangeEndFrequency,
+      });
+      if (!nextRange) return;
+      tciDigitalAutoZoomTransitionRef.current = true;
+      setRadioSdrViewport((current) => (
+        current
+        && current.min === nextRange.min
+        && current.max === nextRange.max
+          ? current
+          : nextRange
+      ));
+      queueTciViewportSync(nextRange);
+    }, TCI_DIGITAL_AUTO_ZOOM_DELAY_MS);
+
+    return () => {
+      if (tciDigitalAutoZoomTimerRef.current) {
+        clearTimeout(tciDigitalAutoZoomTimerRef.current);
+        tciDigitalAutoZoomTimerRef.current = null;
+      }
+    };
+  }, [currentMode?.name, isTciDigitalMode, isWideRadioSdr, queueTciViewportSync, Boolean(radioSdrViewportBounds), tciDigitalRxOverlay?.rangeEndFrequency, tciDigitalRxOverlay?.rangeStartFrequency]);
+  const handleSplitFrequencyChange = useCallback((frequency: number) => {
+    if (
+      !canWriteFrequency
+      || !splitTxFrequencyWritable
+      || !Number.isFinite(frequency)
+      || !connection.state.radioService
+    ) return;
+    connection.state.radioService.wsClientInstance.setSplitFrequency(Math.round(frequency));
+  }, [canWriteFrequency, connection.state.radioService, splitTxFrequencyWritable]);
+  const handleRadioSdrOverlayFrequencyChange = useCallback((id: string, frequency: number) => {
+    const overlay = radioSdrFrequencyOverlays.find(item => item.id === id);
+    if (!overlay?.draggable || !Number.isFinite(frequency)) return;
+    if (overlay.frequencyTarget === 'split-frequency') {
+      handleSplitFrequencyChange(frequency);
+      return;
+    }
+    if (overlay.frequencyTarget !== 'radio-frequency') return;
+    if (frequencyGestureTarget === 'radio-frequency') {
+      void handleRadioSdrFrequencyGesture(frequency);
+      return;
+    }
+    void handleDigitalBaseFrequencyGesture(frequency);
+  }, [frequencyGestureTarget, handleDigitalBaseFrequencyGesture, handleRadioSdrFrequencyGesture, handleSplitFrequencyChange, radioSdrFrequencyOverlays]);
   const presetMarkers: PresetMarker[] = React.useMemo(() => {
     if (!isVoiceMode) {
       return [];
@@ -2054,6 +2251,28 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     }));
   }, [currentOpenWebRXZoomLevelIndex, openWebRXViewport, openWebRXZoomLevels, updateOpenWebRXViewport]);
 
+  const handleStepTciViewportZoom = useCallback((direction: 'in' | 'out') => {
+    if (!isWideRadioSdr || !radioSdrViewport || !radioSdrViewportBounds || !viewportInteraction.canZoom) return;
+    const nativeSpan = radioSdrViewportBounds.max - radioSdrViewportBounds.min;
+    const currentSpan = radioSdrViewport.max - radioSdrViewport.min;
+    if (!Number.isFinite(nativeSpan) || nativeSpan <= 0 || !Number.isFinite(currentSpan) || currentSpan <= 0) return;
+    const nextSpan = Math.max(
+      TCI_MIN_LOCAL_VIEWPORT_SPAN_HZ,
+      Math.min(nativeSpan, currentSpan * (direction === 'in' ? 0.5 : 2)),
+    );
+    const center = (radioSdrViewport.min + radioSdrViewport.max) / 2;
+    const boundedCenter = Math.max(
+      radioSdrViewportBounds.min + nextSpan / 2,
+      Math.min(radioSdrViewportBounds.max - nextSpan / 2, center),
+    );
+    const nextRange = {
+      min: boundedCenter - nextSpan / 2,
+      max: boundedCenter + nextSpan / 2,
+    };
+    setRadioSdrViewport(nextRange);
+    queueTciViewportSync(nextRange);
+  }, [isWideRadioSdr, queueTciViewportSync, radioSdrViewport, radioSdrViewportBounds, viewportInteraction.canZoom]);
+
   const controls = sessionState?.controls ?? [];
   const spectrumZoomOutControl = controls.find(control => control.id === 'zoom-step' && control.action === 'out' && control.visible);
   const spectrumZoomInControl = controls.find(control => control.id === 'zoom-step' && control.action === 'in' && control.visible);
@@ -2061,7 +2280,13 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const openWebRXDetailControl = controls.find(control => control.id === 'openwebrx-detail-toggle' && control.visible);
   const viewportZoomOutControl = controls.find(control => control.id === 'viewport-zoom' && control.action === 'out' && control.visible);
   const viewportZoomInControl = controls.find(control => control.id === 'viewport-zoom' && control.action === 'in' && control.visible);
-  const shouldShowZoomControls = Boolean(spectrumZoomOutControl || spectrumZoomInControl);
+  const canTciViewportZoomOut = isWideRadioSdr && viewportInteraction.canZoom && Boolean(radioSdrViewport && radioSdrViewportBounds)
+    && (radioSdrViewport!.max - radioSdrViewport!.min) < (radioSdrViewportBounds!.max - radioSdrViewportBounds!.min);
+  const canTciViewportZoomIn = isWideRadioSdr && viewportInteraction.canZoom && Boolean(radioSdrViewport)
+    && (radioSdrViewport!.max - radioSdrViewport!.min) > TCI_MIN_LOCAL_VIEWPORT_SPAN_HZ;
+  const shouldShowZoomControls = isWideRadioSdr
+    ? Boolean(radioSdrViewport)
+    : Boolean(spectrumZoomOutControl || spectrumZoomInControl);
   const shouldShowDigitalSpectrumWindowControl = Boolean(digitalWindowControl);
   const shouldShowOpenWebRXDetailControl = Boolean(openWebRXDetailControl);
   const effectiveShowOpenWebRXZoomControls = shouldShowOpenWebRXZoomControls
@@ -2144,8 +2369,8 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
               size="sm"
               variant="light"
               className="min-w-5 w-5 h-5 px-0 text-white/90 disabled:text-default-500"
-              onPress={() => handleInvokeSpectrumControl('zoom-step', 'out')}
-              isDisabled={!spectrumZoomOutControl?.enabled}
+              onPress={() => isWideRadioSdr ? handleStepTciViewportZoom('out') : handleInvokeSpectrumControl('zoom-step', 'out')}
+              isDisabled={isWideRadioSdr ? !canTciViewportZoomOut : !spectrumZoomOutControl?.enabled}
               title={t('spectrum.zoomOut')}
             >
               <MinusIcon className="w-2.5 h-2.5" />
@@ -2155,8 +2380,8 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
               size="sm"
               variant="light"
               className="min-w-5 w-5 h-5 px-0 text-white/90 disabled:text-default-500"
-              onPress={() => handleInvokeSpectrumControl('zoom-step', 'in')}
-              isDisabled={!spectrumZoomInControl?.enabled}
+              onPress={() => isWideRadioSdr ? handleStepTciViewportZoom('in') : handleInvokeSpectrumControl('zoom-step', 'in')}
+              isDisabled={isWideRadioSdr ? !canTciViewportZoomIn : !spectrumZoomInControl?.enabled}
               title={t('spectrum.zoomIn')}
             >
               <PlusIcon className="w-2.5 h-2.5" />
@@ -2285,6 +2510,19 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     );
   };
 
+  const waterfallViewportInteraction = useMemo(() => ({
+    mode: isWideRadioSdr && !isFixedSpectrumMode
+      ? 'local-pan-zoom' as const
+      : isRadioSdrSelected
+        ? 'radio-center' as const
+        : 'none' as const,
+    range: isWideRadioSdr && !isFixedSpectrumMode ? radioSdrViewport : null,
+    bounds: isWideRadioSdr && !isFixedSpectrumMode ? radioSdrViewportBounds : null,
+    canZoom: isWideRadioSdr && !isFixedSpectrumMode && viewportInteraction.canZoom,
+    canPan: isWideRadioSdr && !isFixedSpectrumMode && viewportInteraction.canPan,
+    onChange: isWideRadioSdr && !isFixedSpectrumMode ? handleTciViewportChange : undefined,
+  }), [handleTciViewportChange, isFixedSpectrumMode, isRadioSdrSelected, isWideRadioSdr, radioSdrViewport, radioSdrViewportBounds, viewportInteraction.canPan, viewportInteraction.canZoom]);
+
   if (isCollapsed) {
     return (
       <CollapsedSpectrumBar
@@ -2389,6 +2627,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         themeId={selectedSpectrumThemeId}
         sharpPixels={isAudioSpectrumSelected && isIfInputSignal}
         frameIntervalMs={spectrumRenderConfig?.analysisIntervalMs}
+        totalRows={renderHistoryRows}
         showCycleMarkers={showCycleMarkers}
         cycleSlotMs={cycleSlotMs}
         frequencyRangeMode={frequencyRangeMode}
@@ -2402,9 +2641,10 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
             : 'baseband'
         }
         interactionFrequencyStepHz={frequencyGestureStepHz}
+        viewportInteraction={waterfallViewportInteraction}
         dragFrequencyStepHz={radioSdrDragFrequencyStepHz}
         dragFrequencyCommitIntervalMs={RADIO_SDR_DRAG_FREQUENCY_COMMIT_INTERVAL_MS}
-        txBandOverlays={radioSdrTxBandOverlays}
+        txBandOverlays={radioSdrFrequencyOverlays}
         frequencyBandOverlays={isAudioSpectrumSelected ? frequencyBandOverlays : []}
         presetMarkers={presetMarkers}
         rxFrequencies={displaySpectrumMarkers.rxFrequencies}
@@ -2413,7 +2653,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         onEnableFakeFrequency={handleEnableFakeFrequency}
         onDismissLowPowerWarning={handleDismissLowPowerHint}
         onTxFrequencyChange={displayTxFrequencyChange}
-        onTxBandOverlayFrequencyChange={voiceOverlayIsInteractive ? (_id, frequency) => void handleRadioSdrFrequencyGesture(frequency) : undefined}
+        onTxBandOverlayFrequencyChange={canWriteFrequency ? handleRadioSdrOverlayFrequencyChange : undefined}
         onFrequencyBandOverlayPreviewChange={isAudioSpectrumSelected ? onFrequencyBandOverlayPreviewChange : undefined}
         onFrequencyBandOverlayCommit={isAudioSpectrumSelected ? onFrequencyBandOverlayCommit : undefined}
         onPresetMarkerClick={presetMarkers.length > 0 && canWriteFrequency && frequencyGestureTarget === 'radio-frequency' ? handleRadioFrequencyGesture : undefined}
@@ -2516,19 +2756,26 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         </PopoverTrigger>
         <PopoverContent className="w-[min(24rem,calc(100vw-1rem))] max-h-[calc(100dvh-3rem)] overflow-hidden p-0">
           <div className="flex max-h-[calc(100dvh-3rem)] w-full flex-col">
-            <div className="z-10 shrink-0 border-b border-divider bg-content1 px-4 py-3 text-sm font-semibold">
+            <div className="z-10 shrink-0 bg-content1 px-4 py-3 text-sm font-semibold">
               {t('spectrum.rangeSettings')}
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-              <div className="space-y-4">
-                <div className="text-xs font-semibold uppercase tracking-wide text-default-500">
-                  {t('spectrum.viewSettings')}
-                </div>
-                <div className="space-y-2">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-default-500">
-                    {t('spectrum.themeSettings')}
-                  </div>
+              <div className="space-y-3">
+                <Accordion
+                  variant="light"
+                  selectionMode="multiple"
+                  defaultExpandedKeys={new Set(['view', 'display'])}
+                  className="-mx-1 -mt-3 gap-1 px-0"
+                  itemClasses={{
+                    base: 'border-b-0 py-0',
+                    heading: 'border-b-0',
+                    trigger: 'min-h-0 px-1 py-2',
+                    title: 'text-xs font-medium text-default-600',
+                    content: 'px-1 pb-3 pt-1',
+                  }}
+                >
+                  <AccordionItem key="view" title={<span className="text-xs font-medium text-default-600">{t('spectrum.viewSettings')}</span>}>
                   <div className="grid grid-cols-8 gap-1.5">
                     {SPECTRUM_THEME_IDS.map((themeId) => {
                       const theme = getSpectrumTheme(themeId);
@@ -2555,25 +2802,42 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                       );
                     })}
                   </div>
-                </div>
-                {canConfigureSpectrum && spectrumRenderConfig && (
-                  <SpectrumAnalysisSettings
-                    config={spectrumRenderConfig}
-                    enabled={canConfigureSpectrum}
-                    pending={spectrumPresetPending}
-                    customDraft={customSpectrumDraft}
-                    customEditing={customSpectrumEditing}
-                    onPresetChange={handleSpectrumPresetChange}
-                    onCustomEditingChange={setCustomSpectrumEditing}
-                    onCustomDraftChange={setCustomSpectrumDraft}
-                  />
+                  </AccordionItem>
+                {isAudioSpectrumSelected && canConfigureSpectrum && spectrumRenderConfig && (
+                  <AccordionItem key="audio-analysis" title={<span className="text-xs font-medium text-default-600">{t('spectrum.analysisSettings')}</span>}>
+                    <SpectrumAnalysisSettings
+                      config={spectrumRenderConfig}
+                      enabled={canConfigureSpectrum}
+                      pending={spectrumPresetPending}
+                      customDraft={customSpectrumDraft}
+                      customEditing={customSpectrumEditing}
+                      onPresetChange={handleSpectrumPresetChange}
+                      onCustomEditingChange={setCustomSpectrumEditing}
+                      onCustomDraftChange={setCustomSpectrumDraft}
+                    />
+                  </AccordionItem>
                 )}
-                <div className="flex items-center justify-between gap-3 rounded-lg bg-default-100/50 px-3 py-2 dark:bg-default-50/10">
+                {canConfigureTciSpectrum && tciSpectrumSettings && (
+                  <AccordionItem key="tci-analysis" title={<span className="text-xs font-medium text-default-600">{t('radio:spectrum.tciSettings.title')}</span>}>
+                    <TciSpectrumSettingsPanel
+                      settings={tciSpectrumSettings}
+                      pending={tciSpectrumSettingsPending}
+                      canWrite={canConfigureTciSpectrum}
+                      sampleRateState={tciIqSampleRateState}
+                      sampleRateDescriptor={tciIqSampleRateDescriptor}
+                      onCapabilityWrite={writeRadioCapability}
+                      onChange={handleTciSpectrumSettingsChange}
+                    />
+                  </AccordionItem>
+                )}
+                <AccordionItem key="interaction" title={<span className="text-xs font-medium text-default-600">{t('spectrum.interactionSettings')}</span>}>
+                <div className="space-y-4">
+                <div className="flex items-center justify-between gap-3 rounded-lg bg-default-100/50 px-2 py-2 dark:bg-default-50/10">
                   <div className="min-w-0">
                     <div className="text-xs font-medium text-default-700">
                       {t('spectrum.cycleMarkers')}
                     </div>
-                    <div className="text-[11px] leading-tight text-default-400">
+                  <div className="text-[11px] leading-tight text-default-400">
                       {t('spectrum.cycleMarkersDescription')}
                     </div>
                   </div>
@@ -2585,7 +2849,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                   />
                 </div>
                 {showRadioSdrCenterViewSettings && (
-                  <div className="space-y-2 rounded-lg bg-default-100/50 px-3 py-2 dark:bg-default-50/10">
+                  <div className="space-y-2 rounded-lg bg-default-100/50 px-2 py-2 dark:bg-default-50/10">
                     <div>
                       <div className="text-xs font-medium text-default-700">
                         {t('spectrum.radioSdrCenterView')}
@@ -2612,10 +2876,10 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                     </Tabs>
                   </div>
                 )}
-                <div className="h-px bg-divider" />
-                <div className="text-xs font-semibold uppercase tracking-wide text-default-500">
-                  {t('spectrum.displaySettings')}
                 </div>
+                </AccordionItem>
+                <AccordionItem key="display" title={<span className="text-xs font-medium text-default-600">{t('spectrum.displaySettings')}</span>}>
+                <div className="space-y-4">
                 {!isRadioSdrSelected && !isOpenWebRXSdrSelected && (
                   <Tabs
                     selectedKey={audioRangeSettings.mode}
@@ -2787,10 +3051,13 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                 </div>
                   </>
                 )}
+                </div>
+                </AccordionItem>
+                </Accordion>
               </div>
             </div>
-            {customSpectrumEditing && canConfigureSpectrum && (
-              <div className="flex shrink-0 justify-end gap-2 border-t border-divider bg-content1 px-4 py-3">
+            {isAudioSpectrumSelected && customSpectrumEditing && canConfigureSpectrum && (
+              <div className="flex shrink-0 justify-end gap-2 bg-content1 px-4 py-3">
                 <Button size="sm" variant="light" onPress={handleCustomSpectrumCancel} isDisabled={spectrumPresetPending}>
                   {t('spectrum.cancel')}
                 </Button>

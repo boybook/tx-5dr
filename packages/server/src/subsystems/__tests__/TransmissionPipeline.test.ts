@@ -502,7 +502,7 @@ describe('TransmissionPipeline lifecycle integration', () => {
     expect(harness.playAudio).toHaveBeenCalledWith(
       finalAudio.audioData,
       finalAudio.sampleRate,
-      expect.any(Object),
+      expect.objectContaining({ txEnvelopeProfile: 'ft8-ft4' }),
     );
     expect(harness.setPTT).not.toHaveBeenCalledWith(false);
     harness.audioDone.resolve();
@@ -675,6 +675,9 @@ describe('TransmissionPipeline lifecycle integration', () => {
     outputDrain.resolve({ ready: true, waitedForDrain: true });
     await vi.waitFor(() => expect(harness.playAudio).toHaveBeenCalledTimes(2));
     expect(harness.playAudio.mock.calls[1]?.[0]).toHaveLength(2_250);
+    expect(harness.playAudio.mock.calls[1]?.[2]).toEqual(expect.objectContaining({
+      txEnvelopeProfile: 'ft8-ft4',
+    }));
     expect(harness.setPTT.mock.calls.map(([active]) => active)).toEqual([true]);
 
     harness.getAudioDone(1).resolve();

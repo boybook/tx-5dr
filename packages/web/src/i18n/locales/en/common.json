@@ -196,6 +196,8 @@
     "popOut": "Show in separate window",
     "rangeSettings": "Spectrum Settings",
     "viewSettings": "View",
+    "analysisSettings": "Analysis",
+    "interactionSettings": "Interaction",
     "displaySettings": "Display range",
     "inputSignalAfLabel": "AF",
     "inputSignalIfLabel": "IF",

@@ -1,4 +1,4 @@
-import { WSMessageType, ModeDescriptor, type SpectrumKind, type WSSelectedFrame, type WSAccessDeniedData, type SstvTxCancelCommand, type SstvTxStartCommand, type FaxCalibrationSetCommand, type FaxCalibrationResetCommand } from '@tx5dr/contracts';
+import { WSMessageType, ModeDescriptor, type SpectrumKind, type SpectrumViewport, type WSSelectedFrame, type WSAccessDeniedData, type SstvTxCancelCommand, type SstvTxStartCommand, type FaxCalibrationSetCommand, type FaxCalibrationResetCommand } from '@tx5dr/contracts';
 import { WSMessageHandler } from './WSMessageHandler.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -319,8 +319,12 @@ export class WSClient extends WSMessageHandler {
     this.send(WSMessageType.SET_MODE, { mode });
   }
 
-  subscribeSpectrum(kind: SpectrumKind | null): void {
-    this.send(WSMessageType.SUBSCRIBE_SPECTRUM, { kind });
+  subscribeSpectrum(kind: SpectrumKind | null, viewport?: SpectrumViewport): void {
+    this.send(WSMessageType.SUBSCRIBE_SPECTRUM, { kind, ...(viewport ? { viewport } : {}) });
+  }
+
+  setSpectrumViewport(viewport: SpectrumViewport | null): void {
+    this.send(WSMessageType.SPECTRUM_VIEWPORT_CHANGED, viewport);
   }
 
   subscribeImageRx(enabled: boolean): void {

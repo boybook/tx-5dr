@@ -96,6 +96,26 @@ describe('RadioCapabilityManager', () => {
     manager.onDisconnected();
   });
 
+  it('discovers TCI IQ sample-rate options and routes writes through the shared controller', async () => {
+    const manager = new RadioCapabilityManager();
+    const setRate = vi.fn().mockResolvedValue(192_000);
+    const connection = new MockConnection(RadioConnectionType.TCI, {
+      getTciIqSampleRates: vi.fn().mockResolvedValue([48_000, 96_000, 192_000]),
+      getTciIqSampleRate: vi.fn().mockResolvedValue(96_000),
+      setTciIqSampleRate: setRate,
+    });
+
+    await manager.onConnected(connection as never);
+    const snapshot = manager.getCapabilitySnapshot();
+    expect(getDescriptor(snapshot.descriptors, 'tci_iq_sample_rate').options?.map((option) => option.value))
+      .toEqual([48_000, 96_000, 192_000]);
+    expect(getCapability(snapshot.capabilities, 'tci_iq_sample_rate')).toMatchObject({ supported: true, value: 96_000 });
+
+    await manager.writeCapability('tci_iq_sample_rate', 192_000);
+    expect(setRate).toHaveBeenCalledWith(192_000);
+    manager.onDisconnected();
+  });
+
   it('marks a statically supported hamlib capability unavailable when the first read fails recoverably', async () => {
     const manager = new RadioCapabilityManager();
     const connection = new MockConnection(RadioConnectionType.HAMLIB, {

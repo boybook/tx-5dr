@@ -27,10 +27,31 @@ export const SpectrumSessionFrequencyRangeModeSchema = z.enum([
 ]);
 export type SpectrumSessionFrequencyRangeMode = z.infer<typeof SpectrumSessionFrequencyRangeModeSchema>;
 
+export const SpectrumSessionViewModeSchema = z.enum(['wide', 'radio-center']);
+export type SpectrumSessionViewMode = z.infer<typeof SpectrumSessionViewModeSchema>;
+
 export const SpectrumFrequencyRangeSchema = z.object({
   min: z.number(),
   max: z.number(),
 });
+export const SpectrumViewportSchema = z.object({
+  min: z.number().finite(),
+  max: z.number().finite(),
+  displayBinCount: z.number().int().positive().max(16384),
+}).refine((range) => range.max > range.min, {
+  message: 'Spectrum viewport maximum must be greater than minimum',
+  path: ['max'],
+});
+export type SpectrumViewport = z.infer<typeof SpectrumViewportSchema>;
+
+export const SpectrumSessionViewportInteractionSchema = z.object({
+  enabled: z.boolean(),
+  canZoom: z.boolean(),
+  canPan: z.boolean(),
+  canTuneAtEdge: z.boolean(),
+  bounds: SpectrumFrequencyRangeSchema.nullable(),
+});
+export type SpectrumSessionViewportInteraction = z.infer<typeof SpectrumSessionViewportInteractionSchema>;
 
 export const SpectrumBinaryFormatSchema = z.object({
   type: z.literal('int16'),
@@ -66,9 +87,25 @@ export const SpectrumLevelDescriptorSchema = z.object({
 });
 export type SpectrumLevelDescriptor = z.infer<typeof SpectrumLevelDescriptorSchema>;
 
+/** A lower-resolution, wider-range representation derived from the same FFT. */
+export const SpectrumFrameSupplementSchema = z.object({
+  frequencyRange: SpectrumFrequencyRangeSchema,
+  binaryData: SpectrumBinaryDataSchema,
+  meta: z.object({
+    sourceBinCount: z.number().int().positive(),
+    displayBinCount: z.number().int().positive(),
+    centerFrequency: z.number().optional(),
+    spanHz: z.number().optional(),
+    level: SpectrumLevelDescriptorSchema.optional(),
+  }),
+});
+export type SpectrumFrameSupplement = z.infer<typeof SpectrumFrameSupplementSchema>;
+
 export const SpectrumFrameMetaSchema = z.object({
   sourceBinCount: z.number().int().positive(),
   displayBinCount: z.number().int().positive(),
+  /** Original source range before a per-client server-side projection. */
+  nativeFrequencyRange: SpectrumFrequencyRangeSchema.optional(),
   centerFrequency: z.number().optional(),
   spanHz: z.number().optional(),
   profileId: z.string().nullable().optional(),
@@ -83,6 +120,7 @@ export const SpectrumFrameSchema = z.object({
   frequencyRange: SpectrumFrequencyRangeSchema,
   binaryData: SpectrumBinaryDataSchema,
   meta: SpectrumFrameMetaSchema,
+  supplement: SpectrumFrameSupplementSchema.optional(),
 });
 
 export const SpectrumSourceAvailabilitySchema = z.object({
@@ -147,7 +185,30 @@ export const SpectrumSessionPresetMarkerSchema = z.object({
 });
 export type SpectrumSessionPresetMarker = z.infer<typeof SpectrumSessionPresetMarkerSchema>;
 
+export const SpectrumSessionFrequencyOverlaySchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  lineFrequency: z.number().finite(),
+  rangeStartFrequency: z.number().finite(),
+  rangeEndFrequency: z.number().finite(),
+  variant: z.enum(['tx', 'rx', 'window']),
+  draggable: z.boolean(),
+  frequencyTarget: z.enum(['radio-frequency', 'operator-tx', 'split-frequency']).nullable(),
+}).refine((overlay) => overlay.rangeEndFrequency >= overlay.rangeStartFrequency, {
+  message: 'Spectrum frequency overlay range is invalid',
+  path: ['rangeEndFrequency'],
+});
+export type SpectrumSessionFrequencyOverlay = z.infer<typeof SpectrumSessionFrequencyOverlaySchema>;
+
 export const SpectrumSessionInteractionStateSchema = z.object({
+  viewMode: SpectrumSessionViewModeSchema.default('radio-center'),
+  viewport: SpectrumSessionViewportInteractionSchema.default({
+    enabled: false,
+    canZoom: false,
+    canPan: false,
+    canTuneAtEdge: false,
+    bounds: null,
+  }),
   showTxMarkers: z.boolean(),
   showRxMarkers: z.boolean(),
   canDragTx: z.boolean(),
@@ -157,6 +218,7 @@ export const SpectrumSessionInteractionStateSchema = z.object({
   frequencyGestureTarget: z.enum(['operator-tx', 'radio-frequency']).nullable(),
   frequencyStepHz: z.number().int().positive().nullable(),
   presetMarkers: z.array(SpectrumSessionPresetMarkerSchema),
+  frequencyOverlays: z.array(SpectrumSessionFrequencyOverlaySchema),
   canDragVoiceOverlay: z.boolean(),
   showVoiceOverlay: z.boolean(),
   canLocalViewportZoom: z.boolean(),

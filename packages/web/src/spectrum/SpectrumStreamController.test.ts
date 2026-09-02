@@ -55,6 +55,21 @@ function makeFrame(
   };
 }
 
+function addSupplement(frame: SpectrumFrame, values: number[], frequencyRange: { min: number; max: number }): SpectrumFrame {
+  const data = new Int16Array(values);
+  return {
+    ...frame,
+    supplement: {
+      frequencyRange,
+      binaryData: {
+        data: Buffer.from(data.buffer).toString('base64'),
+        format: { type: 'int16', length: values.length, scale: 1, offset: 0 },
+      },
+      meta: { sourceBinCount: values.length, displayBinCount: values.length },
+    },
+  };
+}
+
 describe('SpectrumStreamController memory behavior', () => {
   let rafCallbacks: Map<number, FrameRequestCallback>;
   let nextRafId: number;
@@ -396,6 +411,92 @@ describe('SpectrumStreamController memory behavior', () => {
     expect(batch?.rowTimestamps).toEqual([11, 10]);
     expect(Array.from(batch?.rows[0] ?? [])).toEqual([10, 110, 210]);
     expect(Array.from(batch?.rows[1] ?? [])).toEqual([100, 200, 0]);
+  });
+
+  it('crops radio SDR frames to an explicit absolute local viewport', () => {
+    const controller = new SpectrumStreamController(4);
+    controller.updateContext({
+      selectedKind: 'radio-sdr',
+      radioSdrViewport: { min: 950, max: 1050 },
+    });
+    controller.pushFrame(makeFrame('radio-sdr', 10, [0, 100, 200, 300, 400], { min: 900, max: 1100 }));
+    flushNextAnimationFrame();
+    const batch = controller.consumeRenderBatch();
+
+    expect(batch?.axis).toEqual({ minHz: 950, maxHz: 1050, binCount: 5 });
+    expect(Array.from(batch?.rows[0] ?? [])).toEqual([100, 150, 200, 250, 300]);
+  });
+
+  it('uses the wide supplement when a local viewport extends beyond the detail frame', () => {
+    const controller = new SpectrumStreamController(4);
+    controller.updateContext({
+      selectedKind: 'radio-sdr',
+      radioSdrViewport: { min: 0, max: 200 },
+    });
+    const frame = addSupplement(
+      makeFrame('radio-sdr', 10, [100, 200, 300], { min: 80, max: 120 }),
+      [0, 50, 100, 150, 200],
+      { min: 0, max: 200 },
+    );
+    frame.meta.nativeFrequencyRange = { min: 0, max: 200 };
+    controller.pushFrame(frame);
+    flushNextAnimationFrame();
+    const batch = controller.consumeRenderBatch();
+
+    expect(batch?.axis).toEqual({ minHz: 0, maxHz: 200, binCount: 3 });
+    expect(Array.from(batch?.rows[0] ?? [])).toEqual([0, 200, 200]);
+  });
+
+  it('coalesces rapid local viewport changes into one deferred history rebuild', () => {
+    const controller = new SpectrumStreamController(4);
+    const frameListener = vi.fn();
+    controller.updateContext({ selectedKind: 'radio-sdr' });
+    controller.subscribeFrameTick(frameListener);
+    controller.pushFrame(makeFrame('radio-sdr', 10, [0, 100, 200], { min: 900, max: 1100 }));
+    flushNextAnimationFrame();
+    controller.consumeRenderBatch();
+    frameListener.mockClear();
+
+    controller.updateContext({ radioSdrViewport: { min: 920, max: 1080 } });
+    controller.updateContext({ radioSdrViewport: { min: 940, max: 1060 } });
+
+    expect(frameListener).not.toHaveBeenCalled();
+    expect(rafCallbacks.size).toBe(1);
+    flushNextAnimationFrame();
+    const batch = controller.consumeRenderBatch();
+
+    expect(frameListener).toHaveBeenCalledTimes(1);
+    expect(batch?.axis).toEqual({ minHz: 940, maxHz: 1060, binCount: 3 });
+    expect(batch?.axisTransition).toBe('immediate');
+  });
+
+  it('limits viewport rebuild work to the visible waterfall rows', () => {
+    const controller = new SpectrumStreamController(8);
+    controller.updateContext({ selectedKind: 'radio-sdr' });
+    for (let index = 0; index < 8; index += 1) {
+      controller.pushFrame(makeFrame('radio-sdr', index + 1, [index, index + 1], { min: 0, max: 10 }));
+    }
+    flushNextAnimationFrame();
+    controller.consumeRenderBatch();
+    rafCallbacks.clear();
+    controller.setRenderRowLimit(3);
+    flushNextAnimationFrame();
+    const batch = controller.consumeRenderBatch();
+
+    expect(batch?.rows).toHaveLength(3);
+    expect(batch?.rowTimestamps).toEqual([8, 7, 6]);
+  });
+
+  it('keeps the native radio range when frames are server-projected to a client viewport', () => {
+    const controller = new SpectrumStreamController(4);
+    controller.updateContext({ selectedKind: 'radio-sdr' });
+    const projected = makeFrame('radio-sdr', 10, [100, 150, 200], { min: 950, max: 1050 });
+    projected.meta.nativeFrequencyRange = { min: 900, max: 1100 };
+    controller.pushFrame(projected);
+
+    expect(controller.getFullRange('radio-sdr')).toEqual({ min: 900, max: 1100 });
+    expect(controller.getStatusSnapshot().fullRange).toEqual({ min: 900, max: 1100 });
+    expect(controller.getStatusSnapshot().displayRange).toEqual({ min: 950, max: 1050 });
   });
 
   it('optimistically remaps cached radio SDR history after a local frequency intent', () => {

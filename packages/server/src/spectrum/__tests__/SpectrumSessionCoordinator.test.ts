@@ -3,13 +3,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { SpectrumSessionCoordinator } from '../SpectrumSessionCoordinator.js';
 
 class MockEngine extends EventEmitter<Record<string, never>> {
-  engineMode: 'digital' | 'voice' | 'cw' = 'digital';
-  currentModeName: 'FT8' | 'FT4' | 'VOICE' | 'CW' = 'FT8';
+  engineMode: 'digital' | 'voice' | 'cw' | 'image' = 'digital';
+  currentModeName: 'FT8' | 'FT4' | 'VOICE' | 'CW' | 'SSTV' | 'FAX' = 'FT8';
 
   readonly radioManager = {
     getActiveConnection: vi.fn((): any => null),
     getConfig: vi.fn(() => ({ type: 'icom-wlan' })),
     getCoreCapabilities: vi.fn(() => ({ readRadioMode: true })),
+    getCapabilitySnapshot: vi.fn((): any => ({ descriptors: [], capabilities: [] })),
     getFrequency: vi.fn(),
     getIcomWlanManager: vi.fn((): any => null),
     getMode: vi.fn(),
@@ -218,12 +219,13 @@ describe('SpectrumSessionCoordinator', () => {
       configureSpectrumDisplay: vi.fn(),
       getSpectrumDisplayState: vi.fn().mockResolvedValue({
         mode: 'fixed',
-        edgeLowHz: frequency - 1000,
+        edgeLowHz: frequency,
         edgeHighHz: frequency + 4000,
         spanHz: 5000,
         supportsFixedEdges: true,
         supportedSpans: [5000, 10_000],
       }),
+      getMode: vi.fn().mockResolvedValue({ mode: 'USB', bandwidth: 4000 }),
       getRadioIoQueueSnapshot: vi.fn(() => createBusySnapshot(busy)),
     };
 
@@ -231,7 +233,7 @@ describe('SpectrumSessionCoordinator', () => {
     engine.radioManager.getActiveConnection.mockReturnValue(connection);
     seedRadioSdrFrame(coordinator, frequency);
     (coordinator as any).lastRadioFrame.frequencyRange = {
-      min: frequency - 1000,
+      min: frequency,
       max: frequency + 4000,
     };
     (coordinator as any).lastRadioFrame.meta.spanHz = 5000;
@@ -314,6 +316,7 @@ describe('SpectrumSessionCoordinator', () => {
         supportsFixedEdges: true,
         supportedSpans: [5000, 10_000],
       }),
+      getMode: vi.fn().mockResolvedValue({ mode: 'USB', bandwidth: 5000 }),
       getRadioIoQueueSnapshot: vi.fn(() => createBusySnapshot(false)),
     };
 
@@ -381,10 +384,11 @@ describe('SpectrumSessionCoordinator', () => {
     });
   });
 
-  it('exposes TCI IQ sample-rate zoom without the unsupported digital window control', async () => {
+  it('does not expose shared TCI IQ sample-rate zoom as a per-client control', async () => {
     const engine = new MockEngine();
     engine.radioManager.isConnected.mockReturnValue(true);
     engine.radioManager.getConfig.mockReturnValue({ type: 'tci' } as any);
+    engine.radioManager.getActiveConnection.mockReturnValue({ getTciRxFilterBand: async () => [0, 4000] });
     engine.radioManager.getMode.mockResolvedValue({ mode: 'DIGU', bandwidth: 3000 });
     const setSpan = vi.fn().mockResolvedValue(48_000);
     const spanController = {
@@ -404,7 +408,7 @@ describe('SpectrumSessionCoordinator', () => {
 
     const state = await coordinator.refresh('radio-sdr');
     expect(state.frequencyRangeMode).toBe('absolute-center');
-    expect(state.controls.filter(control => control.id === 'zoom-step')).toHaveLength(2);
+    expect(state.controls.filter(control => control.id === 'zoom-step')).toHaveLength(0);
     expect(state.controls.some(control => control.id === 'digital-window-toggle')).toBe(false);
     expect(state.interaction).toMatchObject({
       showTxMarkers: true,
@@ -412,9 +416,16 @@ describe('SpectrumSessionCoordinator', () => {
       canDragTx: true,
       frequencyGestureTarget: 'operator-tx',
     });
+    expect(state.interaction.frequencyOverlays).toEqual([expect.objectContaining({
+      id: 'digital-usb-window',
+      label: '',
+      rangeStartFrequency: 14_074_000,
+      rangeEndFrequency: 14_078_000,
+      frequencyTarget: 'radio-frequency',
+    })]);
 
     await coordinator.invokeControl('radio-sdr', 'zoom-step', 'in');
-    expect(setSpan).toHaveBeenCalledWith(48_000);
+    expect(setSpan).not.toHaveBeenCalled();
   });
 
   it('hides TCI zoom controls when all sample rates map to one IF window', async () => {
@@ -464,6 +475,93 @@ describe('SpectrumSessionCoordinator', () => {
       frequencyGestureTarget: 'radio-frequency',
       frequencyStepHz: 1000,
     });
+  });
+
+  it('declares a wide TCI voice carrier overlay as radio-frequency draggable', async () => {
+    const engine = new MockEngine();
+    engine.engineMode = 'voice';
+    engine.currentModeName = 'VOICE';
+    engine.radioManager.getConfig.mockReturnValue({ type: 'tci' });
+    engine.radioManager.isConnected.mockReturnValue(true);
+    engine.radioManager.getMode.mockResolvedValue({ mode: 'USB', bandwidth: 2400 });
+    engine.radioManager.getCapabilitySnapshot.mockReturnValue({ descriptors: [], capabilities: [{ id: 'split_enabled', value: false, meta: { txFrequencyWritable: true } }] });
+    const spectrumCoordinator = new EventEmitter();
+    const coordinator = new SpectrumSessionCoordinator(engine as any, spectrumCoordinator as any);
+    seedRadioSdrFrame(coordinator, 14_200_000);
+
+    const state = await coordinator.refresh('radio-sdr');
+
+    expect(state.interaction.viewMode).toBe('wide');
+    expect(state.interaction.viewport).toMatchObject({ enabled: true, canPan: true, canZoom: true });
+    expect(state.interaction.frequencyOverlays).toEqual([expect.objectContaining({
+      id: 'voice-current-tx',
+      draggable: true,
+      frequencyTarget: 'radio-frequency',
+      rangeStartFrequency: 14_200_000,
+      rangeEndFrequency: 14_202_400,
+    })]);
+  });
+
+  it('keeps non-split ICOM carrier TX non-draggable in center view', async () => {
+    const engine = new MockEngine();
+    engine.engineMode = 'voice';
+    engine.currentModeName = 'VOICE';
+    engine.radioManager.isConnected.mockReturnValue(true);
+    engine.radioManager.getMode.mockResolvedValue({ mode: 'USB', bandwidth: 2400 });
+    engine.radioManager.getCapabilitySnapshot.mockReturnValue({ descriptors: [], capabilities: [{ id: 'split_enabled', value: false, meta: { txFrequencyWritable: true } }] });
+    const spectrumCoordinator = new EventEmitter();
+    const coordinator = new SpectrumSessionCoordinator(engine as any, spectrumCoordinator as any);
+    seedRadioSdrFrame(coordinator, 14_200_000);
+
+    const state = await coordinator.refresh('radio-sdr');
+
+    expect(state.interaction.viewMode).toBe('radio-center');
+    expect(state.interaction.frequencyOverlays).toEqual([expect.objectContaining({
+      id: 'voice-current-tx',
+      draggable: false,
+      frequencyTarget: 'radio-frequency',
+    })]);
+  });
+
+  it('exposes Split TX as the only carrier drag target in center view', async () => {
+    const engine = new MockEngine();
+    engine.engineMode = 'cw';
+    engine.currentModeName = 'CW';
+    engine.radioManager.isConnected.mockReturnValue(true);
+    engine.radioManager.getMode.mockResolvedValue({ mode: 'CW', bandwidth: 500 });
+    engine.radioManager.getCapabilitySnapshot.mockReturnValue({ descriptors: [], capabilities: [{
+      id: 'split_enabled', value: true, meta: { txFrequency: 14_052_500, txFrequencyWritable: true },
+    }] });
+    const spectrumCoordinator = new EventEmitter();
+    const coordinator = new SpectrumSessionCoordinator(engine as any, spectrumCoordinator as any);
+    seedRadioSdrFrame(coordinator, 14_050_000);
+
+    const state = await coordinator.refresh('radio-sdr');
+
+    expect(state.interaction.viewMode).toBe('radio-center');
+    expect(state.interaction.frequencyOverlays).toEqual([
+      expect.objectContaining({ id: 'cw-current-rx', draggable: false, frequencyTarget: null }),
+      expect.objectContaining({ id: 'cw-split-tx', draggable: true, frequencyTarget: 'split-frequency', lineFrequency: 14_052_500 }),
+    ]);
+  });
+
+  it('declares an image carrier overlay without claiming image TX capability', async () => {
+    const engine = new MockEngine();
+    engine.engineMode = 'image';
+    engine.currentModeName = 'FAX';
+    engine.radioManager.getConfig.mockReturnValue({ type: 'tci' });
+    engine.radioManager.isConnected.mockReturnValue(true);
+    engine.radioManager.getCapabilitySnapshot.mockReturnValue({ descriptors: [], capabilities: [{ id: 'split_enabled', value: false, meta: { txFrequencyWritable: true } }] });
+    const spectrumCoordinator = new EventEmitter();
+    const coordinator = new SpectrumSessionCoordinator(engine as any, spectrumCoordinator as any);
+    seedRadioSdrFrame(coordinator, 3_850_000);
+
+    const state = await coordinator.refresh('radio-sdr');
+
+    expect(state.interaction.viewMode).toBe('wide');
+    expect(state.interaction.frequencyOverlays).toEqual([expect.objectContaining({
+      id: 'image-current-tx', draggable: true, frequencyTarget: 'radio-frequency',
+    })]);
   });
 
   it('restores radio SDR display mode to center when entering CW', async () => {

@@ -295,6 +295,7 @@ export const CAPABILITY_IDS = [
   'spectrum_rbw',
   'spectrum_during_tx',
   'spectrum_center_type',
+  'tci_iq_sample_rate',
   'dcs_code',
 ] as const;
 

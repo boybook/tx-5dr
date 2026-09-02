@@ -10,17 +10,21 @@ import {
   type TciIqFrame,
   type TciIqStreamSession,
 } from 'tci-client-node';
-import type { SpectrumFrame, SpectrumSourceAvailability } from '@tx5dr/contracts';
+import { TciSpectrumSettingsSchema, type SpectrumFrame, type SpectrumSourceAvailability, type TciSpectrumSettings } from '@tx5dr/contracts';
 import type { TciConnection } from '../radio/connections/TciConnection.js';
+import { ConfigManager } from '../config/config-manager.js';
 import { createLogger } from '../utils/logger.js';
 import type { RadioSpectrumSource, RadioSpectrumSpanController } from './RadioSpectrumSource.js';
 import { TCI_DBFS_LEVEL } from './spectrumUtils.js';
 
 const logger = createLogger('TciIqSpectrumSource');
 const DEFAULT_IQ_SAMPLE_RATE = 96_000;
-const FFT_SIZE = 4096;
-const DISPLAY_BINS = 1024;
-const ANALYSIS_INTERVAL_MS = 100;
+const MAX_FFT_SIZE = 65_536;
+// The supplement only fills out-of-window areas while zooming/panning. Keep it
+// intentionally coarse so every client does not pay for a second high-res
+// copy of the FFT line.
+const WIDE_VIEW_DISPLAY_BIN_COUNT = 512;
+const WIDE_VIEW_PERCENTILE = 0.9;
 const SAMPLE_RATE_FRAME_CONFIRM_MS = 750;
 const RECONNECT_INITIAL_DELAY_MS = 500;
 const RECONNECT_MAX_DELAY_MS = 5_000;
@@ -45,7 +49,10 @@ export class TciIqSpectrumSource implements RadioSpectrumSource, RadioSpectrumSp
   private analyzer: { analyze(interleavedIq: Float32Array): Promise<ComplexSpectrumResult> } | null = null;
   private analyzerSampleRate = 0;
   private analyzerRevision = 0;
-  private ring = new Float32Array(FFT_SIZE * 2);
+  private fftSize: TciSpectrumSettings['fftSize'];
+  private displayBinCount: number;
+  private analysisIntervalMs: number;
+  private ring = new Float32Array(MAX_FFT_SIZE * 2);
   private ringWrite = 0;
   private ringComplexCount = 0;
   private analysisActive = false;
@@ -83,6 +90,11 @@ export class TciIqSpectrumSource implements RadioSpectrumSource, RadioSpectrumSp
     this.analyzerFactory = options.analyzerFactory ?? ((analyzerOptions) => new ComplexSpectrumAnalyzer(analyzerOptions));
     this.reconnectInitialDelayMs = options.reconnectInitialDelayMs ?? RECONNECT_INITIAL_DELAY_MS;
     this.reconnectMaxDelayMs = options.reconnectMaxDelayMs ?? RECONNECT_MAX_DELAY_MS;
+    const settings = ConfigManager.getInstance().getTciSpectrumSettings();
+    this.fftSize = settings.fftSize;
+    this.displayBinCount = settings.displayBinCount;
+    this.analysisIntervalMs = settings.analysisIntervalMs;
+    this.connection.registerTciIqSpectrumController?.(this);
   }
 
   async getAvailability(): Promise<SpectrumSourceAvailability> {
@@ -95,11 +107,46 @@ export class TciIqSpectrumSource implements RadioSpectrumSource, RadioSpectrumSp
       reason: support.supported
         ? (this.connection.isConnected() ? undefined : 'radio_disconnected')
         : 'tci_iq_not_supported',
-      sourceBinCount: FFT_SIZE,
-      displayBinCount: DISPLAY_BINS,
+      sourceBinCount: this.fftSize,
+      displayBinCount: this.displayBinCount,
       supportsWaterfall: true,
       frequencyRangeMode: 'absolute',
     };
+  }
+
+  getTciSpectrumSettings(): TciSpectrumSettings {
+    return {
+      fftSize: this.fftSize,
+      displayBinCount: this.displayBinCount,
+      analysisIntervalMs: this.analysisIntervalMs,
+    };
+  }
+
+  isActive(): boolean {
+    return this.session !== null;
+  }
+
+  async setTciSpectrumSettings(settings: TciSpectrumSettings): Promise<TciSpectrumSettings> {
+    const next = TciSpectrumSettingsSchema.parse(settings);
+    const previous = this.getTciSpectrumSettings();
+    this.fftSize = next.fftSize;
+    this.displayBinCount = next.displayBinCount;
+    this.analysisIntervalMs = next.analysisIntervalMs;
+    if (this.session && this.analyzerSampleRate > 0 && previous.fftSize !== next.fftSize) {
+      this.resetAnalyzer(this.analyzerSampleRate);
+    }
+    try {
+      await ConfigManager.getInstance().updateTciSpectrumSettings(next);
+    } catch (error) {
+      this.fftSize = previous.fftSize;
+      this.displayBinCount = previous.displayBinCount;
+      this.analysisIntervalMs = previous.analysisIntervalMs;
+      if (this.session && this.analyzerSampleRate > 0 && previous.fftSize !== next.fftSize) {
+        this.resetAnalyzer(this.analyzerSampleRate);
+      }
+      throw error;
+    }
+    return this.getTciSpectrumSettings();
   }
 
   async start(listener: (frame: SpectrumFrame) => void): Promise<void> {
@@ -136,11 +183,14 @@ export class TciIqSpectrumSource implements RadioSpectrumSource, RadioSpectrumSp
       this.updateIfLimits(client.getState().ifLimits);
       client.on('state', (state) => this.updateIfLimits(state.ifLimits));
       const currentRate = capabilities.currentSampleRate;
-      const requestedRate = typeof currentRate === 'number' && currentRate > 0
-        ? currentRate
-        : this.supportedSpans.includes(DEFAULT_IQ_SAMPLE_RATE)
-          ? DEFAULT_IQ_SAMPLE_RATE
-          : this.supportedSpans[0] ?? 48_000;
+      const configuredRate = ConfigManager.getInstance().getTciIqSampleRate();
+      const requestedRate = configuredRate && this.supportedSpans.includes(configuredRate)
+        ? configuredRate
+        : this.supportedSpans.length > 0
+          ? Math.max(...this.supportedSpans)
+          : typeof currentRate === 'number' && currentRate > 0
+            ? currentRate
+            : DEFAULT_IQ_SAMPLE_RATE;
       const session = await client.openIqStream({
         receiver: options.receiver,
         sampleRate: requestedRate,
@@ -202,6 +252,7 @@ export class TciIqSpectrumSource implements RadioSpectrumSource, RadioSpectrumSp
     await session?.close().catch((error) => logger.debug('Failed to stop TCI IQ session', error));
     await client?.disconnect().catch((error) => logger.debug('Failed to disconnect TCI IQ client', error));
     await connectPromise?.catch(() => undefined);
+    this.connection.unregisterTciIqSpectrumController?.(this);
     if (wasRunning) logger.info('TCI IQ spectrum stopped');
   }
 
@@ -291,8 +342,8 @@ export class TciIqSpectrumSource implements RadioSpectrumSource, RadioSpectrumSp
     for (let index = 0; index + 1 < interleaved.length; index += 2) {
       this.ring[this.ringWrite * 2] = interleaved[index]!;
       this.ring[this.ringWrite * 2 + 1] = interleaved[index + 1]!;
-      this.ringWrite = (this.ringWrite + 1) % FFT_SIZE;
-      this.ringComplexCount = Math.min(FFT_SIZE, this.ringComplexCount + 1);
+      this.ringWrite = (this.ringWrite + 1) % this.fftSize;
+      this.ringComplexCount = Math.min(this.fftSize, this.ringComplexCount + 1);
     }
     this.latestCenterFrequency = frame.centerFrequency;
     this.currentSpan = frame.sampleRate;
@@ -303,7 +354,7 @@ export class TciIqSpectrumSource implements RadioSpectrumSource, RadioSpectrumSp
     }
     this.logStreamParameters(frame);
     const now = performance.now();
-    if (this.ringComplexCount < FFT_SIZE || now - this.lastAnalysisAt < ANALYSIS_INTERVAL_MS) return;
+    if (this.ringComplexCount < this.fftSize || now - this.lastAnalysisAt < this.analysisIntervalMs) return;
     if (this.analysisActive) {
       this.analysisPending = true;
       return;
@@ -320,9 +371,9 @@ export class TciIqSpectrumSource implements RadioSpectrumSource, RadioSpectrumSp
     this.analysisActive = true;
     this.analysisPending = false;
     this.lastAnalysisAt = performance.now();
-    const snapshot = new Float32Array(FFT_SIZE * 2);
-    for (let index = 0; index < FFT_SIZE; index++) {
-      const source = (this.ringWrite + index) % FFT_SIZE;
+    const snapshot = new Float32Array(this.fftSize * 2);
+    for (let index = 0; index < this.fftSize; index++) {
+      const source = (this.ringWrite + index) % this.fftSize;
       snapshot[index * 2] = this.ring[source * 2]!;
       snapshot[index * 2 + 1] = this.ring[source * 2 + 1]!;
     }
@@ -334,13 +385,36 @@ export class TciIqSpectrumSource implements RadioSpectrumSource, RadioSpectrumSp
         || listener !== this.listener
       ) return;
       const displayWindow = this.resolveDisplayWindow(result.spanHz);
+      const fullWindow = {
+        minOffsetHz: -result.spanHz / 2,
+        maxOffsetHz: result.spanHz / 2,
+      };
       const magnitudes = this.cropAndCompressMagnitudes(
         result.magnitudesBase64,
         result.magnitudesLength,
         result.spanHz,
         displayWindow,
+        this.displayBinCount,
       );
       const spanHz = displayWindow.maxOffsetHz - displayWindow.minOffsetHz;
+      const hasCroppedDetailWindow = displayWindow.minOffsetHz > fullWindow.minOffsetHz
+        || displayWindow.maxOffsetHz < fullWindow.maxOffsetHz;
+      const wideMagnitudes = hasCroppedDetailWindow
+        ? this.cropAndCompressMagnitudes(
+            result.magnitudesBase64,
+            result.magnitudesLength,
+            result.spanHz,
+            fullWindow,
+            WIDE_VIEW_DISPLAY_BIN_COUNT,
+            'power-mean-percentile',
+            result.scale,
+            result.offset,
+          )
+        : null;
+      const nativeFrequencyRange = {
+        min: centerFrequency + fullWindow.minOffsetHz,
+        max: centerFrequency + fullWindow.maxOffsetHz,
+      };
       listener({
         timestamp: Date.now(),
         kind: 'radio-sdr',
@@ -353,14 +427,31 @@ export class TciIqSpectrumSource implements RadioSpectrumSource, RadioSpectrumSp
           format: { type: 'int16', length: magnitudes.length, scale: result.scale, offset: result.offset },
         },
         meta: {
-          sourceBinCount: FFT_SIZE,
+          sourceBinCount: this.fftSize,
           displayBinCount: magnitudes.length,
           centerFrequency,
           spanHz,
+          nativeFrequencyRange,
           profileId: null,
           radioModel: 'TCI IQ',
           level: TCI_DBFS_LEVEL,
         },
+        ...(wideMagnitudes ? {
+          supplement: {
+            frequencyRange: nativeFrequencyRange,
+            binaryData: {
+              data: Buffer.from(wideMagnitudes.buffer, wideMagnitudes.byteOffset, wideMagnitudes.byteLength).toString('base64'),
+              format: { type: 'int16' as const, length: wideMagnitudes.length, scale: result.scale, offset: result.offset },
+            },
+            meta: {
+              sourceBinCount: this.fftSize,
+              displayBinCount: wideMagnitudes.length,
+              centerFrequency,
+              spanHz: result.spanHz,
+              level: TCI_DBFS_LEVEL,
+            },
+          },
+        } : {}),
       });
     } catch (error) {
       logger.warn('TCI IQ spectrum analysis failed', error);
@@ -379,8 +470,8 @@ export class TciIqSpectrumSource implements RadioSpectrumSource, RadioSpectrumSp
     this.currentSpan = sampleRate;
     this.analyzer = this.analyzerFactory({
       sampleRate,
-      fftSize: FFT_SIZE,
-      outputBins: FFT_SIZE,
+      fftSize: this.fftSize,
+      outputBins: this.fftSize,
       windowFunction: 'hann',
       removeDc: true,
     });
@@ -411,6 +502,10 @@ export class TciIqSpectrumSource implements RadioSpectrumSource, RadioSpectrumSp
     inputLength: number,
     sampleRate: number,
     window: { minOffsetHz: number; maxOffsetHz: number },
+    outputBinCount: number,
+    aggregation: 'max' | 'power-mean-percentile' = 'max',
+    scale = 1,
+    offset = 0,
   ): Int16Array {
     const bytes = Buffer.from(base64, 'base64');
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -422,18 +517,46 @@ export class TciIqSpectrumSource implements RadioSpectrumSource, RadioSpectrumSp
     const start = Math.max(0, Math.min(availableLength - 1, Math.floor(toIndex(window.minOffsetHz))));
     const end = Math.max(start + 1, Math.min(availableLength, Math.ceil(toIndex(window.maxOffsetHz))));
     const selectedLength = end - start;
-    const output = new Int16Array(DISPLAY_BINS);
+    const output = new Int16Array(outputBinCount);
     for (let outputIndex = 0; outputIndex < output.length; outputIndex++) {
       const binStart = start + Math.floor(outputIndex * selectedLength / output.length);
       const binEnd = start + Math.max(
         Math.floor((outputIndex + 1) * selectedLength / output.length),
         Math.floor(outputIndex * selectedLength / output.length) + 1,
       );
-      let maximum = -32768;
-      for (let inputIndex = binStart; inputIndex < Math.min(binEnd, end); inputIndex++) {
-        maximum = Math.max(maximum, input[inputIndex] ?? -32768);
+      const boundedBinEnd = Math.min(binEnd, end);
+      if (aggregation === 'max' || scale <= 0 || !Number.isFinite(scale)) {
+        let maximum = -32768;
+        for (let inputIndex = binStart; inputIndex < boundedBinEnd; inputIndex++) {
+          maximum = Math.max(maximum, input[inputIndex] ?? -32768);
+        }
+        output[outputIndex] = maximum;
+        continue;
       }
-      output[outputIndex] = maximum;
+
+      const dbValues: number[] = [];
+      let powerSum = 0;
+      for (let inputIndex = binStart; inputIndex < boundedBinEnd; inputIndex++) {
+        const db = (input[inputIndex] ?? -32768) * scale + offset;
+        dbValues.push(db);
+        powerSum += 10 ** (db / 10);
+      }
+      if (dbValues.length === 0) {
+        output[outputIndex] = -32768;
+        continue;
+      }
+      dbValues.sort((left, right) => left - right);
+      const percentileIndex = Math.min(
+        dbValues.length - 1,
+        Math.max(0, Math.floor((dbValues.length - 1) * WIDE_VIEW_PERCENTILE)),
+      );
+      const meanPowerDb = 10 * Math.log10(powerSum / dbValues.length);
+      // Keep the noise floor close to the power mean while retaining a modest
+      // amount of strong-signal contrast. An uncapped percentile would recreate
+      // the max-pool brightness bias that this fallback is meant to avoid.
+      const percentileBoostDb = Math.min(6, Math.max(0, dbValues[percentileIndex]! - meanPowerDb));
+      const selectedDb = meanPowerDb + percentileBoostDb;
+      output[outputIndex] = Math.max(-32768, Math.min(32767, Math.round((selectedDb - offset) / scale)));
     }
     return output;
   }

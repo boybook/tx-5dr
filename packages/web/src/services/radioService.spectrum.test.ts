@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SpectrumKind } from '@tx5dr/contracts';
+import type { SpectrumKind, SpectrumViewport } from '@tx5dr/contracts';
 import { RadioService } from './radioService';
 
 const mockState = vi.hoisted(() => ({
@@ -8,6 +8,7 @@ const mockState = vi.hoisted(() => ({
     connected: boolean;
     ready: boolean;
     subscribeSpectrum: ReturnType<typeof vi.fn>;
+    setSpectrumViewport: ReturnType<typeof vi.fn>;
     handlers: Map<string, Set<(data?: unknown) => void>>;
     emit: (event: string, data?: unknown) => void;
   }>,
@@ -19,6 +20,7 @@ vi.mock('@tx5dr/core', () => {
     connected = false;
     ready = false;
     subscribeSpectrum = vi.fn();
+    setSpectrumViewport = vi.fn();
     handlers = new Map<string, Set<(data?: unknown) => void>>();
 
     constructor(config: { clientVersion?: string }) {
@@ -131,5 +133,26 @@ describe('RadioService spectrum subscription reliability', () => {
 
     expect(client.subscribeSpectrum).toHaveBeenCalledTimes(4);
     expect(client.subscribeSpectrum).toHaveBeenLastCalledWith('radio-sdr');
+  });
+
+  it('replays the client viewport with spectrum subscriptions and updates it independently', () => {
+    const service = new RadioService();
+    const client = mockState.clients[0]!;
+    client.connected = true;
+    client.ready = true;
+    const viewport: SpectrumViewport = { min: 14_070_000, max: 14_090_000, displayBinCount: 4096 };
+
+    service.setSpectrumViewport(viewport);
+    expect(client.setSpectrumViewport).not.toHaveBeenCalled();
+
+    service.subscribeSpectrum('radio-sdr');
+    expect(client.subscribeSpectrum).toHaveBeenLastCalledWith('radio-sdr', viewport);
+
+    const nextViewport = { ...viewport, min: 14_075_000, max: 14_095_000 };
+    service.setSpectrumViewport(nextViewport);
+    expect(client.setSpectrumViewport).toHaveBeenLastCalledWith(nextViewport);
+    expect(client.setSpectrumViewport).toHaveBeenCalledTimes(1);
+    service.setSpectrumViewport({ ...nextViewport });
+    expect(client.setSpectrumViewport).toHaveBeenCalledTimes(1);
   });
 });

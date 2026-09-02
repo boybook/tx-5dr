@@ -7,6 +7,16 @@
     "disconnected": "已断开",
     "failed": "连接失败"
   },
+  "spectrum": {
+    "tciSettings": {
+      "title": "TCI SDR 频谱",
+      "description": "调整共享 TCI 频谱分析的分辨率和刷新速度。",
+      "fftSize": "FFT 分辨率",
+      "displayBins": "显示分辨率",
+      "refreshInterval": "刷新间隔",
+      "updateFailed": "TCI 频谱设置更新失败"
+    }
+  },
   "status": {
     "txDisconnected": "⚠️ 电台发射中断连接",
     "suggestion": "💡 建议",
@@ -668,6 +678,10 @@
     "tx_audio_input_source": {
       "label": "发射音频输入",
       "description": "选择电台发射端使用的物理音频输入源（麦克风、USB、网络或附件接口）。"
+    },
+    "tci_iq_sample_rate": {
+      "label": "TCI IQ 采样率",
+      "description": "设置共享的 TCI IQ 频谱采样率。采样率越高，可显示的频谱范围越宽，但会占用更多电台和服务器带宽。"
     },
     "rf_power": {
       "label": "发射功率",

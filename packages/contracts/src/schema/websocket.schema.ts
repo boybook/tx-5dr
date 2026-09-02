@@ -40,7 +40,7 @@ import { CWDecoderEventSchema, CWDecoderStatusSchema, type CWDecoderEvent, type 
 import { CapabilityListSchema, CapabilityStateSchema, WriteCapabilityPayloadSchema } from './radio-capability.schema.js';
 import { RadioPowerStateEventSchema } from './radio-power.schema.js';
 import { AudioSidecarStatusPayloadSchema } from './audio-sidecar.schema.js';
-import { SpectrumCapabilitiesSchema, SpectrumFrameSchema, SpectrumKindSchema, SpectrumSessionControlActionSchema, SpectrumSessionControlIdSchema, SpectrumSessionStateSchema } from './spectrum.schema.js';
+import { SpectrumCapabilitiesSchema, SpectrumFrameSchema, SpectrumKindSchema, SpectrumSessionControlActionSchema, SpectrumSessionControlIdSchema, SpectrumSessionStateSchema, SpectrumViewportSchema } from './spectrum.schema.js';
 import type { RealtimeSettingsResponseData } from './realtime.schema.js';
 import type { AndroidOperatorAudioStatus } from './android-operator-audio.schema.js';
 import { ClockStatusSummarySchema } from './system.schema.js';
@@ -98,6 +98,7 @@ export enum WSMessageType {
   SPECTRUM_FRAME = 'spectrumFrame',
   SPECTRUM_SESSION_STATE_CHANGED = 'spectrumSessionStateChanged',
   INVOKE_SPECTRUM_CONTROL = 'invokeSpectrumControl',
+  SPECTRUM_VIEWPORT_CHANGED = 'spectrumViewportChanged',
   DECODE_ERROR = 'decodeError',
   SYSTEM_STATUS = 'systemStatus',
   BOOTSTRAP_STATUS_CHANGED = 'bootstrapStatusChanged',
@@ -873,7 +874,13 @@ export const WSSubscribeSpectrumMessageSchema = WSBaseMessageSchema.extend({
   type: z.literal(WSMessageType.SUBSCRIBE_SPECTRUM),
   data: z.object({
     kind: SpectrumKindSchema.nullable(),
+    viewport: SpectrumViewportSchema.optional(),
   }),
+});
+
+export const WSSpectrumViewportChangedMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.SPECTRUM_VIEWPORT_CHANGED),
+  data: SpectrumViewportSchema.nullable(),
 });
 
 export const WSSpectrumSubscriptionChangedMessageSchema = WSBaseMessageSchema.extend({
@@ -1876,6 +1883,7 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSSpectrumCapabilitiesMessageSchema,
   WSSubscribeSpectrumMessageSchema,
   WSSpectrumSubscriptionChangedMessageSchema,
+  WSSpectrumViewportChangedMessageSchema,
   WSSpectrumFrameMessageSchema,
   WSSpectrumSessionStateChangedMessageSchema,
   WSInvokeSpectrumControlMessageSchema,
@@ -2000,6 +2008,7 @@ export type WSSlotPackUpdatedMessage = z.infer<typeof WSSlotPackUpdatedMessageSc
 export type WSSpectrumCapabilitiesMessage = z.infer<typeof WSSpectrumCapabilitiesMessageSchema>;
 export type WSSubscribeSpectrumMessage = z.infer<typeof WSSubscribeSpectrumMessageSchema>;
 export type WSSpectrumSubscriptionChangedMessage = z.infer<typeof WSSpectrumSubscriptionChangedMessageSchema>;
+export type WSSpectrumViewportChangedMessage = z.infer<typeof WSSpectrumViewportChangedMessageSchema>;
 export type WSSpectrumFrameMessage = z.infer<typeof WSSpectrumFrameMessageSchema>;
 export type WSSpectrumSessionStateChangedMessage = z.infer<typeof WSSpectrumSessionStateChangedMessageSchema>;
 export type WSInvokeSpectrumControlMessage = z.infer<typeof WSInvokeSpectrumControlMessageSchema>;
