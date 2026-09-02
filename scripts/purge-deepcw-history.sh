@@ -29,7 +29,7 @@ done < <(git for-each-ref --format='%(refname)' refs/original)
 git reflog expire --expire=now --all
 git gc --prune=now --quiet
 
-if git rev-list --objects --all | rg -i 'resources/models/deepcw/(en_tiny|en_small)\.onnx|resources/licenses/deepcw|39578E22-27CE-4AFB-989F-450345767A53'; then
+if git rev-list --objects --all | rg -i 'resources/models/deepcw/(en_tiny|en_small)\.onnx$|resources/licenses/deepcw(/|$)|39578E22-27CE-4AFB-989F-450345767A53$'; then
   echo "DeepCW history purge verification failed: an old path remains reachable." >&2
   exit 1
 fi
