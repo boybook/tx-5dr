@@ -290,9 +290,14 @@ export class SlotPackPersistence {
    * 读取指定日期的存储记录（用于数据恢复或分析）
    */
   async readRecords(dateStr: string): Promise<SlotPackStorageRecord[]> {
+    const startedAt = performance.now();
+    const memoryBefore = process.memoryUsage();
+    logger.info(`slot pack records read started date=${dateStr} heapUsedBytes=${memoryBefore.heapUsed} rssBytes=${memoryBefore.rss}`);
     try {
       const filePath = await this.getFilePath(dateStr);
       const content = await fs.readFile(filePath, 'utf8');
+      const fileReadAt = performance.now();
+      logger.info(`slot pack records parse started date=${dateStr} contentBytes=${Buffer.byteLength(content, 'utf8')} readDurationMs=${(fileReadAt - startedAt).toFixed(1)}`);
 
       const records: SlotPackStorageRecord[] = [];
       const lines = content.trim().split('\n');
@@ -308,7 +313,13 @@ export class SlotPackPersistence {
         }
       }
 
-      logger.info(`Read ${records.length} records for ${dateStr}`);
+      const memoryAfter = process.memoryUsage();
+      logger.info(
+        `slot pack records read date=${dateStr} recordCount=${records.length} contentBytes=${Buffer.byteLength(content, 'utf8')} `
+        + `readDurationMs=${(fileReadAt - startedAt).toFixed(1)} parseDurationMs=${(performance.now() - fileReadAt).toFixed(1)} `
+        + `heapUsedBytes=${memoryAfter.heapUsed} heapGrowthBytes=${memoryAfter.heapUsed - memoryBefore.heapUsed} `
+        + `rssBytes=${memoryAfter.rss} rssGrowthBytes=${memoryAfter.rss - memoryBefore.rss}`,
+      );
       this.rebuildLatestRecordsCache(dateStr, records);
       return records;
 
@@ -328,15 +339,23 @@ export class SlotPackPersistence {
    */
   async readLatestRecords(dateStr: string): Promise<SlotPackStorageRecord[]> {
     const indexed = this.latestRecordsCache.get(dateStr);
-    if (indexed) return [...indexed.values()];
+    if (indexed) {
+      logger.info(`slot pack latest index cache hit date=${dateStr} slotCount=${indexed.size}`);
+      return [...indexed.values()];
+    }
 
+    const startedAt = performance.now();
     const records = await this.readRecords(dateStr);
     const loaded = this.latestRecordsCache.get(dateStr);
-    if (loaded) return [...loaded.values()];
+    if (loaded) {
+      logger.info(`slot pack latest index built date=${dateStr} slotCount=${loaded.size} durationMs=${(performance.now() - startedAt).toFixed(1)}`);
+      return [...loaded.values()];
+    }
 
     const fallback = new Map<string, SlotPackStorageRecord>();
     for (const record of records) this.updateLatestRecord(fallback, record);
     this.latestRecordsCache.set(dateStr, fallback);
+    logger.info(`slot pack latest index built date=${dateStr} slotCount=${fallback.size} durationMs=${(performance.now() - startedAt).toFixed(1)}`);
     return [...fallback.values()];
   }
 

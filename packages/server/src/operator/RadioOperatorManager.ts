@@ -3175,12 +3175,16 @@ export class RadioOperatorManager {
   }
 
   private async completeAutomaticQSORecord(operatorId: string, qsoRecord: QSORecord): Promise<QSORecord> {
+    const enrichmentStartedAt = performance.now();
+    const memoryBefore = process.memoryUsage();
     const myCallsign = (qsoRecord.myCallsign || this.logManager.getOperatorCallsign(operatorId) || '').toUpperCase();
     const targetCallsign = qsoRecord.callsign.toUpperCase();
     const slotMs = this.getSlotDurationForMode(qsoRecord.mode);
     const historyStartMs = Math.max(0, qsoRecord.startTime - slotMs);
     const historyEndMs = qsoRecord.endTime ?? qsoRecord.startTime;
+    logger.info(`automatic QSO record enrichment started operatorId=${operatorId} startMs=${historyStartMs} endMs=${historyEndMs} heapUsedBytes=${memoryBefore.heapUsed} rssBytes=${memoryBefore.rss}`);
     const historySlotPacks = await this.collectRelevantSlotPacks(historyStartMs, historyEndMs);
+    const historyCollectedAt = performance.now();
 
     const grid = qsoRecord.grid
       || this.callsignTracker?.getGrid(targetCallsign);
@@ -3224,6 +3228,14 @@ export class RadioOperatorManager {
       reportReceived: preferSignalReport(reportReceived, qsoRecord.reportReceived),
       messageHistory: history.messages,
     };
+    const memoryAfter = process.memoryUsage();
+    logger.info(
+      `automatic QSO record enrichment completed operatorId=${operatorId} startMs=${historyStartMs} endMs=${historyEndMs} `
+      + `slotPackCount=${historySlotPacks.length} messageCount=${history.messages.length} `
+      + `collectDurationMs=${(historyCollectedAt - enrichmentStartedAt).toFixed(1)} rebuildDurationMs=${(performance.now() - historyCollectedAt).toFixed(1)} `
+      + `heapUsedBytes=${memoryAfter.heapUsed} heapGrowthBytes=${memoryAfter.heapUsed - memoryBefore.heapUsed} `
+      + `rssBytes=${memoryAfter.rss} rssGrowthBytes=${memoryAfter.rss - memoryBefore.rss} externalBytes=${memoryAfter.external} arrayBuffersBytes=${memoryAfter.arrayBuffers}`,
+    );
     return {
       ...completedRecord,
       comment: resolveQsoComment(completedRecord),
@@ -3231,6 +3243,9 @@ export class RadioOperatorManager {
   }
 
   private async collectRelevantSlotPacks(startMs: number, endMs: number): Promise<SlotPack[]> {
+    const collectionStartedAt = performance.now();
+    const memoryBefore = process.memoryUsage();
+    logger.info(`automatic QSO history collection started startMs=${startMs} endMs=${endMs} heapUsedBytes=${memoryBefore.heapUsed} rssBytes=${memoryBefore.rss}`);
     const merged = new Map<string, SlotPack>();
     const activeSlotPacks = this.slotPackManager
       .getActiveSlotPacks(startMs, endMs)
@@ -3248,20 +3263,39 @@ export class RadioOperatorManager {
     const cacheCoversWindow = activeSlotPacks.some((slotPack) => slotPack.startMs <= startMs)
       && activeSlotPacks.some((slotPack) => slotPack.endMs >= endMs);
     if (cacheCoversWindow) {
-      return Array.from(merged.values()).sort((left, right) => {
+      const result = Array.from(merged.values()).sort((left, right) => {
         if (left.startMs !== right.startMs) return left.startMs - right.startMs;
         return left.slotId.localeCompare(right.slotId);
       });
+      const memoryAfter = process.memoryUsage();
+      logger.info(
+        `automatic QSO history collection completed source=active-cache startMs=${startMs} endMs=${endMs} `
+        + `slotPackCount=${result.length} durationMs=${(performance.now() - collectionStartedAt).toFixed(1)} `
+        + `heapUsedBytes=${memoryAfter.heapUsed} heapGrowthBytes=${memoryAfter.heapUsed - memoryBefore.heapUsed} `
+        + `rssBytes=${memoryAfter.rss} rssGrowthBytes=${memoryAfter.rss - memoryBefore.rss}`,
+      );
+      return result;
     }
 
     const dateStrings = this.getDateStringsBetween(startMs, endMs);
+    logger.warn(
+      `automatic QSO history cache incomplete startMs=${startMs} endMs=${endMs} activeSlotPackCount=${activeSlotPacks.length} dates=${dateStrings.join(',') || 'none'}`,
+    );
     for (const dateStr of dateStrings) {
+      const readStartedAt = performance.now();
+      const readMemoryBefore = process.memoryUsage();
       const readLatestStoredRecords = (this.slotPackManager as SlotPackManager & {
         readLatestStoredRecords?: (date: string) => Promise<Array<{ slotPack: SlotPack; storedAt?: number }>>;
       }).readLatestStoredRecords;
       const records = typeof readLatestStoredRecords === 'function'
         ? await readLatestStoredRecords.call(this.slotPackManager, dateStr)
         : await this.slotPackManager.readStoredRecords(dateStr);
+      const readMemoryAfter = process.memoryUsage();
+      logger.info(
+        `automatic QSO persisted slot index loaded date=${dateStr} recordCount=${records.length} durationMs=${(performance.now() - readStartedAt).toFixed(1)} `
+        + `heapUsedBytes=${readMemoryAfter.heapUsed} heapGrowthBytes=${readMemoryAfter.heapUsed - readMemoryBefore.heapUsed} `
+        + `rssBytes=${readMemoryAfter.rss} rssGrowthBytes=${readMemoryAfter.rss - readMemoryBefore.rss}`,
+      );
       const latestBySlot = new Map<string, SlotPack>();
 
       for (const record of records) {
@@ -3282,12 +3316,20 @@ export class RadioOperatorManager {
       }
     }
 
-    return Array.from(merged.values()).sort((left, right) => {
+    const result = Array.from(merged.values()).sort((left, right) => {
       if (left.startMs !== right.startMs) {
         return left.startMs - right.startMs;
       }
       return left.slotId.localeCompare(right.slotId);
     });
+    const memoryAfter = process.memoryUsage();
+    logger.info(
+      `automatic QSO history collection completed source=persisted-fallback startMs=${startMs} endMs=${endMs} `
+      + `slotPackCount=${result.length} durationMs=${(performance.now() - collectionStartedAt).toFixed(1)} `
+      + `heapUsedBytes=${memoryAfter.heapUsed} heapGrowthBytes=${memoryAfter.heapUsed - memoryBefore.heapUsed} `
+      + `rssBytes=${memoryAfter.rss} rssGrowthBytes=${memoryAfter.rss - memoryBefore.rss}`,
+    );
+    return result;
   }
 
   private rebuildQSOMessageHistory(

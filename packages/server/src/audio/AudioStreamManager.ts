@@ -39,6 +39,8 @@ const RTAUDIO_TX_CONSUME_WATCHDOG_MS = 750;
 const RTAUDIO_TX_DRAIN_TIMEOUT_FLOOR_MS = 1000;
 const RTAUDIO_TX_START_ACK_TIMEOUT_MS = 2000;
 const RTAUDIO_TX_WATCHDOG_MIN_SUBMITTED_CHUNKS = 3;
+const AUDIO_PLAYBACK_EVENT_LOOP_WARN_MS = 100;
+const RTAUDIO_WRITE_WARN_MS = 100;
 const RTAUDIO_TX_MAX_CONSECUTIVE_WRITE_FAILURES = 20;
 const RTAUDIO_OUTPUT_WARNING_LOG_WINDOW_MS = 5000;
 const MAX_SERIALIZED_INPUT_INGEST_DEPTH = 3;
@@ -2982,6 +2984,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       // setInterval-based playback loop wrapped in a Promise
       await new Promise<void>((resolve, reject) => {
         const hrStart = performance.now();
+        let lastPlaybackTickAt = hrStart;
+        let lastPlaybackTimingWarnAt = Number.NEGATIVE_INFINITY;
+        let lastOutputWriteWarnAt = Number.NEGATIVE_INFINITY;
         let cursor = 0;
         let samplesWritten = 0;
         let lastProgressSec = -1;
@@ -3005,11 +3010,28 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             // entering native code because some backends invoke the callback
             // synchronously from write().
             this.noteRtAudioChunkPending(playbackStartWaiter!);
+            const writeStartedAt = performance.now();
             try {
               this.rtAudioOutput.write(encoded.buffer);
             } catch (error) {
               this.rollbackRtAudioChunkPending(playbackStartWaiter!);
               throw error;
+            }
+            const writeFinishedAt = performance.now();
+            const writeDurationMs = writeFinishedAt - writeStartedAt;
+            if (
+              writeDurationMs >= RTAUDIO_WRITE_WARN_MS
+              && writeFinishedAt - lastOutputWriteWarnAt >= 1000
+            ) {
+              lastOutputWriteWarnAt = writeFinishedAt;
+              const mem = process.memoryUsage();
+              const backend = this.getOutputBackendSnapshot();
+              logger.warn(
+                `audio output write blocked playbackId=${playbackId} frameId=${diagnosticContext.frameId ?? 'none'} chunk=${idx} `
+                + `writeDurationMs=${writeDurationMs.toFixed(1)} submittedChunks=${submittedChunks} consumedChunks=${this.outputFramesConsumed} `
+                + `pendingChunks=${submittedChunks - this.outputFramesConsumed} backend=${backend.api ?? 'unknown'} `
+                + `heapUsedBytes=${mem.heapUsed} rssBytes=${mem.rss} externalBytes=${mem.external} arrayBuffersBytes=${mem.arrayBuffers}`,
+              );
             }
             consecutiveWriteFailCount = 0;
             if (encoded.monitorChunk && encoded.monitorChunk.length > 0) {
@@ -3052,6 +3074,25 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
         const interval = setInterval(() => {
           try {
+            const tickStartedAt = performance.now();
+            const tickGapMs = tickStartedAt - lastPlaybackTickAt;
+            lastPlaybackTickAt = tickStartedAt;
+            if (
+              tickGapMs >= AUDIO_PLAYBACK_EVENT_LOOP_WARN_MS
+              && tickStartedAt - lastPlaybackTimingWarnAt >= 1000
+            ) {
+              lastPlaybackTimingWarnAt = tickStartedAt;
+              const mem = process.memoryUsage();
+              const backend = this.getOutputBackendSnapshot();
+              logger.warn(
+                `audio playback event-loop tick delayed playbackId=${playbackId} frameId=${diagnosticContext.frameId ?? 'none'} `
+                + `tickGapMs=${tickGapMs.toFixed(1)} elapsedMs=${(tickStartedAt - hrStart).toFixed(1)} cursor=${cursor} totalChunks=${totalChunks} `
+                + `submittedChunks=${submittedChunks} consumedChunks=${this.outputFramesConsumed} pendingChunks=${submittedChunks - this.outputFramesConsumed} `
+                + `writeFails=${writeFailCount} backend=${backend.api ?? 'unknown'} heapUsedBytes=${mem.heapUsed} rssBytes=${mem.rss} `
+                + `externalBytes=${mem.external} arrayBuffersBytes=${mem.arrayBuffers}`,
+              );
+            }
+
             if (this.outputRuntimeIssueError?.audioIssue.streamGeneration === playbackStreamGeneration) {
               clearInterval(interval);
               reject(this.outputRuntimeIssueError);
