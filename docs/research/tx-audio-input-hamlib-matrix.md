@@ -82,6 +82,9 @@ model definition provides a complete normal-input value table.
 
 - All raw CAT/CI-V I/O is executed inside `HamlibConnection`'s serialized
   `RadioIoQueue`; writes are marked critical.
+- Hamlib `sendRaw` is request/response oriented: fire-and-forget writes use a
+  one-byte reply buffer without a terminator (`sendRaw(data, 1)`), because
+  `replyMaxLen=0` with a terminator still enters the native read path.
 - A capability is advertised only when the exact Hamlib model metadata matches
   a provider. A write is followed by a readback and fails closed on mismatch.
 - Provider failures make the dynamic capability unavailable but do not block

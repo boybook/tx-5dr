@@ -149,10 +149,16 @@ describe('HamlibConnection', () => {
   });
 
   it('exposes Yaesu FT-710 TX audio routing through model-specific EX CAT', async () => {
-    const { connection, rig } = createConnectedConnection({
-      sendRaw: vi.fn()
-        .mockResolvedValueOnce(Buffer.alloc(0))
-        .mockResolvedValueOnce(Buffer.from('EX0101141;', 'ascii')),
+    const { connection, rig } = createConnectedConnection();
+    // Model the native Hamlib contract: replyMaxLen=0 is not a valid
+    // fire-and-forget request when a terminator is supplied.
+    rig.sendRaw.mockImplementation((_data, replyMaxLen) => {
+      if (replyMaxLen === 0) {
+        return Promise.reject(new Error('sendRaw attempted a zero-length reply read'));
+      }
+      return Promise.resolve(
+        replyMaxLen === 1 ? Buffer.alloc(0) : Buffer.from('EX0101141;', 'ascii'),
+      );
     });
     const testConnection = asTestConnection(connection);
     testConnection.meterRigMetadata = { rigModel: 1049, mfgName: 'Yaesu', modelName: 'FT-710' };
@@ -160,7 +166,7 @@ describe('HamlibConnection', () => {
 
     await expect(connection.getSupportedTxAudioInputSources!()).resolves.toEqual(['mic', 'usb', 'accessory']);
     await expect(connection.setTxAudioInputSource!('usb')).resolves.toMatchObject({ applied: 'usb', acknowledgement: 'readback' });
-    expect(rig.sendRaw).toHaveBeenNthCalledWith(1, Buffer.from('EX0101141;', 'ascii'), 0, Buffer.from(';'));
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(1, Buffer.from('EX0101141;', 'ascii'), 1);
     expect(rig.sendRaw).toHaveBeenNthCalledWith(2, Buffer.from('EX010114;', 'ascii'), 64, Buffer.from(';'));
   });
 
@@ -204,7 +210,7 @@ describe('HamlibConnection', () => {
     testConnection.currentRadioMode = 'USB';
 
     await expect(connection.setTxAudioInputSource!('usb')).resolves.toMatchObject({ applied: 'usb' });
-    expect(rig.sendRaw).toHaveBeenNthCalledWith(1, Buffer.from('MS00010;', 'ascii'), 0, Buffer.from(';'));
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(1, Buffer.from('MS00010;', 'ascii'), 1);
     expect(rig.sendRaw).toHaveBeenNthCalledWith(2, Buffer.from('MS0;', 'ascii'), 64, Buffer.from(';'));
   });
 
@@ -231,8 +237,8 @@ describe('HamlibConnection', () => {
 
     await expect(connection.getSupportedTxAudioInputSources!()).resolves.toEqual(['mic', 'usb', 'accessory']);
     await expect(connection.setTxAudioInputSource!('usb')).resolves.toMatchObject({ applied: 'usb', acknowledgement: 'readback' });
-    expect(rig.sendRaw).toHaveBeenNthCalledWith(1, Buffer.from('EX0101131;', 'ascii'), 0, Buffer.from(';'));
-    expect(rig.sendRaw).toHaveBeenNthCalledWith(2, Buffer.from('EX0101141;', 'ascii'), 0, Buffer.from(';'));
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(1, Buffer.from('EX0101131;', 'ascii'), 1);
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(2, Buffer.from('EX0101141;', 'ascii'), 1);
     expect(rig.sendRaw).toHaveBeenNthCalledWith(3, Buffer.from('EX010113;', 'ascii'), 64, Buffer.from(';'));
     expect(rig.sendRaw).toHaveBeenNthCalledWith(4, Buffer.from('EX010114;', 'ascii'), 64, Buffer.from(';'));
   });
@@ -250,8 +256,8 @@ describe('HamlibConnection', () => {
     testConnection.currentRadioMode = 'PKTUSB';
 
     await expect(connection.setTxAudioInputSource!('usb')).resolves.toMatchObject({ applied: 'usb' });
-    expect(rig.sendRaw).toHaveBeenNthCalledWith(1, Buffer.from('EX0701;', 'ascii'), 0, Buffer.from(';'));
-    expect(rig.sendRaw).toHaveBeenNthCalledWith(2, Buffer.from('EX0722;', 'ascii'), 0, Buffer.from(';'));
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(1, Buffer.from('EX0701;', 'ascii'), 1);
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(2, Buffer.from('EX0722;', 'ascii'), 1);
     expect(rig.sendRaw).toHaveBeenNthCalledWith(3, Buffer.from('EX070;', 'ascii'), 64, Buffer.from(';'));
     expect(rig.sendRaw).toHaveBeenNthCalledWith(4, Buffer.from('EX072;', 'ascii'), 64, Buffer.from(';'));
   });
@@ -269,8 +275,8 @@ describe('HamlibConnection', () => {
     testConnection.currentRadioMode = 'USB';
 
     await expect(connection.setTxAudioInputSource!('usb')).resolves.toMatchObject({ applied: 'usb' });
-    expect(rig.sendRaw).toHaveBeenNthCalledWith(1, Buffer.from('EX0101111;', 'ascii'), 0, Buffer.from(';'));
-    expect(rig.sendRaw).toHaveBeenNthCalledWith(2, Buffer.from('EX0101121;', 'ascii'), 0, Buffer.from(';'));
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(1, Buffer.from('EX0101111;', 'ascii'), 1);
+    expect(rig.sendRaw).toHaveBeenNthCalledWith(2, Buffer.from('EX0101121;', 'ascii'), 1);
   });
 
   it('supports only MIC/REAR on FT-891 and never advertises USB', async () => {

@@ -2982,7 +2982,14 @@ export class HamlibConnection
       if (!commands) return null;
       const send = async (command: string, parameter?: number) => {
         const wire = `${command}${parameter === undefined ? '' : parameter};`;
-        return this.rig!.sendRaw(Buffer.from(wire, 'ascii'), parameter === undefined ? 64 : 0, Buffer.from(';'));
+        // Hamlib's sendRaw API is request/response oriented. A zero-length
+        // reply buffer with a terminator still enters its read path and can
+        // consume an unrelated CAT frame. Use a one-byte, unterminated read
+        // for fire-and-forget writes; Hamlib returns immediately without
+        // waiting for a reply.
+        return parameter === undefined
+          ? this.rig!.sendRaw(Buffer.from(wire, 'ascii'), 64, Buffer.from(';'))
+          : this.rig!.sendRaw(Buffer.from(wire, 'ascii'), 1);
       };
       const modeKey = ((this.currentRadioMode ?? 'USB').toUpperCase().includes('PKT') || (this.currentRadioMode ?? '').toUpperCase().includes('DATA')
         ? 'DATA' : (this.currentRadioMode ?? '').toUpperCase().includes('FM') ? 'FM'
@@ -3011,9 +3018,11 @@ export class HamlibConnection
     if (provider.protocol === 'yaesu-ex') {
       const prefix = this.getYaesuTxAudioCommand(provider);
       const command = `${prefix}${value === undefined ? '' : value};`;
-      const reply = await this.rig!.sendRaw(Buffer.from(command, 'ascii'), value === undefined ? 64 : 0, Buffer.from(';'));
+      const reply = value === undefined
+        ? await this.rig!.sendRaw(Buffer.from(command, 'ascii'), 64, Buffer.from(';'))
+        : await this.rig!.sendRaw(Buffer.from(command, 'ascii'), 1);
       if (value === undefined) {
-        const escapedPrefix = prefix.replace(/[.*+?^${}()|[\[\]\\]/g, '\\$&');
+        const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const match = reply.toString('ascii').match(new RegExp(`${escapedPrefix}(\\d);`));
         return match ? Number.parseInt(match[1]!, 10) : null;
       }
@@ -3023,7 +3032,9 @@ export class HamlibConnection
     if (provider.protocol === 'kenwood-ms') {
       const register = provider.kenwoodRegister ?? 0;
       const command = `MS${register}${value === undefined ? '' : value};`;
-      const reply = await this.rig!.sendRaw(Buffer.from(command, 'ascii'), value === undefined ? 64 : 0, Buffer.from(';'));
+      const reply = value === undefined
+        ? await this.rig!.sendRaw(Buffer.from(command, 'ascii'), 64, Buffer.from(';'))
+        : await this.rig!.sendRaw(Buffer.from(command, 'ascii'), 1);
       if (value === undefined) {
         const match = reply.toString('ascii').match(new RegExp(`MS${register}([0-3]);`));
         return match ? Number.parseInt(match[1]!, 10) : null;
@@ -3038,7 +3049,9 @@ export class HamlibConnection
       const values = provider.kenwoodCompositeValues ?? {};
       const send = async (tuple?: readonly [number, number, number, number, number]) => {
         const wire = tuple ? `MS${p1}${tuple[1]}${tuple[2]}${tuple[3]}${tuple[4]};` : `MS${p1};`;
-        return this.rig!.sendRaw(Buffer.from(wire, 'ascii'), tuple ? 0 : 64, Buffer.from(';'));
+        return tuple
+          ? this.rig!.sendRaw(Buffer.from(wire, 'ascii'), 1)
+          : this.rig!.sendRaw(Buffer.from(wire, 'ascii'), 64, Buffer.from(';'));
       };
       if (value === undefined) {
         const reply = await send();
@@ -3060,7 +3073,9 @@ export class HamlibConnection
     const extension = provider.civExtension ?? [0x01, 0x19];
     const payload = [0x1a, 0x05, ...extension];
     const frame = Buffer.from([0xfe, 0xfe, civAddress, 0xe0, ...payload, ...(value === undefined ? [] : [value]), 0xfd]);
-    const reply = await this.rig!.sendRaw(frame, value === undefined ? 64 : 0, Buffer.from([0xfd]));
+    const reply = value === undefined
+      ? await this.rig!.sendRaw(frame, 64, Buffer.from([0xfd]))
+      : await this.rig!.sendRaw(frame, 1);
     if (value === undefined) {
       const marker = Buffer.from(payload);
       const markerIndex = reply.indexOf(marker);
