@@ -13,6 +13,10 @@ import {
   type RealtimeTransportPolicy,
   type RigctldBridgeConfig,
   type CWDecoderConfig,
+  type SpectrumPreset,
+  type SpectrumCustomSettings,
+  SpectrumCustomSettingsSchema,
+  SpectrumPresetSchema,
   UpdateNtpServerListRequestSchema,
   sanitizeCallsignInput,
   sanitizeGridInput,
@@ -159,6 +163,11 @@ export interface AppConfig {
   rigctld?: RigctldBridgeConfig;
   /** CW receive-side decoder configuration. */
   cwDecoder?: CWDecoderConfig;
+  /** Site-wide spectrum analysis preset. */
+  spectrum: {
+    preset: SpectrumPreset;
+    customSettings?: SpectrumCustomSettings;
+  };
   /** Persisted NTP server order. When absent, built-in defaults are used. */
   ntp?: {
     servers?: string[];
@@ -233,6 +242,9 @@ const DEFAULT_CONFIG: AppConfig = {
   rtcDataAudioPublicUdpPort: null,
   rigctld: { ...DEFAULT_RIGCTLD_BRIDGE_CONFIG },
   cwDecoder: CWDecoderConfigSchema.parse({}),
+  spectrum: {
+    preset: 'balanced',
+  },
   observability: {
     enabled: true,
     noticeVersion: 0,
@@ -333,6 +345,7 @@ export function validateAppConfigCandidate(value: unknown): Record<string, unkno
   assertOptionalObject(value, 'plugins');
   assertOptionalObject(value, 'rigctld');
   assertOptionalObject(value, 'cwDecoder');
+  assertOptionalObject(value, 'spectrum');
   assertOptionalObject(value, 'ntp');
   assertOptionalObject(value, 'observability');
   assertOptionalObjectOrNull(value, 'lastSelectedFrequency');
@@ -350,6 +363,12 @@ export function validateAppConfigCandidate(value: unknown): Record<string, unkno
   }
   if (value.logLevel !== undefined && !['debug', 'info', 'warn', 'error'].includes(String(value.logLevel))) {
     throw new Error('config.logLevel must be debug, info, warn, or error');
+  }
+  if (isPlainObject(value.spectrum) && value.spectrum.preset !== undefined) {
+    SpectrumPresetSchema.parse(value.spectrum.preset);
+    if (value.spectrum.preset === 'custom') {
+      SpectrumCustomSettingsSchema.parse(value.spectrum.customSettings);
+    }
   }
   if (isPlainObject(value.observability)) {
     if (value.observability.enabled !== undefined && typeof value.observability.enabled !== 'boolean') {
@@ -551,7 +570,20 @@ export class ConfigManager {
 
     // 合并默认配置和加载的配置
     this.config = this.mergeConfig(DEFAULT_CONFIG, parsedConfig);
+    const parsedSpectrumPreset = SpectrumPresetSchema.safeParse(this.config.spectrum?.preset);
+    const parsedCustomSettings = SpectrumCustomSettingsSchema.safeParse(this.config.spectrum?.customSettings);
+    this.config.spectrum = parsedSpectrumPreset.success && (
+      parsedSpectrumPreset.data !== 'custom' || parsedCustomSettings.success
+    )
+      ? {
+          preset: parsedSpectrumPreset.data,
+          ...(parsedSpectrumPreset.data === 'custom' && parsedCustomSettings.success
+            ? { customSettings: parsedCustomSettings.data }
+            : {}),
+        }
+      : { preset: DEFAULT_CONFIG.spectrum.preset };
     if (migrated) {
+      parsedConfig.spectrum = this.config.spectrum;
       await this.configStore.set(parsedConfig);
     }
   }
@@ -1188,6 +1220,39 @@ export class ConfigManager {
       updatedAt: Date.now(),
     };
     await this.saveConfig();
+  }
+
+  getSpectrumPreset(): SpectrumPreset {
+    return this.config.spectrum.preset;
+  }
+
+  getSpectrumSettings(): { preset: SpectrumPreset; customSettings?: SpectrumCustomSettings } {
+    return {
+      preset: this.config.spectrum.preset,
+      ...(this.config.spectrum.customSettings ? { customSettings: { ...this.config.spectrum.customSettings } } : {}),
+    };
+  }
+
+  async updateSpectrumPreset(preset: SpectrumPreset): Promise<void> {
+    await this.updateSpectrumSettings(preset);
+  }
+
+  async updateSpectrumSettings(preset: SpectrumPreset, customSettings?: SpectrumCustomSettings): Promise<void> {
+    const parsed = SpectrumPresetSchema.parse(preset);
+    const parsedCustomSettings = parsed === 'custom'
+      ? SpectrumCustomSettingsSchema.parse(customSettings)
+      : undefined;
+    const previous = this.config.spectrum;
+    this.config.spectrum = {
+      preset: parsed,
+      ...(parsedCustomSettings ? { customSettings: parsedCustomSettings } : {}),
+    };
+    try {
+      await this.saveConfig();
+    } catch (error) {
+      this.config.spectrum = previous;
+      throw error;
+    }
   }
 
   /**

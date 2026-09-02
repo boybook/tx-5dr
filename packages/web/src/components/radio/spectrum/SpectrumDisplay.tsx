@@ -3,7 +3,7 @@ import { Button, Input, Popover, PopoverContent, PopoverTrigger, Slider, Switch,
 import { addToast } from '@heroui/toast';
 import { ArrowsPointingOutIcon, ChevronDownIcon, ChevronUpIcon, Cog6ToothIcon, MinusIcon, PlusIcon } from '@heroicons/react/24/outline';
 import { useTranslation } from 'react-i18next';
-import type { AudioInputSignalType, EngineMode, SpectrumFrame, SpectrumKind, SpectrumLevelDescriptor, SpectrumLevelDomain, SpectrumSessionVoiceState, SystemStatus } from '@tx5dr/contracts';
+import type { AudioInputSignalType, EngineMode, SpectrumCustomSettings, SpectrumFrame, SpectrumKind, SpectrumLevelDescriptor, SpectrumLevelDomain, SpectrumPreset, SpectrumSessionVoiceState, SystemStatus } from '@tx5dr/contracts';
 import { UserRole } from '@tx5dr/contracts';
 import { api, getBandFromFrequency } from '@tx5dr/core';
 import { useConnection, useCurrentOperatorId, useOperators, useProfiles, usePTTState, useRadioConnectionState, useRadioModeState, useRadioState, useCapabilityState, useCapabilityDescriptor, useSpectrum, useSplitState } from '../../../store/radioStore';
@@ -24,6 +24,7 @@ import { readSpectrumSubscriptionPaused, setSpectrumSubscriptionPaused } from '.
 import { resetOperatorsForOperatingStateChange } from '../../../utils/operatorReset';
 import { canExecuteRadioFrequency, canWriteRadioFrequency, isFakeFrequencySupportedMode } from '../../../utils/radioControl';
 import { setRadioFrequencyWithIntent, subscribeRadioFrequencyIntent, type SetRadioFrequencyParams } from '../../../utils/radioFrequencyIntent';
+import { deriveSpectrumCustomSettings, SpectrumAnalysisSettings } from './SpectrumAnalysisSettings';
 import {
   RADIO_SDR_OPTIMISTIC_DISPLAY_HOLD_TIMEOUT_MS,
   RADIO_SDR_OPTIMISTIC_DISPLAY_IDLE,
@@ -61,9 +62,10 @@ type ElectronWindowHelper = Window & {
   };
 };
 
+const AUDIO_WATERFALL_HISTORY_ROWS = 1024;
 const WATERFALL_HISTORY_ROWS = 120;
 const SPECTRUM_HISTORY_LIMITS = {
-  audio: 120,
+  audio: AUDIO_WATERFALL_HISTORY_ROWS,
   'radio-sdr': WATERFALL_HISTORY_ROWS,
   'openwebrx-sdr': 40,
 } satisfies Partial<Record<SpectrumKind, number>>;
@@ -1027,8 +1029,10 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const canSetFrequency = useCan('execute', 'RadioFrequency');
   const canControlRadio = useCan('execute', 'RadioControl');
   const canToggleInputSignal = useHasMinRole(UserRole.ADMIN);
+  const canConfigureSpectrum = useHasMinRole(UserRole.ADMIN);
   const ability = useAbility();
   const [inputSignalTogglePending, setInputSignalTogglePending] = useState(false);
+  const [spectrumPresetPending, setSpectrumPresetPending] = useState(false);
   const [strategyFrequencyPick, setStrategyFrequencyPick] = useState<StrategyFrequencyPickRequest | null>(null);
   useEffect(() => {
     const listener = (event: Event) => {
@@ -1050,6 +1054,9 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     controllerRef.current = new SpectrumStreamController(SPECTRUM_HISTORY_LIMITS);
   }
   const streamController = controllerRef.current;
+  const spectrumRenderConfig = capabilities?.renderConfig ?? null;
+  const [customSpectrumDraft, setCustomSpectrumDraft] = useState<SpectrumCustomSettings>(() => deriveSpectrumCustomSettings(spectrumRenderConfig));
+  const [customSpectrumEditing, setCustomSpectrumEditing] = useState(false);
   const streamStatus = useSyncExternalStore(
     streamController.subscribeStatus,
     streamController.getStatusSnapshot,
@@ -1224,7 +1231,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     referenceFrequencyHz: spectrumReferenceFrequency,
   }), [frequencyRangeMode, isRadioSdrSelected, radioSdrCenterViewMode, spectrumReferenceFrequency]);
   const cycleSlotMs = currentMode?.slotMs ?? null;
-  const waterfallViewKey = `${effectiveSelectedKind}:${isOpenWebRXDetailMode ? 'detail' : 'main'}:${isRadioSdrSelected ? radioSdrLevelDomain : ''}`;
+  const waterfallViewKey = `${effectiveSelectedKind}:${isOpenWebRXDetailMode ? 'detail' : 'main'}:${isRadioSdrSelected ? radioSdrLevelDomain : ''}:${spectrumRenderConfig?.revision ?? 0}`;
   const audioRangeSettings = persistedRangeSettings.audio;
   const rangeLimits = isOpenWebRXSdrSelected
     ? OPENWEBRX_RANGE_LIMITS
@@ -1300,6 +1307,49 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     }));
   }, []);
 
+  const handleSpectrumPresetChange = useCallback(async (preset: Exclude<SpectrumPreset, 'custom'>) => {
+    if (!canConfigureSpectrum || spectrumPresetPending || spectrumRenderConfig?.preset === preset) {
+      return;
+    }
+
+    setSpectrumPresetPending(true);
+    try {
+      await api.updateSpectrumSettings({ preset });
+    } catch (error) {
+      logger.error('Failed to update spectrum analysis preset', error);
+      addToast({
+        title: t('spectrum.analysisPresetUpdateFailed'),
+        color: 'danger',
+      });
+    } finally {
+      setSpectrumPresetPending(false);
+    }
+  }, [canConfigureSpectrum, spectrumPresetPending, spectrumRenderConfig?.preset, t]);
+
+  const handleCustomSpectrumSettingsApply = useCallback(async (settings: SpectrumCustomSettings) => {
+    if (!canConfigureSpectrum || spectrumPresetPending) {
+      return;
+    }
+
+    setSpectrumPresetPending(true);
+    try {
+      await api.updateSpectrumSettings({ preset: 'custom', settings });
+    } catch (error) {
+      logger.error('Failed to update custom spectrum analysis settings', error);
+      addToast({
+        title: t('spectrum.analysisPresetUpdateFailed'),
+        color: 'danger',
+      });
+    } finally {
+      setSpectrumPresetPending(false);
+    }
+  }, [canConfigureSpectrum, spectrumPresetPending, t]);
+
+  const handleCustomSpectrumCancel = useCallback(() => {
+    setCustomSpectrumDraft(deriveSpectrumCustomSettings(spectrumRenderConfig));
+    setCustomSpectrumEditing(spectrumRenderConfig?.preset === 'custom');
+  }, [spectrumRenderConfig]);
+
   const handleCycleMarkersChange = useCallback((enabled: boolean) => {
     setPersistedRangeSettings(prev => ({
       ...prev,
@@ -1313,6 +1363,17 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       radioSdrCenterViewMode: mode,
     }));
   }, []);
+
+  useEffect(() => {
+    if (!spectrumRenderConfig) {
+      streamController.setFrameIntervalMs(null);
+      return;
+    }
+    setCustomSpectrumDraft(deriveSpectrumCustomSettings(spectrumRenderConfig));
+    setCustomSpectrumEditing(spectrumRenderConfig.preset === 'custom');
+    streamController.setFrameIntervalMs(spectrumRenderConfig.analysisIntervalMs);
+    streamController.resetKind(AUDIO_SOURCE);
+  }, [spectrumRenderConfig?.analysisIntervalMs, spectrumRenderConfig?.revision, streamController]);
 
   useEffect(() => {
     localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(persistedRangeSettings));
@@ -1618,6 +1679,14 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       if (frameProfileId !== undefined && activeProfileId !== null && frameProfileId !== activeProfileId) {
         return;
       }
+      if (
+        frame.kind === AUDIO_SOURCE
+        && spectrumRenderConfig
+        && frame.meta.spectrumConfigRevision !== undefined
+        && frame.meta.spectrumConfigRevision !== spectrumRenderConfig.revision
+      ) {
+        return;
+      }
       streamController.pushFrame(frame);
       if (frame.kind === activeSpectrumKind) {
         lastAcceptedSpectrumFrameAtRef.current = Date.now();
@@ -1641,7 +1710,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     return () => {
       wsClient.offWSEvent('spectrumFrame', handleSpectrumFrame);
     };
-  }, [activeProfileId, activeSpectrumKind, connection.state.radioService, isCollapsed, isRadioSdrServerFrequencySyncHeld, streamController, updateRadioSdrOptimisticDisplayState, updateSpectrumRecoveryState]);
+  }, [activeProfileId, activeSpectrumKind, connection.state.radioService, isCollapsed, isRadioSdrServerFrequencySyncHeld, spectrumRenderConfig, streamController, updateRadioSdrOptimisticDisplayState, updateSpectrumRecoveryState]);
 
   useEffect(() => {
     lastAcceptedSpectrumFrameAtRef.current = Date.now();
@@ -2319,9 +2388,9 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         autoRangeConfig={audioRangeSettings.auto}
         themeId={selectedSpectrumThemeId}
         sharpPixels={isAudioSpectrumSelected && isIfInputSignal}
+        frameIntervalMs={spectrumRenderConfig?.analysisIntervalMs}
         showCycleMarkers={showCycleMarkers}
         cycleSlotMs={cycleSlotMs}
-        totalRows={WATERFALL_HISTORY_ROWS}
         frequencyRangeMode={frequencyRangeMode}
         referenceFrequencyHz={spectrumReferenceFrequency}
         frequencyAxisTransform={frequencyAxisTransform}
@@ -2445,14 +2514,17 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
             <Cog6ToothIcon className="h-3.5 w-3.5" />
           </Button>
         </PopoverTrigger>
-        <PopoverContent className="w-80 p-0">
-          <div className="w-full">
-            <div className="px-4 py-3 text-sm font-semibold border-b border-divider">
+        <PopoverContent className="w-[min(24rem,calc(100vw-1rem))] max-h-[calc(100dvh-3rem)] overflow-hidden p-0">
+          <div className="flex max-h-[calc(100dvh-3rem)] w-full flex-col">
+            <div className="z-10 shrink-0 border-b border-divider bg-content1 px-4 py-3 text-sm font-semibold">
               {t('spectrum.rangeSettings')}
             </div>
 
-            <div className="px-4 py-3">
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
               <div className="space-y-4">
+                <div className="text-xs font-semibold uppercase tracking-wide text-default-500">
+                  {t('spectrum.viewSettings')}
+                </div>
                 <div className="space-y-2">
                   <div className="text-xs font-semibold uppercase tracking-wide text-default-500">
                     {t('spectrum.themeSettings')}
@@ -2484,6 +2556,18 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                     })}
                   </div>
                 </div>
+                {canConfigureSpectrum && spectrumRenderConfig && (
+                  <SpectrumAnalysisSettings
+                    config={spectrumRenderConfig}
+                    enabled={canConfigureSpectrum}
+                    pending={spectrumPresetPending}
+                    customDraft={customSpectrumDraft}
+                    customEditing={customSpectrumEditing}
+                    onPresetChange={handleSpectrumPresetChange}
+                    onCustomEditingChange={setCustomSpectrumEditing}
+                    onCustomDraftChange={setCustomSpectrumDraft}
+                  />
+                )}
                 <div className="flex items-center justify-between gap-3 rounded-lg bg-default-100/50 px-3 py-2 dark:bg-default-50/10">
                   <div className="min-w-0">
                     <div className="text-xs font-medium text-default-700">
@@ -2529,6 +2613,9 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                   </div>
                 )}
                 <div className="h-px bg-divider" />
+                <div className="text-xs font-semibold uppercase tracking-wide text-default-500">
+                  {t('spectrum.displaySettings')}
+                </div>
                 {!isRadioSdrSelected && !isOpenWebRXSdrSelected && (
                   <Tabs
                     selectedKey={audioRangeSettings.mode}
@@ -2702,6 +2789,16 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                 )}
               </div>
             </div>
+            {customSpectrumEditing && canConfigureSpectrum && (
+              <div className="flex shrink-0 justify-end gap-2 border-t border-divider bg-content1 px-4 py-3">
+                <Button size="sm" variant="light" onPress={handleCustomSpectrumCancel} isDisabled={spectrumPresetPending}>
+                  {t('spectrum.cancel')}
+                </Button>
+                <Button size="sm" color="primary" onPress={() => { void handleCustomSpectrumSettingsApply(customSpectrumDraft); }} isDisabled={spectrumPresetPending}>
+                  {t('spectrum.apply')}
+                </Button>
+              </div>
+            )}
           </div>
         </PopoverContent>
       </Popover>

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { SpectrumFrameSchema, SpectrumLevelDescriptorSchema } from '../spectrum.schema.js';
+import {
+  SpectrumSettingsResponseSchema,
+  SpectrumSettingsUpdateRequestSchema,
+  getSpectrumPresetDefinition,
+} from '../spectrum-config.schema.js';
 
 describe('spectrum level descriptor schema', () => {
   it('accepts dBFS, calibrated dB and raw Level descriptors', () => {
@@ -38,5 +43,34 @@ describe('spectrum level descriptor schema', () => {
       },
     });
     expect(result.success).toBe(true);
+  });
+});
+
+describe('spectrum analysis settings schemas', () => {
+  it('validates preset updates and derived render settings', () => {
+    expect(SpectrumSettingsUpdateRequestSchema.parse({ preset: 'fine' })).toEqual({ preset: 'fine' });
+    const balanced = getSpectrumPresetDefinition('balanced');
+    expect(SpectrumSettingsResponseSchema.parse({
+      success: true,
+      currentSettings: { ...balanced, revision: 3 },
+      presets: [getSpectrumPresetDefinition('responsive'), balanced, getSpectrumPresetDefinition('fine')],
+    }).currentSettings.displayBinCount).toBe(4097);
+  });
+
+  it('rejects arbitrary analysis parameters', () => {
+    expect(() => SpectrumSettingsUpdateRequestSchema.parse({ preset: 'custom', fftSize: 4096 })).toThrow();
+  });
+
+  it('accepts a validated custom analysis draft', () => {
+    expect(SpectrumSettingsUpdateRequestSchema.parse({
+      preset: 'custom',
+      settings: {
+        analysisIntervalMs: 275,
+        fftSize: 4096,
+        targetSampleRate: 8000,
+        windowFunction: 'hann',
+        haloReduce: true,
+      },
+    }).preset).toBe('custom');
   });
 });

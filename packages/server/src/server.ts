@@ -678,6 +678,8 @@ export async function createServer() {
   // Admin 路由：音频、设置、存储、第三方服务
   await registerRoleScope(fastify, UserRole.ADMIN, async (scope) => {
     await scope.register(audioRoutes, { prefix: '/api/audio' });
+    const { spectrumSettingsWriteRoutes } = await import('./routes/spectrum-settings.js');
+    await scope.register(spectrumSettingsWriteRoutes, { prefix: '/api/audio/spectrum-settings' });
     await scope.register(settingsRoutes, { prefix: '/api/settings' });
     await scope.register(diagnosticRoutes, { prefix: '/api/diagnostics' });
     const { storageRoutes } = await import('./routes/storage.js');
@@ -691,6 +693,8 @@ export async function createServer() {
 
   // Viewer+ 路由：操作员（内部根据角色过滤）、电台状态、模式、时隙包、语音
   await registerRoleScope(fastify, UserRole.VIEWER, async (scope) => {
+    const { spectrumSettingsReadRoutes } = await import('./routes/spectrum-settings.js');
+    await scope.register(spectrumSettingsReadRoutes, { prefix: '/api/audio/spectrum-settings' });
     await scope.register(operatorRoutes, { prefix: '/api/operators' });
     await scope.register(radioRoutes, { prefix: '/api/radio' });
     await scope.register(powerRoutes, { prefix: '/api/radio/power' });

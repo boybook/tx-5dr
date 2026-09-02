@@ -1,5 +1,15 @@
 import { EventEmitter } from 'eventemitter3';
-import type { AudioInputSignalType, SpectrumFrame } from '@tx5dr/contracts';
+import {
+  getSpectrumPresetDefinition,
+  SpectrumCustomSettingsSchema,
+  type AudioInputSignalType,
+  type SpectrumFrame,
+  type SpectrumCustomSettings,
+  type SpectrumPreset,
+  type SpectrumPresetId,
+  type SpectrumRenderConfig,
+  type SpectrumWindowFunction,
+} from '@tx5dr/contracts';
 import type { AudioBufferProvider } from '@tx5dr/core';
 import { SpectrumAnalyzer } from './SpectrumAnalyzer.js';
 import { createLogger } from '../utils/logger.js';
@@ -22,6 +32,9 @@ export interface SpectrumConfig {
   targetSampleRate: number;
   /** Display-only IF halo reduction */
   haloReduce: boolean;
+  preset?: SpectrumPreset;
+  customSettings?: SpectrumCustomSettings;
+  configRevision?: number;
 }
 
 /**
@@ -30,6 +43,7 @@ export interface SpectrumConfig {
 export interface SpectrumSchedulerEvents {
   spectrumReady: (spectrum: SpectrumFrame) => void;
   error: (error: Error) => void;
+  configChanged: (config: SpectrumRenderConfig) => void;
 }
 
 /**
@@ -52,8 +66,7 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
   // 配置：是否允许发射时频谱分析
   private shouldSpectrumWhileTransmitting?: () => boolean;
   private inputSignalType: AudioInputSignalType = 'af';
-  private readonly baseFftSize: number;
-  private readonly baseWindowFunction: SpectrumConfig['windowFunction'];
+  private readonly baseWindowFunction: SpectrumWindowFunction;
 
   // 性能统计
   private stats = {
@@ -70,16 +83,20 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
     super();
 
     this.shouldSpectrumWhileTransmitting = shouldSpectrumWhileTransmitting;
-    this.baseFftSize = config.fftSize ?? 2048;
-    this.baseWindowFunction = config.windowFunction ?? 'blackmanHarris';
+    const initialPreset = config.preset === 'custom' ? 'balanced' : (config.preset ?? 'balanced');
+    const initialDefinition = getSpectrumPresetDefinition(initialPreset);
+    this.baseWindowFunction = config.windowFunction ?? initialDefinition.windowFunction;
 
     this.config = {
-      analysisInterval: config.analysisInterval ?? 100, // 100ms间隔
-      fftSize: this.baseFftSize,
+      analysisInterval: config.analysisInterval ?? initialDefinition.analysisIntervalMs,
+      fftSize: config.fftSize ?? initialDefinition.fftSize,
       windowFunction: this.baseWindowFunction,
       enabled: config.enabled ?? true,
-      targetSampleRate: config.targetSampleRate ?? 6000, // 12kHz降采样到6kHz，覆盖0-3kHz
+      targetSampleRate: config.targetSampleRate ?? initialDefinition.targetSampleRate,
       haloReduce: config.haloReduce ?? false,
+      preset: config.preset ?? initialPreset,
+      customSettings: config.customSettings,
+      configRevision: config.configRevision ?? 0,
     };
   }
 
@@ -109,6 +126,7 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
       windowFunction: this.config.windowFunction,
       targetSampleRate: this.config.targetSampleRate,
       haloReduce: this.config.haloReduce,
+      configRevision: this.config.configRevision,
     });
 
     logger.info(`spectrum analyzer started: interval=${this.config.analysisInterval}ms fftSize=${this.config.fftSize} window=${this.config.windowFunction} haloReduce=${this.config.haloReduce} sampleRate=${this.sampleRate}Hz`);
@@ -125,16 +143,21 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
     }
     this.inputSignalType = nextType;
 
+    if (this.config.preset === 'custom') {
+      this.updateConfig({ fftSize: this.config.fftSize });
+      return;
+    }
+
     if (nextType === 'icom-12k-if') {
       // Blackman-Harris has much lower sidelobes than Hann — reduces strong-tone "halo".
       this.updateConfig({
         windowFunction: 'blackmanHarris',
-        fftSize: this.baseFftSize,
+        fftSize: this.config.fftSize,
         haloReduce: true,
       });
       logger.info('IF audio waterfall tuning enabled', {
         windowFunction: 'blackmanHarris',
-        fftSize: this.baseFftSize,
+        fftSize: this.config.fftSize,
         haloReduce: true,
       });
       return;
@@ -142,13 +165,78 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
 
     this.updateConfig({
       windowFunction: this.baseWindowFunction,
-      fftSize: this.baseFftSize,
+      fftSize: this.config.fftSize,
       haloReduce: false,
     });
     logger.info('IF audio waterfall tuning disabled; restored AF spectrum settings', {
       windowFunction: this.baseWindowFunction,
-      fftSize: this.baseFftSize,
+      fftSize: this.config.fftSize,
     });
+  }
+
+  applyPreset(
+    preset: SpectrumPreset,
+    revision = this.config.configRevision ?? 0,
+    customSettings?: SpectrumCustomSettings,
+  ): void {
+    const custom = preset === 'custom'
+      ? SpectrumCustomSettingsSchema.parse(customSettings)
+      : null;
+    const presetDefinition = getSpectrumPresetDefinition(
+      preset === 'custom' ? 'balanced' : preset as SpectrumPresetId,
+    );
+    const definition = custom ?? {
+      analysisIntervalMs: presetDefinition.analysisIntervalMs,
+      fftSize: presetDefinition.fftSize,
+      targetSampleRate: presetDefinition.targetSampleRate,
+      windowFunction: presetDefinition.windowFunction,
+      haloReduce: presetDefinition.haloReduce,
+    };
+    this.config.preset = preset;
+    this.config.configRevision = revision;
+    this.config.customSettings = custom ?? undefined;
+    this.updateConfig({
+      analysisInterval: definition.analysisIntervalMs,
+      fftSize: definition.fftSize,
+      targetSampleRate: definition.targetSampleRate,
+      windowFunction: custom?.windowFunction ?? (this.inputSignalType === 'icom-12k-if' ? 'blackmanHarris' : this.baseWindowFunction),
+      haloReduce: custom?.haloReduce ?? this.inputSignalType === 'icom-12k-if',
+    });
+  }
+
+  emitConfigChanged(): void {
+    this.emit('configChanged', this.getRenderConfig());
+  }
+
+  getRenderConfig(): SpectrumRenderConfig {
+    const preset = this.config.preset ?? 'balanced';
+    const custom = preset === 'custom' ? this.config.customSettings : undefined;
+    const definition = getSpectrumPresetDefinition(
+      preset === 'custom' ? 'balanced' : preset as SpectrumPresetId,
+    );
+    const analysisIntervalMs = custom?.analysisIntervalMs ?? this.config.analysisInterval;
+    const fftSize = custom?.fftSize ?? this.config.fftSize;
+    const targetSampleRate = custom?.targetSampleRate ?? this.config.targetSampleRate;
+    const windowFunction = custom?.windowFunction ?? this.config.windowFunction;
+    const haloReduce = custom?.haloReduce ?? this.config.haloReduce;
+    const displayBinCount = fftSize / 2 + 1;
+    const maxFrequency = targetSampleRate / 2;
+    return {
+      ...definition,
+      preset,
+      revision: this.config.configRevision ?? 0,
+      analysisIntervalMs,
+      frameRateHz: 1000 / analysisIntervalMs,
+      fftSize,
+      targetSampleRate,
+      fftWindowDurationMs: (fftSize / targetSampleRate) * 1000,
+      frequencyResolutionHz: targetSampleRate / fftSize,
+      frequencyRange: { min: 0, max: maxFrequency },
+      displayBinCount,
+      windowFunction,
+      haloReduce,
+      ...(custom ? { customSettings: custom } : {}),
+    };
   }
 
   /**
@@ -337,9 +425,10 @@ export class SpectrumScheduler extends EventEmitter<SpectrumSchedulerEvents> {
         sampleRate: this.sampleRate,
         fftSize: this.config.fftSize,
         windowFunction: this.config.windowFunction,
-        targetSampleRate: this.config.targetSampleRate,
-        haloReduce: this.config.haloReduce,
-      });
+      targetSampleRate: this.config.targetSampleRate,
+      haloReduce: this.config.haloReduce,
+      configRevision: this.config.configRevision,
+    });
     }
 
     logger.info('config updated:', newConfig);

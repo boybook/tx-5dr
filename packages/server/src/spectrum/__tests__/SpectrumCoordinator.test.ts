@@ -200,4 +200,31 @@ describe('SpectrumCoordinator', () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(source.stop).toHaveBeenCalledTimes(1);
   });
+
+  it('preserves the native audio FFT bin count for display clients', async () => {
+    const engine = new MockEngine();
+    const coordinator = new SpectrumCoordinator(engine as any);
+    const frames: any[] = [];
+    coordinator.on('frame', (frame) => frames.push(frame));
+    await coordinator.setConnectionSubscription('audio-client', 'audio');
+
+    const values = Int16Array.from({ length: 4097 }, (_, index) => index);
+    engine.spectrumScheduler.emit('spectrumReady', {
+      timestamp: 1,
+      kind: 'audio',
+      frequencyRange: { min: 0, max: 3000 },
+      binaryData: {
+        data: Buffer.from(values.buffer).toString('base64'),
+        format: { type: 'int16', length: values.length, scale: 1, offset: 0 },
+      },
+      meta: {
+        sourceBinCount: values.length,
+        displayBinCount: values.length,
+      },
+    });
+
+    expect(frames).toHaveLength(1);
+    expect(frames[0].binaryData.format.length).toBe(4097);
+    expect(frames[0].meta.displayBinCount).toBe(4097);
+  });
 });

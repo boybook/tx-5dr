@@ -2,8 +2,17 @@ import { describe, expect, it } from 'vitest';
 import {
   areCycleMarkerPositionsEqual,
   buildCycleMarkerPositions,
+  getWaterfallScrollAnimationDurationMs,
   resolveNextCycleMarkerPositions,
 } from './WebGLWaterfall';
+
+describe('getWaterfallScrollAnimationDurationMs', () => {
+  it('uses the negotiated interval for every row in a batch', () => {
+    expect(getWaterfallScrollAnimationDurationMs(200, 1)).toBe(200);
+    expect(getWaterfallScrollAnimationDurationMs(200, 3)).toBe(600);
+    expect(getWaterfallScrollAnimationDurationMs(Number.NaN, 1)).toBe(100);
+  });
+});
 
 describe('buildCycleMarkerPositions', () => {
   it('creates marker positions when FT8 rows cross cycle boundaries', () => {
@@ -37,6 +46,15 @@ describe('buildCycleMarkerPositions', () => {
 
     expect(nextMarkers).toBe(currentMarkers);
     expect(areCycleMarkerPositionsEqual(currentMarkers, nextMarkers)).toBe(true);
+  });
+
+  it('uses only rows that fit in the visible texture when positioning markers', () => {
+    const timestamps = Array.from({ length: 1024 }, (_, index) => 30_050 - index * 150);
+    const markers = resolveNextCycleMarkerPositions([], timestamps, true, 15_000, 128);
+
+    expect(markers.map(marker => marker.timestamp)).toEqual([30_000, 15_000]);
+    expect(markers.every(marker => marker.topPercent <= 100)).toBe(true);
+    expect(markers[1]?.topPercent).toBeCloseTo(((100.5 + 1 / 3) / 128) * 100, 5);
   });
 
   it('clears marker state only when cycle markers are disabled with existing markers', () => {

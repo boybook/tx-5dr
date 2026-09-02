@@ -4,6 +4,7 @@ export * from './schema/hello.schema.js';
 export * from './schema/audio.schema.js';
 export * from './schema/ft8.schema.js';
 export * from './schema/spectrum.schema.js';
+export * from './schema/spectrum-config.schema.js';
 export * from './schema/websocket.schema.js';
 export * from './schema/mode.schema.js';
 export * from './schema/qso.schema.js';

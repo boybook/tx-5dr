@@ -82,7 +82,6 @@ const DEFAULT_HISTORY = 120;
 const SPECTRUM_KINDS: SpectrumKind[] = ['audio', 'radio-sdr', 'openwebrx-sdr'];
 const DEFAULT_FRAME_DURATION_MS = 100;
 const MIN_FRAME_DURATION_MS = 40;
-const MAX_FRAME_DURATION_MS = 140;
 const IDLE_FREEZE_MIN_MS = 300;
 const MAX_BATCH_SIZE = 8;
 const RADIO_SDR_OPTIMISTIC_TIMEOUT_MS = 2000;
@@ -320,6 +319,7 @@ export class SpectrumStreamController {
   private lastRenderTime = 0;
   private lastArrivalTime = 0;
   private arrivalIntervalEma = DEFAULT_FRAME_DURATION_MS;
+  private configuredFrameIntervalMs: number | null = null;
 
   constructor(historyLimits: SpectrumHistoryLimits = DEFAULT_HISTORY) {
     this.historyLimits = normalizeHistoryLimits(historyLimits);
@@ -340,6 +340,12 @@ export class SpectrumStreamController {
   };
 
   getStatusSnapshot = (): SpectrumStreamStatus => this.statusSnapshot;
+
+  setFrameIntervalMs(intervalMs: number | null): void {
+    this.configuredFrameIntervalMs = typeof intervalMs === 'number' && Number.isFinite(intervalMs) && intervalMs > 0
+      ? intervalMs
+      : null;
+  }
 
   getFullRange = (kind: SpectrumKind | null): { min: number; max: number } | null => {
     if (!kind) {
@@ -423,6 +429,27 @@ export class SpectrumStreamController {
       ...this.context,
       radioSdrViewRange: null,
     };
+    this.pendingBatch = {
+      mode: 'reset',
+      rows: [],
+      rowTimestamps: [],
+      axis: null,
+      frameToken: null,
+      hasBacklog: false,
+      totalRows: 0,
+    };
+    this.syncStatusSnapshot();
+    this.notifyFrameListeners();
+  }
+
+  resetKind(kind: SpectrumKind): void {
+    this.pendingByKind[kind].length = 0;
+    this.histories[kind].length = 0;
+    if (this.context.selectedKind !== kind) {
+      return;
+    }
+
+    this.cancelScheduledReplaceBatch();
     this.pendingBatch = {
       mode: 'reset',
       rows: [],
@@ -717,7 +744,10 @@ export class SpectrumStreamController {
       return;
     }
 
-    const frameDuration = Math.max(MIN_FRAME_DURATION_MS, Math.min(MAX_FRAME_DURATION_MS, this.arrivalIntervalEma));
+    const frameDuration = Math.max(
+      MIN_FRAME_DURATION_MS,
+      this.configuredFrameIntervalMs ?? this.arrivalIntervalEma,
+    );
     const idleFreezeThreshold = Math.max(IDLE_FREEZE_MIN_MS, this.arrivalIntervalEma * 2.5);
     const oldestQueuedAt = pendingQueue[0]?.queuedAt ?? now;
     const backlogAge = now - oldestQueuedAt;

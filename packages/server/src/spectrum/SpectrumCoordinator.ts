@@ -1,10 +1,17 @@
 import { EventEmitter } from 'eventemitter3';
-import type { SpectrumCapabilities, SpectrumFrame, SpectrumKind, SpectrumSourceAvailability, SupportedRig } from '@tx5dr/contracts';
+import {
+  getSpectrumPresetDefinition,
+  type SpectrumCapabilities,
+  type SpectrumFrame,
+  type SpectrumKind,
+  type SpectrumSourceAvailability,
+  type SupportedRig,
+} from '@tx5dr/contracts';
 import { ConfigManager } from '../config/config-manager.js';
 import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import { createLogger } from '../utils/logger.js';
-import { SPECTRUM_DISPLAY_BIN_COUNT, createOpenWebRXSpectrumFrame, normalizeSpectrumFrame, resampleBins } from './spectrumUtils.js';
+import { SPECTRUM_DISPLAY_BIN_COUNT, createOpenWebRXSpectrumFrame, normalizeSpectrumFrame } from './spectrumUtils.js';
 import type { OpenWebRXSpectrumFrame } from '@openwebrx-js/api';
 import type { OpenWebRXAudioAdapter } from '../openwebrx/OpenWebRXAudioAdapter.js';
 import { RadioSpectrumSourceRegistry, type RadioSpectrumSource } from './RadioSpectrumSource.js';
@@ -77,8 +84,11 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
         return;
       }
 
-      const resampled = this.normalizeAudioFrame(frame);
-      this.emit('frame', resampled);
+      const normalized = this.normalizeAudioFrame(frame);
+      this.emit('frame', normalized);
+    });
+    this.engine.getSpectrumScheduler().on('configChanged', () => {
+      void this.emitCapabilitiesChanged();
     });
   }
 
@@ -88,13 +98,19 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
     const radioSource = await this.getRadioSourceAvailability();
     const openWebRXSource = this.getOpenWebRXSourceAvailability();
     const defaultKind = this.getDefaultSpectrumKind(config.type, radioSource.available, openWebRXSource.available);
+    const scheduler = this.engine.getSpectrumScheduler() as SpectrumCoordinatorSchedulerLike;
+    const balanced = getSpectrumPresetDefinition('balanced');
+    const renderConfig = scheduler.getRenderConfig?.() ?? {
+      ...balanced,
+      revision: 0,
+    };
     const audioSource: SpectrumSourceAvailability = {
       kind: 'audio',
       supported: true,
       available: true,
       defaultSelected: defaultKind === 'audio',
-      displayBinCount: SPECTRUM_DISPLAY_BIN_COUNT,
-      sourceBinCount: SPECTRUM_DISPLAY_BIN_COUNT,
+      displayBinCount: renderConfig.displayBinCount,
+      sourceBinCount: renderConfig.displayBinCount,
       supportsWaterfall: true,
       frequencyRangeMode: 'baseband',
     };
@@ -106,6 +122,8 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
       profileId,
       defaultKind,
       sources: [radioSource, openWebRXSource, audioSource],
+      renderConfig,
+      presets: (['responsive', 'balanced', 'fine'] as const).map(getSpectrumPresetDefinition),
     };
   }
 
@@ -248,18 +266,18 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
   private normalizeAudioFrame(frame: SpectrumFrame): SpectrumFrame {
     const bytes = Buffer.from(frame.binaryData.data, 'base64');
     const int16View = new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / Int16Array.BYTES_PER_ELEMENT));
-    const resampled = resampleBins(int16View, SPECTRUM_DISPLAY_BIN_COUNT);
+    const preserved = Int16Array.from(int16View);
 
     return normalizeSpectrumFrame({
       ...frame,
       binaryData: {
-        data: resampled,
+        data: preserved,
         scale: frame.binaryData.format.scale,
         offset: frame.binaryData.format.offset,
       },
       meta: {
         ...frame.meta,
-        displayBinCount: SPECTRUM_DISPLAY_BIN_COUNT,
+        displayBinCount: preserved.length,
       },
     });
   }
@@ -345,4 +363,8 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
     }
     await this.emitCapabilitiesChanged();
   }
+}
+
+interface SpectrumCoordinatorSchedulerLike {
+  getRenderConfig?: () => SpectrumCapabilities['renderConfig'];
 }

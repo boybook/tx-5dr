@@ -7,6 +7,7 @@ export interface SpectrumConfig {
   windowFunction?: 'hann' | 'hamming' | 'blackman' | 'blackmanHarris' | 'none';
   overlapRatio?: number; // 0.0 - 1.0
   targetSampleRate?: number; // 目标采样率
+  configRevision?: number;
   /**
    * Display-only frequency-domain baseline flattening for IF-mode audio waterfalls.
    * Removes the colored/tilted noise-floor "halo" cloud so only real above-noise
@@ -33,6 +34,7 @@ export class SpectrumAnalyzer {
       overlapRatio: config.overlapRatio || 0.5,
       targetSampleRate: config.targetSampleRate || 6000,
       haloReduce: config.haloReduce ?? false,
+      configRevision: config.configRevision ?? 0,
     };
 
     // 验证FFT大小是2的幂
@@ -110,6 +112,7 @@ export class SpectrumAnalyzer {
         displayBinCount: numBins,
         centerFrequency: ((numBins - 1) * freqResolution) / 2,
         spanHz: (numBins - 1) * freqResolution,
+        spectrumConfigRevision: this.config.configRevision,
       },
     };
   }

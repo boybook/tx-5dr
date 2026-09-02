@@ -9,6 +9,8 @@ import type {
   AudioDeviceSettingsResponse,
   AudioSettingsResolveRequest,
   AudioSettingsResolveResponse,
+  SpectrumSettingsResponse,
+  SpectrumSettingsUpdateRequest,
   ModeDescriptor,
   CreateRadioOperatorRequest,
   UpdateRadioOperatorRequest,
@@ -926,6 +928,20 @@ export const api = {
       { method: 'POST' },
       apiBase
     );
+  },
+
+  async getSpectrumSettings(apiBase?: string): Promise<SpectrumSettingsResponse> {
+    return apiRequest<SpectrumSettingsResponse>('/audio/spectrum-settings', undefined, apiBase);
+  },
+
+  async updateSpectrumSettings(
+    settings: SpectrumSettingsUpdateRequest,
+    apiBase?: string,
+  ): Promise<SpectrumSettingsResponse> {
+    return apiRequest<SpectrumSettingsResponse>('/audio/spectrum-settings', {
+      method: 'POST',
+      body: JSON.stringify(settings),
+    }, apiBase);
   },
 
   // ========== 电台控制API ==========
@@ -2711,6 +2727,8 @@ export const {
   updateAudioSettings,
   resolveAudioSettings,
   resetAudioSettings,
+  getSpectrumSettings,
+  updateSpectrumSettings,
   getAvailableModes,
   getCurrentMode,
   switchMode,

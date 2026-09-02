@@ -28,6 +28,8 @@ import {
   type CWDecoderBackendDescriptor,
   type CWDecoderRuntimeBackend,
   type PresetFrequency,
+  type SpectrumPreset,
+  type SpectrumCustomSettings,
   resolveWindowTiming,
 } from '@tx5dr/contracts';
 import { EventEmitter } from 'eventemitter3';
@@ -619,6 +621,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       enabled: DigitalRadioEngine.SPECTRUM_CONFIG.ENABLED,
       targetSampleRate: DigitalRadioEngine.SPECTRUM_CONFIG.TARGET_SAMPLE_RATE
     }, () => ConfigManager.getInstance().getFT8Config().spectrumWhileTransmitting ?? true);
+    const spectrumSettings = ConfigManager.getInstance().getSpectrumSettings();
+    this.spectrumScheduler.applyPreset(spectrumSettings.preset, 0, spectrumSettings.customSettings);
     // IF-mode audio waterfall uses Blackman-Harris + baseline flatten (decode path unchanged).
     this.audioStreamManager.on('inputSignalTypeChanged', (inputSignalType) => {
       this.spectrumScheduler.setInputSignalType(inputSignalType);
@@ -936,6 +940,41 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   public getSpectrumScheduler(): SpectrumScheduler {
     return this.spectrumScheduler;
+  }
+
+  public async updateSpectrumPreset(preset: SpectrumPreset): Promise<ReturnType<SpectrumScheduler['getRenderConfig']>> {
+    return this.updateSpectrumSettings(preset);
+  }
+
+  public async updateSpectrumSettings(
+    preset: SpectrumPreset,
+    customSettings?: SpectrumCustomSettings,
+  ): Promise<ReturnType<SpectrumScheduler['getRenderConfig']>> {
+    const configManager = ConfigManager.getInstance();
+    const previousSettings = configManager.getSpectrumSettings();
+    const previousRevision = this.spectrumScheduler.getRenderConfig().revision;
+    const nextRevision = previousRevision + 1;
+    if (
+      previousSettings.preset === preset
+      && JSON.stringify(previousSettings.customSettings ?? null) === JSON.stringify(customSettings ?? null)
+    ) {
+      return this.spectrumScheduler.getRenderConfig();
+    }
+
+    this.spectrumScheduler.applyPreset(preset, nextRevision, customSettings);
+    try {
+      await configManager.updateSpectrumSettings(preset, customSettings);
+    } catch (error) {
+      this.spectrumScheduler.applyPreset(
+        previousSettings.preset,
+        previousRevision,
+        previousSettings.customSettings,
+      );
+      throw error;
+    }
+
+    this.spectrumScheduler.emitConfigChanged();
+    return this.spectrumScheduler.getRenderConfig();
   }
 
   public getOpenWebRXAudioAdapter(): OpenWebRXAudioAdapter | null {
@@ -1271,6 +1310,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       (slotInfo, windowIdx) => this._operatorManager.getDecodeApContext(slotInfo, windowIdx)
     );
 
+    const spectrumSettings = ConfigManager.getInstance().getSpectrumSettings();
+    this.spectrumScheduler.applyPreset(spectrumSettings.preset, 0, spectrumSettings.customSettings);
     await this.spectrumScheduler.initialize(
       this.audioStreamManager.getAudioProvider(),
       this.audioStreamManager.getInternalSampleRate()

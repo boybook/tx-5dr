@@ -155,6 +155,8 @@ interface WebGLWaterfallProps {
   showCycleMarkers?: boolean;
   /** 数字模式周期长度（毫秒），例如 FT8=15000、FT4=7500 */
   cycleSlotMs?: number | null;
+  /** Backend-negotiated interval between spectrum rows. */
+  frameIntervalMs?: number;
   /** 需要显示"低功率—可开启虚拟频差"弱警告的操作员 ID（由上层根据实测功率判断） */
   lowPowerWarningOperatorIds?: string[];
   /** 弱警告 popover 中点击"一键开启虚拟频差" */
@@ -179,6 +181,7 @@ const WATERFALL_BASEBAND_RULER_MAX_HZ = 3000;
 const WATERFALL_BASEBAND_RULER_MINOR_STEP_HZ = 100;
 const WATERFALL_BASEBAND_RULER_MAJOR_STEP_HZ = 500;
 const WATERFALL_RULER_MIN_LABEL_SPACING_PX = 56;
+const WATERFALL_MAX_HISTORY_ROWS = 1024;
 
 export function getWaterfallDragCommitDelayMs(
   nowMs: number,
@@ -254,6 +257,15 @@ export function getWaterfallCanvasPixelRatio(devicePixelRatio: number | null | u
 
 export function createWaterfallUploadBuffer(width: number, height: number): Uint8Array {
   return new Uint8Array(Math.max(0, width) * Math.max(0, height));
+}
+
+export function getWaterfallScrollAnimationDurationMs(
+  frameIntervalMs: number,
+  rowCount: number,
+): number {
+  const safeInterval = Number.isFinite(frameIntervalMs) && frameIntervalMs > 0 ? frameIntervalMs : 100;
+  const safeRowCount = Math.max(1, Math.floor(rowCount));
+  return Math.max(50, safeInterval * safeRowCount);
 }
 
 export type WaterfallLocalGestureSource = 'mouse-drag' | 'horizontal-wheel';
@@ -590,8 +602,12 @@ export function resolveNextCycleMarkerPositions(
   cycleSlotMs: number | null | undefined,
   visibleRows: number,
 ): CycleMarkerPosition[] {
+  const safeVisibleRows = Math.max(1, Math.floor(visibleRows));
+  const visibleTimestamps = rowTimestamps.length > safeVisibleRows
+    ? rowTimestamps.slice(0, safeVisibleRows)
+    : rowTimestamps;
   const nextMarkers = showCycleMarkers
-    ? buildCycleMarkerPositions(rowTimestamps, cycleSlotMs, visibleRows)
+    ? buildCycleMarkerPositions(visibleTimestamps, cycleSlotMs, safeVisibleRows)
     : [];
 
   return areCycleMarkerPositionsEqual(currentMarkers, nextMarkers)
@@ -697,6 +713,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   sharpPixels = false,
   showCycleMarkers = false,
   cycleSlotMs = null,
+  frameIntervalMs = 100,
   lowPowerWarningOperatorIds = [],
   onEnableFakeFrequency,
   onDismissLowPowerWarning,
@@ -816,6 +833,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const displayRowTimestampsRef = useRef<number[]>([]);
   const headRowRef = useRef<number>(0);
   const rowCountRef = useRef<number>(0);
+  const textureWidthRef = useRef<number>(0);
+  const maxTextureSizeRef = useRef<number>(4096);
   // 平滑滚动相关
   const headRowLocationRef = useRef<WebGLUniformLocation | null>(null);
   const textureHeightLocationRef = useRef<WebGLUniformLocation | null>(null);
@@ -831,8 +850,6 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const transitionTextureHeightLocationRef = useRef<WebGLUniformLocation | null>(null);
   const verticalScrollAnimRef = useRef<number>();
   const axisTransitionAnimRef = useRef<number>();
-  const lastDataTimeRef = useRef(0);
-  const frameIntervalRef = useRef(100);
   const lastAnimatedFrameTokenRef = useRef<string | number | null>(null);
   const currentAxisRef = useRef<SpectrumAxis | null>(null);
   const textureHeightRef = useRef<number>(Math.max(totalRows ?? 0, 1));
@@ -848,13 +865,13 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       return;
     }
 
-    const visibleRows = Math.max(textureHeightRef.current, displayRowTimestampsRef.current.length, 1);
+    const visibleRows = Math.max(textureHeightRef.current, 1);
     const offsetPercent = (offsetRows / visibleRows) * 100;
     markerLayer.style.transform = offsetPercent === 0 ? '' : `translateY(-${offsetPercent}%)`;
   }, []);
 
   const refreshCycleMarkers = useCallback((rowTimestamps: number[] = displayRowTimestampsRef.current) => {
-    const visibleRows = Math.max(textureHeightRef.current, rowTimestamps.length, 1);
+    const visibleRows = Math.max(textureHeightRef.current, 1);
     const nextMarkers = resolveNextCycleMarkerPositions(
       cycleMarkersRef.current,
       rowTimestamps,
@@ -1181,6 +1198,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       }
 
       glRef.current = gl;
+      maxTextureSizeRef.current = Math.max(1, Number(gl.getParameter(gl.MAX_TEXTURE_SIZE)) || 4096);
 
       // 创建程序
       const program = createProgram(gl);
@@ -1386,7 +1404,13 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   ) => {
     const start = rowIndex * width;
     for (let x = 0; x < width; x += 1) {
-      const normalizedValue = (row[x] - rangeMin) * rangeScale;
+      const sourceStart = Math.floor((x * row.length) / width);
+      const sourceEnd = Math.max(sourceStart + 1, Math.ceil(((x + 1) * row.length) / width));
+      let maxValue = -Infinity;
+      for (let sourceIndex = sourceStart; sourceIndex < Math.min(sourceEnd, row.length); sourceIndex += 1) {
+        maxValue = Math.max(maxValue, Number(row[sourceIndex]));
+      }
+      const normalizedValue = (maxValue - rangeMin) * rangeScale;
       target[start + x] = Math.max(0, Math.min(255, Math.floor(normalizedValue)));
     }
   }, []);
@@ -1599,15 +1623,18 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const gl = glRef.current;
     const texture = textureRef.current;
     const program = programRef.current;
-    const width = nextAxis?.binCount ?? spectrumData[0]?.length ?? 0;
+    const sourceWidth = nextAxis?.binCount ?? spectrumData[0]?.length ?? 0;
 
-    if (!gl || !texture || !program || gl.isContextLost() || width <= 0) {
+    if (!gl || !texture || !program || gl.isContextLost() || sourceWidth <= 0) {
       return;
     }
     updateCurrentAxisUniform(nextAxis);
 
-    const actualHeight = spectrumData.length;
-    const textureHeight = totalRows ? Math.max(actualHeight, totalRows) : Math.max(actualHeight, 1);
+    const canvasHeight = canvasRef.current?.height ?? 0;
+    const textureHeight = Math.max(1, canvasHeight || totalRows || 1);
+    const visibleSpectrumData = spectrumData.slice(0, textureHeight);
+    const actualHeight = visibleSpectrumData.length;
+    const width = Math.min(sourceWidth, maxTextureSizeRef.current);
     const dataSize = width * textureHeight;
     const textureData = createWaterfallUploadBuffer(width, textureHeight);
 
@@ -1615,7 +1642,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     let currentMax = maxDb;
 
     if (autoRange && actualHeight > 0) {
-      const range = calculateDataRange(spectrumData);
+      const range = calculateDataRange(visibleSpectrumData);
       currentMin = range.min;
       currentMax = range.max;
       updateActualRangeState(range);
@@ -1630,7 +1657,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     for (const segment of segments) {
       const segmentEnd = Math.min(rowOffset + segment.rowCount, actualHeight);
       for (let y = rowOffset; y < segmentEnd; y += 1) {
-        writeNormalizedRow(textureData, y, spectrumData[y], width, segment.rangeMin, segment.rangeScale);
+        writeNormalizedRow(textureData, y, visibleSpectrumData[y], width, segment.rangeMin, segment.rangeScale);
       }
       rowOffset = segmentEnd;
       if (rowOffset >= actualHeight) {
@@ -1639,7 +1666,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     }
 
     for (let y = rowOffset; y < actualHeight; y += 1) {
-      writeNormalizedRow(textureData, y, spectrumData[y], width, currentMin, fallbackScale);
+      writeNormalizedRow(textureData, y, visibleSpectrumData[y], width, currentMin, fallbackScale);
     }
 
     gl.activeTexture(gl.TEXTURE0);
@@ -1648,6 +1675,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width, textureHeight, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, textureData);
     applySpectrumTextureFilter(gl, texture, sharpPixelsRef.current);
     lastDataLengthRef.current = dataSize;
+    textureWidthRef.current = width;
 
     rowCountRef.current = actualHeight;
     updateTextureMetadata(textureHeight, 0);
@@ -1726,9 +1754,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const gl = glRef.current;
     const texture = textureRef.current;
     const program = programRef.current;
-    const width = nextAxis?.binCount ?? rowsToAppend[rowsToAppend.length - 1]?.length ?? 0;
+    const sourceWidth = nextAxis?.binCount ?? rowsToAppend[rowsToAppend.length - 1]?.length ?? 0;
 
-    if (!gl || !texture || !program || gl.isContextLost() || width <= 0 || rowsToAppend.length === 0) {
+    if (!gl || !texture || !program || gl.isContextLost() || sourceWidth <= 0 || rowsToAppend.length === 0) {
       return;
     }
     updateCurrentAxisUniform(nextAxis);
@@ -1736,7 +1764,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const spectrumData = displayRowsRef.current;
     const actualHeight = spectrumData.length;
     const previousTextureHeight = textureHeightRef.current;
-    const textureHeight = totalRows ? Math.max(actualHeight, totalRows) : Math.max(actualHeight, 1);
+    const textureHeight = Math.max(1, canvasRef.current?.height ?? 0, totalRows ?? 0);
+    const width = Math.min(sourceWidth, maxTextureSizeRef.current);
+    const previousTextureWidth = textureWidthRef.current;
 
     let txModeChanged = false;
     if (autoRange && isTransmitting !== prevTransmittingRef.current && prevTransmittingRef.current !== undefined) {
@@ -1770,7 +1800,13 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       updateActualRangeState(null);
     }
 
-    if (txModeChanged || rangeChanged || previousTextureHeight !== textureHeight || rowCountRef.current === 0) {
+    if (
+      txModeChanged
+      || rangeChanged
+      || previousTextureHeight !== textureHeight
+      || previousTextureWidth !== width
+      || rowCountRef.current === 0
+    ) {
       rebuildTexture(spectrumData, nextAxis);
       return;
     }
@@ -1879,6 +1915,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         const positionLocation = gl.getAttribLocation(program, 'a_position');
         gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
       }
+
+      if (displayRowsRef.current.length > 0 && currentAxisRef.current) {
+        rebuildTextureRef.current(displayRowsRef.current, currentAxisRef.current);
+      }
       
       // 立即重新渲染
       render();
@@ -1985,7 +2025,6 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       rowCountRef.current = 0;
       headRowRef.current = 0;
       lastAnimatedFrameTokenRef.current = null;
-      lastDataTimeRef.current = 0;
       applyCycleMarkerScrollOffset(0);
       if (cycleMarkersRef.current.length > 0) {
         cycleMarkersRef.current = [];
@@ -1998,7 +2037,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     }
 
     const nextAxis = batch.axis;
-    const maxRows = totalRows ?? batch.rows.length;
+    const maxRows = totalRows ?? WATERFALL_MAX_HISTORY_ROWS;
 
     if (batch.mode === 'replace') {
       const previousAxis = currentAxisRef.current;
@@ -2063,16 +2102,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     }
 
     const now = performance.now();
-    if (lastDataTimeRef.current > 0) {
-      const interval = Math.min(now - lastDataTimeRef.current, 500);
-      frameIntervalRef.current = frameIntervalRef.current * 0.7 + interval * 0.3;
-    }
-    lastDataTimeRef.current = now;
 
     const startRows = Math.min(batch.rows.length, Math.max(rowCountRef.current, 1));
-    const animDuration = batch.hasBacklog
-      ? Math.max(45, Math.min(140, frameIntervalRef.current * Math.max(0.45, batch.rows.length * 0.3)))
-      : Math.max(50, Math.min(180, frameIntervalRef.current * Math.max(0.9, batch.rows.length * 0.45)));
+    const animDuration = getWaterfallScrollAnimationDurationMs(frameIntervalMs, startRows);
     const animStartTime = now;
 
     gl.useProgram(program);
@@ -2111,6 +2143,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     releaseTextureStorage,
     rebuildTexture,
     render,
+    frameIntervalMs,
     resetAutoRangeState,
     startAxisTransition,
     stopAxisTransition,

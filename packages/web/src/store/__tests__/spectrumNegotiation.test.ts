@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SpectrumCapabilities } from '@tx5dr/contracts';
-import { MODES } from '@tx5dr/contracts';
+import { getSpectrumPresetDefinition, MODES } from '@tx5dr/contracts';
 import { createSpectrumNegotiator } from '../radio/spectrumNegotiation';
 import { initialRadioState, radioReducer, type RadioState } from '../radioStore';
 import { setSpectrumSubscriptionPaused } from '../../utils/spectrumSubscriptionPause';
@@ -57,6 +57,15 @@ function createCapabilities(options: {
         supportsWaterfall: true,
         frequencyRangeMode: 'baseband',
       },
+    ],
+    renderConfig: {
+      ...getSpectrumPresetDefinition('balanced'),
+      revision: 0,
+    },
+    presets: [
+      getSpectrumPresetDefinition('responsive'),
+      getSpectrumPresetDefinition('balanced'),
+      getSpectrumPresetDefinition('fine'),
     ],
   };
 }

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SpectrumPresetDefinitionSchema, SpectrumRenderConfigSchema } from './spectrum-config.schema.js';
 
 export const SpectrumKindSchema = z.enum(['audio', 'radio-sdr', 'openwebrx-sdr']);
 export type SpectrumKind = z.infer<typeof SpectrumKindSchema>;
@@ -73,6 +74,7 @@ export const SpectrumFrameMetaSchema = z.object({
   profileId: z.string().nullable().optional(),
   radioModel: z.string().optional(),
   level: SpectrumLevelDescriptorSchema.optional(),
+  spectrumConfigRevision: z.number().int().nonnegative().optional(),
 });
 
 export const SpectrumFrameSchema = z.object({
@@ -99,6 +101,8 @@ export const SpectrumCapabilitiesSchema = z.object({
   profileId: z.string().nullable(),
   defaultKind: SpectrumKindSchema,
   sources: z.array(SpectrumSourceAvailabilitySchema),
+  renderConfig: SpectrumRenderConfigSchema,
+  presets: z.array(SpectrumPresetDefinitionSchema),
 });
 
 export const SpectrumSessionControlIdSchema = z.enum([

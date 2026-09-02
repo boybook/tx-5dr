@@ -163,6 +163,22 @@ describe('SpectrumStreamController memory behavior', () => {
     expect(frameListener).toHaveBeenCalled();
   });
 
+  it('uses the negotiated frame interval when throttling render batches', () => {
+    const controller = new SpectrumStreamController(4);
+    controller.updateContext({ selectedKind: 'audio' });
+    controller.setFrameIntervalMs(200);
+
+    controller.pushFrame(makeFrame('audio', 1, [1, 2, 3]));
+    flushNextAnimationFrame(1000);
+    expect(controller.consumeRenderBatch()?.rowTimestamps).toEqual([1]);
+
+    controller.pushFrame(makeFrame('audio', 2, [2, 3, 4]));
+    flushNextAnimationFrame(1100);
+    expect(controller.consumeRenderBatch()).toBeNull();
+    flushNextAnimationFrame(1200);
+    expect(controller.consumeRenderBatch()?.rowTimestamps).toEqual([2]);
+  });
+
   it('clears histories, pending queues, listeners and RAF on destroy', () => {
     const controller = new SpectrumStreamController(4);
     controller.updateContext({ selectedKind: 'audio' });
