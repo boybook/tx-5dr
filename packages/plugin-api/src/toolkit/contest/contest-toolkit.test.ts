@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { QSORecord } from '@tx5dr/contracts';
 import {
   createMockContext,
   createMockEventBus,
@@ -45,6 +46,7 @@ import { createContestQsoEnvelopeAdapter } from './ContestQsoEnvelopeAdapter.js'
 import {
   CONTEST_LOGBOOK_PERMISSIONS,
   defaultContestLogbook,
+  standardFT8ContestLogbook,
   type ContestLogbookAdapter,
   type ContestLogbookReviewIssue,
 } from './ContestLogbook.js';
@@ -193,7 +195,7 @@ describe('contest toolkit', () => {
       contest,
       runtime: () => ({}) as StrategyRuntime,
     });
-    expect(plugin.minPluginApiVersion).toBe('2.2.0');
+    expect(plugin.minPluginApiVersion).toBe('2.3.0');
     expect(() => plugin.createStrategyRuntime?.({
       ...(createMockContext() as unknown as StrategyPluginContext),
       pluginApiVersion: '2.0.0',
@@ -1050,6 +1052,64 @@ describe('contest toolkit', () => {
     expect(plugin.hooks?.onConfigChange).toBeDefined();
   });
 
+  it('routes contest QSO completion effects into the contest session', async () => {
+    const contest = createExampleContest();
+    const ctx = createMockContext({ permissions: CONTEST_LOGBOOK_PERMISSIONS });
+    const record: QSORecord = {
+      id: 'qso-1',
+      callsign: 'JA1AAA',
+      grid: 'PM95',
+      frequency: 14_074_000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-08-29T01:00:00Z'),
+      messageHistory: [],
+      myCallsign: 'W1AW',
+      myGrid: 'FN31',
+    };
+    const plugin = composeFT8ContestPlugin({
+      name: 'completion-contest',
+      version: '1.0.0',
+      permissions: CONTEST_LOGBOOK_PERMISSIONS,
+      contest,
+      logbook: standardFT8ContestLogbook({ contest }),
+      runtime: () => ({
+        checkpoint: () => ({}),
+        restore: () => {},
+        decide: () => ({
+          transmission: null,
+          snapshot: { currentState: 'TX6', slots: {}, context: {} },
+          qsoCompletion: { lifecycleEpoch: 1, record },
+        }),
+        getTransmitText: () => null,
+        requestCall: () => {},
+        getSnapshot: () => ({ currentState: 'TX6', slots: {}, context: {} }),
+        patchContext: () => {},
+        setState: () => {},
+        setSlotContent: () => {},
+        reset: () => {},
+      }) as StrategyRuntime,
+    });
+
+    await plugin.onLoad?.(ctx as never);
+    const result = await plugin.createStrategyRuntime!(ctx as never).decide([], {
+      epoch: 1,
+      source: 'slot-auto',
+      isReDecision: false,
+      signal: new AbortController().signal,
+    });
+
+    expect(result.qsoCompletion?.destination).toEqual({
+      kind: 'plugin-session-key',
+      sessionKey: expect.stringContaining('contest:'),
+    });
+    expect(result.qsoCompletion?.record.contestEntry).toMatchObject({
+      contestId: 'example-ft8',
+      sent: { grid: 'FN31' },
+      received: { grid: 'PM95' },
+    });
+    await plugin.onUnload?.(ctx as never);
+  });
+
   it('rejects logbook composition without the required session permissions', () => {
     const contest = createExampleContest();
     const adapter = {
@@ -1088,7 +1148,7 @@ describe('contest toolkit', () => {
         adapter: adapter as unknown as ContestLogbookAdapter<typeof contest, { schemaVersion: 1; revision: number }, {}>,
       }),
       runtime: () => ({}) as StrategyRuntime,
-    } as any)).toThrow('contest_logbook_missing_permission:logbook:session');
+    } as unknown as Parameters<typeof composeFT8ContestPlugin>[0])).toThrow('contest_logbook_missing_permission:logbook:session');
   });
 
   it('composes narrow typed workbench protocols for multiple plugin pages', async () => {

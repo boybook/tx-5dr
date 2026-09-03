@@ -262,6 +262,7 @@ export function getPluginBridgeSdkScript(): string {
       var arr = pushListeners[action];
       if (arr) pushListeners[action] = arr.filter(function(f) { return f !== cb; });
     },
+    openExternal: function(url) { window.parent.postMessage({ type: 'tx5dr:open-external', url: url }, '*'); },
     resize: function(height) { window.parent.postMessage({ type: 'tx5dr:resize', height: height }, '*'); },
   };
 })();

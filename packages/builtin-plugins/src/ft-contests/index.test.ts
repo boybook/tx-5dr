@@ -37,6 +37,30 @@ describe('FT contest catalog', () => {
     ]);
   });
 
+  it('wires every contest to the shared operator logbook page and session', () => {
+    for (const entry of ftContestCatalog) {
+      expect(entry.definition.permissions).toEqual(expect.arrayContaining(['logbook:session', 'plugin:event-bus']));
+      expect(entry.definition.panels).toContainEqual(expect.objectContaining({
+        id: 'contest-log',
+        slot: 'operator-action',
+        component: 'iframe',
+        pageId: 'contest-log',
+        openMode: 'page',
+      }));
+      expect(entry.definition.ui?.pages).toContainEqual(expect.objectContaining({
+        id: 'contest-log',
+        entry: 'contest-log.html',
+        accessScope: 'operator',
+        resourceBinding: 'operator',
+      }));
+      expect(entry.definition.minPluginApiVersion).toBe('2.3.0');
+      expect(entry.dirPath).toContain('ft-contests');
+      expect(entry.contest.edition.source?.url).toMatch(/^https?:\/\//);
+      expect(entry.contest.presentation?.summary).toBeTruthy();
+      expect(entry.contest.presentation?.scoring).toBeTruthy();
+    }
+  });
+
   it('covers distance, fixed-point and location-aware scoring without duplicating logic', () => {
     const arrl = createFT8ContestTestKit(arrlDigitalContest);
     arrl.score([

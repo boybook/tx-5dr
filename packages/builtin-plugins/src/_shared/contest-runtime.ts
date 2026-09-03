@@ -19,8 +19,8 @@ export function contestLocales(
   ja: string,
 ): Record<string, Record<string, string>> {
   return {
-    en: { ...standardQSOLocales.en, pluginName: title, pluginDescription: en },
-    zh: { ...standardQSOLocales.zh, pluginName: title, pluginDescription: zh },
-    ja: { ...standardQSOLocales.ja, pluginName: title, pluginDescription: ja },
+    en: { ...standardQSOLocales.en, pluginName: title, pluginDescription: en, contestLogTitle: 'Contest log' },
+    zh: { ...standardQSOLocales.zh, pluginName: title, pluginDescription: zh, contestLogTitle: '比赛日志' },
+    ja: { ...standardQSOLocales.ja, pluginName: title, pluginDescription: ja, contestLogTitle: 'コンテストログ' },
   };
 }

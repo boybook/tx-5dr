@@ -11,9 +11,12 @@
  *   npx create-tx5dr-plugin my-contest --template ft8-contest
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
+
+const require = createRequire(import.meta.url);
 
 // ===== Types =====
 
@@ -158,6 +161,23 @@ function hasVite(config: PluginConfig): boolean {
   return config.template === 'ui-react' || config.template === 'ui-vue';
 }
 
+function readContestLogbookUiAssets(): Map<string, string> {
+  const entry = require.resolve('@tx5dr/plugin-api/contest-logbook-ui/contest-log.html');
+  const root = resolve(entry, '..');
+  const files = new Map<string, string>();
+  const visit = (directory: string, prefix: string) => {
+    for (const name of readdirSync(directory)) {
+      const source = join(directory, name);
+      const relative = join(prefix, name);
+      if (statSync(source).isDirectory()) visit(source, relative);
+      else files.set(`ui/${relative}`, readFileSync(source, 'utf8'));
+    }
+  };
+  if (!existsSync(root)) throw new Error('contest-logbook-ui-assets-missing');
+  visit(root, '');
+  return files;
+}
+
 // ===== Core template generation =====
 
 function generatePackageJson(config: PluginConfig): string {
@@ -250,6 +270,7 @@ dist/
 function generateLocaleZh(config: PluginConfig): string {
   return JSON.stringify({
     pluginDescription: `${config.name} plugin`,
+    contestLogTitle: '比赛日志',
     enabled: '启用自动发射控制',
     enabledDesc: '允许此插件通过宿主发射协调器影响当前操作员的自动通联',
   }, null, 2) + '\n';
@@ -258,6 +279,7 @@ function generateLocaleZh(config: PluginConfig): string {
 function generateLocaleEn(config: PluginConfig): string {
   return JSON.stringify({
     pluginDescription: `${config.name} plugin`,
+    contestLogTitle: 'Contest log',
     enabled: 'Enable automatic transmit control',
     enabledDesc: 'Allow this plugin to influence operator automation through the host coordinator',
   }, null, 2) + '\n';
@@ -455,20 +477,21 @@ function generateTsFT8ContestPlugin(config: PluginConfig): string {
 } from '@tx5dr/plugin-api';
 import {
   cabrilloSubmission,
-  CONTEST_SESSION_PERMISSIONS,
+  CONTEST_LOGBOOK_PERMISSIONS,
   composeFT8ContestPlugin,
   createContestQsoEnvelopeAdapter,
-  defaultContestSession,
   defineFT8Contest,
   distancePoints,
   fixedWeekendEdition,
   gridExchange,
   requireExchangeAndFinalAck,
   type FT8ContestQso,
+  standardFT8ContestLogbook,
   type GridExchange,
 } from '@tx5dr/plugin-api/contest';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
+import jaLocale from './locales/ja.json' with { type: 'json' };
 
 export type ContestQso = FT8ContestQso<GridExchange> & {
   frequencyKhz: number;
@@ -498,13 +521,7 @@ export const contest = defineFT8Contest<GridExchange, ContestQso>({
 
 export const contestEnvelope = createContestQsoEnvelopeAdapter(contest);
 
-export const session = defaultContestSession({
-  create: () => ({
-    schemaVersion: 1,
-    revision: 0,
-    settings: {},
-  }),
-});
+export const logbook = standardFT8ContestLogbook({ contest });
 
 class ContestRuntime implements StrategyRuntime {
   private state: StrategyRuntimeSlot = 'TX6';
@@ -576,17 +593,18 @@ class ContestRuntime implements StrategyRuntime {
 export const plugin = composeFT8ContestPlugin({
   name: '${config.name}',
   version: '0.1.0',
-  minPluginApiVersion: '2.2.0',
+  minPluginApiVersion: '2.3.0',
   description: 'pluginDescription',
-  permissions: CONTEST_SESSION_PERMISSIONS,
+  permissions: CONTEST_LOGBOOK_PERMISSIONS,
   contest,
-  session,
+  logbook,
   runtime: (_contest, context) => new ContestRuntime(context),
 });
 
 export const locales: Record<string, Record<string, string>> = {
   zh: zhLocale,
   en: enLocale,
+  ja: jaLocale,
 };
 
 export default plugin;
@@ -775,7 +793,7 @@ describe('${config.name}', () => {
 
   it('exposes an FT8 strategy plugin', () => {
     expect(plugin.type).toBe('strategy');
-    expect(plugin.minPluginApiVersion).toBe('2.2.0');
+      expect(plugin.minPluginApiVersion).toBe('2.3.0');
     expect(contest.operating).toMatchObject({
       humanInitiation: 'required',
       maxConcurrentQsos: 1,
@@ -1396,6 +1414,7 @@ function generateFiles(config: PluginConfig): Map<string, string> {
 
     if (config.template === 'ft8-contest') {
       files.set('src/index.ts', generateTsFT8ContestPlugin(config));
+      for (const [relativePath, content] of readContestLogbookUiAssets()) files.set(relativePath, content);
     } else if (config.type === 'strategy') {
       files.set('src/index.ts', generateTsStrategyPlugin(config));
     } else if (hasUI(config)) {
@@ -1404,8 +1423,9 @@ function generateFiles(config: PluginConfig): Map<string, string> {
       files.set('src/index.ts', generateTsUtilityPlugin(config));
     }
 
-    files.set('src/locales/zh.json', generateLocaleZh(config));
-    files.set('src/locales/en.json', generateLocaleEn(config));
+      files.set('src/locales/zh.json', generateLocaleZh(config));
+      files.set('src/locales/en.json', generateLocaleEn(config));
+      if (config.template === 'ft8-contest') files.set('src/locales/ja.json', JSON.stringify({ pluginDescription: `${config.name} plugin`, contestLogTitle: 'コンテストログ' }, null, 2) + '\n');
     files.set('src/__tests__/plugin.test.ts', generateTsTest(config));
   } else {
     if (hasUI(config)) {

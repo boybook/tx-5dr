@@ -5,6 +5,13 @@
  */
 export function openExternal(url: string): void {
   if (!url) return;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return;
   const api = (window as unknown as {
     electronAPI?: { shell?: { openExternal?: (u: string) => Promise<void> } };
   }).electronAPI?.shell?.openExternal;

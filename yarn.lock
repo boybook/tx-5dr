@@ -6517,7 +6517,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@tx5dr/plugin-api@workspace:*, @tx5dr/plugin-api@workspace:packages/plugin-api":
+"@tx5dr/plugin-api@npm:^2.3.0, @tx5dr/plugin-api@workspace:*, @tx5dr/plugin-api@workspace:packages/plugin-api":
   version: 0.0.0-use.local
   resolution: "@tx5dr/plugin-api@workspace:packages/plugin-api"
   dependencies:
@@ -6525,8 +6525,12 @@ __metadata:
     "@tx5dr/core": "workspace:*"
     "@tx5dr/shared-config": "workspace:*"
     "@types/node": "npm:^20.11.24"
+    "@vitejs/plugin-react": "npm:^4.3.4"
     eslint: "npm:^8.0.0"
+    react: "npm:^18.3.1"
+    react-dom: "npm:^18.3.1"
     typescript: "npm:^5.0.0"
+    vite: "npm:^6.3.4"
     vitest: "npm:^1.0.0"
   languageName: unknown
   linkType: soft
@@ -9398,6 +9402,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "create-tx5dr-plugin@workspace:packages/create-tx5dr-plugin"
   dependencies:
+    "@tx5dr/plugin-api": "npm:^2.3.0"
     typescript: "npm:^5.0.0"
   bin:
     create-tx5dr-plugin: ./dist/index.js

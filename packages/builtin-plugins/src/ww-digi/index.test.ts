@@ -145,6 +145,7 @@ describe('WW Digi contest edition persistence', () => {
       .toBe('plugin-session-ww-digi-2026');
     expect(ctx.store.global.get<{ health?: { state?: string } }>(wwDigiTestables.sessionKey('BG5DRB', 2026))?.health)
       .toMatchObject({ state: 'healthy' });
+    await wwDigiStrategyPlugin.onUnload?.(ctx as never);
   });
 
   it('observes the active contest edition after the configured year changes', async () => {
@@ -171,6 +172,7 @@ describe('WW Digi contest edition persistence', () => {
       expect(ctx.ui._events.filter((event) => event.type === 'operator-projection-refresh'))
         .toHaveLength(initialRefreshes + 1);
     });
+    await wwDigiStrategyPlugin.onUnload?.(ctx as never);
   });
 
   it('refreshes the contest projection only from its independent session', async () => {
@@ -492,6 +494,8 @@ describe('WW Digi contest edition persistence', () => {
   });
 
   it('opens the contest log through an operator-bound standalone page entry', () => {
+    expect(wwDigiStrategyPlugin.minPluginApiVersion).toBe('2.3.0');
+    expect(wwDigiStrategyPlugin.permissions).toEqual(expect.arrayContaining(['logbook:session', 'plugin:event-bus']));
     expect(wwDigiStrategyPlugin.panels).toContainEqual(expect.objectContaining({
       id: 'contest-log',
       slot: 'operator-action',

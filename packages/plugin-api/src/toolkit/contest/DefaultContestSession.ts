@@ -105,6 +105,10 @@ export interface DefaultContestSessionOptions<
   /** Scope of the non-QSO KV state. QSO data always lives in the Host plugin-session. */
   stateScope?: 'operator' | 'global';
   create(contest: TContest, context: ContestSessionContext): TSession;
+  /** Overrides the generated durable key for an explicit migration. */
+  sessionKey?(contest: TContest, context: ContestSessionContext): string;
+  /** Overrides the KV state key for an explicit migration. */
+  stateKey?(contest: TContest, context: ContestSessionContext): string;
   title?(contest: TContest, context: ContestSessionContext): string;
   maxTransactionAttempts?: number;
 }
@@ -118,6 +122,10 @@ export interface DefaultContestSessionModule<
   /** Binds Host operations to the current plugin invocation context. */
   access(context: ContestSessionContext): ContestApplicationSessionFacade;
   getHealth(operatorId: string): ContestSessionHealth;
+  /** Returns the destination accepted by strategy QSO completion effects. */
+  getDestination(operatorId: string): { kind: 'plugin-session-key'; sessionKey: string };
+  /** Rebinds an already loaded operator to another immutable contest edition. */
+  rebind(operatorId: string, contest: TContest, context: ContestSessionContext): Promise<void>;
 }
 
 function cloneHealth(health: ContestSessionHealth): ContestSessionHealth {
@@ -148,7 +156,7 @@ function encodeIdentitySegment(value: string): string {
   }).join('');
 }
 
-function sessionKey(contest: ContestSessionIdentity): string {
+function defaultSessionKey(contest: ContestSessionIdentity): string {
   const key = [
     'contest',
     encodeIdentitySegment(contest.id),
@@ -210,6 +218,7 @@ export function defaultContestSession<
   const repositories = new Map<string, ContestSessionRepository<TSession>>();
   const contests = new Map<string, TContest>();
   const owners = new Map<string, ContestSessionOwner>();
+  const sessionKeys = new Map<string, string>();
   const health = new Map<string, ContestSessionHealth>();
   const subscriptions = new Map<string, Set<() => void>>();
   const defaultAttempts = validateAttempts(options.maxTransactionAttempts ?? 3);
@@ -250,7 +259,7 @@ export function defaultContestSession<
     owner: ContestSessionOwner,
   ): Promise<PluginLogbookSessionAccess> {
     const access = await context.logbook.sessions.open({
-      sessionKey: sessionKey(contest),
+      sessionKey: options.sessionKey?.(contest, context) ?? defaultSessionKey(contest),
       stationCallsign: owner.stationCallsign,
       title: options.title?.(contest, context)
         ?? `${contest.id} ${contest.edition.id} - ${owner.stationCallsign}`,
@@ -296,6 +305,48 @@ export function defaultContestSession<
         writable: false,
         updatedAt: Date.now(),
       });
+    },
+    getDestination(operatorId) {
+      const key = sessionKeys.get(operatorId);
+      if (!key) throw new Error('contest_session_not_open');
+      return { kind: 'plugin-session-key', sessionKey: key };
+    },
+    async rebind(operatorId, contest, context) {
+      const currentRepository = repositories.get(operatorId);
+      const owner = owners.get(operatorId);
+      if (!currentRepository || !owner) throw new Error('contest_session_not_open');
+      for (const unsubscribe of subscriptions.get(operatorId) ?? []) unsubscribe();
+      subscriptions.delete(operatorId);
+      await currentRepository.flush();
+
+      const store = options.stateScope === 'global' ? context.store.global : context.store.operator;
+      const durableKey = options.sessionKey?.(contest, context) ?? defaultSessionKey(contest);
+      const repository = new ContestSessionRepository(
+        store,
+        options.stateKey?.(contest, context) ?? durableKey,
+        () => options.create(contest, context),
+      );
+      repositories.set(operatorId, repository);
+      contests.set(operatorId, contest);
+      sessionKeys.set(operatorId, durableKey);
+      setHealth(operatorId, { state: 'opening', readable: false, writable: false });
+      try {
+        const access = await openHostSession(contest, context, owner);
+        const snapshot = await access.readQsoSnapshot();
+        setHealth(operatorId, {
+          state: 'healthy',
+          revision: snapshot.revision,
+          qsoCount: snapshot.records.length,
+        });
+      } catch (error) {
+        setHealth(operatorId, {
+          state: 'degraded',
+          readable: false,
+          writable: false,
+          error: errorMessage(error),
+        });
+        throw error;
+      }
     },
     access(context) {
       const operatorId = context.operator.id;
@@ -443,14 +494,16 @@ export function defaultContestSession<
       };
       if (!owner.pluginName || !owner.stationCallsign) throw new Error('contest_session_owner_invalid');
       const store = options.stateScope === 'global' ? context.store.global : context.store.operator;
+      const durableKey = options.sessionKey?.(contest, context) ?? defaultSessionKey(contest);
       const repository = new ContestSessionRepository(
         store,
-        sessionKey(contest),
+        options.stateKey?.(contest, context) ?? durableKey,
         () => options.create(contest, context),
       );
       repositories.set(operatorId, repository);
       contests.set(operatorId, contest);
       owners.set(operatorId, owner);
+      sessionKeys.set(operatorId, durableKey);
       setHealth(operatorId, { state: 'opening', readable: false, writable: false });
       try {
         const access = await openHostSession(contest, context, owner);
@@ -470,17 +523,19 @@ export function defaultContestSession<
         repositories.delete(operatorId);
         contests.delete(operatorId);
         owners.delete(operatorId);
+        sessionKeys.delete(operatorId);
         throw error;
       }
       return async () => {
         try {
           for (const unsubscribe of subscriptions.get(operatorId) ?? []) unsubscribe();
           subscriptions.delete(operatorId);
-          await repository.flush();
+          await (repositories.get(operatorId) ?? repository).flush();
         } finally {
           repositories.delete(operatorId);
           contests.delete(operatorId);
           owners.delete(operatorId);
+          sessionKeys.delete(operatorId);
           setHealth(operatorId, { state: 'closed', readable: false, writable: false });
         }
       };

@@ -68,7 +68,7 @@ export default definePlugin({
 
 Release boundary: `2.0.1` is the containment release for the existing
 experimental/advanced `./toolkit` surface. The stable `./contest` entry point,
-root re-exports and `ft8-contest` scaffold start at `2.2.0`; the publish workflow
+root re-exports and `ft8-contest` scaffold start at `2.3.0`; the publish workflow
 rejects an older version when that stable export is present.
 
 Plugin compatibility uses the bundled `@tx5dr/plugin-api` SemVer, not the
@@ -84,12 +84,14 @@ same modules and connect them with `definePlugin()` itself.
 ```ts
 import {
   cabrilloSubmission,
+  CONTEST_LOGBOOK_PERMISSIONS,
   composeFT8ContestPlugin,
   defineFT8Contest,
   distancePoints,
   fixedWeekendEdition,
   gridExchange,
   requireExchangeAndFinalAck,
+  standardFT8ContestLogbook,
 } from '@tx5dr/plugin-api/contest';
 import { createContestRuntime } from './runtime.js';
 
@@ -105,6 +107,11 @@ const contest = defineFT8Contest({
   exchange: gridExchange(),
   completion: requireExchangeAndFinalAck(),
   scoring: distancePoints({ stepKm: 3000 }),
+  presentation: {
+    summary: 'FT8/FT4 grid exchange contest.',
+    scoring: 'One point plus one point per 3000 km step; grid fields provide multipliers.',
+    exchange: 'Four-character Maidenhead grid',
+  },
   submission: cabrilloSubmission({
     headers: () => [['CONTEST', 'EXAMPLE-FT8']],
     qsoLine: (qso) => `QSO: ${qso.callsign}`,
@@ -114,9 +121,11 @@ const contest = defineFT8Contest({
 export default composeFT8ContestPlugin({
   name: 'example-ft8',
   version: '1.0.0',
-  minPluginApiVersion: '2.2.0',
+  minPluginApiVersion: '2.3.0',
+  permissions: CONTEST_LOGBOOK_PERMISSIONS,
   contest,
   runtime: createContestRuntime,
+  logbook: standardFT8ContestLogbook({ contest }),
 });
 ```
 
@@ -133,7 +142,13 @@ maps human initiation and QSO/simultaneous-signal limits into Host-enforced
 strategy capabilities. `cycleRelation` remains a runtime-adapter responsibility
 because it depends on the contest protocol's lane semantics. Optional
 `defaultContestSession()` and `defaultContestWorkbench()` hide storage keys and
-page routing while keeping their module interfaces replaceable.
+page routing while keeping their module interfaces replaceable. For a complete
+operator-facing contest logbook, use `standardFT8ContestLogbook({ contest })`;
+it supplies the standard page, panel, bridge protocol, ADIF import/export and
+official submission format. The `ft8-contest` scaffold copies the canonical
+page assets automatically. The definition's `presentation` metadata is shown
+as collapsible rule and scoring details with a link to the official rules; when
+metadata is absent, the corresponding detail is omitted.
 
 Single-stream contests may add `strategyFeatures.targetQueue` explicitly.
 Definitions with more than one concurrent QSO automatically require the Host's
@@ -521,6 +536,9 @@ Plugin iframe pages communicate with the host via the Bridge SDK (`window.tx5dr`
 tx5dr.invoke('getState').then(function(state) {
   // Full autocomplete for tx5dr methods
 });
+
+// Opens the system default browser in Electron, or a new tab in Web.
+tx5dr.openExternal('https://example.com/rules');
 ```
 
 ## CSS Design Tokens

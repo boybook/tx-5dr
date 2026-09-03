@@ -6,6 +6,7 @@ import { useWSEvent } from '../../hooks/useWSEvent';
 import { createLogger } from '../../utils/logger';
 import { getAuthHeaders, getStoredJwt } from '../../utils/authHeaders';
 import { forwardPluginIframeKeyboardEvent } from '../../utils/pluginIframeKeyboardEvents';
+import { openExternal } from '../../utils/openExternal';
 import { PluginIframeRequestGate } from './PluginIframeRequestGate';
 
 const logger = createLogger('PluginIframeHost');
@@ -344,6 +345,10 @@ export const PluginIframeHost: React.FC<PluginIframeHostProps> = ({
           iframeRef.current?.dispatchEvent(
             new CustomEvent('plugin-request-close', { bubbles: true }),
           );
+          break;
+
+        case 'tx5dr:open-external':
+          if (typeof msg.url === 'string') openExternal(msg.url);
           break;
 
         default:

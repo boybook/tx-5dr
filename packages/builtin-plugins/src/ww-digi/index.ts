@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { wwDigiSimulationScenarios } from './simulation-scenarios.js';
 import {
   definePlugin,
+  composeFT8ContestPlugin,
   generateADIFFile,
   type PluginContextFor,
   type PluginLogbookSessionAccess,
@@ -10,10 +11,25 @@ import {
   type StrategyMessagePresentationProjection,
   type StrategyPluginContext,
   type StrategyRuntimeSnapshot,
+  type PluginUIHandler,
 } from '@tx5dr/plugin-api';
 import type { PluginQuickSetting } from '@tx5dr/plugin-api';
 import { getCallsignInfo, getStandardDigitalFrequencyMatch } from '@tx5dr/core';
-import { ContestSessionNotifier, ContestSessionRepository } from '@tx5dr/plugin-api/toolkit';
+import {
+  ContestSessionNotifier,
+  ContestSessionRepository,
+  cabrilloSubmission,
+  defaultContestLogbook,
+  defineFT8Contest,
+  distancePoints,
+  fixedWeekendEdition,
+  gridExchange,
+  gridFieldMultiplier,
+  requireExchangeAndFinalAck,
+  type ContestLogbookAdapter,
+  type ContestLogbookViewModel,
+  type FT8ContestQso,
+} from '@tx5dr/plugin-api/toolkit';
 import {
   WWDigiStrategyRuntime,
   type WWDigiPracticeOperatingIndex,
@@ -49,6 +65,7 @@ import {
   wwDigiEditionId,
   wwDigiRulesetVersion,
   WW_DIGI_CONTEST_ID,
+  WW_DIGI_RULESET_VERSION,
   type WWDigiContestEntryView,
 } from './contest-entry.js';
 
@@ -94,6 +111,7 @@ interface PendingAdifImport {
 }
 
 const pendingAdifImports = new Map<string, PendingAdifImport>();
+const legacyPageHandlers = new Map<string, PluginUIHandler>();
 
 function prunePendingAdifImports(now = Date.now()): void {
   for (const [token, pending] of pendingAdifImports) {
@@ -876,7 +894,7 @@ export const wwDigiQuickSettings: PluginQuickSetting[] = [
   { settingKey: 'authorizedStaleReceiveCycles' },
 ];
 
-export const wwDigiStrategyPlugin = definePlugin({
+const wwDigiBasePlugin = definePlugin({
   apiVersion: 2,
   name: BUILTIN_WW_DIGI_PLUGIN_NAME,
   version: '1.0.0',
@@ -1036,7 +1054,7 @@ export const wwDigiStrategyPlugin = definePlugin({
       typed.log.warn('WW Digi ledger reconciliation failed', { error: error instanceof Error ? error.message : String(error) });
     });
     typed.ui.refreshOperatorProjection();
-    typed.ui.registerPageHandler({
+    const handler: PluginUIHandler = {
       async onMessage(pageId, action, data, requestContext) {
         if (pageId !== 'contest-log') throw new Error(`Unknown page: ${pageId}`);
         const payload = data && typeof data === 'object' ? data as Record<string, unknown> : {};
@@ -1196,7 +1214,9 @@ export const wwDigiStrategyPlugin = definePlugin({
         }
         throw new Error(`Unknown action: ${action}`);
       },
-    });
+    };
+    legacyPageHandlers.set(typed.operator.id, handler);
+    typed.ui.registerPageHandler(handler);
   },
   onUnload(ctx) {
     const typed = ctx as WWDigiContext;
@@ -1204,6 +1224,7 @@ export const wwDigiStrategyPlugin = definePlugin({
       if (pending.operatorId === typed.operator.id) pendingAdifImports.delete(token);
     }
     practiceRuntimes.delete(typed.operator.id);
+    legacyPageHandlers.delete(typed.operator.id);
   },
   hooks: {
     async onConfigChange(changes, ctx) {
@@ -1280,6 +1301,208 @@ export const wwDigiStrategyPlugin = definePlugin({
   },
 });
 
+type WWDigiFrameworkQso = FT8ContestQso<{ grid: string }> & {
+  operatorCallsign?: string;
+  operatorGrid?: string;
+  frequencyHz?: number;
+};
+
+const wwDigiFrameworkContest = defineFT8Contest<{ grid: string }, WWDigiFrameworkQso>({
+  id: WW_DIGI_CONTEST_ID,
+  rulesetVersion: WW_DIGI_RULESET_VERSION,
+  edition: fixedWeekendEdition({
+    id: wwDigiEditionId(DEFAULT_CONTEST_YEAR),
+    startAt: new Date(resolveWWDigiContestPeriod(DEFAULT_CONTEST_YEAR).startTime),
+    endAt: new Date(resolveWWDigiContestPeriod(DEFAULT_CONTEST_YEAR).endTime),
+    source: { url: 'https://ww-digi.com/rules/' },
+  }),
+  modes: ['FT8', 'FT4'],
+  bands: WW_DIGI_BANDS,
+  exchange: gridExchange(),
+  completion: requireExchangeAndFinalAck(),
+  scoring: distancePoints<WWDigiFrameworkQso>({
+    stepKm: 3_000,
+    multiplierKeys: gridFieldMultiplier({
+      grid: (qso) => qso.receivedExchange?.grid,
+      band: (qso) => qso.band,
+    }),
+  }),
+  submission: cabrilloSubmission<WWDigiFrameworkQso>({
+    headers: () => [['CONTEST', 'WW-DIGI']],
+    qsoLine: (qso) => `QSO: ${qso.frequencyHz ?? 0} DG ${new Date(qso.startTime).toISOString()} ${qso.callsign}`,
+  }),
+  operating: {
+    humanInitiation: 'required',
+    maxConcurrentQsos: 3,
+    maxSimultaneousSignals: 3,
+    cycleRelation: 'any',
+  },
+});
+
+const wwDigiContestLogbookSettings = {
+  settings: {
+    contestYear: { type: 'number' as const, default: DEFAULT_CONTEST_YEAR, label: 'contestYear', description: 'contestYearDesc', scope: 'operator' as const },
+    location: { type: 'string' as const, default: '', label: 'location', description: 'locationDesc', scope: 'operator' as const },
+    categoryBand: { type: 'string' as const, default: 'ALL', label: 'categoryBand', description: 'categoryBandDesc', scope: 'operator' as const, options: [...WW_DIGI_BANDS.map((value) => ({ label: value as string, value: value as string })), { label: 'ALL', value: 'ALL' }] },
+    categoryPower: { type: 'string' as const, default: 'LOW', label: 'categoryPower', description: 'categoryPowerDesc', scope: 'operator' as const, options: ['HIGH', 'LOW', 'QRP'].map((value) => ({ label: value, value })) },
+    categoryOperator: { type: 'string' as const, default: 'SINGLE-OP', label: 'categoryOperator', description: 'categoryOperatorDesc', scope: 'operator' as const, options: ['SINGLE-OP', 'MULTI-OP', 'CHECKLOG'].map((value) => ({ label: value, value })) },
+    categoryTransmitter: { type: 'string' as const, default: 'ONE', label: 'categoryTransmitter', description: 'categoryTransmitterDesc', scope: 'operator' as const, options: ['ONE', 'TWO', 'UNLIMITED'].map((value) => ({ label: value, value })) },
+    operators: { type: 'string' as const, default: '', label: 'operators', description: 'operatorsDesc', scope: 'operator' as const },
+  },
+  seed: (contest: typeof wwDigiFrameworkContest, context: import('@tx5dr/plugin-api').ContestSessionContext) => createSession(context as unknown as WWDigiIdentityContext, configuredContestYear(context.config.contestYear)),
+  validate: (session: WWDigiContestSession, _contest: typeof wwDigiFrameworkContest, context: import('@tx5dr/plugin-api').ContestSessionContext) => {
+    try {
+      validateSessionConfig(context as unknown as WWDigiIdentityContext, session.config);
+      return [];
+    } catch (error) {
+      return [{ code: 'invalid_contest_settings', message: error instanceof Error ? error.message : String(error), severity: 'error' as const }];
+    }
+  },
+  title: (_contest: typeof wwDigiFrameworkContest, context: import('@tx5dr/plugin-api').ContestSessionContext) => `WW Digi ${configuredContestYear(context.config.contestYear)} - ${context.operator.callsign.trim().toUpperCase()}`,
+};
+
+const wwDigiContestLogbookAdapter: ContestLogbookAdapter<
+  typeof wwDigiFrameworkContest,
+  WWDigiContestSession,
+  ContestConfig,
+  Readonly<Record<string, unknown>>,
+  unknown,
+  unknown,
+  void,
+  readonly ['logbook:session', 'operator:transmit-control', 'plugin:event-bus']
+> = {
+  settings: wwDigiContestLogbookSettings,
+  presentation: {
+    columns: [
+      { key: 'callsign', label: 'Callsign' },
+      { key: 'band', label: 'Band' },
+      { key: 'mode', label: 'Mode' },
+      { key: 'receivedGrid', label: 'Exchange' },
+      { key: 'status', label: 'Status' },
+    ],
+  },
+  async getState(_contest, session, context) {
+    const typed = context as WWDigiContext;
+    const year = configuredContestYear(typed.config.contestYear);
+    const records = await readContestRecords(typed, year);
+    const score = summarizeWWDigiScore(records, session.config.categoryBand);
+    const rows = score.rows.map((row) => ({
+      id: row.record.qsoId,
+      callsign: row.record.callsign,
+      band: row.record.band,
+      mode: row.record.mode,
+      time: row.record.startTime,
+      status: row.record.status,
+      fields: {
+        receivedGrid: row.record.receivedGrid ?? 'ZZ00',
+        dupe: row.dupe,
+        points: row.creditedPoints,
+        newMultiplier: row.newMultiplier,
+      },
+      receivedExchange: row.record.receivedGrid,
+      operatorCallsign: row.record.myCallsign,
+    }));
+    return {
+      schemaVersion: 1,
+      contest: {
+        id: WW_DIGI_CONTEST_ID,
+        editionId: wwDigiEditionId(year),
+        rulesetVersion: WW_DIGI_RULESET_VERSION,
+        officialUrl: 'https://ww-digi.com/rules/',
+        startAt: new Date(resolveWWDigiContestPeriod(year).startTime).toISOString(),
+        endAt: new Date(resolveWWDigiContestPeriod(year).endTime).toISOString(),
+        modes: ['FT8', 'FT4'],
+        bands: [...WW_DIGI_BANDS],
+        exchangeId: 'grid-4',
+        exchangeSummary: 'Four-character Maidenhead grid',
+        completionId: wwDigiFrameworkContest.completion.id,
+        ruleSummary: 'FT4/FT8, four-character grid exchange, distance scoring and per-band grid-field multipliers.',
+        scoringSummary: 'One point plus one point per 3000 km step; grid fields multiply the score per band.',
+      },
+      health: {
+        state: session.health.state === 'healthy' ? 'healthy' as const : session.health.state === 'degraded' ? 'degraded' as const : 'opening' as const,
+        readable: session.health.state !== 'degraded',
+        writable: session.health.state === 'healthy',
+        updatedAt: session.health.updatedAt ?? Date.now(),
+        error: session.health.error,
+      },
+      settings: {
+        value: session.config,
+        valid: isSessionConfirmed(typed, year, session),
+        issues: isSessionConfirmed(typed, year, session) ? [] : ['Contest settings require confirmation'],
+        fields: Object.entries(wwDigiContestLogbookSettings.settings).map(([key, descriptor]) => ({ key, label: descriptor.label, description: descriptor.description, type: descriptor.type, options: 'options' in descriptor ? descriptor.options : undefined })),
+      },
+      score: {
+        claimedScore: score.claimedScore,
+        qsoPoints: score.qsoPoints,
+        multiplierCount: score.gridFields,
+        details: {
+          moduleId: wwDigiFrameworkContest.scoring.id,
+          summary: 'One point plus one point per 3000 km step; grid fields multiply the score per band.',
+          qsoCount: rows.length,
+          multiplierCount: score.gridFields,
+          total: score.claimedScore,
+        },
+      },
+      qsos: rows,
+      review: { pendingCount: score.reviewCount, issues: score.rows.flatMap((row) => row.record.status === 'review' || row.qsoPoints === null ? [{ code: row.qsoPoints === null ? 'missing_grid' : 'review', message: row.qsoPoints === null ? 'Missing valid grid exchange' : 'Marked for review', qsoId: row.record.qsoId, severity: 'warning' as const }] : []) },
+      import: { state: 'idle' as const },
+      export: { formats: [{ id: 'adif', label: 'ADIF', extension: '.adi', enabled: session.health.state === 'healthy' }, { id: 'cabrillo', label: 'Cabrillo', extension: '.log', enabled: session.health.state === 'healthy' && isSessionConfirmed(typed, year, session) }] },
+      columns: wwDigiContestLogbookAdapter.presentation?.columns,
+      presentation: wwDigiContestLogbookAdapter.presentation,
+    } satisfies ContestLogbookViewModel<ContestConfig>;
+  },
+  decode(action, data) {
+    const payload = data && typeof data === 'object' ? data as Record<string, unknown> : {};
+    if (action === 'save-settings' || action === 'set-qso-status' || action === 'preview-import' || action === 'commit-import' || action === 'cancel-import' || action === 'export') return { action, payload };
+    throw new Error(`contest_logbook_unknown_action:${action}`);
+  },
+  async handle(request, _contest, _session, requestContext) {
+    const operatorId = requestContext.instanceTarget.kind === 'operator' ? requestContext.instanceTarget.operatorId : '';
+    const handler = legacyPageHandlers.get(operatorId);
+    if (!handler) throw new Error('ww_digi_page_handler_unavailable');
+    const actionMap: Record<string, string> = {
+      'save-settings': 'updateSession',
+      'set-qso-status': 'setStatus',
+      'preview-import': 'previewADIFImport',
+      'commit-import': 'commitADIFImport',
+      'cancel-import': 'cancelADIFImport',
+    };
+    if (request.action === 'export') {
+      const formatId = (request.payload as { formatId?: unknown }).formatId;
+      const result = await handler.onMessage('contest-log', formatId === 'adif' ? 'renderADIF' : 'renderCabrillo', {}, requestContext) as { text?: string };
+      return { fileName: `ww-digi.${formatId === 'adif' ? 'adi' : 'log'}`, mediaType: 'text/plain', text: result.text ?? '' };
+    }
+    return handler.onMessage('contest-log', actionMap[request.action] ?? request.action, request.payload, requestContext);
+  },
+};
+
+const wwDigiContestLogbook = defaultContestLogbook({
+  contest: wwDigiFrameworkContest,
+  adapter: wwDigiContestLogbookAdapter,
+  resolveContest: (context) => ({
+    ...wwDigiFrameworkContest,
+    edition: fixedWeekendEdition({
+      id: wwDigiEditionId(configuredContestYear(context.config.contestYear)),
+      startAt: new Date(resolveWWDigiContestPeriod(configuredContestYear(context.config.contestYear)).startTime),
+      endAt: new Date(resolveWWDigiContestPeriod(configuredContestYear(context.config.contestYear)).endTime),
+      source: { url: 'https://ww-digi.com/rules/' },
+    }),
+  }),
+  sessionKey: (_contest, context) => contestLogbookSessionKey(configuredContestYear(context.config.contestYear)),
+  stateKey: (_contest, context) => sessionKey(context.operator.callsign, configuredContestYear(context.config.contestYear)),
+});
+
+const { createStrategyRuntime: createWWDigiStrategyRuntime, ...wwDigiPluginMetadata } = wwDigiBasePlugin;
+
+export const wwDigiStrategyPlugin = composeFT8ContestPlugin({
+  ...wwDigiPluginMetadata,
+  permissions: ['logbook:session', 'operator:transmit-control', 'plugin:event-bus'] as const,
+  contest: wwDigiFrameworkContest,
+  logbook: wwDigiContestLogbook,
+  runtime: (_contest, context) => createWWDigiStrategyRuntime!(context),
+});
+
 export const wwDigiTestables = {
   configuredContestYear,
   legacyLedgerKey,
@@ -1309,6 +1532,7 @@ export const wwDigiLocales: Record<string, Record<string, string>> = {
   ja: jaLocale,
 };
 
-export const wwDigiDirPath = fileURLToPath(new URL('.', import.meta.url));
+// Contest logbook pages are built once in the shared FT contest asset directory.
+export const wwDigiDirPath = fileURLToPath(new URL('../ft-contests/', import.meta.url));
 
 export { WWDigiStrategyRuntime } from './WWDigiStrategyRuntime.js';

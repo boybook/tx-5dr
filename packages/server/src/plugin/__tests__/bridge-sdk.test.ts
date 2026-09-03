@@ -57,6 +57,17 @@ function createBridgeHarness(search: string): BridgeHarness {
 }
 
 describe('plugin bridge SDK state', () => {
+  it('forwards external links to the parent host', () => {
+    const harness = createBridgeHarness('?_locale=en');
+
+    harness.window.tx5dr.openExternal('https://example.com/rules');
+
+    expect(harness.window.parent.postMessage).toHaveBeenCalledWith({
+      type: 'tx5dr:open-external',
+      url: 'https://example.com/rules',
+    }, '*');
+  });
+
   it('bootstraps locale, theme and public params from the iframe URL', () => {
     const harness = createBridgeHarness('?_locale=zh-CN&_theme=light&callsign=BA1ABC&auth_token=secret');
 

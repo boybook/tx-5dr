@@ -1,6 +1,8 @@
+import { fileURLToPath } from 'node:url';
 import { getCallsignInfo } from '@tx5dr/core';
 import {
   cabrilloSubmission,
+  CONTEST_LOGBOOK_PERMISSIONS,
   composeFT8ContestPlugin,
   defineCompletionModule,
   defineFT8Contest,
@@ -16,6 +18,7 @@ import {
   oncePerBand,
   requireExchangeAndFinalAck,
   scoreBy,
+  standardFT8ContestLogbook,
   type ContestExchangeFields,
   type ContestValidationIssue,
   type FT8ContestDefinition,
@@ -88,7 +91,10 @@ export interface FTContestCatalogEntry {
   contest: AnyContest;
   definition: AnyPluginDefinition;
   locales: Record<string, Record<string, string>>;
+  dirPath: string;
 }
+
+export const ftContestDirPath = fileURLToPath(new URL('.', import.meta.url));
 
 function edition(id: string, startAt: string, endAt: string, url: string) {
   return fixedWeekendEdition({
@@ -294,7 +300,9 @@ function contestPlugin<TExchange, TQso extends FT8ContestQso<TExchange>>(
     description: 'pluginDescription',
     settings: standardQSOSettings,
     quickSettings: standardQSOQuickSettings,
+    permissions: CONTEST_LOGBOOK_PERMISSIONS,
     contest,
+    logbook: standardFT8ContestLogbook({ contest }),
     runtime: (_contest: AnyContest, ctx: StrategyPluginContext) => createContestStrategyRuntime(ctx),
   });
 }
@@ -315,6 +323,7 @@ function createEntry<TExchange, TQso extends FT8ContestQso<TExchange>>(
     contest: input.contest as AnyContest,
     definition: contestPlugin(input.name, input.contest),
     locales: contestLocales(input.title, input.en, input.zh, input.ja),
+    dirPath: ftContestDirPath,
   };
 }
 
@@ -330,6 +339,8 @@ function gridContest(
     url: string;
     contestHeader: string;
     scoring: ReturnType<typeof distancePoints>;
+    ruleSummary?: string;
+    scoringSummary?: string;
   },
 ) {
   return defineFT8Contest<GridExchange, GridContestQso>({
@@ -342,6 +353,11 @@ function gridContest(
     completion: requireExchangeAndFinalAck(),
     scoring: input.scoring,
     submission: cabrillo<GridContestQso, GridExchange>(input.contestHeader, gridText),
+    presentation: {
+      summary: input.ruleSummary ?? 'Four-character Maidenhead grid exchange contest.',
+      scoring: input.scoringSummary ?? 'Contest-specific scoring and multipliers are shown below.',
+      exchange: 'Four-character Maidenhead grid',
+    },
   });
 }
 
@@ -354,6 +370,8 @@ export const arrlDigitalContest = gridContest({
   url: 'https://contests.arrl.org/ContestRules/Digital-Rules.pdf',
   bands: ['160M', '80M', '40M', '20M', '15M', '10M', '6M'],
   contestHeader: 'ARRL-DIGITAL',
+  ruleSummary: 'Digital contest using a four-character Maidenhead grid exchange across the HF and 6M bands.',
+  scoringSummary: 'One point plus one point per 500 km step, rounded up.',
   scoring: distancePoints<GridContestQso>({
     stepKm: 500,
     rounding: 'ceil',
@@ -375,6 +393,11 @@ export const ftChallengeContest = defineFT8Contest<GridAndSnrExchange, GridSnrCo
     missingDistancePoints: 1,
   }),
   submission: cabrillo<GridSnrContestQso, GridAndSnrExchange>('FT-CHALLENGE', gridSnrText),
+  presentation: {
+    summary: 'FT8/FT4 contest using a signal report and four-character Maidenhead grid exchange.',
+    scoring: 'One point plus one point per 3000 km step; grid fields provide multipliers.',
+    exchange: 'Signal report and four-character Maidenhead grid',
+  },
 });
 
 export const ftRoundupContest = defineFT8Contest<RoundupExchange, RoundupQso>({
@@ -388,6 +411,11 @@ export const ftRoundupContest = defineFT8Contest<RoundupExchange, RoundupQso>({
   dupe: oncePerBand(),
   scoring: fixedPoints<RoundupQso>(1, { multiplierKeys: roundupMultiplierKeys }),
   submission: cabrillo<RoundupQso, RoundupExchange>('FT-RU', roundupText),
+  presentation: {
+    summary: 'FT4/FT8 contest using a signal report plus state, province, or serial exchange.',
+    scoring: 'One point per valid QSO with location and DXCC multipliers.',
+    exchange: 'Signal report and state, province, or serial',
+  },
 });
 
 export const europeanFt8DxContest = gridContest({
@@ -401,6 +429,8 @@ export const europeanFt8DxContest = gridContest({
   bands: ['80M', '40M', '20M', '15M', '10M'],
   contestHeader: 'EUROPEAN-FT8-DX',
   scoring: gridDistanceScoring<GridContestQso>({ stepKm: 3000 }),
+  ruleSummary: 'FT8 DX contest using a four-character Maidenhead grid exchange on the HF bands.',
+  scoringSummary: 'One point plus one point per 3000 km step; grid fields provide multipliers.',
 });
 
 export const europeanFt4DxContest = gridContest({
@@ -414,6 +444,8 @@ export const europeanFt4DxContest = gridContest({
   bands: ['80M', '40M', '20M', '15M', '10M'],
   contestHeader: 'EUROPEAN-FT4-DX',
   scoring: gridDistanceScoring<GridContestQso>({ stepKm: 3000 }),
+  ruleSummary: 'FT4 DX contest using a four-character Maidenhead grid exchange on the HF bands.',
+  scoringSummary: 'One point plus one point per 3000 km step; grid fields provide multipliers.',
 });
 
 export const rsgbFt4InternationalActivityDayContest = defineFT8Contest<GridExchange, GridContestQso>({
@@ -434,6 +466,11 @@ export const rsgbFt4InternationalActivityDayContest = defineFT8Contest<GridExcha
     }),
   }),
   submission: cabrillo<GridContestQso, GridExchange>('RSGB-FT4-IAD', gridText),
+  presentation: {
+    summary: 'FT4 activity contest using grid exchange across the 80M, 40M, 20M, 15M, and 10M bands.',
+    scoring: 'One point for the same continent and three points for a different continent; DXCC entities multiply per band.',
+    exchange: 'Four-character Maidenhead grid',
+  },
 });
 
 export const rsgbFt4ContestSeriesContest = defineFT8Contest<GridExchange, GridContestQso>({
@@ -453,6 +490,11 @@ export const rsgbFt4ContestSeriesContest = defineFT8Contest<GridExchange, GridCo
     }),
   }),
   submission: cabrillo<GridContestQso, GridExchange>('RSGB-FT4-SERIES', gridText),
+  presentation: {
+    summary: 'RSGB FT4 contest series using grid exchange on 80M.',
+    scoring: 'One point for the same continent and three points for a different continent; DXCC entities are multipliers.',
+    exchange: 'Four-character Maidenhead grid',
+  },
 });
 
 function vhfActivityContest(input: {
@@ -476,6 +518,11 @@ function vhfActivityContest(input: {
       multiplierKeys: gridFieldMultiplier({ grid: (qso) => qso.receivedExchange?.grid, band: undefined }),
     }),
     submission: cabrillo<GridContestQso, GridExchange>(input.contestHeader, gridText),
+    presentation: {
+      summary: 'FT8/FT4 activity contest using four-character Maidenhead grid exchange on VHF and UHF bands.',
+      scoring: 'One point per valid QSO; received grid fields are multipliers.',
+      exchange: 'Four-character Maidenhead grid',
+    },
   });
 }
 
@@ -531,6 +578,12 @@ function ybStyleContest(input: {
       multiplierKeys: prefixAndDxccMultiplierKeys,
     }),
     submission: cabrillo<MemberAwareContestQso<GridExchange>, GridExchange>(input.contestHeader, gridText),
+    presentation: {
+      title: input.title,
+      summary: 'FT8 contest using four-character Maidenhead grid exchange with member-aware country and prefix scoring.',
+      scoring: 'Member, country, prefix, and DXCC rules determine QSO points and multipliers.',
+      exchange: 'Four-character Maidenhead grid',
+    },
   });
 }
 
@@ -568,6 +621,11 @@ export const africaFt4DxContest = defineFT8Contest<GridExchange, GridContestQso>
     eligible: (qso) => Boolean(continent(qso.operatorCallsign, qso.startTime) && continent(qso.callsign, qso.startTime)),
   }),
   submission: cabrillo<GridContestQso, GridExchange>('AFRICA-FT4-DX', gridText),
+  presentation: {
+    summary: 'FT4 DX contest using four-character Maidenhead grid exchange across the HF bands.',
+    scoring: 'Continent and country-aware point values determine the score.',
+    exchange: 'Four-character Maidenhead grid',
+  },
 });
 
 export const ftContestCatalog: readonly FTContestCatalogEntry[] = Object.freeze([
@@ -681,4 +739,5 @@ export const ftContestBuiltinPluginEntries = ftContestCatalog.map((entry) => ({
   definition: entry.definition,
   locales: entry.locales,
   enabledByDefault: false,
+  dirPath: entry.dirPath,
 }));

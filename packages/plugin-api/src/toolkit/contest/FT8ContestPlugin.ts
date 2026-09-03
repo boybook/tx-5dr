@@ -13,7 +13,7 @@ import type { VersionedContestSession } from './ContestSessionRepository.js';
 import type { FT8ContestDefinition } from './FT8ContestDefinition.js';
 import type { FT8ContestQso } from './FT8ContestModules.js';
 
-export const FT8_CONTEST_MIN_PLUGIN_API_VERSION = '2.2.0';
+export const FT8_CONTEST_MIN_PLUGIN_API_VERSION = '2.3.0';
 
 export interface FT8RuntimeModule<TContest> {
   readonly id: string;
@@ -127,6 +127,33 @@ function runtimeFactory<TContest>(
   runtime: FT8RuntimeModule<TContest> | FT8RuntimeFactory<TContest>,
 ): FT8RuntimeFactory<TContest> {
   return typeof runtime === 'function' ? runtime : (contest, context) => runtime.create(contest, context);
+}
+
+function decorateRuntime(
+  runtime: StrategyRuntime,
+  decorate: NonNullable<ContestLogbookModule<unknown, VersionedContestSession>['decorateCompletion']>,
+  context: StrategyPluginContext,
+): StrategyRuntime {
+  return new Proxy(runtime, {
+    get(target, property, receiver) {
+      if (property === 'decide') {
+        return async (...args: Parameters<StrategyRuntime['decide']>) => {
+          const result = await target.decide(...args);
+          const qsoCompletion = result.qsoCompletion
+            ? decorate(result.qsoCompletion, context)
+            : undefined;
+          const qsoCompletions = result.qsoCompletions?.map((effect) => decorate(effect, context));
+          return {
+            ...result,
+            ...(qsoCompletion ? { qsoCompletion } : {}),
+            ...(qsoCompletions ? { qsoCompletions } : {}),
+          };
+        };
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
 }
 
 function mergeHooks<Permissions extends readonly PluginPermission[]>(
@@ -350,8 +377,9 @@ export function composeFT8ContestPlugin<
         pages: mergeArrayById(logbook?.ui?.pages, ui?.pages),
       }
     : undefined;
-  const mergedSession: any = session ?? logbook?.session;
-  const mergedWorkbench: any = workbench ?? logbook?.workbench;
+  type Contest = FT8ContestDefinition<TExchange, TQso, TSubmissionOptions>;
+  const mergedSession = (session ?? logbook?.session) as unknown as ContestSessionModule<Contest, SessionPermissions> | undefined;
+  const mergedWorkbench = (workbench ?? logbook?.workbench) as unknown as ContestWorkbenchModule<Contest, WorkbenchPermissions> | undefined;
 
   return {
     ...metadata,
@@ -368,24 +396,26 @@ export function composeFT8ContestPlugin<
       assertPluginApiCompatible(minPluginApiVersion, metadata.name, context.pluginApiVersion);
       const runtime = createRuntime(contest, context);
       assertContestRuntimeFeatures(runtime, mergedFeatures);
-      return runtime;
+      return logbook?.decorateCompletion
+        ? decorateRuntime(runtime, logbook.decorateCompletion, context)
+        : runtime;
     },
     async onLoad(context) {
       const instanceCleanups: ContestModuleCleanup[] = [];
       cleanups.set(context.operator.id, instanceCleanups);
       try {
         if (mergedSession) {
-          const cleanup = await (mergedSession as any).setup({
+          const cleanup = await mergedSession.setup({
             contest,
-            context: context as any,
+            context: context as unknown as PluginContextFor<SessionPermissions>,
             pluginName: metadata.name,
           });
           if (cleanup) instanceCleanups.push(cleanup);
         }
         if (mergedWorkbench) {
-          const cleanup = await (mergedWorkbench as any).setup({
+          const cleanup = await mergedWorkbench.setup({
             contest,
-            context: context as any,
+            context: context as unknown as PluginContextFor<WorkbenchPermissions>,
             pluginName: metadata.name,
           });
           if (cleanup) instanceCleanups.push(cleanup);
