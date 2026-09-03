@@ -106,8 +106,8 @@ describe('CWDecoderWorkerPool telemetry', () => {
       ready: true,
       activeJob: {
         id: 7,
-        audio: new Float32Array(9_600),
-        sampleRate: 9_600,
+        audio: new Float32Array(3_200),
+        sampleRate: 3_200,
         resolve: vi.fn(),
         reject: vi.fn(),
         timer,
@@ -203,9 +203,9 @@ describe('CWDecoderWorkerPool telemetry', () => {
     });
 
     await pool.start();
-    await pool.decode(new Float32Array(9_600), 9_600);
+    await pool.decode(new Float32Array(3_200), 3_200);
     pool.updateTuning({ targetFreqHz: 650, filterWidthHz: 250 });
-    await pool.decode(new Float32Array(9_600), 9_600);
+    await pool.decode(new Float32Array(3_200), 3_200);
 
     expect(requests).toEqual([
       { targetFreqHz: 800, filterWidthHz: 800 },
@@ -238,8 +238,8 @@ describe('CWDecoderWorkerPool telemetry', () => {
     internals.inFlight = 1;
     internals.pending.push({
       id: 1,
-      audio: new Float32Array(9_600),
-      sampleRate: 9_600,
+      audio: new Float32Array(3_200),
+      sampleRate: 3_200,
       resolve: vi.fn(),
       reject: pendingReject,
     });
@@ -249,8 +249,8 @@ describe('CWDecoderWorkerPool telemetry', () => {
       ready: true,
       activeJob: {
         id: 2,
-        audio: new Float32Array(9_600),
-        sampleRate: 9_600,
+        audio: new Float32Array(3_200),
+        sampleRate: 3_200,
         resolve: vi.fn(),
         reject: activeReject,
         timer: activeTimer,

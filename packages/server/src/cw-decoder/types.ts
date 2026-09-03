@@ -144,7 +144,7 @@ export const DEFAULT_CW_DECODER_CONFIG: CWDecoderConfig = {
   enabled: false,
   backend: 'deepcw-onnx',
   inputSampleRate: 9_600,
-  decodeSampleRate: 9_600,
+  decodeSampleRate: 3_200,
   runtimeBackend: 'cpu',
   modelSize: 'tiny',
   language: 'en',

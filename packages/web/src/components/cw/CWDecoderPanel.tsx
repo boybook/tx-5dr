@@ -49,9 +49,9 @@ interface BackendAttribution {
 
 const BACKEND_ATTRIBUTIONS: Record<string, BackendAttribution> = {
   'deepcw-onnx': {
-    name: 'DeepCW / web-deep-cw-decoder',
-    sourceUrl: 'https://github.com/e04/web-deep-cw-decoder',
-    license: 'GPL-3.0',
+    name: 'DeepCW / deepcw-engine',
+    sourceUrl: 'https://github.com/e04/deepcw-engine',
+    license: 'AGPL-3.0-only',
   },
 };
 

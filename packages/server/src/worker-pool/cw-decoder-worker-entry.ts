@@ -40,8 +40,8 @@ async function initialize(): Promise<void> {
   try {
     await runDeepCWDecode({
       id: 0,
-      audio: new Float32Array(9_600),
-      sampleRate: 9_600,
+      audio: new Float32Array(3_200),
+      sampleRate: 3_200,
       modelPath: initData?.modelPath,
       runtimeBackend: initData?.runtimeBackend,
       modelSize: initData?.modelSize,

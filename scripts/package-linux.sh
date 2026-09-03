@@ -354,7 +354,7 @@ fi
 if [[ -f "$PROJECT_ROOT/resources/README.txt" ]]; then
     cp "$PROJECT_ROOT/resources/README.txt" "$APP_ROOT/resources/"
 fi
-for model in en_tiny.onnx en_small.onnx; do
+for model in model.onnx model.onnx.json; do
     if [[ ! -f "$APP_ROOT/resources/models/deepcw/$model" ]]; then
         err "DeepCW model missing from package resources: resources/models/deepcw/$model"
         exit 1
@@ -438,7 +438,7 @@ build_package() {
         --description "TX-5DR Digital Radio Server - Ham Radio FT8 Application" \
         --maintainer "BG5DRB <bg5drb@example.com>" \
         --url "https://tx5dr.com" \
-        --license "MIT" \
+        --license "GPL-3.0-only AND AGPL-3.0-only" \
         --category "hamradio" \
         --depends "nodejs >= 22" \
         --depends "nginx" \

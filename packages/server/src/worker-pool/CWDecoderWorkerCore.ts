@@ -1,6 +1,7 @@
 import { createRequire } from 'module';
-import { existsSync, statSync } from 'node:fs';
-import { audioToDeepCWSpectrogramTensor, type DeepCWInputType } from './DeepCWFeatureExtractor.js';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import path from 'node:path';
+import { audioToDeepCWSpectrogramTensor, DEEP_CW_SAMPLE_RATE, type DeepCWInputType } from './DeepCWFeatureExtractor.js';
 import type { CWDecoderCharacterSpan, CWDecoderWordSpaceSpan } from '../cw-decoder/types.js';
 
 interface DeepCWOnnxMetadata {
@@ -58,6 +59,24 @@ export function probeDeepCWRuntime(modelPath?: string | null): CWDecoderRuntimeP
     if (!existsSync(modelPath) || !statSync(modelPath).isFile()) {
       return { available: false, error: `DeepCW model file not found: ${modelPath}` };
     }
+    const metadataPath = path.join(path.dirname(modelPath), 'model.onnx.json');
+    if (!existsSync(metadataPath) || !statSync(metadataPath).isFile()) {
+      return { available: false, error: `DeepCW model metadata file not found: ${metadataPath}` };
+    }
+    const metadata = JSON.parse(readFileSync(metadataPath, 'utf8')) as {
+      sample_rate?: unknown;
+      spectrogram_frequency_bins?: unknown;
+      num_classes?: unknown;
+      onnx_input_name?: unknown;
+      onnx_output_name?: unknown;
+    };
+    if (metadata.sample_rate !== DEEP_CW_SAMPLE_RATE
+      || metadata.spectrogram_frequency_bins !== 65
+      || metadata.num_classes !== 42
+      || metadata.onnx_input_name !== 'spectrogram'
+      || metadata.onnx_output_name !== 'log_probs') {
+      return { available: false, error: `DeepCW model metadata is incompatible: ${metadataPath}` };
+    }
   } catch (error) {
     return { available: false, error: `DeepCW model file is not readable: ${error instanceof Error ? error.message : String(error)}` };
   }
@@ -72,8 +91,8 @@ export async function runDeepCWDecode(request: CWDecoderWorkerRequest): Promise<
   if (!probe.available) {
     throw new Error(probe.error ?? 'DeepCW runtime is unavailable');
   }
-  if (request.sampleRate !== 9_600) {
-    throw new Error(`DeepCW worker expects 9600 Hz PCM, received ${request.sampleRate} Hz`);
+  if (request.sampleRate !== DEEP_CW_SAMPLE_RATE) {
+    throw new Error(`DeepCW worker expects ${DEEP_CW_SAMPLE_RATE} Hz PCM, received ${request.sampleRate} Hz`);
   }
 
   const require = createRequire(import.meta.url);

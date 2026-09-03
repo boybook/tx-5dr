@@ -144,22 +144,20 @@ describe('DeepCWDecoderBackend', () => {
     await backend.stop('test');
   });
 
-  it('reports an error instead of resampling non-9600 Hz input inside the backend', async () => {
+  it('resamples source audio to the model sample rate inside the backend', async () => {
     const pool = new MockPool([decodeResult()]);
     const backend = new DeepCWDecoderBackend({ poolFactory: () => pool as never });
-    const errors: string[] = [];
-    backend.on('error', (event) => errors.push(event.error));
-
     await backend.start({ ...DEFAULT_CW_DECODER_CONFIG, enabled: true, decodeIntervalMs: 1000 });
-    backend.pushAudio(audio(1), 12_000);
+    const sourceAudio = new Float32Array(3 * 12_000).fill(0.1);
+    backend.pushAudio(sourceAudio, 12_000);
+    await (backend as unknown as { runDecodeJob: () => Promise<void> }).runDecodeJob();
 
-    expect(errors[0]).toContain('expects 9600 Hz audioData');
+    expect(pool.calls[0]).toBe(3 * DEFAULT_CW_DECODER_CONFIG.decodeSampleRate);
     expect(backend.getStatus()).toMatchObject({
-      state: 'error',
-      backendAvailable: false,
-      backendError: expect.stringContaining('expects 9600 Hz audioData'),
+      state: 'running',
+      backendAvailable: true,
+      backendError: null,
     });
-    expect(pool.calls).toEqual([]);
     await backend.stop('test');
   });
 

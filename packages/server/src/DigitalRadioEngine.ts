@@ -160,9 +160,10 @@ export function resolveDeepCWModelPath(
   const configured = env.TX5DR_DEEPCW_MODEL_PATH;
   if (configured) return configured;
 
-  const language = config.language === 'en' ? 'en' : 'en';
-  const modelSize = config.modelSize === 'small' ? 'small' : 'tiny';
-  const fileName = `${language}_${modelSize}.onnx`;
+  // deepcw-engine publishes one AGPL-3.0-only model plus its metadata.
+  // Keep the legacy modelSize/language fields for wire compatibility, but
+  // resolve only the pinned model artifact.
+  const fileName = 'model.onnx';
   const cwd = options.cwd ?? process.cwd();
   const moduleDir = options.moduleDir ?? DEFAULT_DEEPCW_MODULE_DIR;
   const appRootFromModule = path.resolve(moduleDir, '..', '..', '..');
@@ -213,14 +214,14 @@ export function makeDeepCWBackendDescriptor(options: DeepCWBackendDescriptorOpti
     error: options.error ?? null,
     reason: options.error ?? undefined,
     runtimeBackends,
-    modelSizes: ['tiny', 'small'],
+    modelSizes: ['tiny'],
     languages: ['en'],
     modes: ['streaming'],
-    model: 'en_tiny/en_small',
+    model: 'deepcw-engine model.onnx',
     runtime: options.runtimeBackend ?? 'cpu',
-    attributionName: 'DeepCW / web-deep-cw-decoder',
-    sourceUrl: 'https://github.com/e04/web-deep-cw-decoder',
-    license: 'GPL-3.0',
+    attributionName: 'DeepCW / deepcw-engine',
+    sourceUrl: 'https://github.com/e04/deepcw-engine',
+    license: 'AGPL-3.0-only',
   };
 }
 

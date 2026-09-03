@@ -2,7 +2,8 @@ import { EventEmitter } from 'eventemitter3';
 import { createLogger } from '../utils/logger.js';
 import { CWDecoderWorkerPool } from '../worker-pool/CWDecoderWorkerPool.js';
 import { probeDeepCWRuntime } from '../worker-pool/CWDecoderWorkerCore.js';
-import { analyzeDeepCWSignal } from '../worker-pool/DeepCWFeatureExtractor.js';
+import { analyzeDeepCWSignal, DEEP_CW_SAMPLE_RATE } from '../worker-pool/DeepCWFeatureExtractor.js';
+import { resampleLinear } from './resampler.js';
 import { StreamingCommitHelper } from './StreamingCommitHelper.js';
 import {
   DEFAULT_CW_DECODER_CONFIG,
@@ -177,14 +178,17 @@ export class DeepCWDecoderBackend extends EventEmitter<CWDecoderBackendEvents> i
 
   pushAudio(chunk: Float32Array, sampleRate: number): void {
     if (chunk.length === 0) return;
-    if (sampleRate !== this.config.decodeSampleRate) {
+    if (!Number.isFinite(sampleRate) || sampleRate <= 0) {
       this.handleInputSampleRateMismatch(sampleRate);
       return;
     }
     if (this.status.state === 'error' && this.isInputSampleRateMismatchError(this.status.backendError)) {
       this.setStatus(this.makeStatus('running', true, null));
     }
-    this.appendDecodeRateAudio(new Float32Array(chunk));
+    const decodeAudio = sampleRate === this.config.decodeSampleRate
+      ? new Float32Array(chunk)
+      : resampleLinear(chunk, sampleRate, this.config.decodeSampleRate);
+    this.appendDecodeRateAudio(decodeAudio);
   }
 
   getStatus(): CWDecoderStatus {
@@ -352,12 +356,12 @@ export class DeepCWDecoderBackend extends EventEmitter<CWDecoderBackendEvents> i
   }
 
   private handleInputSampleRateMismatch(sampleRate: number): void {
-    const message = `DeepCW decoder expects ${this.config.decodeSampleRate} Hz audioData from the unified audio pipeline, received ${sampleRate} Hz`;
+    const message = `DeepCW decoder cannot resample audioData with invalid sample rate ${sampleRate}`;
     if (this.status.backendError === message) {
       return;
     }
     this.setStatus(this.makeStatus('error', false, message));
-    this.emitError(`${message}. Switch to CW mode or restart audio so the main RX buffer runs at 9600 Hz.`, true);
+    this.emitError(message, true);
     logger.warn('DeepCW input sample rate mismatch', {
       inputSampleRate: sampleRate,
       expectedSampleRate: this.config.decodeSampleRate,
@@ -390,7 +394,7 @@ export class DeepCWDecoderBackend extends EventEmitter<CWDecoderBackendEvents> i
   }
 
   private isInputSampleRateMismatchError(error: string | null): boolean {
-    return !!error && error.includes(`expects ${this.config.decodeSampleRate} Hz audioData`);
+    return !!error && error.includes('cannot resample audioData');
   }
 
   private clearPendingPreviewIfNeeded(): void {
@@ -423,8 +427,10 @@ export class DeepCWDecoderBackend extends EventEmitter<CWDecoderBackendEvents> i
       ...DEFAULT_CW_DECODER_CONFIG,
       ...config,
       backend: 'deepcw-onnx',
+      modelSize: 'tiny',
+      language: 'en',
       inputSampleRate: positiveInteger(config.inputSampleRate, DEFAULT_CW_DECODER_CONFIG.inputSampleRate),
-      decodeSampleRate: positiveInteger(config.decodeSampleRate, DEFAULT_CW_DECODER_CONFIG.decodeSampleRate),
+      decodeSampleRate: DEEP_CW_SAMPLE_RATE,
       windowSeconds: positiveInteger(config.windowSeconds, DEFAULT_CW_DECODER_CONFIG.windowSeconds),
       decodeIntervalMs: positiveInteger(config.decodeIntervalMs, DEFAULT_CW_DECODER_CONFIG.decodeIntervalMs),
       minCommitChars: positiveInteger(config.minCommitChars, DEFAULT_CW_DECODER_CONFIG.minCommitChars),

@@ -8,6 +8,7 @@ import {
   DEEP_CW_HOP_LENGTH,
   DEEP_CW_SAMPLE_RATE,
   analyzeDeepCWSignal,
+  audioToDeepCWSpectrogramTensor,
   getDeepCWBandMapping,
 } from '../DeepCWFeatureExtractor.js';
 
@@ -31,9 +32,9 @@ function deterministicNoise(seconds: number, amplitude = 0.1): Float32Array {
 
 describe('DeepCW feature constants', () => {
   it('matches the official Single EN spectrogram geometry', () => {
-    expect(DEEP_CW_SAMPLE_RATE).toBe(9_600);
-    expect(DEEP_CW_FFT_LENGTH).toBe(768);
-    expect(DEEP_CW_HOP_LENGTH).toBe(192);
+    expect(DEEP_CW_SAMPLE_RATE).toBe(3_200);
+    expect(DEEP_CW_FFT_LENGTH).toBe(256);
+    expect(DEEP_CW_HOP_LENGTH).toBe(48);
     expect(DEEP_CW_BIN_RESOLUTION).toBe(12.5);
     expect(DEEP_CW_CROPPED_BINS).toBe(65);
     expect(DEEP_CW_DECODABLE_MIN_FREQ_HZ).toBe(400);
@@ -52,6 +53,20 @@ describe('DeepCW feature constants', () => {
       effectiveMaxFreqHz: 1_200,
       croppedBins: 65,
     });
+  });
+
+  it('uses the deepcw-engine padded log-magnitude input geometry', () => {
+    const tensor = audioToDeepCWSpectrogramTensor(
+      sineWave(700, 1),
+      'float32',
+      800,
+      800,
+    );
+
+    expect(tensor?.dims).toEqual([1, 1, 67, 65]);
+    expect(tensor?.type).toBe('float32');
+    expect(tensor?.data.length).toBe(67 * 65);
+    expect(Math.max(...(tensor?.data as Float32Array))).toBeGreaterThan(0);
   });
 
   it('maps shifted narrow bands around the target tone only', () => {

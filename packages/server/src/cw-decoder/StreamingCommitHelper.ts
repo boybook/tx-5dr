@@ -1,7 +1,7 @@
 import type { CWDecoderCommitEvent, CWDecoderPendingEvent, CWDecoderCharacterSpan, CWDecoderWordSpaceSpan } from './types.js';
 
-const FFT_LENGTH = 768;
-const HOP_LENGTH = 192;
+const FFT_LENGTH = 256;
+const HOP_LENGTH = 48;
 const DEFAULT_OVERLAP_RETENTION_SECONDS = 1.25;
 const DEFAULT_STABLE_MIN_NON_WHITESPACE_CHARS = 5;
 const DEFAULT_STABLE_REPEAT_COUNT = 3;

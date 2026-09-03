@@ -7,7 +7,7 @@ import {
 
 describe('resolveDeepCWModelPath', () => {
   it('resolves Linux service models from the app root when cwd is server dist', () => {
-    const expected = '/usr/share/tx5dr/resources/models/deepcw/en_tiny.onnx';
+    const expected = '/usr/share/tx5dr/resources/models/deepcw/model.onnx';
 
     const resolved = resolveDeepCWModelPath(
       { language: 'en', modelSize: 'tiny' },
@@ -23,7 +23,7 @@ describe('resolveDeepCWModelPath', () => {
   });
 
   it('resolves Docker models from the app root when cwd is server dist', () => {
-    const expected = '/app/resources/models/deepcw/en_tiny.onnx';
+    const expected = '/app/resources/models/deepcw/model.onnx';
 
     const resolved = resolveDeepCWModelPath(
       { language: 'en', modelSize: 'tiny' },
@@ -56,7 +56,7 @@ describe('resolveDeepCWModelPath', () => {
 
   it('keeps APP_RESOURCES semantics for Electron bundles', () => {
     const appResources = '/Applications/TX-5DR.app/Contents/Resources';
-    const expected = `${appResources}/models/deepcw/en_small.onnx`;
+    const expected = `${appResources}/models/deepcw/model.onnx`;
 
     const resolved = resolveDeepCWModelPath(
       { language: 'en', modelSize: 'small' },
@@ -93,5 +93,9 @@ describe('resolveDeepCWRuntimeBackends', () => {
 
     expect(descriptor.runtimeBackends).toEqual(resolveDeepCWRuntimeBackends());
     expect(descriptor.runtime).toBe('cuda');
+    expect(descriptor.model).toBe('deepcw-engine model.onnx');
+    expect(descriptor.sourceUrl).toBe('https://github.com/e04/deepcw-engine');
+    expect(descriptor.license).toBe('AGPL-3.0-only');
+    expect(descriptor.modelSizes).toEqual(['tiny']);
   });
 });
