@@ -67,7 +67,6 @@ import {
 import {
   BufferLogbookSourceAdapter,
   LogbookDocument,
-  type LogbookDocumentSegment,
   type LogbookRecordProjection,
   type LogbookRewriteOperation,
   type PreparedLogbookMutation,
@@ -1051,31 +1050,22 @@ export class ADIFLogProvider implements ILogProvider {
     },
   ): void {
     try {
-      const committedDocument = LogbookDocument.fromScanShared(
-        committed.scan,
-        committed.recordProjections,
-      );
-      const previousDocument = this.document;
-      this.document = committedDocument;
       if (mutation.kind === 'append') {
+        // Appends do not move any existing source ranges. Reusing the
+        // prepared document avoids rebuilding every segment after each QSO.
+        this.document = mutation.nextDocument;
         for (const id of mutation.addedIds) {
-          const next = committedDocument.getQso(id);
+          const next = mutation.nextDocument.getQso(id);
           if (next) this.records.append(next);
         }
       } else {
-        if (committedDocument.getSegments().length < (previousDocument?.getSegments().length ?? 0)) {
-          for (const id of mutation.changedIds) {
-            if (this.records.get(id)) this.records.remove(id);
-          }
-        }
-        this.reconcileRuntimeIds(previousDocument, committedDocument, mutation.changedIds);
-        for (const id of mutation.changedIds) {
-          const next = committedDocument.getQso(id);
-          const current = this.records.get(id);
-          if (next && current) this.records.replace(id, next);
-          else if (!next && current) this.records.remove(id);
-          else if (next && !current) this.records.append(next);
-        }
+        // Rewrites can change record lengths, so source ranges must come from
+        // the verified post-rename scan rather than the pre-commit document.
+        // Keep the established full installation for rewrites. It is outside
+        // the TX critical path and preserves the scanner's external-record ID
+        // and source semantics exactly.
+        this.installScan(committed.scan, committed.generation, committed.recordProjections);
+        return;
       }
       this.generation = committed.generation;
     } catch (error) {
@@ -1087,30 +1077,6 @@ export class ADIFLogProvider implements ILogProvider {
         error: error instanceof Error ? error.message : String(error),
       });
       this.installScan(committed.scan, committed.generation, committed.recordProjections);
-    }
-  }
-
-  private reconcileRuntimeIds(
-    previous: LogbookDocument | undefined,
-    next: LogbookDocument,
-    changedIds: readonly string[],
-  ): void {
-    if (!previous) return;
-    const changed = new Set(changedIds);
-    const previousByHash = new Map<string, LogbookDocumentSegment[]>();
-    for (const segment of previous.getSegments()) {
-      if (!segment.qso || changed.has(segment.qso.id)) continue;
-      const bucket = previousByHash.get(segment.rawHash) ?? [];
-      bucket.push(segment);
-      previousByHash.set(segment.rawHash, bucket);
-    }
-    for (const segment of next.getSegments()) {
-      if (!segment.qso) continue;
-      const bucket = previousByHash.get(segment.rawHash);
-      const prior = bucket?.shift();
-      if (prior?.qso && prior.qso.id !== segment.qso.id && this.records.get(prior.qso.id)) {
-        this.records.rekey(prior.qso.id, segment.qso);
-      }
     }
   }
 
