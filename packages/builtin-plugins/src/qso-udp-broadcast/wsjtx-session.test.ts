@@ -81,6 +81,33 @@ describe('WSJT-X UDP session', () => {
 
     expect(sentBuffer(network, 0).readUInt32BE(4)).toBe(2);
     expect(decodeWsjtMessage(sentBuffer(network, 0)).kind).toBe('heartbeat');
+    expect(decodeWsjtMessage(sentBuffer(network, 1)).kind).toBe('status');
+  });
+
+  it('replays status with the heartbeat for receivers that start late', async () => {
+    const network = createMockNetworkControl();
+    const ctx = createMockContext({
+      permissions: ['network', 'operator:transmit-control'],
+      network,
+      radio: { frequency: 14_074_000 },
+      operator: { frequency: 1_500, callsign: 'W1AW', grid: 'FN31' },
+    });
+    const session = new WsjtUdpSession(ctx, settings());
+
+    await session.start();
+    network._sockets[0]._sent.length = 0;
+
+    await session.onTimer('wsjtx-udp-heartbeat');
+
+    expect(network._sockets[0]._sent).toHaveLength(2);
+    expect(decodeWsjtMessage(sentBuffer(network, 0)).kind).toBe('heartbeat');
+    const status = decodeWsjtMessage(sentBuffer(network, 1));
+    expect(status.kind).toBe('status');
+    if (status.kind === 'status') {
+      expect(status.dialFrequency).toBe(14_074_000);
+      expect(status.deCall).toBe('W1AW');
+      expect(status.deGrid).toBe('FN31');
+    }
   });
 
   it('broadcasts decodes with raw frame confidence and replays them as old decodes', async () => {

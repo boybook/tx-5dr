@@ -77,6 +77,11 @@ export class WsjtUdpSession {
   async onTimer(timerId: string): Promise<void> {
     if (timerId === 'wsjtx-udp-heartbeat') {
       await this.sendHeartbeat();
+      // GridTracker can start after the plugin. Its listener ignores packets
+      // while booting, so the one-time startup Status may be lost; replay the
+      // current operating state with each heartbeat to make discovery order
+      // independent.
+      await this.sendStatus();
     }
   }
 
