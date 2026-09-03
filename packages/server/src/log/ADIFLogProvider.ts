@@ -67,6 +67,7 @@ import {
 import {
   BufferLogbookSourceAdapter,
   LogbookDocument,
+  type LogbookDocumentSegment,
   type LogbookRecordProjection,
   type LogbookRewriteOperation,
   type PreparedLogbookMutation,
@@ -403,9 +404,13 @@ export class ADIFLogProvider implements ILogProvider {
           return { revision: currentRevision, outcomes: [] };
         }
 
-        const originalRecords = new Map(this.records.all().map(record => [record.id, record]));
-        const workingRecords = new Map(
-          [...originalRecords].map(([id, record]) => [id, cloneRecord(record)]),
+        // Batch mutations are usually tiny (LoTW normally updates one QSO).
+        // Keep a working copy only for records touched by this batch instead
+        // of cloning the entire logbook before preparing the physical write.
+        const originalRecords = new Map<string, QSORecord>();
+        const workingRecords = new Map<string, QSORecord>();
+        const getWorkingRecord = (id: string): QSORecord | null => (
+          workingRecords.get(id) ?? this.records.get(id)
         );
         const addedIds = new Set<string>();
         const addedOrder: string[] = [];
@@ -417,10 +422,10 @@ export class ADIFLogProvider implements ILogProvider {
           const mutation = requestedMutations[inputIndex]!;
           if (mutation.type === 'add') {
             const requestedId = mutation.record.id?.trim();
-            let id = requestedId && !workingRecords.has(requestedId)
+            let id = requestedId && !workingRecords.has(requestedId) && !this.records.get(requestedId)
               ? requestedId
               : `tx5dr-${randomUUID()}`;
-            while (workingRecords.has(id)) id = `tx5dr-${randomUUID()}`;
+            while (workingRecords.has(id) || this.records.get(id)) id = `tx5dr-${randomUUID()}`;
             const persisted = normalizeQsoForPersistence({
               ...mutation.record,
               id,
@@ -433,8 +438,11 @@ export class ADIFLogProvider implements ILogProvider {
             continue;
           }
 
-          const existing = workingRecords.get(mutation.qsoId);
+          const existing = getWorkingRecord(mutation.qsoId);
           if (!existing) throw new Error(`QSO with id ${mutation.qsoId} not found`);
+          if (!workingRecords.has(mutation.qsoId) && !addedIds.has(mutation.qsoId)) {
+            originalRecords.set(mutation.qsoId, cloneRecord(existing));
+          }
           const updates = mutation.updates;
           const requested = {
             ...existing,
@@ -497,7 +505,7 @@ export class ADIFLogProvider implements ILogProvider {
           outcomes: outcomes.map((outcome) => {
             const record = operations.length > 0
               ? this.records.get(outcome.targetId)
-              : workingRecords.get(outcome.targetId);
+              : getWorkingRecord(outcome.targetId);
             if (!record) throw new Error(`Committed QSO with id ${outcome.targetId} not found`);
             const finalStatus = outcome.status === 'updated'
               && originalRecords.has(outcome.targetId)
@@ -963,8 +971,8 @@ export class ADIFLogProvider implements ILogProvider {
   private async commitMutation(mutation: PreparedLogbookMutation): Promise<void> {
     const logBookId = this.options.logBookId?.trim()
       || path.basename(this.logFilePath).replace(/\.adi$/i, '');
-    const beforeRecordCount = this.document?.getQsoRecords().length ?? 0;
-    const expectedRecordCount = mutation.nextDocument.getQsoRecords().length;
+    const beforeRecordCount = this.document?.getQsoCount() ?? 0;
+    const expectedRecordCount = mutation.nextDocument.getQsoCount();
     const changedIds = mutation.kind === 'append' ? mutation.addedIds : mutation.changedIds;
     const audit = {
       logBookId,
@@ -992,8 +1000,7 @@ export class ADIFLogProvider implements ILogProvider {
             validate: (scan, _generation, projections) => this.assertScanMatches(expected, scan, projections),
           },
         );
-        this.assertScanMatches(mutation.nextDocument, committed.scan, committed.recordProjections);
-        this.installScan(committed.scan, committed.generation, committed.recordProjections);
+        this.installCommittedMutation(mutation, committed);
       } else {
         try {
           await this.requireBackup().ensureBeforeRewrite();
@@ -1013,7 +1020,7 @@ export class ADIFLogProvider implements ILogProvider {
             validate: (scan, _generation, projections) => this.assertScanMatches(expected, scan, projections),
           },
         );
-        this.installScan(committed.scan, committed.generation, committed.recordProjections);
+        this.installCommittedMutation(mutation, committed);
       }
       this.backup?.markMutationCommitted();
       this.refreshHealth();
@@ -1028,10 +1035,82 @@ export class ADIFLogProvider implements ILogProvider {
     if (mutation.kind === 'rewrite') {
       logger.info('Logbook rewrite committed', {
         ...audit,
-        actualRecordCount: this.document?.getQsoRecords().length ?? 0,
+        actualRecordCount: this.document?.getQsoCount() ?? 0,
         generationAfter: this.generation?.token.slice(0, 12) ?? null,
         generationSize: this.generation?.size ?? 0,
       });
+    }
+  }
+
+  private installCommittedMutation(
+    mutation: PreparedLogbookMutation,
+    committed: {
+      scan: AdifScanResult;
+      recordProjections: readonly LogbookRecordProjection[];
+      generation: GenerationToken;
+    },
+  ): void {
+    try {
+      const committedDocument = LogbookDocument.fromScanShared(
+        committed.scan,
+        committed.recordProjections,
+      );
+      const previousDocument = this.document;
+      this.document = committedDocument;
+      if (mutation.kind === 'append') {
+        for (const id of mutation.addedIds) {
+          const next = committedDocument.getQso(id);
+          if (next) this.records.append(next);
+        }
+      } else {
+        if (committedDocument.getSegments().length < (previousDocument?.getSegments().length ?? 0)) {
+          for (const id of mutation.changedIds) {
+            if (this.records.get(id)) this.records.remove(id);
+          }
+        }
+        this.reconcileRuntimeIds(previousDocument, committedDocument, mutation.changedIds);
+        for (const id of mutation.changedIds) {
+          const next = committedDocument.getQso(id);
+          const current = this.records.get(id);
+          if (next && current) this.records.replace(id, next);
+          else if (!next && current) this.records.remove(id);
+          else if (next && !current) this.records.append(next);
+        }
+      }
+      this.generation = committed.generation;
+    } catch (error) {
+      // The bytes are already durably committed and validated. If an
+      // incremental projection update ever hits an unhandled ID edge case,
+      // restore a coherent in-memory view from that verified generation.
+      logger.error('Incremental logbook projection update failed; restored full committed projection', {
+        mutationKind: mutation.kind,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.installScan(committed.scan, committed.generation, committed.recordProjections);
+    }
+  }
+
+  private reconcileRuntimeIds(
+    previous: LogbookDocument | undefined,
+    next: LogbookDocument,
+    changedIds: readonly string[],
+  ): void {
+    if (!previous) return;
+    const changed = new Set(changedIds);
+    const previousByHash = new Map<string, LogbookDocumentSegment[]>();
+    for (const segment of previous.getSegments()) {
+      if (!segment.qso || changed.has(segment.qso.id)) continue;
+      const bucket = previousByHash.get(segment.rawHash) ?? [];
+      bucket.push(segment);
+      previousByHash.set(segment.rawHash, bucket);
+    }
+    for (const segment of next.getSegments()) {
+      if (!segment.qso) continue;
+      const bucket = previousByHash.get(segment.rawHash);
+      const prior = bucket?.shift();
+      if (prior?.qso && prior.qso.id !== segment.qso.id && this.records.get(prior.qso.id)) {
+        this.records.rekey(prior.qso.id, segment.qso);
+      }
     }
   }
 
@@ -1040,22 +1119,18 @@ export class ADIFLogProvider implements ILogProvider {
     scan: AdifScanResult,
     projections?: readonly LogbookRecordProjection[],
   ): void {
-    const actual = LogbookDocument.fromScan(scan, projections).getSegments();
     const wanted = expected.getSegments();
-    if (actual.length !== wanted.length) {
-      throw new Error(`Committed ADIF has ${actual.length} segments; expected ${wanted.length}`);
+    if (scan.records.length !== wanted.length) {
+      throw new Error(`Committed ADIF has ${scan.records.length} segments; expected ${wanted.length}`);
     }
     for (let index = 0; index < wanted.length; index += 1) {
       const left = wanted[index]!;
-      const right = actual[index]!;
+      const right = scan.records[index]!;
       if (left.rawHash !== right.rawHash) {
         throw new Error(`Committed ADIF segment ${index} has an unexpected raw hash`);
       }
-      if (Boolean(left.qso) !== Boolean(right.qso)) {
+      if (projections && Boolean(left.qso) !== Boolean(projections[index]?.qso)) {
         throw new Error(`Committed ADIF segment ${index} changed QSO visibility`);
-      }
-      if (left.qso?.id !== right.qso?.id) {
-        throw new Error(`Committed ADIF segment ${index} has an unexpected runtime id`);
       }
     }
   }

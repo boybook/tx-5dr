@@ -21,6 +21,7 @@ import {
   type AdifFileSystem,
 } from './FileSystemAdapter.js';
 import { LogbookScanWorker } from './LogbookScanWorker.js';
+import { AdifRewriteWorker } from './AdifRewriteWorker.js';
 import type {
   GenerationToken,
   LogbookFileScanResult,
@@ -118,6 +119,9 @@ export interface AdifFileStoreOptions {
   onScanProgress?: (progress: LogbookScanProgress) => void;
   faultHook?: (context: AdifFileStoreFaultContext) => void | Promise<void>;
   createIfMissing?: boolean;
+  /** Test seam; production defaults to an isolated rewrite worker. */
+  rewriteWorker?: AdifRewriteWorker;
+  useRewriteWorker?: boolean;
 }
 
 export class AdifFileStoreError extends Error {
@@ -215,6 +219,7 @@ export class AdifFileStore {
   private readonly onScanProgress?: AdifFileStoreOptions['onScanProgress'];
   private readonly faultHook?: AdifFileStoreOptions['faultHook'];
   private readonly createIfMissing: boolean;
+  private readonly rewriteWorker: AdifRewriteWorker | null;
   private readonly stateListeners = new Set<(
     state: AdifFileStoreHealth,
     issues: readonly AdifFileStoreIssue[],
@@ -235,6 +240,9 @@ export class AdifFileStore {
     this.onScanProgress = options.onScanProgress;
     this.faultHook = options.faultHook;
     this.createIfMissing = options.createIfMissing ?? true;
+    this.rewriteWorker = (options.useRewriteWorker ?? (process.env.NODE_ENV !== 'test' && !options.fileSystem))
+      ? options.rewriteWorker ?? new AdifRewriteWorker()
+      : null;
   }
 
   getState(): { status: AdifFileStoreHealth; issues: readonly AdifFileStoreIssue[] } {
@@ -487,15 +495,27 @@ export class AdifFileStore {
 
       let mainRenamed = false;
       try {
-        const handle = await this.openRewriteTemp(await this.fileMode(this.filePath));
-        try {
-          await this.writeRewriteSource(handle, source, before.generation.size);
+        const mode = await this.fileMode(this.filePath);
+        if (this.rewriteWorker) {
+          const chunks = await collectRewriteChunks(source);
+          await this.rewriteWorker.write(
+            this.filePath,
+            this.rewriteTempPath,
+            mode ?? 0o600,
+            chunks,
+          );
           await this.injectFault('rewrite-after-temp-write');
-          await handle.sync();
-          await this.injectFault('rewrite-after-temp-fsync');
-        } finally {
-          await handle.close().catch(() => undefined);
+        } else {
+          const handle = await this.openRewriteTemp(mode);
+          try {
+            await this.writeRewriteSource(handle, source, before.generation.size);
+            await this.injectFault('rewrite-after-temp-write');
+            await handle.sync();
+          } finally {
+            await handle.close().catch(() => undefined);
+          }
         }
+        await this.injectFault('rewrite-after-temp-fsync');
 
         const candidate = await this.scanRequired(this.rewriteTempPath);
         await this.validateRewriteCandidate(candidate, expectations);
@@ -1373,6 +1393,23 @@ export class AdifFileStore {
 
 function shiftedRange(range: AdifByteRange, offset: number): AdifByteRange {
   return { start: range.start + offset, end: range.end + offset };
+}
+
+async function collectRewriteChunks(
+  source: Iterable<AdifRewriteChunk> | AsyncIterable<AdifRewriteChunk>,
+): Promise<AdifRewriteChunk[]> {
+  const chunks: AdifRewriteChunk[] = [];
+  let chunkIndex = 0;
+  for await (const chunk of source) {
+    if (chunk instanceof Uint8Array) chunks.push(Buffer.from(chunk));
+    else if (chunk.kind === 'source') chunks.push({ kind: 'source', range: { ...chunk.range } });
+    else chunks.push({ kind: 'bytes', bytes: Buffer.from(chunk.bytes) });
+    chunkIndex += 1;
+    if (chunkIndex % 256 === 0) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  }
+  return chunks;
 }
 
 function shiftedIssue(issue: AdifScanIssue, offset: number): AdifScanIssue {

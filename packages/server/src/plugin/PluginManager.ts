@@ -343,6 +343,9 @@ export class PluginManager {
     logger.info('Starting plugin manager');
     this.running = true;
     try {
+      if (process.env.NODE_ENV !== 'test') {
+        await this._logbookSyncHost.initialize(this.deps.dataDir);
+      }
       await this.loadPluginsIntoMemory();
       this.registerEngineListeners();
       this.bumpGeneration();
@@ -352,6 +355,7 @@ export class PluginManager {
       this.devWatcher = null;
       this.unregisterEngineListeners();
       await this.teardownAllInstances().catch(() => {});
+      await this._logbookSyncHost.shutdown().catch(() => {});
       this.running = false;
       throw error;
     }
@@ -381,6 +385,7 @@ export class PluginManager {
     this.devWatcher?.stop();
     this.devWatcher = null;
     await this.teardownAllInstances();
+    await this._logbookSyncHost.shutdown();
     this.eventEmitter.off('pluginLog', this.recordPluginLogHistory);
     this.unregisterEngineListeners();
     this.running = false;

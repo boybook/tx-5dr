@@ -119,6 +119,41 @@ describe('AdifFileStore durability', () => {
     await store.close();
   });
 
+  it('writes the rewrite candidate in an isolated worker before the atomic rename', async () => {
+    const original = adifRecord('BG5AA') + String.fromCharCode(10);
+    const replacement = adifRecord('BG5AB') + String.fromCharCode(10);
+    const { filePath } = await createLogbook(original);
+    const store = new AdifFileStore(filePath, {
+      useRewriteWorker: true,
+      scanner: { scan: scanLogbookFileInline },
+    });
+    const opened = await store.open();
+
+    await store.commitRewrite([Buffer.from(replacement)], opened.generation, { recordCount: 1 });
+
+    expect(await readFile(filePath, 'utf8')).toBe(replacement);
+    await store.close();
+  }, 60_000);
+
+  it('keeps the formal ADIF unchanged when the worker candidate is rejected', async () => {
+    const original = adifRecord('BG5AA') + String.fromCharCode(10);
+    const replacement = adifRecord('BG5AB') + String.fromCharCode(10);
+    const { filePath } = await createLogbook(original);
+    const store = new AdifFileStore(filePath, {
+      useRewriteWorker: true,
+      scanner: { scan: scanLogbookFileInline },
+      faultHook: async ({ point }) => {
+        if (point === 'rewrite-after-temp-write') throw new Error('injected candidate rejection');
+      },
+    });
+    const opened = await store.open();
+
+    await expect(store.commitRewrite([Buffer.from(replacement)], opened.generation, { recordCount: 1 }))
+      .rejects.toThrow('injected candidate rejection');
+    expect(await readFile(filePath, 'utf8')).toBe(original);
+    await store.close();
+  }, 60_000);
+
   it('coalesces a large document rewrite into a constant number of formal ADIF opens', async () => {
     const records = Array.from(
       { length: 2_000 },

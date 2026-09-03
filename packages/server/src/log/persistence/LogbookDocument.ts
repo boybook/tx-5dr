@@ -194,11 +194,16 @@ function cloneParts(parts: readonly StoredPart[]): StoredPart[] {
   return parts.map(clonePart);
 }
 
-function cloneSegment(segment: StoredSegment): StoredSegment {
+/**
+ * Copy the segment shell while sharing immutable source ranges and QSO data.
+ * Prepared mutations use copy-on-write, so duplicating every Buffer/QSO here
+ * would only create avoidable TX-path memory pressure.
+ */
+function cloneSegmentShallow(segment: StoredSegment): StoredSegment {
   return {
     ...segment,
-    leading: cloneParts(segment.leading),
-    raw: clonePart(segment.raw),
+    leading: segment.leading,
+    raw: segment.raw,
     leadingRange: { ...segment.leadingRange },
     rawRange: { ...segment.rawRange },
   };
@@ -207,9 +212,8 @@ function cloneSegment(segment: StoredSegment): StoredSegment {
 function reprojectSegments(input: readonly StoredSegment[]): StoredSegment[] {
   const rawOrdinals = new Map<string, number>();
   const usedIds = new Set<string>();
-
   return input.map((candidate) => {
-    const segment = cloneSegment(candidate);
+    const segment = cloneSegmentShallow(candidate);
     const ordinal = (rawOrdinals.get(segment.rawHash) ?? 0) + 1;
     rawOrdinals.set(segment.rawHash, ordinal);
     const preferredId = !segment.explicitId
@@ -219,7 +223,9 @@ function reprojectSegments(input: readonly StoredSegment[]): StoredSegment[] {
         : duplicateIdFor(segment.rawHash, ordinal);
     const runtimeId = allocateRuntimeId(usedIds, preferredId, segment.rawHash, ordinal);
     const qso = segment.qso
-      ? cloneQso(segment.qso as QSORecord, runtimeId)
+      ? segment.qso.id === runtimeId
+        ? segment.qso
+        : cloneQso(segment.qso as QSORecord, runtimeId)
       : undefined;
     if (qso) usedIds.add(qso.id);
     return {
@@ -412,7 +418,7 @@ export class LogbookDocument {
 
     let offset = partsLength(this.prefix);
     const laidOutSegments = parts.segments.map((input) => {
-      const segment = cloneSegment(input);
+      const segment = cloneSegmentShallow(input);
       const leadingLength = partsLength(segment.leading);
       segment.leadingRange = { start: offset, end: offset + leadingLength };
       offset = segment.leadingRange.end;
@@ -469,7 +475,15 @@ export class LogbookDocument {
     scan: AdifScanResult,
     projections?: readonly LogbookRecordProjection[],
   ): LogbookDocument {
-    return LogbookDocument.fromScanInternal(scan, undefined, projections);
+    return LogbookDocument.fromScanInternal(scan, undefined, projections, true);
+  }
+
+  /** Build a source-backed document while reusing worker-owned QSO projections. */
+  static fromScanShared(
+    scan: AdifScanResult,
+    projections: readonly LogbookRecordProjection[],
+  ): LogbookDocument {
+    return LogbookDocument.fromScanInternal(scan, undefined, projections, false);
   }
 
   /** Build the memory-backed convenience form used by tests/import/migration. */
@@ -484,6 +498,7 @@ export class LogbookDocument {
     scan: AdifScanResult,
     sourceAdapter?: LogbookSourceAdapter,
     suppliedProjections?: readonly LogbookRecordProjection[],
+    cloneProjections = true,
   ): LogbookDocument {
     if (suppliedProjections && suppliedProjections.length !== scan.records.length) {
       throw new Error('ADIF scan record projection count does not match the structural scan');
@@ -511,7 +526,7 @@ export class LogbookDocument {
         raw: sourcePart(record.range),
         rawHash: record.rawHash,
         syntacticallyValid: record.syntacticallyValid,
-        qso: decoded ? cloneQso(decoded) : undefined,
+        qso: decoded ? (cloneProjections ? cloneQso(decoded) : decoded) : undefined,
         unparsedContestEntry: projection.unparsedContestEntry,
         leadingRange: { ...record.leadingRange },
         rawRange: { ...record.range },
@@ -538,6 +553,10 @@ export class LogbookDocument {
 
   getQsoRecords(): readonly Readonly<QSORecord>[] {
     return [...this.qsoById.values()];
+  }
+
+  getQsoCount(): number {
+    return this.qsoById.size;
   }
 
   getQso(id: string): Readonly<QSORecord> | undefined {
@@ -627,7 +646,7 @@ export class LogbookDocument {
 
   prepareRewrite(operations: readonly LogbookRewriteOperation[]): PreparedRewriteMutation {
     this.assertMutationSafe();
-    let segments = this.segments.map(cloneSegment);
+    let segments = this.segments.map(cloneSegmentShallow);
     let safeTrailing = cloneParts(this.safeTrailing);
     const changedIds: string[] = [];
 
@@ -661,7 +680,10 @@ export class LogbookDocument {
         const nextSegment = segments[index + 1];
         if (fragment.trailing.length > 0) {
           if (nextSegment && partsLength(nextSegment.leading) === 0) {
-            nextSegment.leading = inlinePart(fragment.trailing);
+            segments[index + 1] = {
+              ...nextSegment,
+              leading: inlinePart(fragment.trailing),
+            };
           } else if (!nextSegment && partsLength(safeTrailing) === 0) {
             safeTrailing = inlinePart(fragment.trailing);
           }
@@ -687,7 +709,9 @@ export class LogbookDocument {
       changedIds.push(...appended.addedIds);
     }
 
-    const nextDocument = this.withParts(segments, safeTrailing);
+    // Recompute only runtime IDs/segment identity; unchanged QSO objects and
+    // source ranges remain shared by reprojectSegments.
+    const nextDocument = this.withParts(segments, safeTrailing, true);
     return Object.freeze({
       kind: 'rewrite',
       rewriteParts: nextDocument.getContentParts({ includeIncompleteTail: false }),
@@ -707,7 +731,7 @@ export class LogbookDocument {
       });
     }
 
-    const segments = this.segments.map(cloneSegment);
+    const segments = this.segments.map(cloneSegmentShallow);
     const appended = this.appendFragments(segments, cloneParts(this.safeTrailing), inputs);
     const nextDocument = this.withParts(appended.segments, appended.safeTrailing);
     return Object.freeze({
@@ -777,11 +801,15 @@ export class LogbookDocument {
     return { segments, safeTrailing, addedIds };
   }
 
-  private withParts(segments: StoredSegment[], safeTrailing: StoredPart[]): LogbookDocument {
+  private withParts(
+    segments: StoredSegment[],
+    safeTrailing: StoredPart[],
+    reproject = false,
+  ): LogbookDocument {
     return new LogbookDocument({
       prefix: cloneParts(this.prefix),
       headerEnd: this.headerRange?.end,
-      segments: reprojectSegments(segments),
+      segments: reproject ? reprojectSegments(segments) : segments.map(cloneSegmentShallow),
       safeTrailing,
       incompleteTail: cloneParts(this.incompleteTail),
       sourceAdapter: this.sourceAdapter,

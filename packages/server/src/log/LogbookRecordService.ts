@@ -227,6 +227,25 @@ function addToIndex(index: RecordIndex, qso: QSORecord): void {
   if (band !== 'Unknown') addToBucket(index.perCallsignBands, callsign, band);
 }
 
+function sameDerivedIndexIdentity(left: QSORecord, right: QSORecord): boolean {
+  return left.callsign === right.callsign
+    && left.frequency === right.frequency
+    && left.mode === right.mode
+    && left.submode === right.submode
+    && left.grid === right.grid
+    && left.dxccId === right.dxccId
+    && left.dxccStatus === right.dxccStatus
+    && left.dxccNeedsReview === right.dxccNeedsReview;
+}
+
+function addConfirmedIndex(index: RecordIndex, qso: QSORecord): void {
+  if (!qso.dxccId || !isConfirmed(qso)) return;
+  const band = getBandFromFrequency(qso.frequency);
+  index.confirmedDxccEntities.add(qso.dxccId);
+  if (band !== 'Unknown') addToBucket(index.confirmedBandDxcc, band, qso.dxccId);
+  addToBucket(index.confirmedModeDxcc, normalizedMode(qso.mode), qso.dxccId);
+}
+
 export function enrichQsoWithDxcc(qso: QSORecord): QSORecord {
   if (qso.dxccSource === 'manual_override' && qso.dxccId) return { ...qso };
   const resolution = resolveDXCCEntity(qso.callsign, qso.startTime);
@@ -354,9 +373,10 @@ export function mergeImportedQso(existing: QSORecord, incoming: QSORecord): { ch
 }
 
 export class LogbookRecordService {
-  private readonly records: readonly QSORecord[];
+  private records: QSORecord[];
   private readonly byId = new Map<string, QSORecord>();
-  private readonly index = createIndex();
+  private index = createIndex();
+  private indexValid = true;
 
   constructor(records: Iterable<Readonly<QSORecord>>) {
     const collected: QSORecord[] = [];
@@ -366,7 +386,73 @@ export class LogbookRecordService {
       this.byId.set(record.id, record);
       addToIndex(this.index, record);
     }
-    this.records = Object.freeze(collected);
+    this.records = collected;
+  }
+
+  /** Append one committed record without rebuilding the complete projection. */
+  append(input: Readonly<QSORecord>): QSORecord {
+    if (this.byId.has(input.id)) throw new Error(`QSO with id ${input.id} already exists`);
+    const record = cloneRecord(input);
+    this.records.push(record);
+    this.byId.set(record.id, record);
+    if (this.indexValid) addToIndex(this.index, record);
+    return cloneRecord(record);
+  }
+
+  /** Replace one committed record and lazily refresh derived indexes. */
+  replace(id: string, input: Readonly<QSORecord>): QSORecord {
+    const existing = this.byId.get(id);
+    if (!existing) throw new Error(`QSO with id ${id} not found`);
+    const record = cloneRecord(input);
+    if (record.id !== id && this.byId.has(record.id)) {
+      throw new Error(`QSO with id ${record.id} already exists`);
+    }
+    const position = this.records.findIndex((candidate) => candidate.id === id);
+    if (position < 0) throw new Error(`QSO with id ${id} not found`);
+    this.records[position] = record;
+    this.byId.delete(id);
+    this.byId.set(record.id, record);
+    if (sameDerivedIndexIdentity(existing, record)) {
+      const wasConfirmed = isConfirmed(existing);
+      const isNowConfirmed = isConfirmed(record);
+      if (!wasConfirmed && isNowConfirmed) addConfirmedIndex(this.index, record);
+      if (wasConfirmed && !isNowConfirmed) this.indexValid = false;
+    } else {
+      this.indexValid = false;
+    }
+    return cloneRecord(record);
+  }
+
+  rekey(oldId: string, input: Readonly<QSORecord>): QSORecord {
+    const existing = this.byId.get(oldId);
+    if (!existing) throw new Error(`QSO with id ${oldId} not found`);
+    if (oldId === input.id) return this.replace(oldId, input);
+    if (this.byId.has(input.id)) throw new Error(`QSO with id ${input.id} already exists`);
+    const record = cloneRecord(input);
+    const position = this.records.findIndex((candidate) => candidate.id === oldId);
+    if (position < 0) throw new Error(`QSO with id ${oldId} not found`);
+    this.records[position] = record;
+    this.byId.delete(oldId);
+    this.byId.set(record.id, record);
+    this.indexValid = false;
+    return cloneRecord(record);
+  }
+
+  remove(id: string): void {
+    if (!this.byId.has(id)) throw new Error(`QSO with id ${id} not found`);
+    const position = this.records.findIndex((candidate) => candidate.id === id);
+    if (position < 0) throw new Error(`QSO with id ${id} not found`);
+    this.records.splice(position, 1);
+    this.byId.delete(id);
+    this.indexValid = false;
+  }
+
+  private ensureIndex(): void {
+    if (this.indexValid) return;
+    const next = createIndex();
+    for (const record of this.records) addToIndex(next, record);
+    this.index = next;
+    this.indexValid = true;
   }
 
   get(id: string): QSORecord | null {
@@ -403,6 +489,7 @@ export class LogbookRecordService {
   }
 
   hasWorked(callsign: string, band?: string): boolean {
+    this.ensureIndex();
     const key = callsign.toUpperCase();
     if (!band) return (this.index.perCallsign.get(key)?.count ?? 0) > 0;
     if (band === 'Unknown') return false;
@@ -410,11 +497,13 @@ export class LogbookRecordService {
   }
 
   lastWithCallsign(callsign: string): QSORecord | null {
+    this.ensureIndex();
     const record = this.index.perCallsign.get(callsign.toUpperCase())?.lastQSO;
     return record ? cloneRecord(record) : null;
   }
 
   analyze(callsign: string, grid?: string, band?: string): CallsignAnalysis {
+    this.ensureIndex();
     const upper = callsign.toUpperCase();
     const info = this.index.perCallsign.get(upper);
     const prefix = extractPrefix(upper);

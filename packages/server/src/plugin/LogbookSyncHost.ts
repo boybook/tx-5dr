@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import type {
   LogbookSyncProvider,
   SyncAction,
@@ -9,8 +11,10 @@ import type {
   SyncDownloadOptions,
 } from '@tx5dr/plugin-api';
 import { createSyncFailure } from '@tx5dr/plugin-api';
-import type { QSORecord } from '@tx5dr/contracts';
+import { QSORecordSchema, type QSORecord } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
+import { JsonFileStore, PersistenceCoordinator } from '../utils/persistence/index.js';
+import { resolvePluginPaths } from './paths.js';
 import { snapshotPluginData } from './plugin-data-boundary.js';
 
 const logger = createLogger('LogbookSyncHost');
@@ -20,6 +24,12 @@ interface RegisteredProvider {
   provider: LogbookSyncProvider;
   owner: LogbookSyncProviderOwner;
   info: LogbookSyncProviderInfo;
+}
+
+interface PendingAutoUpload {
+  providerId: string;
+  callsign: string;
+  records: QSORecord[];
 }
 
 export interface LogbookSyncProviderOwner {
@@ -62,6 +72,63 @@ export class LogbookSyncHost {
   private pendingAutoRecords = new Map<string, Map<string, QSORecord>>();
   /** Marks keys that already have an auto-drain job queued or running. */
   private scheduledAutoDrains = new Set<string>();
+  private pendingQueueStore: JsonFileStore<PendingAutoUpload[]> | null = null;
+  private pendingQueueFlushTail: Promise<void> = Promise.resolve();
+  private unregisterPendingQueuePersistence: (() => void) | undefined;
+  private pendingQueueReady = false;
+
+  async initialize(dataDir: string): Promise<void> {
+    if (this.pendingQueueStore) return;
+    const queuePath = path.join(resolvePluginPaths(dataDir).pluginDataDir, 'logbook-sync-auto-queue.json');
+    const store = new JsonFileStore<PendingAutoUpload[]>(queuePath, {
+      defaultValue: () => [],
+      validate: (value) => {
+        if (!Array.isArray(value)) throw new Error('logbook sync queue must be an array');
+        return value.map((item) => {
+          if (!item || typeof item !== 'object') throw new Error('logbook sync queue item must be an object');
+          const candidate = item as { providerId?: unknown; callsign?: unknown; records?: unknown };
+          if (typeof candidate.providerId !== 'string' || typeof candidate.callsign !== 'string') {
+            throw new Error('logbook sync queue item identity is invalid');
+          }
+          if (!Array.isArray(candidate.records)) throw new Error('logbook sync queue records must be an array');
+          return {
+            providerId: candidate.providerId,
+            callsign: candidate.callsign,
+            records: candidate.records.map((record) => QSORecordSchema.parse(record)),
+          };
+        });
+      },
+      backups: 3,
+      createIfMissing: true,
+    });
+    await store.load();
+    this.pendingQueueStore = store;
+    this.pendingQueueReady = true;
+    this.unregisterPendingQueuePersistence = PersistenceCoordinator.getInstance().register({
+      name: `logbook-sync-auto-queue:${queuePath}`,
+      flush: async () => this.flushPendingQueue(),
+    });
+    for (const item of store.get()) {
+      if (!item || typeof item.providerId !== 'string' || typeof item.callsign !== 'string') continue;
+      const key = LogbookSyncHost.uploadKey(item.providerId, item.callsign);
+      const records = this.pendingAutoRecords.get(key) ?? new Map<string, QSORecord>();
+      for (const record of item.records ?? []) {
+        if (record && typeof record.id === 'string') records.set(record.id, snapshotPluginData(record, 'structured'));
+      }
+      if (records.size > 0) this.pendingAutoRecords.set(key, records);
+    }
+    for (const [id, entry] of this.providers) {
+      this.resumePendingForProvider(id, entry);
+    }
+  }
+
+  async shutdown(): Promise<void> {
+    await this.flushPendingQueue();
+    this.unregisterPendingQueuePersistence?.();
+    this.unregisterPendingQueuePersistence = undefined;
+    this.pendingQueueStore = null;
+    this.pendingQueueReady = false;
+  }
 
   private static uploadKey(providerId: string, callsign: string): string {
     return `${providerId}\0${callsign}`;
@@ -99,6 +166,7 @@ export class LogbookSyncHost {
       },
     };
     this.providers.set(provider.id, entry);
+    this.resumePendingForProvider(provider.id, entry);
     logger.info('Logbook sync provider registered', {
       id: provider.id,
       pluginName,
@@ -120,7 +188,6 @@ export class LogbookSyncHost {
           if (key.startsWith(`${id}\0`)) {
             this.activeUploads.delete(key);
             this.uploadQueueTails.delete(key);
-            this.pendingAutoRecords.delete(key);
             this.scheduledAutoDrains.delete(key);
           }
         }
@@ -294,7 +361,12 @@ export class LogbookSyncHost {
    * already queued/running for the same (provider, callsign), new QSOs are
    * buffered and drained in the next serialized auto batch.
    */
-  onQSOComplete(callsign: string, qsoRecord: QSORecord): void {
+  onQSOComplete(callsign: string, qsoRecord: QSORecord): Promise<void> {
+    return this.onQSOCompleteAsync(callsign, qsoRecord);
+  }
+
+  private async onQSOCompleteAsync(callsign: string, qsoRecord: QSORecord): Promise<void> {
+    let changed = false;
     for (const [id, entry] of this.providers) {
       const { provider, pluginName } = entry;
       try {
@@ -306,7 +378,7 @@ export class LogbookSyncHost {
         const queuedRecords = this.pendingAutoRecords.get(key) ?? new Map<string, QSORecord>();
         queuedRecords.set(qsoRecord.id, snapshotPluginData(qsoRecord, 'structured'));
         this.pendingAutoRecords.set(key, queuedRecords);
-        this.scheduleAutoDrain(key, entry, callsign);
+        changed = true;
       } catch (err) {
         logger.warn('Auto-upload check failed', {
           providerId: id,
@@ -315,6 +387,55 @@ export class LogbookSyncHost {
         });
       }
     }
+    if (!changed || !await this.persistPendingQueue()) return;
+    for (const [id, entry] of this.providers) {
+      this.resumePendingForProvider(id, entry);
+    }
+  }
+
+  private resumePendingForProvider(providerId: string, entry: RegisteredProvider): void {
+    if (!this.pendingQueueReady && this.pendingQueueStore) return;
+    for (const key of this.pendingAutoRecords.keys()) {
+      if (!key.startsWith(`${providerId}\0`)) continue;
+      const callsign = key.slice(providerId.length + 1);
+      this.scheduleAutoDrain(key, entry, callsign);
+    }
+  }
+
+  private snapshotPendingQueue(): PendingAutoUpload[] {
+    return [...this.pendingAutoRecords.entries()].map(([key, records]) => {
+      const separator = key.indexOf('\0');
+      return {
+        providerId: key.slice(0, separator),
+        callsign: key.slice(separator + 1),
+        records: [...records.values()].map((record) => snapshotPluginData(record, 'structured')),
+      };
+    }).filter((item) => item.records.length > 0);
+  }
+
+  private async persistPendingQueue(): Promise<boolean> {
+    if (!this.pendingQueueStore) return true;
+    if (!this.pendingQueueReady) return false;
+    const snapshot = this.snapshotPendingQueue();
+    const run = this.pendingQueueFlushTail
+      .catch(() => undefined)
+      .then(() => this.pendingQueueStore!.set(snapshot));
+    this.pendingQueueFlushTail = run.catch(() => undefined);
+    try {
+      await run;
+      return true;
+    } catch (error) {
+      logger.error('Failed to persist logbook sync auto-upload queue', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
+
+  private async flushPendingQueue(): Promise<void> {
+    if (!this.pendingQueueStore || !this.pendingQueueReady) return;
+    await this.persistPendingQueue();
+    await this.pendingQueueStore.flush();
   }
 
   /**
@@ -361,13 +482,13 @@ export class LogbookSyncHost {
     }
 
     this.scheduledAutoDrains.add(key);
+    let drainedSuccessfully = false;
     void this.enqueueUpload(key, async () => {
       const queuedRecords = this.pendingAutoRecords.get(key);
       if (!queuedRecords || queuedRecords.size === 0) {
         return { uploaded: 0, skipped: 0, failed: 0 };
       }
 
-      this.pendingAutoRecords.delete(key);
       const records = Array.from(queuedRecords.values());
       const result = await this.invoke(entry, 'auto-upload', () => entry.provider.upload(callsign, {
         trigger: 'auto',
@@ -393,6 +514,14 @@ export class LogbookSyncHost {
       } else {
         logger.info('Auto-upload completed', audit);
       }
+      if (result.failed === 0 && failures.length === 0) {
+        const remaining = this.pendingAutoRecords.get(key);
+        if (remaining) {
+          for (const record of records) remaining.delete(record.id);
+          if (remaining.size === 0) this.pendingAutoRecords.delete(key);
+        }
+        drainedSuccessfully = await this.persistPendingQueue();
+      }
       return result;
     }).catch((err) => {
       logger.warn('Auto-upload failed', {
@@ -404,9 +533,9 @@ export class LogbookSyncHost {
     }).finally(() => {
       this.scheduledAutoDrains.delete(key);
       const remainingRecords = this.pendingAutoRecords.get(key);
-      if (remainingRecords && remainingRecords.size > 0 && this.isCurrent(entry)) {
+      if (drainedSuccessfully && remainingRecords && remainingRecords.size > 0 && this.isCurrent(entry)) {
         this.scheduleAutoDrain(key, entry, callsign);
-      } else {
+      } else if (!this.pendingQueueStore) {
         this.pendingAutoRecords.delete(key);
       }
     });
