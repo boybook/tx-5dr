@@ -1026,6 +1026,11 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const tciDigitalAutoZoomCancelledModeRef = useRef<string | null>(null);
   const tciDigitalAutoZoomTransitionRef = useRef(false);
   const lastTciViewportTuneRef = useRef<number | null>(null);
+  const tciDdsTuneRef = useRef<{ inFlight: boolean; pendingFrequencyHz: number | null }>({
+    inFlight: false,
+    pendingFrequencyHz: null,
+  });
+  const lastRadioSdrFrameRangeSignatureRef = useRef<string | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(() => readSpectrumSubscriptionPaused());
   const [radioSdrOptimisticDisplayState, setRadioSdrOptimisticDisplayState] = useState<RadioSdrOptimisticDisplayState>(RADIO_SDR_OPTIMISTIC_DISPLAY_IDLE);
   const openWebRXPanStateRef = useRef<{ startX: number; startCenterHz: number; width: number } | null>(null);
@@ -1177,10 +1182,13 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     : baseRadioSdrFrequency;
   const radioSdrNativeRange = streamStatus.fullRange;
   const radioSdrDisplayRange = streamStatus.displayRange;
-  const radioSdrViewportBounds = viewportInteraction.bounds ?? radioSdrNativeRange;
+  // The session capability is refreshed on a slower cadence than IQ frames.
+  // Prefer the latest native frame range so edge tuning never uses stale bounds.
+  const radioSdrViewportBounds = radioSdrNativeRange ?? viewportInteraction.bounds;
   useEffect(() => {
     if (!isWideRadioSdr) {
       setRadioSdrViewport(null);
+      tciDdsTuneRef.current.pendingFrequencyHz = null;
       connection.state.radioService?.setSpectrumViewport(null);
       pendingTciViewportRef.current = null;
       if (tciViewportSyncTimerRef.current) {
@@ -1190,19 +1198,22 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       lastTciViewportTuneRef.current = null;
       return;
     }
-    if (!radioSdrNativeRange) return;
+    if (!radioSdrNativeRange) {
+      return;
+    }
     setRadioSdrViewport((current) => {
       const nativeSpan = radioSdrNativeRange.max - radioSdrNativeRange.min;
       if (!current || current.max <= current.min) {
         const initialRange = radioSdrDisplayRange ?? radioSdrNativeRange;
         return { ...initialRange };
       }
-      if (current.max < radioSdrNativeRange.min || current.min > radioSdrNativeRange.max) {
-        return { ...radioSdrNativeRange };
-      }
       const span = Math.min(nativeSpan, Math.max(TCI_MIN_LOCAL_VIEWPORT_SPAN_HZ, current.max - current.min));
-      const center = (current.min + current.max) / 2;
-      return { min: center - span / 2, max: center + span / 2 };
+      // The viewport is an absolute user selection. A new IQ/DDS center only
+      // changes which samples cover that range; it must not translate the
+      // viewport or clamp it back to the native envelope.
+      return current.max - current.min === span
+        ? current
+        : { min: current.min, max: current.min + span };
     });
   }, [connection.state.radioService, isWideRadioSdr, radioSdrDisplayRange?.max, radioSdrDisplayRange?.min, radioSdrNativeRange?.max, radioSdrNativeRange?.min]);
   useEffect(() => () => {
@@ -1531,14 +1542,6 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     }
   }, [canWriteFrequency, canWriteTargetFrequency, connection.state.isConnected, resetOperatorsAfterOperatingStateChange]);
 
-  const handleSpectrumCenterFrequencyGesture = useCallback((frequency: number) => {
-    if (frequencyGestureTarget === 'radio-frequency') {
-      void handleRadioSdrFrequencyGesture(frequency);
-      return;
-    }
-    void handleDigitalBaseFrequencyGesture(frequency);
-  }, [frequencyGestureTarget, handleDigitalBaseFrequencyGesture, handleRadioSdrFrequencyGesture]);
-
   const queueTciViewportSync = useCallback((range: { min: number; max: number }) => {
     pendingTciViewportRef.current = {
       min: range.min,
@@ -1550,10 +1553,49 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         tciViewportSyncTimerRef.current = null;
         const viewport = pendingTciViewportRef.current;
         pendingTciViewportRef.current = null;
-        if (viewport) connection.state.radioService?.setSpectrumViewport(viewport);
+        if (viewport) {
+          logger.debug('TCI spectrum viewport sent', { minHz: viewport.min, maxHz: viewport.max, displayBinCount: viewport.displayBinCount });
+          connection.state.radioService?.setSpectrumViewport(viewport);
+        }
       }, TCI_VIEWPORT_SYNC_DEBOUNCE_MS);
     }
   }, [connection.state.radioService]);
+
+  const flushTciDdsTune = useCallback(async () => {
+    const queue = tciDdsTuneRef.current;
+    if (queue.inFlight || queue.pendingFrequencyHz === null) return;
+    const radioService = connection.state.radioService;
+    if (!radioService) {
+      queue.pendingFrequencyHz = null;
+      return;
+    }
+
+    const targetFrequencyHz = queue.pendingFrequencyHz;
+    queue.pendingFrequencyHz = null;
+    queue.inFlight = true;
+    logger.info('TCI DDS edge tune started', { targetFrequencyHz });
+    try {
+      await radioService.setRadioDdsFrequency(targetFrequencyHz);
+      logger.info('TCI DDS edge tune completed', { targetFrequencyHz });
+    } catch (error) {
+      logger.warn('TCI DDS edge tune failed', { targetFrequencyHz, error: error instanceof Error ? error.message : String(error) });
+    } finally {
+      queue.inFlight = false;
+      if (queue.pendingFrequencyHz !== null) {
+        void flushTciDdsTune();
+      }
+    }
+  }, [connection.state.radioService]);
+
+  const queueTciDdsTune = useCallback((frequencyHz: number) => {
+    if (!Number.isFinite(frequencyHz)) return;
+    const queue = tciDdsTuneRef.current;
+    const targetFrequencyHz = Math.round(frequencyHz);
+    if (queue.pendingFrequencyHz === targetFrequencyHz && queue.inFlight) return;
+    queue.pendingFrequencyHz = targetFrequencyHz;
+    logger.debug('TCI DDS edge tune queued', { targetFrequencyHz, inFlight: queue.inFlight });
+    void flushTciDdsTune();
+  }, [flushTciDdsTune]);
 
   const handleTciViewportChange = useCallback((next: { min: number; max: number }, source: 'pan' | 'zoom') => {
     if (!isWideRadioSdr || !radioSdrViewportBounds) return;
@@ -1569,12 +1611,23 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     const half = requestedSpan / 2;
     const outOfBounds = center - half < radioSdrViewportBounds.min || center + half > radioSdrViewportBounds.max;
     const canTuneAtEdge = viewportInteraction.canTuneAtEdge && canWriteFrequency;
+    logger.debug('TCI spectrum viewport gesture', {
+      source,
+      requestedMinHz: next.min,
+      requestedMaxHz: next.max,
+      requestedCenterHz: center,
+      requestedSpanHz: requestedSpan,
+      nativeMinHz: radioSdrViewportBounds.min,
+      nativeMaxHz: radioSdrViewportBounds.max,
+      outOfBounds,
+      canTuneAtEdge,
+    });
     if (source === 'pan' && outOfBounds && canTuneAtEdge) {
       const tunedCenter = Math.round(center);
       const tuneStep = isCwMode ? 10 : 1000;
       if (lastTciViewportTuneRef.current === null || Math.abs(tunedCenter - lastTciViewportTuneRef.current) >= tuneStep) {
         lastTciViewportTuneRef.current = tunedCenter;
-        handleSpectrumCenterFrequencyGesture(tunedCenter);
+        queueTciDdsTune(tunedCenter);
       }
     }
     if (source === 'zoom' || (source === 'pan' && outOfBounds && !canTuneAtEdge)) {
@@ -1583,7 +1636,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     const nextRange = { min: center - half, max: center + half };
     setRadioSdrViewport(nextRange);
     queueTciViewportSync(nextRange);
-  }, [canWriteFrequency, currentMode?.name, handleSpectrumCenterFrequencyGesture, isCwMode, isWideRadioSdr, queueTciViewportSync, radioSdrViewportBounds, viewportInteraction.canTuneAtEdge]);
+  }, [canWriteFrequency, currentMode?.name, isCwMode, isWideRadioSdr, queueTciDdsTune, queueTciViewportSync, radioSdrViewportBounds, viewportInteraction.canTuneAtEdge]);
 
   const handleRadioFrequencyGesture = useCallback((frequency: number) => {
     if (!canWriteFrequency || frequencyGestureTarget !== 'radio-frequency') {
@@ -1749,6 +1802,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         clearTimeout(radioSdrServerSyncHoldTimerRef.current);
         radioSdrServerSyncHoldTimerRef.current = null;
       }
+      tciDdsTuneRef.current.pendingFrequencyHz = null;
       if (hasActiveSpectrumSubscriptionRef.current) {
         radioServiceRef.current?.subscribeSpectrum(null);
       }
@@ -1799,6 +1853,19 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         && frame.meta.spectrumConfigRevision !== spectrumRenderConfig.revision
       ) {
         return;
+      }
+      if (frame.kind === RADIO_SDR_SOURCE) {
+        const nativeRange = frame.meta.nativeFrequencyRange ?? frame.frequencyRange;
+        const signature = `${frame.frequencyRange.min}:${frame.frequencyRange.max}:${nativeRange.min}:${nativeRange.max}:${frame.meta.displayBinCount ?? frame.binaryData.format.length}`;
+        if (signature !== lastRadioSdrFrameRangeSignatureRef.current) {
+          lastRadioSdrFrameRangeSignatureRef.current = signature;
+          logger.debug('TCI spectrum frame range received', {
+            frequencyRange: frame.frequencyRange,
+            nativeFrequencyRange: nativeRange,
+            displayBinCount: frame.meta.displayBinCount ?? frame.binaryData.format.length,
+            timestamp: frame.timestamp,
+          });
+        }
       }
       streamController.pushFrame(frame);
       if (frame.kind === activeSpectrumKind) {

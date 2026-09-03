@@ -88,6 +88,18 @@ The spectrum plus/minus controls change only this client viewport; they must not
 issue a TCI `IQ_SAMPLERATE` command. Only an explicit horizontal pan that
 reaches the native IQ edge may request a radio center frequency change.
 
+For TCI wide-band edge tuning, the radio center change uses the protocol's
+`DDS:<receiver>,<frequency>` command rather than the generic VFO frequency
+write. The browser keeps one latest-wins request per active gesture (one
+physical DDS write in flight, with a single pending replacement), so pointer
+move frequency samples cannot build a serialized hardware queue. DDS tuning is
+not routed through the normal VFO optimistic-marker path. When the next IQ frame
+advertises the shifted native range, the browser rebases the existing absolute
+viewport by the native-center delta, preserving its span and sending the
+rebased viewport back to the server. Structured browser and server logs record
+gesture ranges, DDS targets, viewport updates, and frame ranges for diagnosing
+transport or alignment issues.
+
 Digital FT8/FT4 operating windows are delivered as declarative frequency
 overlays in session state. For TCI, their bounds come from the protocol's
 `RX_FILTER_BAND` state (not the wider `IF_LIMITS` capture range). The renderer

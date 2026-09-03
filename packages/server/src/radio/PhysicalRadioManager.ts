@@ -453,6 +453,8 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   private frequencyWriteEpoch = 0;
   private frequencyStateRevision = 0;
   private activeFrequencyOperation: { operationId: string; targetFrequency?: number } | null = null;
+  private ddsTunePending: { frequency: number; receiver: number } | null = null;
+  private ddsTuneDrainPromise: Promise<boolean> | null = null;
   private lastFrequencyWrite:
     | {
         epoch: number;
@@ -1147,6 +1149,57 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         }
       }
     });
+  }
+
+  /**
+   * Move a radio's receiver IQ/DDS center without routing through the generic
+   * VFO operating-state mutation. Only TCI connections expose this optional
+   * control; callers must treat false as unsupported.
+   */
+  async setDdsFrequency(freq: number, receiver = 0): Promise<boolean> {
+    if (!Number.isFinite(freq) || freq < 0 || !Number.isInteger(receiver) || receiver < 0) {
+      logger.warn(`Invalid DDS center frequency request: ${freq}`);
+      return false;
+    }
+    this.ddsTunePending = { frequency: freq, receiver };
+    if (!this.ddsTuneDrainPromise) {
+      this.ddsTuneDrainPromise = this.drainDdsTuneQueue().finally(() => {
+        this.ddsTuneDrainPromise = null;
+        if (this.ddsTunePending) {
+          void this.setDdsFrequency(this.ddsTunePending.frequency, this.ddsTunePending.receiver);
+        }
+      });
+    }
+    return this.ddsTuneDrainPromise;
+  }
+
+  private async drainDdsTuneQueue(): Promise<boolean> {
+    let result = false;
+    while (this.ddsTunePending) {
+      const target = this.ddsTunePending;
+      this.ddsTunePending = null;
+      result = await this.runSessionMutation('setDdsFrequency', async () => {
+        if (!this.connection?.setDdsFrequency) {
+          logger.debug('DDS center-frequency control is unavailable for the active radio');
+          return false;
+        }
+        const resumeFrequencyMonitoring = this.pauseFrequencyMonitoringForMutation();
+        this.capabilityManager.setOperatingStateMutation(true);
+        try {
+          await this.connection.setDdsFrequency(target.frequency, target.receiver);
+          return true;
+        } catch (error) {
+          logger.warn('Failed to set DDS center frequency', error);
+          return false;
+        } finally {
+          this.capabilityManager.setOperatingStateMutation(false);
+          if (resumeFrequencyMonitoring && this.connection) {
+            this.startFrequencyMonitoring();
+          }
+        }
+      });
+    }
+    return result;
   }
 
   private async setFrequencyInternal(freq: number): Promise<boolean> {

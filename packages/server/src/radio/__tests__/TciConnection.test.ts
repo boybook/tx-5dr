@@ -61,6 +61,7 @@ describe('TciConnection', () => {
     });
 
     await connection.setFrequency(21_074_000);
+    await connection.setDdsFrequency(21_075_000);
     await connection.setMode('LSB', 'nochange', { intent: 'digital' });
     await connection.setPTT(true);
     await connection.setSplitEnabled(true);
@@ -73,6 +74,7 @@ describe('TciConnection', () => {
     expect(await connection.getRFPower()).toBeCloseTo(0.42, 2);
     expect(server.receivedCommands.map((command) => command.raw)).toEqual(expect.arrayContaining([
       'VFO:0,0,21074000',
+      'DDS:0,21075000',
       'MODULATION:0,DIGL',
       'TRX:1,true,tci',
       'SPLIT_ENABLE:1,true',

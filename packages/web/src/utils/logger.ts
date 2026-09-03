@@ -6,6 +6,21 @@
 
 const isDev = import.meta.env.DEV;
 
+function formatContext(context: unknown): string {
+  if (context === undefined) return '';
+  if (context instanceof Error) return ` ${context.stack ?? context.message}`;
+  if (typeof context === 'string') return ` ${context}`;
+  try {
+    return ` ${JSON.stringify(context)}`;
+  } catch {
+    return ` ${String(context)}`;
+  }
+}
+
+function formatMessage(module: string, msg: string, context?: unknown): string {
+  return `[${module}] ${msg}${formatContext(context)}`;
+}
+
 export interface Logger {
   debug: (msg: string, ctx?: unknown) => void;
   info:  (msg: string, ctx?: unknown) => void;
@@ -17,17 +32,17 @@ export function createLogger(module: string): Logger {
   return {
     debug: (msg, ctx) => {
       if (!isDev) return;
-      ctx !== undefined ? console.debug(`[${module}] ${msg}`, ctx) : console.debug(`[${module}] ${msg}`);
+      console.debug(formatMessage(module, msg, ctx));
     },
     info: (msg, ctx) => {
       if (!isDev) return;
-      ctx !== undefined ? console.log(`[${module}] ${msg}`, ctx) : console.log(`[${module}] ${msg}`);
+      console.info(formatMessage(module, msg, ctx));
     },
     warn: (msg, err) => {
-      err !== undefined ? console.warn(`[${module}] ${msg}`, err) : console.warn(`[${module}] ${msg}`);
+      console.warn(formatMessage(module, msg, err));
     },
     error: (msg, err) => {
-      err !== undefined ? console.error(`[${module}] ${msg}`, err) : console.error(`[${module}] ${msg}`);
+      console.error(formatMessage(module, msg, err));
     },
   };
 }

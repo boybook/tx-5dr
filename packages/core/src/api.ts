@@ -60,6 +60,7 @@ import type {
   FrequencyListResponse,
   LastFrequencyResponse,
   SetFrequencyResponse,
+  SetDdsFrequencyResponse,
   HamlibConfig,
   PSKReporterConfig,
   PSKReporterStatus,
@@ -1169,6 +1170,20 @@ export const api = {
         body: JSON.stringify(params),
       },
       apiBase
+    );
+  },
+
+  async setRadioDdsFrequency(
+    params: { frequency: number; receiver?: number },
+    apiBase?: string,
+  ): Promise<SetDdsFrequencyResponse> {
+    return apiRequest<SetDdsFrequencyResponse>(
+      '/radio/dds-frequency',
+      {
+        method: 'POST',
+        body: JSON.stringify(params),
+      },
+      apiBase,
     );
   },
 
@@ -2788,6 +2803,7 @@ export const {
   ,getPresetFrequencies
   ,getLastFrequency
   ,setRadioFrequency
+  ,setRadioDdsFrequency
   // 天调控制函数
   ,getTunerCapabilities
   ,getTunerStatus

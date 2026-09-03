@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DigitalModeRadioModePreferenceSchema, HamlibConfigSchema, PresetFrequencySchema, RadioInfoSchema } from '../radio.schema.js';
+import { DdsFrequencyRequestSchema, DigitalModeRadioModePreferenceSchema, HamlibConfigSchema, PresetFrequencySchema, RadioInfoSchema } from '../radio.schema.js';
 
 describe('HamlibConfigSchema digital mode radio mode preference', () => {
   it('accepts legacy configs without a digital mode radio mode preference', () => {
@@ -52,6 +52,17 @@ describe('HamlibConfigSchema TCI connection', () => {
     });
 
     expect(parsed.connectionType).toBe('tci');
+  });
+});
+
+describe('DdsFrequencyRequestSchema', () => {
+  it('accepts non-negative center frequency and receiver values', () => {
+    expect(DdsFrequencyRequestSchema.parse({ frequency: 14_075_000, receiver: 0 })).toEqual({ frequency: 14_075_000, receiver: 0 });
+  });
+
+  it('rejects invalid center frequency and receiver values', () => {
+    expect(() => DdsFrequencyRequestSchema.parse({ frequency: -1 })).toThrow();
+    expect(() => DdsFrequencyRequestSchema.parse({ frequency: 14_075_000, receiver: 0.5 })).toThrow();
   });
 });
 

@@ -64,6 +64,7 @@ export class TciIqSpectrumSource implements RadioSpectrumSource, RadioSpectrumSp
   private latestCenterFrequency: number | undefined;
   private ifLimits: readonly [number, number] | null = null;
   private lastStreamParametersSignature: string | null = null;
+  private lastSpectrumRangeSignature: string | null = null;
   private pendingSampleRateNegotiation: {
     replyRate: number | null;
     lastFrameRate: number | null;
@@ -248,6 +249,7 @@ export class TciIqSpectrumSource implements RadioSpectrumSource, RadioSpectrumSp
     this.ringWrite = 0;
     this.ringComplexCount = 0;
     this.latestCenterFrequency = undefined;
+    this.lastSpectrumRangeSignature = null;
     this.cancelSampleRateNegotiation(new Error('TCI IQ spectrum stopped'));
     await session?.close().catch((error) => logger.debug('Failed to stop TCI IQ session', error));
     await client?.disconnect().catch((error) => logger.debug('Failed to disconnect TCI IQ client', error));
@@ -415,6 +417,20 @@ export class TciIqSpectrumSource implements RadioSpectrumSource, RadioSpectrumSp
         min: centerFrequency + fullWindow.minOffsetHz,
         max: centerFrequency + fullWindow.maxOffsetHz,
       };
+      const rangeSignature = `${centerFrequency}:${displayWindow.minOffsetHz}:${displayWindow.maxOffsetHz}:${this.displayBinCount}`;
+      if (rangeSignature !== this.lastSpectrumRangeSignature) {
+        this.lastSpectrumRangeSignature = rangeSignature;
+        logger.info('TCI spectrum frame range', {
+          centerFrequencyHz: centerFrequency,
+          frequencyRange: {
+            min: centerFrequency + displayWindow.minOffsetHz,
+            max: centerFrequency + displayWindow.maxOffsetHz,
+          },
+          nativeFrequencyRange,
+          displayBinCount: this.displayBinCount,
+          sampleRate: this.analyzerSampleRate,
+        });
+      }
       listener({
         timestamp: Date.now(),
         kind: 'radio-sdr',

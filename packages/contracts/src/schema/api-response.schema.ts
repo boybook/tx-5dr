@@ -156,6 +156,12 @@ export const SetFrequencyResponseSchema = z.object({
   operationId: z.string().optional(),
 });
 
+export const SetDdsFrequencyResponseSchema = z.object({
+  success: z.literal(true),
+  frequency: z.number(),
+  receiver: z.number().int().nonnegative(),
+});
+
 // ========== 时隙包相关响应 ==========
 
 /**
@@ -207,6 +213,7 @@ export type DisconnectRadioResponse = z.infer<typeof DisconnectRadioResponseSche
 
 export type LastFrequencyResponse = z.infer<typeof LastFrequencyResponseSchema>;
 export type SetFrequencyResponse = z.infer<typeof SetFrequencyResponseSchema>;
+export type SetDdsFrequencyResponse = z.infer<typeof SetDdsFrequencyResponseSchema>;
 
 export type SlotPacksResponse = z.infer<typeof SlotPacksResponseSchema>;
 export type SlotPackResponse = z.infer<typeof SlotPackResponseSchema>;

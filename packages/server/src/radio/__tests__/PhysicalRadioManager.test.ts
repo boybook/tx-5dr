@@ -33,6 +33,7 @@ type TestRadioConnection = {
   getFrequency?: ReturnType<typeof vi.fn>;
   getMode?: ReturnType<typeof vi.fn>;
   setFrequency?: ReturnType<typeof vi.fn>;
+  setDdsFrequency?: ReturnType<typeof vi.fn>;
   setPTT?: ReturnType<typeof vi.fn>;
   setTuner?: ReturnType<typeof vi.fn>;
   setMode?: ReturnType<typeof vi.fn>;
@@ -206,6 +207,24 @@ describe('PhysicalRadioManager', () => {
 
     expect(setFrequency).toHaveBeenCalledWith(7074000);
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('coalesces concurrent DDS center-frequency writes to the latest target', async () => {
+    const firstWrite = createDeferred<void>();
+    const setDdsFrequency = vi.fn()
+      .mockImplementationOnce(() => firstWrite.promise)
+      .mockResolvedValue(undefined);
+    asTestManager(manager).connection = { setDdsFrequency };
+
+    const first = manager.setDdsFrequency(14_075_000);
+    await vi.waitFor(() => expect(setDdsFrequency).toHaveBeenCalledTimes(1));
+    const second = manager.setDdsFrequency(14_076_000);
+    expect(setDdsFrequency).toHaveBeenCalledTimes(1);
+
+    firstWrite.resolve();
+    await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
+    expect(setDdsFrequency).toHaveBeenCalledTimes(2);
+    expect(setDdsFrequency.mock.calls.map(([frequency]) => frequency)).toEqual([14_075_000, 14_076_000]);
   });
 
   it('does not report ICOM WLAN transient frequency fallback as a connection health failure', async () => {

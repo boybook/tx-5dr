@@ -522,6 +522,14 @@ export const CustomFrequencyPresetsSchema = z.object({
   presets: z.array(PresetFrequencySchema).min(1),
 });
 
+/** TCI receiver DDS/IQ center-frequency control request. */
+export const DdsFrequencyRequestSchema = z.object({
+  frequency: z.number().finite().nonnegative(),
+  receiver: z.number().int().nonnegative().optional(),
+});
+
+export type DdsFrequencyRequest = z.infer<typeof DdsFrequencyRequestSchema>;
+
 // 导出类型
 export type CustomFrequencyPresets = z.infer<typeof CustomFrequencyPresetsSchema>;
 export type PresetFrequency = z.infer<typeof PresetFrequencySchema>;

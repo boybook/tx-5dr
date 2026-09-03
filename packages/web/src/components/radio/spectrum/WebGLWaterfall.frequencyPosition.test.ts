@@ -9,6 +9,7 @@ import {
   WATERFALL_WHEEL_DELTA_PIXEL,
   buildWaterfallRulerTicks,
   clearWaterfallGestureOverrideForSource,
+  classifyWaterfallViewportWheelAxis,
   easeSpectrumAxisTransition,
   formatWaterfallHoverFrequency,
   getWaterfallFrequencyAfterVisualDelta,
@@ -181,6 +182,16 @@ describe('WebGLWaterfall frequency positioning', () => {
     expect(shouldHandleWaterfallVerticalWheel({ deltaX: 10, deltaY: 10, ctrlKey: false })).toBe(true);
     expect(shouldHandleWaterfallVerticalWheel({ deltaX: 1, deltaY: 10, ctrlKey: false, shiftKey: true })).toBe(false);
     expect(shouldHandleWaterfallVerticalWheel({ deltaX: 0, deltaY: 10, ctrlKey: true })).toBe(false);
+  });
+
+  it('keeps a trackpad gesture on one wheel axis after the first dominant event', () => {
+    const horizontalLock = { axis: 'horizontal' as const, expiresAt: 1_000 };
+    const verticalLock = { axis: 'vertical' as const, expiresAt: 1_000 };
+    expect(classifyWaterfallViewportWheelAxis({ deltaX: 10, deltaY: 1, ctrlKey: false }, null, 500)).toBe('horizontal');
+    expect(classifyWaterfallViewportWheelAxis({ deltaX: 1, deltaY: 10, ctrlKey: false }, horizontalLock, 500)).toBe('horizontal');
+    expect(classifyWaterfallViewportWheelAxis({ deltaX: 10, deltaY: 1, ctrlKey: false }, verticalLock, 500)).toBe('vertical');
+    expect(classifyWaterfallViewportWheelAxis({ deltaX: 10, deltaY: 1, ctrlKey: true }, horizontalLock, 500)).toBe('vertical');
+    expect(classifyWaterfallViewportWheelAxis({ deltaX: 1, deltaY: 10, ctrlKey: false }, horizontalLock, 1_001)).toBe('vertical');
   });
 
   it('maps pixel and line wheel deltas to continuous zoom factors', () => {

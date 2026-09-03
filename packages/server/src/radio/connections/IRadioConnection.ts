@@ -324,6 +324,9 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
    */
   setFrequency(frequency: number): Promise<void>;
 
+  /** Optional receiver DDS/IQ center-frequency control (TCI). */
+  setDdsFrequency?(frequency: number, receiver?: number): Promise<void>;
+
   /**
    * 获取当前频率
    *

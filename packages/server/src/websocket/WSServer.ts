@@ -1267,7 +1267,20 @@ export class WSServer extends WSMessageHandler {
     const connection = this.getConnection(connectionId);
     if (!connection || connection.getSpectrumSubscription() !== 'radio-sdr') return;
     const parsed = data === null ? null : SpectrumViewportSchema.safeParse(data);
-    connection.setSpectrumViewport(parsed === null ? null : parsed.success ? parsed.data : connection.getSpectrumViewport());
+    if (parsed !== null && !parsed.success) {
+      logger.warn('Rejected invalid spectrum viewport', {
+        connectionId,
+        data,
+        error: parsed.error.flatten(),
+      });
+      return;
+    }
+    const viewport = parsed === null ? null : parsed.data;
+    logger.info('Spectrum viewport changed', {
+      connectionId,
+      viewport,
+    });
+    connection.setSpectrumViewport(viewport);
   }
 
   private handleSubscribeImageRx(connectionId: string, data: unknown): void {

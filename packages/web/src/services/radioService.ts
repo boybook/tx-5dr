@@ -187,6 +187,14 @@ export class RadioService {
     }
   }
 
+  async setRadioDdsFrequency(frequency: number, receiver?: number): Promise<{ success: boolean; frequency: number; receiver: number }> {
+    logger.debug('Setting TCI DDS center frequency', { frequencyHz: frequency, ...(receiver === undefined ? {} : { receiver }) });
+    return api.setRadioDdsFrequency(
+      receiver === undefined ? { frequency } : { frequency, receiver },
+      getApiBaseUrl(),
+    );
+  }
+
   replaySpectrumSubscription(): void {
     if (!this.isConnected || !this.desiredSpectrumKind) {
       return;

@@ -299,6 +299,39 @@ export function shouldHandleWaterfallVerticalWheel(
   return absY >= WATERFALL_WHEEL_AXIS_EPSILON && (absX < WATERFALL_WHEEL_AXIS_EPSILON || absY >= absX);
 }
 
+export type WaterfallViewportWheelAxis = 'horizontal' | 'vertical';
+
+export interface WaterfallViewportWheelAxisLock {
+  axis: WaterfallViewportWheelAxis;
+  expiresAt: number;
+}
+
+/**
+ * Classify a viewport wheel event while preserving the dominant axis for a
+ * short gesture window. Trackpads commonly emit small cross-axis deltas over
+ * several wheel events; without this lock one horizontal gesture alternates
+ * between pan and zoom.
+ */
+export function classifyWaterfallViewportWheelAxis(
+  event: Pick<WheelEvent, 'deltaX' | 'deltaY' | 'ctrlKey'> & { shiftKey?: boolean },
+  lock: WaterfallViewportWheelAxisLock | null = null,
+  nowMs = Date.now(),
+): WaterfallViewportWheelAxis | null {
+  if (event.ctrlKey) return 'vertical';
+  if (event.shiftKey) return 'horizontal';
+
+  const absX = Math.abs(event.deltaX);
+  const absY = Math.abs(event.deltaY);
+  if (lock && lock.expiresAt > nowMs) {
+    if (lock.axis === 'horizontal' && absX >= WATERFALL_WHEEL_AXIS_EPSILON) return 'horizontal';
+    if (lock.axis === 'vertical' && absY >= WATERFALL_WHEEL_AXIS_EPSILON) return 'vertical';
+  }
+  if (absX < WATERFALL_WHEEL_AXIS_EPSILON && absY < WATERFALL_WHEEL_AXIS_EPSILON) return null;
+  if (absX > absY) return 'horizontal';
+  if (absY > absX) return 'vertical';
+  return lock && lock.expiresAt > nowMs ? lock.axis : null;
+}
+
 export function getWaterfallHorizontalWheelTunedFrequency(
   startFrequency: number,
   accumulatedDeltaXPx: number,
@@ -831,8 +864,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const cycleMarkersRef = useRef<CycleMarkerPosition[]>([]);
   const [rulerWidthPx, setRulerWidthPx] = React.useState(0);
   const [hoverCursor, setHoverCursor] = React.useState<{ ratio: number; frequency: number; clientX: number; containerTop: number } | null>(null);
-  const localViewportGestureRef = useRef<{ pointerId: number; startX: number; startRange: InteractionFrequencyRange; hzPerPixel: number } | null>(null);
+  const localViewportGestureRef = useRef<{ pointerId: number; startX: number; lastX: number; startRange: InteractionFrequencyRange; hzPerPixel: number } | null>(null);
   const localViewportRangeRef = useRef<InteractionFrequencyRange | null>(null);
+  const viewportWheelAxisLockRef = useRef<WaterfallViewportWheelAxisLock | null>(null);
 
   // TX拖动状态
   const [draggingOperatorId, setDraggingOperatorId] = React.useState<string | null>(null);
@@ -2686,6 +2720,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     localViewportGestureRef.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
+      lastX: event.clientX,
       startRange: range,
       hzPerPixel: span / rect.width,
     };
@@ -2696,15 +2731,21 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       localViewportRangeRef.current = null;
       return;
     }
-    if (!localViewportGestureRef.current) {
-      if (effectiveLocalViewportRange && effectiveLocalViewportRange.max > effectiveLocalViewportRange.min) {
-        localViewportRangeRef.current = { ...effectiveLocalViewportRange };
-        return;
+    if (effectiveLocalViewportRange && effectiveLocalViewportRange.max > effectiveLocalViewportRange.min) {
+      localViewportRangeRef.current = { ...effectiveLocalViewportRange };
+      const gesture = localViewportGestureRef.current;
+      if (gesture) {
+        // The parent may update the absolute range while the pointer is still
+        // down. Move the gesture baseline to the latest rendered range so the
+        // next pointermove cannot resurrect a stale pre-update range.
+        gesture.startRange = { ...effectiveLocalViewportRange };
+        gesture.startX = gesture.lastX;
       }
-      const axis = viewStateRef.current.axis;
-      if (axis) {
-        localViewportRangeRef.current = { min: axis.minHz, max: axis.maxHz };
-      }
+      return;
+    }
+    const axis = viewStateRef.current.axis;
+    if (axis) {
+      localViewportRangeRef.current = { min: axis.minHz, max: axis.maxHz };
     }
   }, [effectiveLocalViewportRange, localViewportInteractionEnabled, viewState.axis?.maxHz, viewState.axis?.minHz]);
 
@@ -2713,6 +2754,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const handleMove = (event: PointerEvent) => {
       const gesture = localViewportGestureRef.current;
       if (!gesture || gesture.pointerId !== event.pointerId) return;
+      gesture.lastX = event.clientX;
       const deltaHz = (event.clientX - gesture.startX) * gesture.hzPerPixel;
       effectiveLocalViewportChange({
         min: gesture.startRange.min - deltaHz,
@@ -2720,7 +2762,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       }, 'pan');
     };
     const handleUp = (event: PointerEvent) => {
-      if (localViewportGestureRef.current?.pointerId === event.pointerId) localViewportGestureRef.current = null;
+      if (localViewportGestureRef.current?.pointerId === event.pointerId) {
+        const currentRange = resolveWaterfallLocalViewportRange(localViewportRangeRef.current, viewStateRef.current.axis);
+        if (currentRange) localViewportRangeRef.current = currentRange;
+        localViewportGestureRef.current = null;
+      }
     };
     document.addEventListener('pointermove', handleMove);
     document.addEventListener('pointerup', handleUp);
@@ -2740,11 +2786,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       // Safari/macOS trackpad pinch is delivered as ctrl+wheel. Treat a
       // vertical-dominant pinch as local zoom, while regular ctrl+wheel remains
       // ignored by the frequency-scrolling path.
-      const isPinchZoom = event.ctrlKey
-        && Math.abs(event.deltaY) >= WATERFALL_WHEEL_AXIS_EPSILON
-        && Math.abs(event.deltaY) >= Math.abs(event.deltaX);
-      const verticalCandidate = isPinchZoom || shouldHandleWaterfallVerticalWheel(event);
-      if (!verticalCandidate) return;
+      const nowMs = Date.now();
+      const axis = classifyWaterfallViewportWheelAxis(event, viewportWheelAxisLockRef.current, nowMs);
+      if (axis !== 'vertical') return;
+      viewportWheelAxisLockRef.current = { axis, expiresAt: nowMs + WATERFALL_HORIZONTAL_WHEEL_SESSION_IDLE_MS };
+      if (!event.ctrlKey && !shouldHandleWaterfallVerticalWheel(event)) return;
       const currentRange = resolveWaterfallLocalViewportRange(
         localViewportRangeRef.current,
         viewStateRef.current.axis,
@@ -2791,7 +2837,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const container = containerRef.current;
     if (!container) return;
     const handleWheel = (event: WheelEvent) => {
-      if (!shouldHandleWaterfallHorizontalWheel(event)) return;
+      const nowMs = Date.now();
+      const axis = classifyWaterfallViewportWheelAxis(event, viewportWheelAxisLockRef.current, nowMs);
+      if (axis !== 'horizontal' || !shouldHandleWaterfallHorizontalWheel(event)) return;
+      viewportWheelAxisLockRef.current = { axis, expiresAt: nowMs + WATERFALL_HORIZONTAL_WHEEL_SESSION_IDLE_MS };
       const currentRange = resolveWaterfallLocalViewportRange(localViewportRangeRef.current, viewStateRef.current.axis);
       if (!currentRange) return;
       const rect = container.getBoundingClientRect();

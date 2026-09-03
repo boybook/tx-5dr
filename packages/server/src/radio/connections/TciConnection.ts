@@ -295,6 +295,25 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     }, { critical: true });
   }
 
+  async setDdsFrequency(frequency: number, receiver = this.currentConfig?.tci?.receiver ?? 0): Promise<void> {
+    await this.runTask('setDdsFrequency', async () => {
+      this.checkConnected();
+      const targetFrequency = Math.round(frequency);
+      if (!Number.isFinite(targetFrequency) || targetFrequency < 0 || !Number.isInteger(receiver) || receiver < 0) {
+        throw new Error(`Invalid TCI DDS frequency: ${frequency}`);
+      }
+      logger.info('TCI DDS center-frequency write started', {
+        receiver,
+        frequencyHz: targetFrequency,
+      });
+      await this.client!.setDdsFrequency(targetFrequency, receiver);
+      logger.info('TCI DDS center-frequency write completed', {
+        receiver,
+        frequencyHz: targetFrequency,
+      });
+    }, { critical: true });
+  }
+
   async getFrequency(): Promise<number> {
     return this.runTask('getFrequency', async () => {
       this.checkConnected();

@@ -65,7 +65,7 @@ vi.mock('@tx5dr/core', () => {
   }
 
   return {
-    api: { getHello: vi.fn() },
+    api: { getHello: vi.fn(), setRadioDdsFrequency: vi.fn(async (params: { frequency: number; receiver?: number }) => ({ success: true, frequency: params.frequency, receiver: params.receiver ?? 0 })) },
     WSClient,
   };
 });
@@ -154,5 +154,20 @@ describe('RadioService spectrum subscription reliability', () => {
     expect(client.setSpectrumViewport).toHaveBeenCalledTimes(1);
     service.setSpectrumViewport({ ...nextViewport });
     expect(client.setSpectrumViewport).toHaveBeenCalledTimes(1);
+  });
+
+  it('writes DDS center frequency through the dedicated API without a VFO intent', async () => {
+    const service = new RadioService();
+    const core = await import('@tx5dr/core');
+
+    await expect(service.setRadioDdsFrequency(14_075_000)).resolves.toEqual({
+      success: true,
+      frequency: 14_075_000,
+      receiver: 0,
+    });
+    expect(core.api.setRadioDdsFrequency).toHaveBeenCalledWith(
+      { frequency: 14_075_000 },
+      '/api',
+    );
   });
 });

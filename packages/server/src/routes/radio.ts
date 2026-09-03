@@ -13,7 +13,7 @@ const logger = createLogger('RadioRoute');
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { ProfileManager } from '../config/ProfileManager.js';
-import { HamlibConfigSchema, UserRole, WriteCapabilityPayloadSchema } from '@tx5dr/contracts';
+import { DdsFrequencyRequestSchema, HamlibConfigSchema, SetDdsFrequencyResponseSchema, UserRole, WriteCapabilityPayloadSchema } from '@tx5dr/contracts';
 import { requireAbility, requireAbilityFor, requireRole } from '../auth/authPlugin.js';
 import type { HamlibConfig } from '@tx5dr/contracts';
 import serialport from 'serialport';
@@ -937,6 +937,53 @@ export async function radioRoutes(fastify: FastifyInstance) {
       ...(applyResult.observedFrequency !== undefined ? { observedFrequency: applyResult.observedFrequency } : {}),
       ...(applyResult.operationId ? { operationId: applyResult.operationId } : {}),
       radioConnected: true
+    });
+  });
+
+  fastify.post('/dds-frequency', {
+    schema: {
+      body: zodToJsonSchema(DdsFrequencyRequestSchema),
+      response: { 200: zodToJsonSchema(SetDdsFrequencyResponseSchema) },
+    },
+    preHandler: [requireAbilityFor('execute', 'RadioFrequency', (r) => ({ frequency: (r.body as any).frequency }))],
+  }, async (req, reply) => {
+    const { frequency, receiver } = req.body as { frequency?: number; receiver?: number };
+    const configuredReceiver = radioManager.getConfig?.().tci?.receiver;
+    const targetReceiver = receiver ?? configuredReceiver ?? 0;
+    if (typeof frequency !== 'number' || !Number.isFinite(frequency) || frequency < 0) {
+      throw new RadioError({
+        code: RadioErrorCode.INVALID_CONFIG,
+        message: `Invalid DDS frequency value: ${frequency}`,
+        userMessage: 'Please provide a valid DDS center frequency',
+        severity: RadioErrorSeverity.WARNING,
+      });
+    }
+    if (!Number.isInteger(targetReceiver) || targetReceiver < 0) {
+      throw new RadioError({
+        code: RadioErrorCode.INVALID_CONFIG,
+        message: `Invalid DDS receiver: ${targetReceiver}`,
+        userMessage: 'Please provide a valid DDS receiver',
+        severity: RadioErrorSeverity.WARNING,
+      });
+    }
+
+    logger.info('DDS center-frequency request received', {
+      frequencyHz: Math.round(frequency),
+      receiver: targetReceiver,
+    });
+    const success = await radioManager.setDdsFrequency(frequency, targetReceiver);
+    if (!success) {
+      throw new RadioError({
+        code: RadioErrorCode.INVALID_OPERATION,
+        message: 'Active radio does not support DDS center-frequency control',
+        userMessage: 'DDS center-frequency control is unavailable for this radio',
+        severity: RadioErrorSeverity.WARNING,
+      });
+    }
+    return reply.send({
+      success: true,
+      frequency: Math.round(frequency),
+      receiver: targetReceiver,
     });
   });
 
