@@ -8,7 +8,17 @@ import { HOST_BASE_VERSION, resolveHostVersion } from './host-version.mjs';
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 async function readPackage(relativePath) {
-  return JSON.parse(await fs.readFile(path.join(projectRoot, relativePath, 'package.json'), 'utf8'));
+  const filePath = path.join(projectRoot, relativePath, 'package.json');
+  let fileContent;
+  try {
+    fileContent = await fs.readFile(filePath, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      return null; // Package does not exist
+    }
+    throw err; // Rethrow other errors
+  }
+  return JSON.parse(fileContent);
 }
 
 function assertVersion(actual, expected, label) {
@@ -41,7 +51,9 @@ const hostPackages = [
 ];
 for (const packagePath of hostPackages) {
   const manifest = await readPackage(packagePath);
-  assertVersion(manifest.version, hostVersion, manifest.name);
+  if (manifest) {
+    assertVersion(manifest.version, hostVersion, manifest.name);
+  }
 }
 
 const pluginApiPackage = await readPackage('packages/plugin-api');
