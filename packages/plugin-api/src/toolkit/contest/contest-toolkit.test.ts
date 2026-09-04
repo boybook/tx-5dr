@@ -195,7 +195,7 @@ describe('contest toolkit', () => {
       contest,
       runtime: () => ({}) as StrategyRuntime,
     });
-    expect(plugin.minPluginApiVersion).toBe('2.3.0');
+    expect(plugin.minPluginApiVersion).toBe('2.4.0');
     expect(() => plugin.createStrategyRuntime?.({
       ...(createMockContext() as unknown as StrategyPluginContext),
       pluginApiVersion: '2.0.0',
@@ -1091,13 +1091,29 @@ describe('contest toolkit', () => {
     });
 
     await plugin.onLoad?.(ctx as never);
-    const result = await plugin.createStrategyRuntime!(ctx as never).decide([], {
+    const runtime = plugin.createStrategyRuntime!(ctx as never);
+    expect(runtime.getSnapshot().messagePresentation).toMatchObject({
+      mode: 'replace-logbook',
+      subject: 'sender-callsign',
+      partitionBy: 'band',
+      defaultClass: 'contest-new-call',
+      classes: {
+        'contest-new-call': expect.objectContaining({
+          badges: [{ label: 'contestNewCallsign', tone: 'warning' }],
+        }),
+        'contest-new-field': expect.objectContaining({
+          badges: [{ label: 'contestNewMultiplier', tone: 'secondary' }],
+        }),
+      },
+    });
+    const result = await runtime.decide([], {
       epoch: 1,
       source: 'slot-auto',
       isReDecision: false,
       signal: new AbortController().signal,
     });
 
+    expect(result.snapshot.messagePresentation?.mode).toBe('replace-logbook');
     expect(result.qsoCompletion?.destination).toEqual({
       kind: 'plugin-session-key',
       sessionKey: expect.stringContaining('contest:'),
@@ -1107,6 +1123,63 @@ describe('contest toolkit', () => {
       sent: { grid: 'FN31' },
       received: { grid: 'PM95' },
     });
+    await plugin.onUnload?.(ctx as never);
+  });
+
+  it('derives standard FrameTable presentation from the independent contest session', async () => {
+    const contest = createExampleContest();
+    const base = createMockLogbookAccess().forCallsign('W1AW');
+    const existing: QSORecord = {
+      id: 'contest-qso-1',
+      callsign: 'JA1AAA',
+      grid: 'PM95',
+      frequency: 14_074_000,
+      mode: 'FT8',
+      startTime: Date.parse('2026-08-29T01:00:00Z'),
+      messageHistory: [],
+      myCallsign: 'W1AW',
+      myGrid: 'FN31',
+    };
+    const access: PluginLogbookSessionAccess = {
+      ...base,
+      id: 'contest-session',
+      title: 'Example contest session',
+      async queryQSOs() { return [existing]; },
+      async readQsoSnapshot() { return { revision: 'contest-r1', records: [existing] }; },
+      async destroy() {},
+    };
+    const ctx = createMockContext({
+      permissions: CONTEST_LOGBOOK_PERMISSIONS,
+      logbookSessions: { open: async () => access, destroy: async () => {} },
+    });
+    const plugin = composeFT8ContestPlugin({
+      name: 'contest-presentation',
+      version: '1.0.0',
+      permissions: CONTEST_LOGBOOK_PERMISSIONS,
+      contest,
+      logbook: standardFT8ContestLogbook({ contest }),
+      runtime: () => ({
+        checkpoint: () => ({}),
+        restore: () => {},
+        decide: () => ({ transmission: null, snapshot: { currentState: 'TX6' } }),
+        getTransmitText: () => null,
+        requestCall: () => {},
+        getSnapshot: () => ({ currentState: 'TX6' }),
+        patchContext: () => {},
+        setState: () => {},
+        setSlotContent: () => {},
+        reset: () => {},
+      }) as StrategyRuntime,
+    });
+
+    await plugin.onLoad?.(ctx as never);
+    const presentation = plugin.createStrategyRuntime!(ctx as never).getSnapshot().messagePresentation;
+    expect(presentation?.assignments).toContainEqual({
+      subject: 'JA1AAA',
+      partition: '20M',
+      classId: 'contest-worked',
+    });
+    expect(presentation?.noveltyRules?.[0]?.knownValuesByPartition['20M']).toEqual(['PM']);
     await plugin.onUnload?.(ctx as never);
   });
 

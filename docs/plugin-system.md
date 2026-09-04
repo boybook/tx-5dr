@@ -154,11 +154,27 @@ revision-guarded QSO 事务、ADIF/官方格式导出、实时分数和 review �
 
 `standardFT8ContestLogbook()` 同时声明 operator-bound `contest-log` page 和
 `operator-action` panel。`@tx5dr/plugin-api` 发布 canonical 静态页面，scaffold 和
-内置插件构建时复制到插件自己的 `ui/` 目录，因此 Host 不需要按插件名提供比赛页面。
+Marketplace 插件构建时复制到插件自己的 `ui/` 目录，因此 Host 不需要按插件名提供比赛页面。
 自定义 contest 字段通过 `ContestLogbookViewModel.columns`、settings fields 和
 presentation locale bundle 描述；通用页面不会写死某一场比赛的字段。公开的
 `ContestWorkbenchCommand` 仍是可扩展的推荐 union，插件只有在确有自定义动作时才需要
 扩展 `ContestWorkbenchRequest`。
+
+标准 FT8/FT4 runtime 也通过 `@tx5dr/plugin-api/ft8` 公开。外部比赛插件不得从
+`@tx5dr/core` 或 Host 内部路径导入 runtime 实现；需要标准解码、频率匹配或 QSO
+runtime 时使用该 public entrypoint。
+
+比赛插件不再注册到 `@tx5dr/builtin-plugins`。本地联调时，在 Host worktree 执行：
+
+```bash
+TX5DR_PLUGINS_ROOT=/Users/fangyizhou/Documents/coding/tx-5dr-plugins \
+  yarn dev:link-marketplace-plugins
+TX5DR_PLUGINS_DIR=/Users/fangyizhou/Documents/coding/tx-5dr-ft8-contest-family-plugins/.dev/plugins \
+  yarn dev
+```
+
+`.dev/plugins` 已被 Host 忽略，脚本只创建指向外部仓库 `dist` 的软链接；正式安装仍
+通过 Marketplace artifact，不会把外部源码或依赖带入 Host。
 
 默认 session 以 `contestId + editionId + rulesetVersion` 隔离，并且只创建 durable
 Host session。runtime/practice session 不能由 cleanup context可靠销毁，必须通过

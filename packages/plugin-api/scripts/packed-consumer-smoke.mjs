@@ -82,6 +82,7 @@ try {
 import * as root from '@tx5dr/plugin-api';
 import * as toolkit from '@tx5dr/plugin-api/toolkit';
 import * as contest from '@tx5dr/plugin-api/contest';
+import * as ft8 from '@tx5dr/plugin-api/ft8';
 import * as testing from '@tx5dr/plugin-api/testing';
 
 const required = [
@@ -91,6 +92,8 @@ const required = [
   [contest.composeFT8ContestPlugin, 'contest.composeFT8ContestPlugin'],
   [contest.createFT8ContestTestKit, 'contest.createFT8ContestTestKit'],
   [contest.standardFT8ContestLogbook, 'contest.standardFT8ContestLogbook'],
+  [ft8.createStandardQSOPluginRuntime, 'ft8.createStandardQSOPluginRuntime'],
+  [ft8.FT8MessageParser, 'ft8.FT8MessageParser'],
   [contest.createContestQsoEnvelopeAdapter, 'contest.createContestQsoEnvelopeAdapter'],
   [testing.createMockContext, 'testing.createMockContext'],
 ];

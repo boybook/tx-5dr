@@ -6517,7 +6517,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@tx5dr/plugin-api@npm:^2.3.0, @tx5dr/plugin-api@workspace:*, @tx5dr/plugin-api@workspace:packages/plugin-api":
+"@tx5dr/plugin-api@npm:^2.4.0, @tx5dr/plugin-api@workspace:*, @tx5dr/plugin-api@workspace:packages/plugin-api":
   version: 0.0.0-use.local
   resolution: "@tx5dr/plugin-api@workspace:packages/plugin-api"
   dependencies:
@@ -9402,7 +9402,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "create-tx5dr-plugin@workspace:packages/create-tx5dr-plugin"
   dependencies:
-    "@tx5dr/plugin-api": "npm:^2.3.0"
+    "@tx5dr/plugin-api": "npm:^2.4.0"
     typescript: "npm:^5.0.0"
   bin:
     create-tx5dr-plugin: ./dist/index.js

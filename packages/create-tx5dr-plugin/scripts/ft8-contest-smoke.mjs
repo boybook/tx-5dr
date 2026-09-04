@@ -2,6 +2,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import {
   cpSync,
   existsSync,
+  readFileSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
@@ -23,6 +24,15 @@ function run(command, args, cwd) {
 try {
   run(process.execPath, [cli, 'smoke-contest', '--template', 'ft8-contest'], temporaryRoot);
   const projectRoot = join(temporaryRoot, 'smoke-contest');
+  const generatedPackage = JSON.parse(readFileSync(join(projectRoot, 'package.json'), 'utf8'));
+  if (generatedPackage.tx5drPlugin?.entry !== 'dist/index.mjs'
+      || generatedPackage.tx5drPlugin?.minPluginApiVersion !== '2.4.0'
+      || !generatedPackage.tx5drPlugin?.include?.some((item) => item.from === 'ui')) {
+    throw new Error('ft8-contest scaffold did not emit Marketplace packaging metadata');
+  }
+  if (!existsSync(join(projectRoot, 'README.md')) || !existsSync(join(projectRoot, 'ui/contest-log.html'))) {
+    throw new Error('ft8-contest scaffold did not emit Marketplace documentation and UI assets');
+  }
   symlinkSync(join(repoRoot, 'node_modules'), join(projectRoot, 'node_modules'), 'dir');
   run('npm', ['run', 'build'], projectRoot);
   run('npm', ['test'], projectRoot);
@@ -41,7 +51,7 @@ try {
   if (loaded.default?.name !== 'smoke-contest') {
     throw new Error('isolated FT8 contest bundle did not export the generated plugin');
   }
-  if (loaded.default?.minPluginApiVersion !== '2.3.0') {
+  if (loaded.default?.minPluginApiVersion !== '2.4.0') {
     throw new Error('isolated FT8 contest bundle did not preserve the Plugin API version floor');
   }
   try {

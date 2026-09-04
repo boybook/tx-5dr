@@ -182,7 +182,7 @@ function readContestLogbookUiAssets(): Map<string, string> {
 
 function generatePackageJson(config: PluginConfig): string {
   const devDeps: Record<string, string> = {
-    '@tx5dr/plugin-api': 'latest',
+    '@tx5dr/plugin-api': '^2.4.0',
   };
 
   if (config.lang === 'ts') {
@@ -240,6 +240,26 @@ function generatePackageJson(config: PluginConfig): string {
     devDependencies: devDeps,
   };
 
+  if (config.template === 'ft8-contest') {
+    pkg.tx5drPlugin = {
+      pluginName: config.name,
+      title: config.name,
+      description: `${config.name} FT8/FT4 contest strategy`,
+      minPluginApiVersion: '2.4.0',
+      author: 'TX-5DR plugin author',
+      license: 'GPL-3.0-only',
+      categories: ['contest', 'ft8', 'ft4'],
+      keywords: ['amateur-radio', 'contest', config.name],
+      entry: 'dist/index.mjs',
+      include: [
+        { from: 'dist/index.mjs', to: 'index.mjs' },
+        { from: 'ui', to: 'ui' },
+        { from: 'src/locales', to: 'locales' },
+        { from: 'README.md', to: 'README.md' },
+      ],
+    };
+  }
+
   return JSON.stringify(pkg, null, 2) + '\n';
 }
 
@@ -271,6 +291,8 @@ function generateLocaleZh(config: PluginConfig): string {
   return JSON.stringify({
     pluginDescription: `${config.name} plugin`,
     contestLogTitle: '比赛日志',
+    contestNewCallsign: '本波段新台',
+    contestNewMultiplier: '新系数',
     enabled: '启用自动发射控制',
     enabledDesc: '允许此插件通过宿主发射协调器影响当前操作员的自动通联',
   }, null, 2) + '\n';
@@ -280,6 +302,8 @@ function generateLocaleEn(config: PluginConfig): string {
   return JSON.stringify({
     pluginDescription: `${config.name} plugin`,
     contestLogTitle: 'Contest log',
+    contestNewCallsign: 'New on band',
+    contestNewMultiplier: 'New multiplier',
     enabled: 'Enable automatic transmit control',
     enabledDesc: 'Allow this plugin to influence operator automation through the host coordinator',
   }, null, 2) + '\n';
@@ -593,7 +617,7 @@ class ContestRuntime implements StrategyRuntime {
 export const plugin = composeFT8ContestPlugin({
   name: '${config.name}',
   version: '0.1.0',
-  minPluginApiVersion: '2.3.0',
+  minPluginApiVersion: '2.4.0',
   description: 'pluginDescription',
   permissions: CONTEST_LOGBOOK_PERMISSIONS,
   contest,
@@ -793,7 +817,7 @@ describe('${config.name}', () => {
 
   it('exposes an FT8 strategy plugin', () => {
     expect(plugin.type).toBe('strategy');
-      expect(plugin.minPluginApiVersion).toBe('2.3.0');
+      expect(plugin.minPluginApiVersion).toBe('2.4.0');
     expect(contest.operating).toMatchObject({
       humanInitiation: 'required',
       maxConcurrentQsos: 1,
@@ -1415,6 +1439,7 @@ function generateFiles(config: PluginConfig): Map<string, string> {
     if (config.template === 'ft8-contest') {
       files.set('src/index.ts', generateTsFT8ContestPlugin(config));
       for (const [relativePath, content] of readContestLogbookUiAssets()) files.set(relativePath, content);
+      files.set('README.md', `# ${config.name}\n\nFT8/FT4 contest strategy plugin for TX-5DR.\n`);
     } else if (config.type === 'strategy') {
       files.set('src/index.ts', generateTsStrategyPlugin(config));
     } else if (hasUI(config)) {
@@ -1425,7 +1450,7 @@ function generateFiles(config: PluginConfig): Map<string, string> {
 
       files.set('src/locales/zh.json', generateLocaleZh(config));
       files.set('src/locales/en.json', generateLocaleEn(config));
-      if (config.template === 'ft8-contest') files.set('src/locales/ja.json', JSON.stringify({ pluginDescription: `${config.name} plugin`, contestLogTitle: 'コンテストログ' }, null, 2) + '\n');
+      if (config.template === 'ft8-contest') files.set('src/locales/ja.json', JSON.stringify({ pluginDescription: `${config.name} plugin`, contestLogTitle: 'コンテストログ', contestNewCallsign: 'このバンドで未交信', contestNewMultiplier: '新マルチ' }, null, 2) + '\n');
     files.set('src/__tests__/plugin.test.ts', generateTsTest(config));
   } else {
     if (hasUI(config)) {

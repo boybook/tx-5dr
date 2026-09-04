@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SimulationScenarioDescriptor } from '@tx5dr/plugin-api';
-import { BUILTIN_PLUGINS, BUILTIN_WW_DIGI_PLUGIN_NAME } from '@tx5dr/builtin-plugins';
 import { SimulationScenarioEngine } from './SimulationScenarioEngine.js';
+import { wwDigiSimulationScenarios } from './testFixtures/ww-digi-simulation-scenarios.js';
 
 const scenario: SimulationScenarioDescriptor = {
   id: 'test',
@@ -126,9 +126,7 @@ describe('SimulationScenarioEngine', () => {
   });
 
   it('lets an ambient WW Digi peer infer directed exchanges from any state', () => {
-    const ambient = BUILTIN_PLUGINS
-      .find((plugin) => plugin.definition.name === BUILTIN_WW_DIGI_PLUGIN_NAME)!
-      .definition.simulationScenarios!
+    const ambient = wwDigiSimulationScenarios
       .find((candidate) => candidate.id === 'ambient-band')!;
     const engine = new SimulationScenarioEngine('seed', [{
       id: 'ambient-1', callsign: 'W1VRB', grid: 'FN42', audioFrequencyHz: 1_700, scenario: ambient,
@@ -149,9 +147,7 @@ describe('SimulationScenarioEngine', () => {
   });
 
   it('lets the ambient band hear standard and contest CQ forms', () => {
-    const ambient = BUILTIN_PLUGINS
-      .find((plugin) => plugin.definition.name === BUILTIN_WW_DIGI_PLUGIN_NAME)!
-      .definition.simulationScenarios!
+    const ambient = wwDigiSimulationScenarios
       .find((candidate) => candidate.id === 'ambient-band')!;
     const matched: string[] = [];
     const create = (id: string) => new SimulationScenarioEngine(id, [{
@@ -195,9 +191,7 @@ describe('SimulationScenarioEngine', () => {
   });
 
   it('reactivates a previous pooled identity when it is directly addressed', () => {
-    const ambient = BUILTIN_PLUGINS
-      .find((plugin) => plugin.definition.name === BUILTIN_WW_DIGI_PLUGIN_NAME)!
-      .definition.simulationScenarios!
+    const ambient = wwDigiSimulationScenarios
       .find((candidate) => candidate.id === 'ambient-band')!;
     const identityPool = [
       { callsign: 'YV5VAC', grid: 'FK62' },
@@ -226,9 +220,7 @@ describe('SimulationScenarioEngine', () => {
   });
 
   it('does not evict a busy peer to reactivate a dormant identity', () => {
-    const ambient = BUILTIN_PLUGINS
-      .find((plugin) => plugin.definition.name === BUILTIN_WW_DIGI_PLUGIN_NAME)!
-      .definition.simulationScenarios!
+    const ambient = wwDigiSimulationScenarios
       .find((candidate) => candidate.id === 'ambient-band')!;
     const identityPool = [
       { callsign: 'YV5VAC', grid: 'FK62' },
@@ -253,9 +245,7 @@ describe('SimulationScenarioEngine', () => {
   });
 
   it('loads multiple addressed dormant identities into distinct idle peers in one frame', () => {
-    const ambient = BUILTIN_PLUGINS
-      .find((plugin) => plugin.definition.name === BUILTIN_WW_DIGI_PLUGIN_NAME)!
-      .definition.simulationScenarios!
+    const ambient = wwDigiSimulationScenarios
       .find((candidate) => candidate.id === 'ambient-band')!;
     const identityPool = Array.from({ length: 30 }, (_value, index) => ({
       callsign: `K1V${String(index).padStart(2, '0')}`,

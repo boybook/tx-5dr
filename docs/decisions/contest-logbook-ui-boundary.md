@@ -4,7 +4,7 @@ Status: accepted
 
 Contest logbooks are a public Plugin API capability. The canonical operator
 page is built and published with `@tx5dr/plugin-api`, then copied into each
-plugin artifact by the scaffold or built-in plugin build. A plugin declares the
+plugin artifact by the scaffold or Marketplace plugin build. A plugin declares the
 capability with `standardFT8ContestLogbook()` or `defaultContestLogbook()`;
 authors do not copy a private WW Digi page or hand-write the standard panel and
 page descriptors.
@@ -26,3 +26,10 @@ The contest session is the authoritative logbook for contest QSO completion.
 The composer decorates strategy completion effects with the contest envelope
 and session destination before the Host performs its durable write. After the
 write, the shared module publishes `stateChanged` to active page sessions.
+
+The same module also owns the contest-specific FrameTable presentation index.
+It is rebuilt from the contest session after session open, durable QSO
+completion, import, review changes, and edition rebinding. The composer overlays
+that projection on the strategy snapshot, so the operator sees new callsign and
+contest multiplier tags from the independent contest logbook rather than from
+the station's primary logbook.

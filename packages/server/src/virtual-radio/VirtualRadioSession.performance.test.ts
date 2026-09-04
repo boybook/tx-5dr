@@ -3,12 +3,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { MODES, type DecodeRequest } from '@tx5dr/contracts';
-import { BUILTIN_PLUGINS, BUILTIN_WW_DIGI_PLUGIN_NAME } from '@tx5dr/builtin-plugins';
 import { WSJTXDecodeProcessPool } from '../decode/WSJTXDecodeProcessPool.js';
 import { WSJTXEncodeWorkQueue, type EncodeRequest, type EncodeResult } from '../decode/WSJTXEncodeWorkQueue.js';
 import { VirtualRadioProfileSchema } from '../config/virtualRadioProfile.js';
 import { VirtualRadioSession } from './VirtualRadioSession.js';
 import { AudioMixer } from '../audio/AudioMixer.js';
+import { wwDigiSimulationScenarios } from './testFixtures/ww-digi-simulation-scenarios.js';
 
 const tempDirs: string[] = [];
 
@@ -50,7 +50,7 @@ describe('VirtualRadioSession real codec loop', () => {
       } },
     });
     const now = Date.UTC(2026, 7, 26, 12, 0, 0) + MODES.FT8.transmitTiming;
-    const scenarios = BUILTIN_PLUGINS.find((plugin) => plugin.definition.name === BUILTIN_WW_DIGI_PLUGIN_NAME)!.definition.simulationScenarios!;
+    const scenarios = wwDigiSimulationScenarios;
     const session = new VirtualRadioSession({
       profile,
       scenarios,
@@ -106,7 +106,7 @@ describe('VirtualRadioSession real codec loop', () => {
         dialFrequencyHz: 14_090_000, scenarioProvider: 'ww-digi', seed: 'three-lanes', peers,
       } },
     });
-    const scenarios = BUILTIN_PLUGINS.find((plugin) => plugin.definition.name === BUILTIN_WW_DIGI_PLUGIN_NAME)!.definition.simulationScenarios!;
+    const scenarios = wwDigiSimulationScenarios;
     const now = Date.UTC(2026, 7, 26, 12, 0, 0) + MODES.FT8.transmitTiming;
     const session = new VirtualRadioSession({
       profile, scenarios, mode: MODES.FT8, dataDir, now: () => now,
@@ -168,7 +168,7 @@ describe('VirtualRadioSession real codec loop', () => {
         dialFrequencyHz: 14_090_000, scenarioProvider: 'ww-digi', seed: 'pileup', peers,
       } },
     });
-    const scenarios = BUILTIN_PLUGINS.find((plugin) => plugin.definition.name === BUILTIN_WW_DIGI_PLUGIN_NAME)!.definition.simulationScenarios!;
+    const scenarios = wwDigiSimulationScenarios;
     const now = Date.UTC(2026, 7, 26, 12, 0, 0) + MODES.FT8.transmitTiming;
     const session = new VirtualRadioSession({
       profile, scenarios, mode: MODES.FT8, dataDir, now: () => now,
@@ -215,7 +215,7 @@ describe('VirtualRadioSession real codec loop', () => {
         peers: [{ id: 'peer-1', callsign: 'JA1AAA', grid: 'PM95', scenarioId: 'standard', audioFrequencyHz: 1_500 }],
       } },
     });
-    const scenarios = BUILTIN_PLUGINS.find((plugin) => plugin.definition.name === BUILTIN_WW_DIGI_PLUGIN_NAME)!.definition.simulationScenarios!;
+    const scenarios = wwDigiSimulationScenarios;
     const now = Date.UTC(2026, 7, 26, 12, 0, 0) + MODES.FT4.transmitTiming;
     const session = new VirtualRadioSession({
       profile, scenarios, mode: MODES.FT4, dataDir, now: () => now,
@@ -259,7 +259,7 @@ describe('VirtualRadioSession real codec loop', () => {
         peers: [{ id: 'peer-1', callsign: 'JA1AAA', grid: 'PM95', scenarioId: 'standard', audioFrequencyHz: 1_500 }],
       } },
     });
-    const scenarios = BUILTIN_PLUGINS.find((plugin) => plugin.definition.name === BUILTIN_WW_DIGI_PLUGIN_NAME)!.definition.simulationScenarios!;
+    const scenarios = wwDigiSimulationScenarios;
     let now = Date.now();
     const session = new VirtualRadioSession({
       profile, scenarios, mode: MODES.FT8, dataDir, now: () => now,
@@ -289,9 +289,7 @@ describe('VirtualRadioSession real codec loop', () => {
         peers: [{ id: 'peer-1', callsign: 'JA1AAA', grid: 'PM95', scenarioId: 'standard', audioFrequencyHz: 1_500 }],
       } },
     });
-    const scenarios = BUILTIN_PLUGINS.find((plugin) => (
-      plugin.definition.name === BUILTIN_WW_DIGI_PLUGIN_NAME
-    ))!.definition.simulationScenarios!;
+    const scenarios = wwDigiSimulationScenarios;
     let now = Date.now();
     const ingested: Float32Array[] = [];
     const session = new VirtualRadioSession({

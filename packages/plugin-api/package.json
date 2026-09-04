@@ -1,6 +1,6 @@
 {
   "name": "@tx5dr/plugin-api",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "type": "module",
   "description": "Public plugin API for TX-5DR digital radio engine",
   "license": "MIT",
@@ -43,6 +43,11 @@
       "import": "./dist/toolkit/contest/index.js",
       "require": "./dist/toolkit/contest/index.js",
       "types": "./dist/toolkit/contest/index.d.ts"
+    },
+    "./ft8": {
+      "import": "./dist/ft8/index.js",
+      "require": "./dist/ft8/index.js",
+      "types": "./dist/ft8/index.d.ts"
     },
     "./contest-logbook-ui/*": "./dist/contest-logbook-ui/*",
     "./bridge": {

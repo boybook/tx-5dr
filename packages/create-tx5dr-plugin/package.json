@@ -1,6 +1,6 @@
 {
   "name": "create-tx5dr-plugin",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "type": "module",
   "description": "Scaffold a new TX-5DR plugin project",
   "license": "MIT",
@@ -26,7 +26,7 @@
     "smoke:ft8-contest": "node scripts/ft8-contest-smoke.mjs"
   },
   "dependencies": {
-    "@tx5dr/plugin-api": "^2.3.0"
+    "@tx5dr/plugin-api": "^2.4.0"
   },
   "devDependencies": {
     "typescript": "^5.0.0"

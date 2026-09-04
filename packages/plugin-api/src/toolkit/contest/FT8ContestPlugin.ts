@@ -6,6 +6,8 @@ import type { PluginHooks } from '../../hooks.js';
 import {
   isQueuedStrategyRuntime,
   type QueuedStrategyRuntime,
+  type StrategyMessagePresentationProjection,
+  type StrategyQSOCompletionEffect,
   type StrategyRuntime,
 } from '../../runtime.js';
 import type { ContestLogbookModule } from './ContestLogbook.js';
@@ -13,7 +15,7 @@ import type { VersionedContestSession } from './ContestSessionRepository.js';
 import type { FT8ContestDefinition } from './FT8ContestDefinition.js';
 import type { FT8ContestQso } from './FT8ContestModules.js';
 
-export const FT8_CONTEST_MIN_PLUGIN_API_VERSION = '2.3.0';
+export const FT8_CONTEST_MIN_PLUGIN_API_VERSION = '2.4.0';
 
 export interface FT8RuntimeModule<TContest> {
   readonly id: string;
@@ -129,25 +131,60 @@ function runtimeFactory<TContest>(
   return typeof runtime === 'function' ? runtime : (contest, context) => runtime.create(contest, context);
 }
 
+function contestRuntimeContext(
+  context: StrategyPluginContext,
+  getMessagePresentation?: (operatorId: string) => StrategyMessagePresentationProjection | undefined,
+): StrategyPluginContext {
+  if (!getMessagePresentation) return context;
+  return {
+    ...context,
+    operator: {
+      ...context.operator,
+      async hasWorkedCallsign(callsign, options) {
+        const presentation = getMessagePresentation(context.operator.id);
+        if (!presentation) return context.operator.hasWorkedCallsign(callsign, options);
+        const normalizedCallsign = callsign.trim().toUpperCase();
+        const currentBand = context.radio.band.trim().toUpperCase();
+        return presentation.assignments.some((assignment) => (
+          assignment.subject.trim().toUpperCase() === normalizedCallsign
+            && (options?.anyBand === true || assignment.partition?.trim().toUpperCase() === currentBand)
+        ));
+      },
+    },
+  };
+}
+
 function decorateRuntime(
   runtime: StrategyRuntime,
   decorate: NonNullable<ContestLogbookModule<unknown, VersionedContestSession>['decorateCompletion']>,
   context: StrategyPluginContext,
+  getMessagePresentation?: (operatorId: string) => StrategyMessagePresentationProjection | undefined,
 ): StrategyRuntime {
   return new Proxy(runtime, {
     get(target, property, receiver) {
       if (property === 'decide') {
         return async (...args: Parameters<StrategyRuntime['decide']>) => {
           const result = await target.decide(...args);
+          const messagePresentation = getMessagePresentation?.(context.operator.id);
           const qsoCompletion = result.qsoCompletion
             ? decorate(result.qsoCompletion, context)
             : undefined;
           const qsoCompletions = result.qsoCompletions?.map((effect) => decorate(effect, context));
           return {
             ...result,
+            snapshot: messagePresentation
+              ? { ...result.snapshot, messagePresentation }
+              : result.snapshot,
             ...(qsoCompletion ? { qsoCompletion } : {}),
             ...(qsoCompletions ? { qsoCompletions } : {}),
           };
+        };
+      }
+      if (property === 'getSnapshot') {
+        return () => {
+          const snapshot = target.getSnapshot();
+          const messagePresentation = getMessagePresentation?.(context.operator.id);
+          return messagePresentation ? { ...snapshot, messagePresentation } : snapshot;
         };
       }
       const value = Reflect.get(target, property, receiver);
@@ -394,11 +431,15 @@ export function composeFT8ContestPlugin<
     hooks: mergedHooks,
     createStrategyRuntime(context) {
       assertPluginApiCompatible(minPluginApiVersion, metadata.name, context.pluginApiVersion);
-      const runtime = createRuntime(contest, context);
+      const runtime = createRuntime(
+        contest,
+        contestRuntimeContext(context, logbook?.getMessagePresentation),
+      );
       assertContestRuntimeFeatures(runtime, mergedFeatures);
-      return logbook?.decorateCompletion
-        ? decorateRuntime(runtime, logbook.decorateCompletion, context)
-        : runtime;
+      if (!logbook?.decorateCompletion && !logbook?.getMessagePresentation) return runtime;
+      const decorateCompletion = logbook.decorateCompletion
+        ?? ((effect: StrategyQSOCompletionEffect) => effect);
+      return decorateRuntime(runtime, decorateCompletion, context, logbook.getMessagePresentation);
     },
     async onLoad(context) {
       const instanceCleanups: ContestModuleCleanup[] = [];

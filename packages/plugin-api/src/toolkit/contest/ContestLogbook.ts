@@ -15,6 +15,7 @@ import type { ContestQsoEnvelopeAdapter } from './ContestQsoEnvelopeAdapter.js';
 import { createContestQsoEnvelopeAdapter } from './ContestQsoEnvelopeAdapter.js';
 import { maidenheadDistanceKm } from './FT8ContestModules.js';
 import type { StrategyQSOCompletionEffect } from '../../runtime.js';
+import type { StrategyMessagePresentationProjection } from '../../runtime.js';
 import { CONTEST_WORKBENCH_ACTIONS } from './DefaultContestWorkbench.js';
 
 export const CONTEST_LOGBOOK_PERMISSIONS = [
@@ -196,6 +197,12 @@ export interface ContestLogbookAdapter<
     readonly pages?: readonly PluginUIPageDescriptor[];
   };
   readonly quickSettings?: readonly PluginQuickSetting[];
+  /** Builds the Host-evaluated decoded-message presentation from contest-session records. */
+  messagePresentation?(
+    contest: TContest,
+    context: PluginContextFor<Permissions>,
+    records: readonly QSORecord[],
+  ): StrategyMessagePresentationProjection | undefined;
   decorateRecord?(record: QSORecord, contest: TContest, context: StrategyPluginContext): QSORecord;
   readonly presentation?: ContestLogbookPresentation;
   projectQso?(record: QSORecord, contest: TContest, context: PluginContextFor<Permissions>): FT8ContestQso<unknown> | null;
@@ -236,6 +243,8 @@ export interface ContestLogbookModule<
     readonly dir?: string;
     readonly pages?: readonly PluginUIPageDescriptor[];
   };
+  /** Returns the latest independent contest-session presentation for an operator. */
+  readonly getMessagePresentation?: (operatorId: string) => StrategyMessagePresentationProjection | undefined;
   readonly decorateCompletion?: (
     effect: StrategyQSOCompletionEffect,
     context: StrategyPluginContext,
@@ -619,6 +628,7 @@ export function defaultContestLogbook<
 ): ContestLogbookModule<TContest, TSession, Permissions> {
   const { contest, adapter } = options;
   const activeContests = new Map<string, TContest>();
+  const messagePresentations = new Map<string, StrategyMessagePresentationProjection>();
   const pageId = options.pageId
     ?? (options.ui !== false ? options.ui?.pageId : undefined)
     ?? DEFAULT_CONTEST_LOGBOOK_PAGE_ID;
@@ -656,18 +666,42 @@ export function defaultContestLogbook<
     stateKey: options.stateKey,
     title: adapter.settings.title,
   });
+  const refreshMessagePresentation = async (
+    operatorId: string,
+    context: PluginContextFor<Permissions>,
+    effectiveContest: TContest,
+    records?: readonly QSORecord[],
+  ): Promise<void> => {
+    if (!adapter.messagePresentation) return;
+    try {
+      const snapshotRecords = records ?? (await sessionBase.access(context as ContestSessionContext).snapshot()).records;
+      const projection = adapter.messagePresentation(effectiveContest, context, snapshotRecords);
+      if (projection) messagePresentations.set(operatorId, projection);
+      else messagePresentations.delete(operatorId);
+    } catch (error) {
+      context.log.debug('Contest message presentation refresh failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
   const session: ContestSessionModule<TContest, ContestLogbookPermissions> = {
     id: sessionBase.id,
     async setup(input) {
       const effectiveContest = options.resolveContest?.(input.context) ?? input.contest;
       activeContests.set(input.context.operator.id, effectiveContest);
       const cleanup = await sessionBase.setup({ ...input, contest: effectiveContest });
+      await refreshMessagePresentation(
+        input.context.operator.id,
+        input.context as unknown as PluginContextFor<Permissions>,
+        effectiveContest,
+      );
       if (!cleanup) return cleanup;
       return async (context) => {
         try {
           await cleanup(context);
         } finally {
           activeContests.delete(context.operator.id);
+          messagePresentations.delete(context.operator.id);
         }
       };
     },
@@ -678,6 +712,7 @@ export function defaultContestLogbook<
       const effectiveContest = activeContests.get(context.operator.id) ?? currentContest;
       const sessionState = sessionBase.forOperator(context.operator.id).read();
       const snapshot = await sessionBase.access(context as ContestSessionContext).snapshot();
+      await refreshMessagePresentation(context.operator.id, context, effectiveContest, snapshot.records);
       const state = await adapter.getState(effectiveContest, sessionState, context, snapshot.records) as ContestLogbookViewModel;
       const hostHealth = sessionBase.getHealth(context.operator.id);
       return {
@@ -697,21 +732,27 @@ export function defaultContestLogbook<
       };
     },
     decode: adapter.decode,
-    handle: (request, handlerContext) => adapter.handle(
-      request,
-      activeContests.get(handlerContext.context.operator.id) ?? handlerContext.contest,
-      sessionBase.forOperator(handlerContext.context.operator.id).read(),
-      handlerContext.request,
-      sessionBase.access(handlerContext.context as ContestSessionContext),
-      undefined,
-      sessionBase.forOperator(handlerContext.context.operator.id),
-      handlerContext.context,
-    ),
+    handle: async (request, handlerContext) => {
+      const effectiveContest = activeContests.get(handlerContext.context.operator.id) ?? handlerContext.contest;
+      const result = await adapter.handle(
+        request,
+        effectiveContest,
+        sessionBase.forOperator(handlerContext.context.operator.id).read(),
+        handlerContext.request,
+        sessionBase.access(handlerContext.context as ContestSessionContext),
+        undefined,
+        sessionBase.forOperator(handlerContext.context.operator.id),
+        handlerContext.context,
+      );
+      await refreshMessagePresentation(handlerContext.context.operator.id, handlerContext.context, effectiveContest);
+      return result;
+    },
   } as DefaultContestWorkbenchOptions<TContest, ContestLogbookViewModel, ContestWorkbenchRequest, unknown, Permissions>);
   const hooks: PluginHooks<Permissions> = {
     ...adapter.hooks,
     async onQSOComplete(record, context) {
       await adapter.hooks?.onQSOComplete?.(record, context);
+      await refreshMessagePresentation(context.operator.id, context, activeContests.get(context.operator.id) ?? contest);
       try {
         await sessionBase.access(context as ContestSessionContext).notify('transaction');
       } catch (error) {
@@ -729,6 +770,7 @@ export function defaultContestLogbook<
         const effectiveContest = options.resolveContest(context as ContestSessionContext);
         activeContests.set(context.operator.id, effectiveContest);
         await sessionBase.rebind(context.operator.id, effectiveContest, context as ContestSessionContext);
+        await refreshMessagePresentation(context.operator.id, context, effectiveContest);
       }
       for (const page of context.ui.listActivePageSessions(pageId)) {
         context.ui.pushToSession(page.sessionId, 'stateChanged');
@@ -748,6 +790,9 @@ export function defaultContestLogbook<
       dir: uiOptions?.dir ?? adapter.ui?.dir ?? 'ui',
       pages,
     } : undefined,
+    getMessagePresentation(operatorId) {
+      return messagePresentations.get(operatorId);
+    },
     decorateCompletion(effect, context) {
       const record = adapter.decorateRecord?.(effect.record, contest, context) ?? effect.record;
       return {
@@ -862,6 +907,75 @@ function standardContestRecordRow(
   };
 }
 
+function gridField(exchange: unknown): string | undefined {
+  if (!exchange || typeof exchange !== 'object') return undefined;
+  const value = (exchange as { grid?: unknown }).grid;
+  if (typeof value !== 'string') return undefined;
+  const field = value.trim().toUpperCase().slice(0, 2);
+  return /^[A-R]{2}$/.test(field) ? field : undefined;
+}
+
+function standardContestMessagePresentation<TExchange, TQso extends FT8ContestQso<TExchange>>(
+  contest: FT8ContestDefinition<TExchange, TQso, unknown>,
+  records: readonly QSORecord[],
+  project: (record: QSORecord) => TQso | null,
+  revision: number,
+): StrategyMessagePresentationProjection {
+  const workedByBand = new Map<string, Set<string>>();
+  const workedFieldsByBand = new Map<string, Set<string>>();
+  for (const record of records) {
+    const qso = project(record);
+    if (!qso || qso.status === 'x-qso') continue;
+    const callsign = qso.callsign.trim().toUpperCase();
+    const band = qso.band.trim().toUpperCase();
+    if (!callsign || !band) continue;
+    const worked = workedByBand.get(band) ?? new Set<string>();
+    worked.add(callsign);
+    workedByBand.set(band, worked);
+    const field = gridField(qso.receivedExchange);
+    if (field) {
+      const fields = workedFieldsByBand.get(band) ?? new Set<string>();
+      fields.add(field);
+      workedFieldsByBand.set(band, fields);
+    }
+  }
+  const asRecord = (values: Map<string, Set<string>>): Record<string, string[]> => Object.fromEntries(
+    [...values].map(([key, entries]) => [key, [...entries].sort()]),
+  );
+  const bandAssignments = [...workedByBand].flatMap(([band, callsigns]) => [...callsigns].map((subject) => ({
+    subject,
+    partition: band,
+    classId: 'contest-worked',
+  })));
+  return {
+    revision,
+    mode: 'replace-logbook',
+    subject: 'sender-callsign',
+    partitionBy: 'band',
+    eligiblePartitions: contest.bands.map((band) => band.toUpperCase()),
+    defaultClass: 'contest-new-call',
+    classes: {
+      'contest-new-field': {
+        badges: [{ label: 'contestNewMultiplier', tone: 'secondary' }],
+        row: { tone: 'secondary', background: 'soft', accent: true },
+        emphasisWhen: [{ firstTokenIn: ['CQ'] }, { anyTokenIn: ['RR73', 'RRR', '73'] }],
+      },
+      'contest-new-call': {
+        badges: [{ label: 'contestNewCallsign', tone: 'warning' }],
+        row: { tone: 'warning', background: 'soft', accent: true },
+        emphasisWhen: [{ firstTokenIn: ['CQ'] }, { anyTokenIn: ['RR73', 'RRR', '73'] }],
+      },
+      'contest-worked': { textDecoration: 'line-through', opacity: 'muted' },
+    },
+    assignments: bandAssignments,
+    noveltyRules: [{
+      fact: 'grid-field-2',
+      knownValuesByPartition: asRecord(workedFieldsByBand),
+      classId: 'contest-new-field',
+    }],
+  };
+}
+
 function decodeStandardContestAction(action: string, data: unknown): ContestWorkbenchRequest {
   const payload = data && typeof data === 'object' ? data as Record<string, unknown> : {};
   if (action === CONTEST_WORKBENCH_ACTIONS.saveSettings) return { action, payload };
@@ -919,6 +1033,7 @@ export function standardFT8ContestLogbook<
     adifContestExporter() as unknown as ContestLogbookExporter<unknown, unknown>,
     officialContestExporter(contest, options.submissionOptions as TSubmissionOptions) as unknown as ContestLogbookExporter<unknown, unknown>,
   ];
+  const presentationRevisions = new Map<string, number>();
 
   const adapter: ContestLogbookAdapter<
     typeof contest,
@@ -932,6 +1047,17 @@ export function standardFT8ContestLogbook<
     settings,
     createQsoEnvelope: envelope,
     exporters,
+    messagePresentation(currentContest, context, records) {
+      const operatorId = context.operator.id;
+      const revision = (presentationRevisions.get(operatorId) ?? 0) + 1;
+      presentationRevisions.set(operatorId, revision);
+      return standardContestMessagePresentation(
+        currentContest as FT8ContestDefinition<TExchange, TQso, unknown>,
+        records,
+        (record) => project(record, context as ContestSessionContext),
+        revision,
+      );
+    },
     presentation: { ...options.presentation, columns },
     getState(currentContest, session, context, records = []) {
       const projected = records.flatMap((record) => {

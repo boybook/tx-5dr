@@ -24,7 +24,7 @@ function installInMemoryLogManager(): void {
   const sessionLogBook = {
     id: 'plugin-session-test',
     name: 'Plugin Session',
-    binding: { kind: 'plugin-session', pluginName: 'ww-digi', stationCallsign: 'BG5DRB', sessionKey: 'ww-digi:2026' },
+    binding: { kind: 'plugin-session', pluginName: 'standard-qso', stationCallsign: 'BG5DRB', sessionKey: 'standard-qso:2026' },
     provider: {
       queryQSOs: vi.fn(async () => []),
       readQsoSnapshot: vi.fn(async () => ({ revision: 'r0', records: [] })),
@@ -134,7 +134,7 @@ describe('PluginManager standard-qso late re-decision', () => {
   });
 
   async function createRuntimeHarness(options?: {
-    strategy?: 'standard-qso' | 'assisted-qso-queue' | 'ww-digi';
+    strategy?: 'standard-qso' | 'assisted-qso-queue';
     myCallsign?: string;
     myGrid?: string;
     targetCallsign?: string;
@@ -309,109 +309,6 @@ describe('PluginManager standard-qso late re-decision', () => {
       pluginManager,
     };
   }
-
-  it('projects the complete WW Digi message presentation through operator runtime status', async () => {
-    const { operator, pluginManager } = await createRuntimeHarness({
-      strategy: 'ww-digi',
-      myCallsign: 'BG0VRT',
-      myGrid: 'NN00',
-      startOperator: false,
-      radioBand: '20m',
-      operatorPluginSettings: {
-        'ww-digi': {
-          contestYear: 2026,
-          parallelStreams: 3,
-          location: 'DX',
-          categoryBand: 'ALL',
-          categoryPower: 'QRP',
-          categoryOperator: 'SINGLE-OP',
-          categoryTransmitter: 'ONE',
-          operators: '',
-        },
-      },
-    });
-
-    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).messagePresentation).toMatchObject({
-      mode: 'replace-logbook',
-      defaultClass: 'contest-new-call',
-      classes: {
-        'contest-new-field': {
-          row: { tone: 'secondary', background: 'soft', accent: true },
-          emphasisWhen: expect.arrayContaining([
-            { firstTokenIn: ['CQ'] },
-            { anyTokenIn: ['RR73', 'RRR', '73'] },
-          ]),
-        },
-        'contest-new-call': {
-          row: { tone: 'warning', background: 'soft', accent: true },
-          emphasisWhen: expect.arrayContaining([
-            { firstTokenIn: ['CQ'] },
-            { anyTokenIn: ['RR73', 'RRR', '73'] },
-          ]),
-        },
-        'contest-worked': { textDecoration: 'line-through', opacity: 'muted' },
-      },
-      noveltyRules: [{ fact: 'grid-field-2', classId: 'contest-new-field' }],
-    });
-    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).messagePresentation?.tagRules).toBeUndefined();
-  });
-
-  it('keeps an empty-queue WW Digi double-click queued while its transmit gate is closed', async () => {
-    const { operator, pluginManager } = await createRuntimeHarness({
-      strategy: 'ww-digi',
-      myCallsign: 'BG0VRT',
-      myGrid: 'NN00',
-      startOperator: false,
-      radioBand: '20m',
-      radioFrequency: 14_090_000,
-      maxConcurrentStreams: 3,
-      operatorPluginSettings: {
-        'ww-digi': { contestYear: 2026, parallelStreams: 3 },
-      },
-    });
-
-    const result = await pluginManager.enqueueQueueTarget(
-      operator.config.id,
-      { callsign: 'JA1AAA' },
-      { startIfIdle: true },
-    );
-
-    expect(result.outcome).toBe('accepted');
-    expect(operator.isTransmitting).toBe(false);
-    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).queue?.rows)
-      .toEqual([expect.objectContaining({ callsign: 'JA1AAA', displayState: 'authorized' })]);
-  });
-
-  it('applies the opt-in WW Digi manual replacement setting through the normal queue command', async () => {
-    const { operator, pluginManager } = await createRuntimeHarness({
-      strategy: 'ww-digi',
-      myCallsign: 'BG0VRT',
-      myGrid: 'NN00',
-      startOperator: false,
-      radioBand: '20m',
-      radioFrequency: 14_090_000,
-      maxConcurrentStreams: 3,
-      operatorPluginSettings: {
-        'ww-digi': {
-          contestYear: 2026,
-          parallelStreams: 3,
-          replaceQueueOnManualTarget: true,
-        },
-      },
-    });
-    const operatorId = operator.config.id;
-
-    await pluginManager.enqueueQueueTarget(operatorId, { callsign: 'JA1AAA' }, { startIfIdle: true });
-    const replaced = await pluginManager.enqueueQueueTarget(
-      operatorId,
-      { callsign: 'JA2BBB' },
-      { startIfIdle: true },
-    );
-
-    expect(replaced.requestOperatorStart).toBe(true);
-    expect(replaced.snapshot.rows.map((row) => row.callsign)).toEqual(['JA2BBB']);
-    expect(operator.isTransmitting).toBe(false);
-  });
 
   async function createMultiOperatorRuntimeHarness(options?: {
     strategy?: 'standard-qso' | 'assisted-qso-queue';

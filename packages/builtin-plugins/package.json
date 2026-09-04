@@ -12,7 +12,7 @@
     }
   },
   "scripts": {
-    "build": "node scripts/generate-clublog-api-key.mjs && tsc && node scripts/build-ui.mjs && node scripts/build-contest-logbook-ui.mjs",
+    "build": "node scripts/generate-clublog-api-key.mjs && tsc && node scripts/build-ui.mjs",
     "dev:server": "node scripts/generate-clublog-api-key.mjs && tsc --watch",
     "dev:ui": "node scripts/build-ui.mjs --watch",
     "lint": "node scripts/generate-clublog-api-key.mjs && eslint src/**/*.ts",

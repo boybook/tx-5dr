@@ -68,7 +68,7 @@ export default definePlugin({
 
 Release boundary: `2.0.1` is the containment release for the existing
 experimental/advanced `./toolkit` surface. The stable `./contest` entry point,
-root re-exports and `ft8-contest` scaffold start at `2.3.0`; the publish workflow
+root re-exports and `ft8-contest` scaffold start at `2.4.0`; the publish workflow
 rejects an older version when that stable export is present.
 
 Plugin compatibility uses the bundled `@tx5dr/plugin-api` SemVer, not the
@@ -121,7 +121,7 @@ const contest = defineFT8Contest({
 export default composeFT8ContestPlugin({
   name: 'example-ft8',
   version: '1.0.0',
-  minPluginApiVersion: '2.3.0',
+  minPluginApiVersion: '2.4.0',
   permissions: CONTEST_LOGBOOK_PERMISSIONS,
   contest,
   runtime: createContestRuntime,
@@ -149,6 +149,9 @@ official submission format. The `ft8-contest` scaffold copies the canonical
 page assets automatically. The definition's `presentation` metadata is shown
 as collapsible rule and scoring details with a link to the official rules; when
 metadata is absent, the corresponding detail is omitted.
+The standard logbook also derives the FrameTable's new-callsign and contest
+multiplier presentation from the independent contest session, and the composer
+adds it to the strategy snapshot automatically.
 
 Single-stream contests may add `strategyFeatures.targetQueue` explicitly.
 Definitions with more than one concurrent QSO automatically require the Host's
