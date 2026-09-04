@@ -11,7 +11,7 @@ interface UseThemeReturn {
 
 const THEME_STORAGE_KEY = 'tx5dr-theme-mode';
 
-export const useTheme = (): UseThemeReturn => {
+export const useTheme = (options: { forcedTheme?: 'light' | 'dark' } = {}): UseThemeReturn => {
   // 获取系统偏好
   const getSystemTheme = (): 'light' | 'dark' => {
     if (typeof window !== 'undefined' && window.matchMedia) {
@@ -35,7 +35,7 @@ export const useTheme = (): UseThemeReturn => {
   const [systemTheme, setSystemTheme] = useState<'light' | 'dark'>(getSystemTheme);
 
   // 计算实际应用的主题
-  const actualTheme = themeMode === 'system' ? systemTheme : themeMode;
+  const actualTheme = options.forcedTheme ?? (themeMode === 'system' ? systemTheme : themeMode);
 
   // 监听系统主题变化
   useEffect(() => {
@@ -105,4 +105,4 @@ export const useTheme = (): UseThemeReturn => {
     setThemeMode,
     toggleTheme,
   };
-}; 
+};

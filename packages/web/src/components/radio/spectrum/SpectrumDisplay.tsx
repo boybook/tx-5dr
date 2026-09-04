@@ -27,6 +27,7 @@ import { canExecuteRadioFrequency, canWriteRadioFrequency, isFakeFrequencySuppor
 import { setRadioFrequencyWithIntent, subscribeRadioFrequencyIntent, type SetRadioFrequencyParams } from '../../../utils/radioFrequencyIntent';
 import { deriveSpectrumCustomSettings, SpectrumAnalysisSettings } from './SpectrumAnalysisSettings';
 import { TciSpectrumSettingsPanel } from './TciSpectrumSettings';
+import { SpectrumRenderHost, type SpectrumPresentation } from './SpectrumRenderHost';
 import {
   RADIO_SDR_OPTIMISTIC_DISPLAY_HOLD_TIMEOUT_MS,
   RADIO_SDR_OPTIMISTIC_DISPLAY_IDLE,
@@ -119,6 +120,8 @@ const DEFAULT_AUTO_CONFIG: AutoRangeConfig = {
 interface SpectrumDisplayProps {
   className?: string;
   height?: number;
+  /** Standalone windows opt into the trace + waterfall presentation. */
+  presentation?: SpectrumPresentation;
   hoverFrequency?: number | null;
   frequencyBandOverlays?: FrequencyBandOverlay[];
   onFrequencyBandOverlayPreviewChange?: (id: string, change: FrequencyBandOverlayChange) => void;
@@ -1047,6 +1050,7 @@ const FakeFreqLowPowerWatcher: React.FC<{
 export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   className = '',
   height = 200,
+  presentation = 'waterfall',
   hoverFrequency,
   frequencyBandOverlays = [],
   onFrequencyBandOverlayPreviewChange,
@@ -1122,7 +1126,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const tciDigitalAutoZoomManualIntentRef = useRef<{ frequencyHz: number; expiresAt: number } | null>(null);
   const tciDigitalAutoZoomFrequencyRef = useRef<number | null>(null);
   const tciDigitalAutoZoomWaitingKeyRef = useRef<string | null>(null);
-  const tciDigitalAutoZoomTransitionRef = useRef(false);
+  const spectrumViewportTransitionRef = useRef(false);
   const lastTciViewportTuneRef = useRef<number | null>(null);
   const tciDdsTuneRef = useRef<{ inFlight: boolean; pendingFrequencyHz: number | null }>({
     inFlight: false,
@@ -2159,8 +2163,8 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   }, [connection.state.isReady, connection.state.radioService, isCollapsed, pauseNoFrameRecovery, resetSpectrumRecoveryState, subscribedKind, updateSpectrumRecoveryState]);
 
   useLayoutEffect(() => {
-    const axisTransition = tciDigitalAutoZoomTransitionRef.current ? 'animate' as const : 'immediate' as const;
-    tciDigitalAutoZoomTransitionRef.current = false;
+    const axisTransition = spectrumViewportTransitionRef.current ? 'animate' as const : 'immediate' as const;
+    spectrumViewportTransitionRef.current = false;
     streamController.updateContext({
       selectedKind: effectiveSelectedKind,
       openWebRXViewport: isOpenWebRXSdrSelected && !isOpenWebRXDetailMode ? openWebRXViewport : null,
@@ -2426,7 +2430,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     tciDigitalAutoZoomTimerRef.current = setTimeout(() => {
       tciDigitalAutoZoomTimerRef.current = null;
       if (tciDigitalAutoZoomScheduledKeyRef.current !== autoZoomKey) return;
-      tciDigitalAutoZoomTransitionRef.current = true;
+      spectrumViewportTransitionRef.current = true;
       setRadioSdrViewport((current) => (
         current
         && current.min === targetRange.min
@@ -2618,7 +2622,13 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       TCI_MIN_LOCAL_VIEWPORT_SPAN_HZ,
       Math.min(nativeSpan, currentSpan * (direction === 'in' ? 0.5 : 2)),
     );
-    const center = (radioSdrViewport.min + radioSdrViewport.max) / 2;
+    // Button zoom follows the actual operating frequency rather than the
+    // current viewport midpoint. This keeps the active VFO in focus after a
+    // user has panned away from it; optimistic frequency state covers a VFO
+    // change that has not reached the physical readback yet.
+    const center = typeof effectiveRadioSdrFrequency === 'number' && Number.isFinite(effectiveRadioSdrFrequency)
+      ? effectiveRadioSdrFrequency
+      : (radioSdrViewport.min + radioSdrViewport.max) / 2;
     const boundedCenter = Math.max(
       radioSdrViewportBounds.min + nextSpan / 2,
       Math.min(radioSdrViewportBounds.max - nextSpan / 2, center),
@@ -2627,8 +2637,12 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       min: boundedCenter - nextSpan / 2,
       max: boundedCenter + nextSpan / 2,
     };
+    // Reuse the same WebGL axis transition used by the FT8/FT4 automatic
+    // presentation zoom. The viewport remains client-local; this flag only
+    // selects the visual transition for the next committed range.
+    spectrumViewportTransitionRef.current = true;
     setRadioSdrViewport(nextRange);
-  }, [isWideRadioSdr, radioSdrViewport, radioSdrViewportBounds, viewportInteraction.canZoom]);
+  }, [effectiveRadioSdrFrequency, isWideRadioSdr, radioSdrViewport, radioSdrViewportBounds, viewportInteraction.canZoom]);
 
   const controls = sessionState?.controls ?? [];
   const spectrumZoomOutControl = controls.find(control => control.id === 'zoom-step' && control.action === 'out' && control.visible);
@@ -2974,73 +2988,65 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         active={fakeFrequencySupported && canControlRadio && !fakeFrequencyEnabled && !lowPowerHintDismissed}
         onChange={setLowPowerWarningOperatorIds}
       />
-      <WebGLWaterfall
+      <SpectrumRenderHost
         key={waterfallViewKey}
-        controller={streamController}
+        presentation={presentation}
         height={height}
-        minDb={currentManualRangeSettings.minDb}
-        maxDb={currentManualRangeSettings.maxDb}
-        autoRange={!isRadioSdrSelected && !isOpenWebRXSdrSelected && audioRangeSettings.mode === 'auto'}
-        autoRangeConfig={audioRangeSettings.auto}
-        themeId={selectedSpectrumThemeId}
-        sharpPixels={isAudioSpectrumSelected && isIfInputSignal}
-        frameIntervalMs={spectrumRenderConfig?.analysisIntervalMs}
-        totalRows={renderHistoryRows}
-        showCycleMarkers={showCycleMarkers}
-        cycleSlotMs={cycleSlotMs}
-        frequencyRangeMode={frequencyRangeMode}
-        referenceFrequencyHz={spectrumReferenceFrequency}
-        frequencyAxisTransform={frequencyAxisTransform}
-        visualFrequencyOffsetHz={visualFrequencyOffsetHz}
-        basebandInteractionRange={BASEBAND_INTERACTION_RANGE}
-        interactionFrequencyMode={
-          frequencyGestureTarget === 'radio-frequency'
-            ? 'absolute'
-            : 'baseband'
-        }
-        interactionFrequencyStepHz={frequencyGestureStepHz}
-        viewportInteraction={waterfallViewportInteraction}
-        dragFrequencyStepHz={radioSdrDragFrequencyStepHz}
-        dragFrequencyCommitIntervalMs={RADIO_SDR_DRAG_FREQUENCY_COMMIT_INTERVAL_MS}
-        txBandOverlays={radioSdrFrequencyOverlays}
-        frequencyBandOverlays={isAudioSpectrumSelected ? frequencyBandOverlays : []}
-        presetMarkers={presetMarkers}
-        rxFrequencies={displaySpectrumMarkers.rxFrequencies}
-        txFrequencies={displaySpectrumMarkers.txFrequencies}
-        lowPowerWarningOperatorIds={lowPowerWarningOperatorIds}
-        onEnableFakeFrequency={handleEnableFakeFrequency}
-        onDismissLowPowerWarning={handleDismissLowPowerHint}
-        onTxFrequencyChange={displayTxFrequencyChange}
-        onTxBandOverlayFrequencyChange={canWriteFrequency ? handleRadioSdrOverlayFrequencyChange : undefined}
-        onFrequencyBandOverlayPreviewChange={isAudioSpectrumSelected ? onFrequencyBandOverlayPreviewChange : undefined}
-        onFrequencyBandOverlayCommit={isAudioSpectrumSelected ? onFrequencyBandOverlayCommit : undefined}
-        onPresetMarkerClick={presetMarkers.length > 0 && canWriteFrequency && frequencyGestureTarget === 'radio-frequency' ? handleRadioFrequencyGesture : undefined}
-        onDragFrequencyPreview={canDragRadioSdrFrequency ? handleRadioSdrFrequencyDragPreview : undefined}
-        onDragFrequencyActiveChange={canDragRadioSdrFrequency ? handleRadioSdrDragActiveChange : undefined}
-        enableHorizontalWheelFrequency={canDragRadioSdrFrequency}
-        onDragFrequencyChange={
-          canDragRadioSdrFrequency
-            ? handleRadioSdrFrequencyDragCommit
-            : undefined
-        }
-        onDoubleClickSetFrequency={
-          strategyFrequencyPick && isAudioSpectrumSelected
+        className="bg-transparent"
+        waterfallProps={{
+          controller: streamController,
+          minDb: currentManualRangeSettings.minDb,
+          maxDb: currentManualRangeSettings.maxDb,
+          autoRange: !isRadioSdrSelected && !isOpenWebRXSdrSelected && audioRangeSettings.mode === 'auto',
+          autoRangeConfig: audioRangeSettings.auto,
+          themeId: selectedSpectrumThemeId,
+          sharpPixels: isAudioSpectrumSelected && isIfInputSignal,
+          frameIntervalMs: spectrumRenderConfig?.analysisIntervalMs,
+          totalRows: renderHistoryRows,
+          showCycleMarkers,
+          cycleSlotMs,
+          frequencyRangeMode,
+          referenceFrequencyHz: spectrumReferenceFrequency,
+          frequencyAxisTransform,
+          visualFrequencyOffsetHz,
+          basebandInteractionRange: BASEBAND_INTERACTION_RANGE,
+          interactionFrequencyMode: frequencyGestureTarget === 'radio-frequency' ? 'absolute' : 'baseband',
+          interactionFrequencyStepHz: frequencyGestureStepHz,
+          viewportInteraction: waterfallViewportInteraction,
+          dragFrequencyStepHz: radioSdrDragFrequencyStepHz,
+          dragFrequencyCommitIntervalMs: RADIO_SDR_DRAG_FREQUENCY_COMMIT_INTERVAL_MS,
+          txBandOverlays: radioSdrFrequencyOverlays,
+          frequencyBandOverlays: isAudioSpectrumSelected ? frequencyBandOverlays : [],
+          presetMarkers,
+          rxFrequencies: displaySpectrumMarkers.rxFrequencies,
+          txFrequencies: displaySpectrumMarkers.txFrequencies,
+          lowPowerWarningOperatorIds,
+          onEnableFakeFrequency: handleEnableFakeFrequency,
+          onDismissLowPowerWarning: handleDismissLowPowerHint,
+          onTxFrequencyChange: displayTxFrequencyChange,
+          onTxBandOverlayFrequencyChange: canWriteFrequency ? handleRadioSdrOverlayFrequencyChange : undefined,
+          onFrequencyBandOverlayPreviewChange: isAudioSpectrumSelected ? onFrequencyBandOverlayPreviewChange : undefined,
+          onFrequencyBandOverlayCommit: isAudioSpectrumSelected ? onFrequencyBandOverlayCommit : undefined,
+          onPresetMarkerClick: presetMarkers.length > 0 && canWriteFrequency && frequencyGestureTarget === 'radio-frequency' ? handleRadioFrequencyGesture : undefined,
+          onDragFrequencyPreview: canDragRadioSdrFrequency ? handleRadioSdrFrequencyDragPreview : undefined,
+          onDragFrequencyActiveChange: canDragRadioSdrFrequency ? handleRadioSdrDragActiveChange : undefined,
+          enableHorizontalWheelFrequency: canDragRadioSdrFrequency,
+          onDragFrequencyChange: canDragRadioSdrFrequency ? handleRadioSdrFrequencyDragCommit : undefined,
+          onDoubleClickSetFrequency: strategyFrequencyPick && isAudioSpectrumSelected
             ? handleStrategyFrequencyPick
             : frequencyGestureTarget === 'radio-frequency' && canDoubleClickSetFrequency && canWriteFrequency
-            ? handleRadioFrequencyGesture
-            : undefined
-        }
-        onRightClickSetFrequency={
-          isOpenWebRXSdrSelected
+              ? handleRadioFrequencyGesture
+              : undefined,
+          onRightClickSetFrequency: isOpenWebRXSdrSelected
             ? (isOpenWebRXDetailMode ? handleRightClickSetFrequency : undefined)
             : frequencyGestureTarget === 'radio-frequency'
-            ? (canRightClickSetFrequency && canWriteFrequency ? handleRadioFrequencyGesture : undefined)
-            : (showMarkers && canRightClickSetFrequency ? handleRightClickSetFrequency : undefined)
-        }
-        onActualRangeChange={handleActualRangeChange}
-        hoverFrequency={effectiveHoverFrequency}
-        isTransmitting={isTransmitting}
-        className="bg-transparent"
+              ? (canRightClickSetFrequency && canWriteFrequency ? handleRadioFrequencyGesture : undefined)
+              : (showMarkers && canRightClickSetFrequency ? handleRightClickSetFrequency : undefined),
+          onActualRangeChange: handleActualRangeChange,
+          hoverFrequency: effectiveHoverFrequency,
+          isTransmitting,
+          className: 'bg-transparent',
+        }}
       />
       {spectrumRecoveryState.isStale && !pauseNoFrameRecovery && (
         <div className="pointer-events-none absolute left-1/2 top-2 z-20 -translate-x-1/2 rounded-full bg-black/55 px-3 py-1 text-[11px] text-white/85 backdrop-blur-sm">

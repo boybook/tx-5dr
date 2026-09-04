@@ -50,6 +50,7 @@ const SpectrumContent: React.FC = () => {
       )}
       <SpectrumDisplay
         height={windowHeight}
+        presentation="trace-waterfall"
         showPopOut={false}
         topLeftOverlayInset={topLeftOverlayInset}
       />
@@ -85,7 +86,10 @@ const SpectrumAuthGate: React.FC = () => {
  * 提供主题、鉴权和 WebSocket 连接
  */
 export const SpectrumPage: React.FC = () => {
-  useTheme();
+  // The standalone spectrum window is intentionally dark regardless of the
+  // main window's persisted theme preference, matching SDR instrument UIs and
+  // keeping the trace/waterfall contrast stable on bright desktops.
+  useTheme({ forcedTheme: 'dark' });
   useLanguage();
 
   return (

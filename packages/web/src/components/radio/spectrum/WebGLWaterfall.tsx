@@ -21,6 +21,7 @@ import {
   getSafeSpectrumThemeCurve,
   type SpectrumThemeId,
 } from './spectrumThemes';
+import type { SpectrumViewportRuntime } from '../../../spectrum/SpectrumViewportRuntime';
 
 const logger = createLogger('WebGLWaterfall');
 
@@ -155,6 +156,8 @@ interface WebGLWaterfallProps {
   interactionFrequencyMode?: 'baseband' | 'absolute';
   interactionFrequencyRange?: InteractionFrequencyRange | null;
   viewportInteraction?: WaterfallViewportInteraction;
+  /** Imperative preview bridge used when trace and waterfall share a host. */
+  viewportRuntime?: SpectrumViewportRuntime;
   /** Absolute viewport panning/zooming for wide-band IQ sources (TCI). */
   enableLocalViewportPanZoom?: boolean;
   localViewportRange?: InteractionFrequencyRange | null;
@@ -745,7 +748,7 @@ export function interpolateSpectrumAxis(
   };
 }
 
-function calculateSpectrumAxisTransitionDuration(fromAxis: SpectrumAxis, toAxis: SpectrumAxis): number {
+export function calculateSpectrumAxisTransitionDuration(fromAxis: SpectrumAxis, toAxis: SpectrumAxis): number {
   const fromSpan = fromAxis.maxHz - fromAxis.minHz;
   const toSpan = toAxis.maxHz - toAxis.minHz;
   if (!Number.isFinite(fromSpan) || !Number.isFinite(toSpan) || fromSpan <= 0 || toSpan <= 0) {
@@ -915,6 +918,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   interactionFrequencyMode = 'baseband',
   interactionFrequencyRange = null,
   viewportInteraction,
+  viewportRuntime,
   enableLocalViewportPanZoom = false,
   localViewportRange = null,
   localViewportBounds = null,
@@ -986,6 +990,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const viewStateRef = useRef<{ axis: SpectrumAxis | null; hasData: boolean }>(initialViewState);
   const cycleMarkersRef = useRef<CycleMarkerPosition[]>([]);
   const cycleMarkerPoolRef = useRef<HTMLDivElement[]>([]);
+  const overlayAxisTransitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [rulerWidthPx, setRulerWidthPx] = React.useState(0);
   const [hoverCursor, setHoverCursor] = React.useState<{ ratio: number; frequency: number; clientX: number; containerTop: number } | null>(null);
   const localViewportGestureRef = useRef<{ pointerId: number; startX: number; lastX: number; startRange: InteractionFrequencyRange; hzPerPixel: number } | null>(null);
@@ -1183,6 +1188,34 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     }
     committedViewAxisOverrideRef.current = null;
   }, []);
+
+  const clearOverlayAxisTransition = useCallback(() => {
+    if (overlayAxisTransitionTimerRef.current) {
+      clearTimeout(overlayAxisTransitionTimerRef.current);
+      overlayAxisTransitionTimerRef.current = null;
+    }
+    const layer = markerLayerRef.current;
+    if (!layer) return;
+    for (const element of layer.querySelectorAll<HTMLElement>('[style*="left"]')) {
+      element.style.transition = '';
+    }
+  }, []);
+
+  const animateOverlayAxisTransition = useCallback((durationMs: number) => {
+    const layer = markerLayerRef.current;
+    if (!layer || !Number.isFinite(durationMs) || durationMs <= 0) return;
+    clearOverlayAxisTransition();
+    const transition = `left ${Math.round(durationMs)}ms ease, width ${Math.round(durationMs)}ms ease`;
+    for (const element of layer.querySelectorAll<HTMLElement>('[style*="left"]')) {
+      element.style.transition = transition;
+    }
+    overlayAxisTransitionTimerRef.current = setTimeout(() => {
+      overlayAxisTransitionTimerRef.current = null;
+      for (const element of layer.querySelectorAll<HTMLElement>('[style*="left"]')) {
+        element.style.transition = '';
+      }
+    }, Math.ceil(durationMs) + 24);
+  }, [clearOverlayAxisTransition]);
 
   const applyGestureMarkerPositions = useCallback((transform: WaterfallGestureOverlayTransform | null) => {
     // Reposition marker elements instead of scaling their layer: every
@@ -2888,6 +2921,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       }
       gestureViewAxisRef.current = null;
       clearCommittedViewAxisOverride();
+      clearOverlayAxisTransition();
       pendingGestureRangeRef.current = null;
       controller.setGestureViewFreeze(false);
       // 释放 WebGL 资源，防止泄漏
@@ -2910,7 +2944,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         boundProgramRef.current = null;
       }
     };
-  }, [clearCommittedViewAxisOverride, controller, initWebGL, releaseTextureStorage]);
+  }, [clearCommittedViewAxisOverride, clearOverlayAxisTransition, controller, initWebGL, releaseTextureStorage]);
 
   const processRenderBatch = useCallback((batch: SpectrumRenderBatch | null) => {
     if (!batch) {
@@ -2948,6 +2982,15 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const maxRows = totalRows ?? WATERFALL_MAX_HISTORY_ROWS;
     if (batch.mode === 'replace') {
       const previousAxis = currentAxisRef.current;
+      if (
+        batch.axisTransition === 'animate'
+        && previousAxis
+        && displayRowsRef.current.length > 0
+      ) {
+        animateOverlayAxisTransition(calculateSpectrumAxisTransitionDuration(previousAxis, nextAxis));
+      } else {
+        clearOverlayAxisTransition();
+      }
       if (
         batch.axisTransition !== 'immediate'
         && displayRowsRef.current.length > 0
@@ -3114,6 +3157,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     clearGestureOverlays,
     clearCycleMarkers,
     clearCommittedViewAxisOverride,
+    clearOverlayAxisTransition,
     controller,
     ensureProgramBound,
     refreshCycleMarkers,
@@ -3124,6 +3168,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     frameIntervalMs,
     resetAutoRangeState,
     startAxisTransition,
+    animateOverlayAxisTransition,
     stopAxisTransition,
     totalRows,
     updateCurrentAxisUniform,
@@ -3696,6 +3741,48 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     renderRef.current();
   }, [applyGestureMarkerPositions, ensureProgramBound, setGestureRulerVisible, updateGestureRuler]);
 
+  // A standalone trace can originate the same viewport gesture. Mirror its
+  // preview into this waterfall without entering React state or the server
+  // negotiation path; the committed range still arrives through the normal
+  // parent callback when the gesture ends.
+  useEffect(() => {
+    if (!viewportRuntime) return;
+    const syncExternalPreview = () => {
+      if (localViewportGestureRef.current) return;
+      const preview = viewportRuntime.getPreviewRange();
+      if (preview && preview.max > preview.min) {
+        if (viewportRuntime.getPhase() === 'commit-hold') {
+          // Keep the final optimistic axis visible while the committed
+          // replace batch is travelling through the controller. The next
+          // batch clears this hold once texture and axis are aligned.
+          clearCommittedViewAxisOverride();
+          committedViewAxisOverrideRef.current = { ...preview };
+          gestureViewAxisRef.current = null;
+          gestureGpuRangeRef.current = null;
+          applyGestureViewAxis(preview);
+          return;
+        }
+        if (!gestureViewAxisRef.current) {
+          clearCommittedViewAxisOverride();
+          gestureGpuRangeRef.current = null;
+          gestureViewAxisRef.current = { ...preview };
+        }
+        applyGestureViewAxis(preview);
+        return;
+      }
+      if (!gestureViewAxisRef.current || pendingGestureRangeRef.current) return;
+      gestureViewAxisRef.current = null;
+      gestureGpuRangeRef.current = null;
+      clearGestureOverlays();
+      const currentAxis = currentAxisRef.current ?? viewStateRef.current.axis;
+      if (currentAxis) updateCurrentAxisUniform(currentAxis);
+      renderRef.current();
+    };
+    const unsubscribe = viewportRuntime.subscribe(syncExternalPreview);
+    syncExternalPreview();
+    return unsubscribe;
+  }, [applyGestureViewAxis, clearCommittedViewAxisOverride, clearGestureOverlays, updateCurrentAxisUniform, viewportRuntime]);
+
   const clearGestureCommitTimer = useCallback(() => {
     if (gestureCommitTimerRef.current) {
       clearTimeout(gestureCommitTimerRef.current);
@@ -3746,8 +3833,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       // through the normal updateContext -> replace rebuild path.
       controller.setGestureViewFreeze(false);
       gestureChangeRef.current?.(range, gestureLastSourceRef.current, 'commit');
+      viewportRuntime?.setCommittedRange(range);
+      if (viewportRuntime) requestAnimationFrame(() => viewportRuntime.clear());
     }
-  }, [applyGestureViewAxis, clearCommittedViewAxisOverride, clearGestureCommitTimer, clearGestureOverlays, controller, updateCurrentAxisUniform]);
+  }, [applyGestureViewAxis, clearCommittedViewAxisOverride, clearGestureCommitTimer, clearGestureOverlays, controller, updateCurrentAxisUniform, viewportRuntime]);
 
   const previewGestureViewport = useCallback((
     nextRange: InteractionFrequencyRange,
@@ -3790,6 +3879,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     localViewportRangeRef.current = effective;
     pendingGestureRangeRef.current = effective;
     gestureViewAxisRef.current = effective;
+    viewportRuntime?.setPreviewRange(effective);
     if (gestureRafRef.current === undefined) {
       gestureRafRef.current = requestAnimationFrame(() => {
         gestureRafRef.current = undefined;
@@ -3804,7 +3894,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       commitGestureViewport,
       WATERFALL_HORIZONTAL_WHEEL_SESSION_IDLE_MS,
     );
-  }, [applyGestureViewAxis, clearCommittedViewAxisOverride, clearGestureCommitTimer, commitGestureViewport, controller, effectiveLocalViewportSupportsPreview]);
+  }, [applyGestureViewAxis, clearCommittedViewAxisOverride, clearGestureCommitTimer, commitGestureViewport, controller, effectiveLocalViewportSupportsPreview, viewportRuntime]);
 
   const handleLocalViewportPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (!localViewportInteractionEnabled || !effectiveLocalViewportChange || event.button !== 0 || !event.isPrimary || !hasAxis) return;

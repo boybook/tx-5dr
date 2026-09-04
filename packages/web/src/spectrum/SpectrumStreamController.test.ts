@@ -229,6 +229,33 @@ describe('SpectrumStreamController memory behavior', () => {
     expect(Array.from(batch?.rows[0] ?? [])).toEqual([0, 100, 200, 300, 400]);
   });
 
+  it('exposes the latest projected row for secondary renderers without decoding it twice', () => {
+    const controller = new SpectrumStreamController(4);
+    controller.updateContext({ selectedKind: 'radio-sdr' });
+    const frame = addSupplement(
+      makeFrame('radio-sdr', 10, [-110, -90, -70], { min: 1000, max: 1100 }, {
+        domain: 'dbfs',
+        unit: 'dBFS',
+        reference: 'full-scale',
+        calibrated: true,
+        min: -120,
+        max: 0,
+      }),
+      [-115, -100, -85, -70],
+      { min: 900, max: 1200 },
+    );
+    controller.pushFrame(frame);
+
+    const snapshot = controller.getLatestRenderSnapshot('radio-sdr');
+    expect(snapshot.frameToken).toBe(10);
+    expect(snapshot.axis).toEqual({ minHz: 1000, maxHz: 1100, binCount: 3 });
+    expect(snapshot.values).toBeInstanceOf(Float32Array);
+    expect(snapshot.supplementAxis).toEqual({ minHz: 900, maxHz: 1200, binCount: 4 });
+    expect(snapshot.supplementValues).toBeInstanceOf(Float32Array);
+    expect(snapshot.values).toBe(getInternals(controller).histories['radio-sdr'][0]!.values);
+    expect(controller.getLatestRenderSnapshot('radio-sdr')).toBe(snapshot);
+  });
+
   it('crops radio SDR center view to the right side of the reference and stretches it to the full width', () => {
     const controller = new SpectrumStreamController(4);
     controller.updateContext({

@@ -159,6 +159,62 @@ The fragment shader selects `highp` when the device supports it so absolute RF
 coordinates retain kHz-level deltas; low-end WebGL1 devices retain a
 `mediump` fallback.
 
+## Trace and waterfall presentations
+
+`SpectrumFrame` is the single transport contract for both the inline and
+standalone presentations. `SpectrumStreamController` retains and projects each
+frame once, then exposes the newest projected row through
+`getLatestRenderSnapshot()`. A presentation host may consume the history batches
+for the waterfall and that same snapshot for a spectrum trace; it must not open
+a second subscription or decode the frame again.
+
+The inline radio page keeps the existing waterfall interaction surface. The
+standalone spectrum window opts into a trace-plus-waterfall layout: the trace
+owns the TX/RX hit targets, while both trace and waterfall accept the same
+background viewport gestures. The lower waterfall is read-only for frequency
+overlays but remains an interactive viewport surface. Both renderers use the same absolute axis, viewport,
+level range, supplement fallback, and declarative frequency overlays. This
+presentation choice is client layout state and is deliberately separate from
+the server-owned TCI `wide` versus ICOM/Hamlib `radio-center` capability.
+
+The trace renderer uses persistent current/previous vertex buffers for the
+latest projected row. A short shader interpolation smooths new FFT frames, and
+a translucent triangle strip fills the area below the line. The controller has
+already merged detail and supplement coverage into that one projected row, so
+the trace never draws a second coarse fallback line. Pan/zoom changes update
+the view-axis uniforms and overlay positions without rebuilding data buffers;
+only a new frame token uploads row values.
+
+The standalone host gives both the trace and waterfall the same viewport
+interaction contract. An imperative `SpectrumViewportRuntime` broadcasts the
+active preview range between the two GPU surfaces without putting wheel/pointer
+samples into React state or server negotiation. The originating surface freezes
+the controller view for the gesture, both surfaces render the same optimistic
+axis, and one final commit releases the freeze and updates the server viewport.
+The host keeps the existing waterfall renderer as a compatibility path while
+the two render passes migrate toward a shared WebGL surface. Any future
+single-surface implementation must preserve the same render-snapshot and
+interaction-surface boundaries.
+
+Trace smoothing is display-only and runs after the controller's projection, so
+the waterfall and all decode paths retain the raw FFT values. The smoother
+first applies an adaptive three-bin median when the bin bandwidth is small
+enough to preserve narrow signals, then applies a time-constant EMA. dB/dBFS
+frames are converted to linear power before the EMA and converted back only for
+the trace; raw `Level` frames use a linear EMA directly. A viewport, source, or
+level-domain change resets the smoother to avoid carrying an old band's noise
+floor into the new view. The trace VBO still performs its separate short shader
+interpolation, which hides frame boundaries but is not a substitute for this
+statistical smoothing stage.
+
+During a trace or waterfall viewport preview, if the optimistic view extends
+outside the committed detail axis, the trace temporarily draws the shared
+wide-envelope supplement in a second persistent VBO. The fragment shader
+discards supplement samples inside the detail interval, so the fallback only
+fills uncovered edges and never appears as a second line during a settled view.
+Supplement uploads are keyed by frame token and are skipped for ordinary
+render frames and for preview steps that remain inside detail coverage.
+
 Digital FT8/FT4 operating windows are delivered as declarative frequency
 overlays in session state. For TCI, their bounds come from the protocol's
 `RX_FILTER_BAND` state (not the wider `IF_LIMITS` capture range). The renderer

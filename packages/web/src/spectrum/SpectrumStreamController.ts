@@ -55,6 +55,24 @@ export interface SpectrumRenderBatch {
   supplementAxis?: SpectrumAxis | null;
 }
 
+/**
+ * The newest spectrum row in the controller's committed view. Renderers use
+ * this snapshot for single-frame presentations (for example the FFT trace)
+ * while the waterfall consumes the full history batches above. The arrays are
+ * retained controller buffers and must be treated as read-only by consumers.
+ */
+export interface SpectrumRenderSnapshot {
+  kind: SpectrumKind;
+  frameToken: number | null;
+  timestamp: number | null;
+  axis: SpectrumAxis | null;
+  values: Float32Array | null;
+  nativeRange: { min: number; max: number } | null;
+  supplementAxis: SpectrumAxis | null;
+  supplementValues: Float32Array | null;
+  level: SpectrumLevelDescriptor | null;
+}
+
 export type SpectrumHistoryLimits = number | Partial<Record<SpectrumKind, number>>;
 
 interface RetainedSpectrumFrame {
@@ -444,6 +462,8 @@ export class SpectrumStreamController {
   private replaceRafId: number | null = null;
   private pendingReplaceAxisTransition: 'animate' | 'immediate' = 'animate';
   private renderRowLimit: number | null = null;
+  private latestRenderSnapshotKey: string | null = null;
+  private latestRenderSnapshot: SpectrumRenderSnapshot | null = null;
   /**
    * While a viewport pan/zoom gesture is active, the radio SDR view range is
    * pinned. Server-projected frames follow the client's debounced viewport
@@ -510,6 +530,65 @@ export class SpectrumStreamController {
 
     const latest = this.histories[kind][0]?.frame ?? null;
     return latest ? latest.nativeFrequencyRange : null;
+  };
+
+  /**
+   * Return the newest row projected to the current committed view. This keeps
+   * trace renderers on the same axis/cache as the waterfall and avoids a
+   * second decode or crop pipeline in the UI.
+   */
+  getLatestRenderSnapshot = (kind: SpectrumKind | null = this.context.selectedKind): SpectrumRenderSnapshot => {
+    if (!kind) {
+      return {
+        kind: 'audio',
+        frameToken: null,
+        timestamp: null,
+        axis: null,
+        values: null,
+        nativeRange: null,
+        supplementAxis: null,
+        supplementValues: null,
+        level: null,
+      };
+    }
+
+    const latest = this.histories[kind][0] ?? null;
+    if (!latest) {
+      return {
+        kind,
+        frameToken: null,
+        timestamp: null,
+        axis: null,
+        values: null,
+        nativeRange: null,
+        supplementAxis: null,
+        supplementValues: null,
+        level: null,
+      };
+    }
+
+    const viewRange = this.context.radioSdrViewRange;
+    const snapshotKey = `${kind}:${latest.frame.timestamp}:${viewRange?.min ?? ''}:${viewRange?.max ?? ''}:${this.context.openWebRXViewport?.centerHz ?? ''}:${this.context.openWebRXViewport?.spanHz ?? ''}:${this.context.isOpenWebRXDetailMode}`;
+    if (this.latestRenderSnapshotKey === snapshotKey && this.latestRenderSnapshot) {
+      return this.latestRenderSnapshot;
+    }
+
+    const transformed = this.transformFrameForCurrentView(latest);
+    const supplementProjection = this.buildSupplementProjection([latest]);
+    const snapshot = {
+      kind,
+      frameToken: latest.frame.timestamp,
+      timestamp: latest.frame.timestamp,
+      axis: transformed?.axis ?? null,
+      values: transformed?.values ?? null,
+      nativeRange: { ...latest.frame.nativeFrequencyRange },
+      supplementAxis: supplementProjection.axis,
+      supplementValues: supplementProjection.rows[0] ?? null,
+      level: latest.frame.level,
+    };
+    this.latestRenderSnapshotKey = snapshotKey;
+    this.latestRenderSnapshot = snapshot;
+    return snapshot;
   };
 
   setRadioSdrServerSyncHoldUntil(untilMs: number | null): void {
@@ -582,6 +661,8 @@ export class SpectrumStreamController {
     this.clearBufferedFrames();
     this.clearRadioSdrOptimisticIntent({ notify: false });
     this.gestureViewFreeze = false;
+    this.latestRenderSnapshotKey = null;
+    this.latestRenderSnapshot = null;
     this.context = {
       ...this.context,
       radioSdrViewRange: null,
@@ -603,6 +684,10 @@ export class SpectrumStreamController {
   resetKind(kind: SpectrumKind): void {
     this.pendingByKind[kind].length = 0;
     this.histories[kind].length = 0;
+    if (this.context.selectedKind === kind) {
+      this.latestRenderSnapshotKey = null;
+      this.latestRenderSnapshot = null;
+    }
     if (this.context.selectedKind !== kind) {
       return;
     }
@@ -634,6 +719,8 @@ export class SpectrumStreamController {
     }
 
     this.pendingBatch = null;
+    this.latestRenderSnapshotKey = null;
+    this.latestRenderSnapshot = null;
     this.lastRenderTime = 0;
     this.lastArrivalTime = 0;
     this.arrivalIntervalEma = DEFAULT_FRAME_DURATION_MS;
@@ -830,6 +917,8 @@ export class SpectrumStreamController {
     options: { axisTransition?: 'animate' | 'immediate' } = {},
   ): void {
     const previous = this.context;
+    this.latestRenderSnapshotKey = null;
+    this.latestRenderSnapshot = null;
     this.context = {
       ...previous,
       ...nextContext,
@@ -938,6 +1027,10 @@ export class SpectrumStreamController {
       cachedViewValues: null,
       cachedAxis: null,
     });
+    if (frame.kind === this.context.selectedKind) {
+      this.latestRenderSnapshotKey = null;
+      this.latestRenderSnapshot = null;
+    }
 
     const radioSdrViewRangeChanged = frame.kind === 'radio-sdr' && !this.gestureViewFreeze
       ? this.applyRadioSdrViewRange(this.resolveRadioSdrViewRange(), { notify: false })
