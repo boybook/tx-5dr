@@ -391,12 +391,23 @@ export class TciIqSpectrumSource implements RadioSpectrumSource, RadioSpectrumSp
         minOffsetHz: -result.spanHz / 2,
         maxOffsetHz: result.spanHz / 2,
       };
+      // Detail and wide fallback payloads are two projections of one FFT.
+      // Decode the native int16 buffer once instead of allocating/copying it
+      // independently for each projection.
+      const decodedMagnitudes = this.decodeMagnitudeValues(
+        result.magnitudesBase64,
+        result.magnitudesLength,
+      );
       const magnitudes = this.cropAndCompressMagnitudes(
         result.magnitudesBase64,
         result.magnitudesLength,
         result.spanHz,
         displayWindow,
         this.displayBinCount,
+        'max',
+        result.scale,
+        result.offset,
+        decodedMagnitudes,
       );
       const spanHz = displayWindow.maxOffsetHz - displayWindow.minOffsetHz;
       const hasCroppedDetailWindow = displayWindow.minOffsetHz > fullWindow.minOffsetHz
@@ -411,6 +422,7 @@ export class TciIqSpectrumSource implements RadioSpectrumSource, RadioSpectrumSp
             'power-mean-percentile',
             result.scale,
             result.offset,
+            decodedMagnitudes,
           )
         : null;
       const nativeFrequencyRange = {
@@ -522,12 +534,10 @@ export class TciIqSpectrumSource implements RadioSpectrumSource, RadioSpectrumSp
     aggregation: 'max' | 'power-mean-percentile' = 'max',
     scale = 1,
     offset = 0,
+    decodedInput?: Int16Array,
   ): Int16Array {
-    const bytes = Buffer.from(base64, 'base64');
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    const availableLength = Math.min(inputLength, Math.floor(bytes.byteLength / Int16Array.BYTES_PER_ELEMENT));
-    const input = new Int16Array(availableLength);
-    for (let index = 0; index < availableLength; index++) input[index] = view.getInt16(index * 2, true);
+    const input = decodedInput ?? this.decodeMagnitudeValues(base64, inputLength);
+    const availableLength = Math.min(inputLength, input.length);
 
     const toIndex = (offsetHz: number) => (offsetHz + sampleRate / 2) / sampleRate * availableLength;
     const start = Math.max(0, Math.min(availableLength - 1, Math.floor(toIndex(window.minOffsetHz))));
@@ -575,6 +585,17 @@ export class TciIqSpectrumSource implements RadioSpectrumSource, RadioSpectrumSp
       output[outputIndex] = Math.max(-32768, Math.min(32767, Math.round((selectedDb - offset) / scale)));
     }
     return output;
+  }
+
+  private decodeMagnitudeValues(base64: string, inputLength: number): Int16Array {
+    const bytes = Buffer.from(base64, 'base64');
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const availableLength = Math.min(inputLength, Math.floor(bytes.byteLength / Int16Array.BYTES_PER_ELEMENT));
+    const input = new Int16Array(availableLength);
+    for (let index = 0; index < availableLength; index += 1) {
+      input[index] = view.getInt16(index * 2, true);
+    }
+    return input;
   }
 
   private logStreamParameters(frame: TciIqFrame): void {

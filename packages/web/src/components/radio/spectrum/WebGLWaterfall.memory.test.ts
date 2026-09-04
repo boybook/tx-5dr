@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createWaterfallUploadBuffer,
   ensureWaterfallScratchRow,
+  ensureWaterfallUploadBuffer,
   getWaterfallCanvasPixelRatio,
   releaseWaterfallTextureMemoryRefs,
 } from './WebGLWaterfall';
@@ -44,5 +45,41 @@ describe('WebGLWaterfall texture memory release', () => {
     expect(scratch).toHaveLength(1024);
     expect(ensureWaterfallScratchRow(scratch, 1024)).toBe(scratch);
     expect(ensureWaterfallScratchRow(scratch, 512)).toHaveLength(512);
+  });
+
+  it('reuses the persistent upload buffer and only grows it', () => {
+    const initial = ensureWaterfallUploadBuffer(null, 1024, 120);
+    expect(initial).toHaveLength(1024 * 120);
+
+    // Smaller rebuilds keep the same allocation.
+    expect(ensureWaterfallUploadBuffer(initial, 512, 60)).toBe(initial);
+    expect(ensureWaterfallUploadBuffer(initial, 1024, 120)).toBe(initial);
+
+    // Larger rebuilds grow exactly once.
+    const grown = ensureWaterfallUploadBuffer(initial, 2048, 120);
+    expect(grown).not.toBe(initial);
+    expect(grown).toHaveLength(2048 * 120);
+    expect(ensureWaterfallUploadBuffer(grown, 1024, 120)).toBe(grown);
+  });
+
+  it('resets persistent texture allocation metadata when storage is released', () => {
+    const refs = {
+      scratchRowRef: { current: new Uint8Array(8) as Uint8Array | null },
+      lastDataLengthRef: { current: 32 },
+      textureHeightRef: { current: 8 },
+      rowCountRef: { current: 8 },
+      headRowRef: { current: 3 },
+      textureAllocatedWidthRef: { current: 1024 },
+      textureAllocatedHeightRef: { current: 512 },
+      supplementAllocatedWidthRef: { current: 512 },
+      supplementAllocatedHeightRef: { current: 512 },
+    };
+
+    releaseWaterfallTextureMemoryRefs(refs);
+
+    expect(refs.textureAllocatedWidthRef.current).toBe(0);
+    expect(refs.textureAllocatedHeightRef.current).toBe(0);
+    expect(refs.supplementAllocatedWidthRef.current).toBe(0);
+    expect(refs.supplementAllocatedHeightRef.current).toBe(0);
   });
 });

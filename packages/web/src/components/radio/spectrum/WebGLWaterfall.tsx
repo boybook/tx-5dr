@@ -5,7 +5,12 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faTriangleExclamation } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../../utils/logger';
-import type { SpectrumAxis, SpectrumRenderBatch, SpectrumStreamController } from '../../../spectrum/SpectrumStreamController';
+import {
+  cropSpectrumToRange,
+  type SpectrumAxis,
+  type SpectrumRenderBatch,
+  type SpectrumStreamController,
+} from '../../../spectrum/SpectrumStreamController';
 import {
   IDENTITY_FREQUENCY_AXIS_TRANSFORM,
   type FrequencyAxisTransform,
@@ -48,13 +53,31 @@ export interface InteractionFrequencyRange {
   max: number;
 }
 
+/**
+ * Gesture phase of a viewport change. During a continuous pan/zoom gesture
+ * the waterfall reports 'preview' changes (rendered GPU-side via the view
+ * axis uniform, without a React commit); a single 'commit' change follows
+ * when the gesture ends and the texture is rebuilt at the final range.
+ * Callbacks may return the effective (e.g. clamped) range so the preview
+ * matches what will be committed. Legacy callbacks that are supplied through
+ * `onLocalViewportChange` bypass the preview path and retain their immediate
+ * commit behavior.
+ */
+export type WaterfallViewportChangePhase = 'preview' | 'commit';
+
 export interface WaterfallViewportInteraction {
   mode: 'none' | 'local-pan-zoom' | 'radio-center';
   range?: InteractionFrequencyRange | null;
   bounds?: InteractionFrequencyRange | null;
   canZoom?: boolean;
   canPan?: boolean;
-  onChange?: (range: InteractionFrequencyRange, source: 'pan' | 'zoom') => void;
+  onChange?: (
+    range: InteractionFrequencyRange,
+    source: 'pan' | 'zoom',
+    phase?: WaterfallViewportChangePhase,
+  ) => InteractionFrequencyRange | void;
+  /** Set true when the callback understands the preview/commit phase. */
+  supportsPreview?: boolean;
 }
 
 export interface TxBandOverlay {
@@ -136,7 +159,11 @@ interface WebGLWaterfallProps {
   enableLocalViewportPanZoom?: boolean;
   localViewportRange?: InteractionFrequencyRange | null;
   localViewportBounds?: InteractionFrequencyRange | null;
-  onLocalViewportChange?: (range: InteractionFrequencyRange, source: 'pan' | 'zoom') => void;
+  onLocalViewportChange?: (
+    range: InteractionFrequencyRange,
+    source: 'pan' | 'zoom',
+    phase?: WaterfallViewportChangePhase,
+  ) => InteractionFrequencyRange | void;
   interactionFrequencyStepHz?: number | null;
   onTxFrequencyChange?: (operatorId: string, frequency: number) => void;
   onTxBandOverlayFrequencyChange?: (id: string, frequency: number) => void;
@@ -197,11 +224,15 @@ const WATERFALL_BASEBAND_RULER_MAX_HZ = 3000;
 const WATERFALL_BASEBAND_RULER_MINOR_STEP_HZ = 100;
 const WATERFALL_BASEBAND_RULER_MAJOR_STEP_HZ = 500;
 const WATERFALL_RULER_MIN_LABEL_SPACING_PX = 56;
+// Keep nearby overlays mounted just outside the committed axis so a GPU-side
+// pan can bring them into view without waiting for a React commit.
+const WATERFALL_OVERLAY_RENDER_MARGIN_PERCENT = 200;
 export const WATERFALL_MAX_HISTORY_ROWS = 1024;
 const WATERFALL_WHEEL_AXIS_EPSILON = 0.1;
 const WATERFALL_ZOOM_REFERENCE_FACTOR = 1.05;
 const WATERFALL_ZOOM_MAC_PIXELS_PER_STEP = 10;
 const WATERFALL_ZOOM_WINDOWS_PIXELS_PER_STEP = 120;
+const WATERFALL_SUPPLEMENT_REBASE_OVERLAP_RATIO = 0.2;
 
 export function getWaterfallDragCommitDelayMs(
   nowMs: number,
@@ -368,6 +399,19 @@ export function createWaterfallUploadBuffer(width: number, height: number): Uint
   return new Uint8Array(Math.max(0, width) * Math.max(0, height));
 }
 
+/**
+ * Reuse the persistent full-texture upload buffer across rebuilds; the
+ * buffer only grows. Rebuilds at a smaller size keep the larger
+ * allocation because WebGL reads exactly width*height bytes from the view.
+ */
+export function ensureWaterfallUploadBuffer(current: Uint8Array | null, width: number, height: number): Uint8Array {
+  const size = Math.max(0, width) * Math.max(0, height);
+  if (current && current.length >= size) {
+    return current;
+  }
+  return createWaterfallUploadBuffer(width, height);
+}
+
 export function getWaterfallScrollAnimationDurationMs(
   frameIntervalMs: number,
   rowCount: number,
@@ -472,6 +516,59 @@ export function getWaterfallFrequencyAfterVisualDelta(
   return frequencyAxisTransform.toActualHz(
     frequencyAxisTransform.toVisualHz(startFrequency) + visualOffsetHz + visualDeltaHz - visualOffsetHz,
   );
+}
+
+/**
+ * Map a screen x ratio (0..1) through the gesture view axis onto the frozen
+ * texture axis. The result is the texture x coordinate used by the shader;
+ * values outside [0, 1] fall outside the uploaded frequency coverage and
+ * render as the colormap minimum. Identity when viewAxis equals textureAxis.
+ */
+export function getWaterfallViewAxisTextureX(
+  ratio: number,
+  viewAxis: { minHz: number; maxHz: number },
+  textureAxis: { minHz: number; maxHz: number },
+): number {
+  const viewSpan = viewAxis.maxHz - viewAxis.minHz;
+  const textureSpan = textureAxis.maxHz - textureAxis.minHz;
+  if (!Number.isFinite(viewSpan) || viewSpan <= 0 || !Number.isFinite(textureSpan) || textureSpan <= 0) {
+    return ratio;
+  }
+  const visualFrequency = viewAxis.minHz + ratio * viewSpan;
+  return (visualFrequency - textureAxis.minHz) / textureSpan;
+}
+
+export interface WaterfallGestureOverlayTransform {
+  translateXPx: number;
+  scaleX: number;
+}
+
+/**
+ * CSS transform that repositions percent-based frequency overlays (ruler
+ * ticks, markers) from the frozen texture axis into the gesture view axis,
+ * so they follow a GPU-side pan/zoom without a React re-render. Returns
+ * null for an identity mapping (no transform needed).
+ */
+export function getWaterfallGestureOverlayTransform(
+  textureAxis: { minHz: number; maxHz: number },
+  viewAxis: { minHz: number; maxHz: number },
+  widthPx: number,
+): WaterfallGestureOverlayTransform | null {
+  const textureSpan = textureAxis.maxHz - textureAxis.minHz;
+  const viewSpan = viewAxis.maxHz - viewAxis.minHz;
+  if (
+    !Number.isFinite(textureSpan) || textureSpan <= 0
+    || !Number.isFinite(viewSpan) || viewSpan <= 0
+    || !Number.isFinite(widthPx) || widthPx <= 0
+  ) {
+    return null;
+  }
+  const scaleX = textureSpan / viewSpan;
+  const translateXPx = ((textureAxis.minHz - viewAxis.minHz) / viewSpan) * widthPx;
+  if (Math.abs(scaleX - 1) < 1e-6 && Math.abs(translateXPx) < 0.01) {
+    return null;
+  }
+  return { translateXPx, scaleX };
 }
 
 function getNiceWaterfallRulerStep(spanHz: number, targetTickCount: number): number {
@@ -674,14 +771,36 @@ export interface WaterfallTextureMemoryRefs {
   textureHeightRef: MutableRef<number>;
   rowCountRef: MutableRef<number>;
   headRowRef: MutableRef<number>;
+  uploadBufferRef?: MutableRef<Uint8Array | null>;
+  supplementScratchRowRef?: MutableRef<Uint8Array | null>;
+  supplementUploadBufferRef?: MutableRef<Uint8Array | null>;
+  textureAllocatedWidthRef?: MutableRef<number>;
+  textureAllocatedHeightRef?: MutableRef<number>;
+  supplementAllocatedWidthRef?: MutableRef<number>;
+  supplementAllocatedHeightRef?: MutableRef<number>;
+  textureAxisRef?: MutableRef<SpectrumAxis | null>;
 }
 
 export function releaseWaterfallTextureMemoryRefs(refs: WaterfallTextureMemoryRefs): void {
   refs.scratchRowRef.current = null;
+  if (refs.uploadBufferRef) {
+    refs.uploadBufferRef.current = null;
+  }
+  if (refs.supplementScratchRowRef) {
+    refs.supplementScratchRowRef.current = null;
+  }
+  if (refs.supplementUploadBufferRef) {
+    refs.supplementUploadBufferRef.current = null;
+  }
   refs.lastDataLengthRef.current = 0;
   refs.textureHeightRef.current = 1;
   refs.rowCountRef.current = 0;
   refs.headRowRef.current = 0;
+  if (refs.textureAllocatedWidthRef) refs.textureAllocatedWidthRef.current = 0;
+  if (refs.textureAllocatedHeightRef) refs.textureAllocatedHeightRef.current = 0;
+  if (refs.supplementAllocatedWidthRef) refs.supplementAllocatedWidthRef.current = 0;
+  if (refs.supplementAllocatedHeightRef) refs.supplementAllocatedHeightRef.current = 0;
+  if (refs.textureAxisRef) refs.textureAxisRef.current = null;
 }
 
 export interface CycleMarkerPosition {
@@ -712,11 +831,8 @@ export function resolveNextCycleMarkerPositions(
   visibleRows: number,
 ): CycleMarkerPosition[] {
   const safeVisibleRows = Math.max(1, Math.floor(visibleRows));
-  const visibleTimestamps = rowTimestamps.length > safeVisibleRows
-    ? rowTimestamps.slice(0, safeVisibleRows)
-    : rowTimestamps;
   const nextMarkers = showCycleMarkers
-    ? buildCycleMarkerPositions(visibleTimestamps, cycleSlotMs, safeVisibleRows)
+    ? buildCycleMarkerPositions(rowTimestamps, cycleSlotMs, safeVisibleRows)
     : [];
 
   return areCycleMarkerPositionsEqual(currentMarkers, nextMarkers)
@@ -736,7 +852,7 @@ export function buildCycleMarkerPositions(
 
   const markers: CycleMarkerPosition[] = [];
   const seenBoundaries = new Set<number>();
-  const rowCount = rowTimestamps.length;
+  const rowCount = Math.min(rowTimestamps.length, safeVisibleRows);
 
   for (let index = 0; index < rowCount - 1; index += 1) {
     const newerTimestamp = rowTimestamps[index];
@@ -839,19 +955,27 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const effectiveLocalViewportRange = viewportInteraction?.range ?? localViewportRange;
   const effectiveLocalViewportBounds = viewportInteraction?.bounds ?? localViewportBounds;
   const effectiveLocalViewportChange = viewportInteraction?.onChange ?? onLocalViewportChange;
+  const effectiveLocalViewportSupportsPreview = viewportInteraction?.onChange
+    ? viewportInteraction.supportsPreview === true
+    : false;
   const localViewportZoomEnabled = localViewportInteractionEnabled
     && (viewportInteraction?.canZoom ?? true);
   const { t } = useTranslation('common');
   const { t: tRadio } = useTranslation('radio');
   const [hoveredWarningOperatorId, setHoveredWarningOperatorId] = React.useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const containerMetricsRef = useRef<{ left: number; width: number }>({ left: 0, width: 0 });
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cycleMarkerLayerRef = useRef<HTMLDivElement>(null);
   const glRef = useRef<WebGLRenderingContext | null>(null);
   const programRef = useRef<WebGLProgram | null>(null);
+  const boundProgramRef = useRef<WebGLProgram | null>(null);
   const textureRef = useRef<WebGLTexture | null>(null);
   const transitionTextureRef = useRef<WebGLTexture | null>(null);
+  const supplementTextureRef = useRef<WebGLTexture | null>(null);
   const animationRef = useRef<number>();
+  const renderRequestRef = useRef<number | undefined>(undefined);
+  const renderDirtyRef = useRef(false);
   const [webglSupported, setWebglSupported] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const initialViewState = {
@@ -859,14 +983,58 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     hasData: false,
   };
   const [viewState, setViewState] = React.useState<{ axis: SpectrumAxis | null; hasData: boolean }>(initialViewState);
-  const [cycleMarkers, setCycleMarkers] = React.useState<CycleMarkerPosition[]>([]);
   const viewStateRef = useRef<{ axis: SpectrumAxis | null; hasData: boolean }>(initialViewState);
   const cycleMarkersRef = useRef<CycleMarkerPosition[]>([]);
+  const cycleMarkerPoolRef = useRef<HTMLDivElement[]>([]);
   const [rulerWidthPx, setRulerWidthPx] = React.useState(0);
   const [hoverCursor, setHoverCursor] = React.useState<{ ratio: number; frequency: number; clientX: number; containerTop: number } | null>(null);
   const localViewportGestureRef = useRef<{ pointerId: number; startX: number; lastX: number; startRange: InteractionFrequencyRange; hzPerPixel: number } | null>(null);
   const localViewportRangeRef = useRef<InteractionFrequencyRange | null>(null);
   const viewportWheelAxisLockRef = useRef<WaterfallViewportWheelAxisLock | null>(null);
+  // Gesture view-axis session: during a continuous pan/zoom gesture the
+  // visible range is applied GPU-side (u_viewAxis uniform + overlay CSS
+  // transform) and committed to React/controller only once at gesture end.
+  const gestureViewAxisRef = useRef<InteractionFrequencyRange | null>(null);
+  // Keeps the final GPU view axis stable between gesture commit and the
+  // controller's replace batch. New stream rows can arrive in that interval;
+  // they must not reset the preview back to the old texture axis.
+  const committedViewAxisOverrideRef = useRef<InteractionFrequencyRange | null>(null);
+  const committedViewAxisOverrideTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingGestureRangeRef = useRef<InteractionFrequencyRange | null>(null);
+  const gestureLastSourceRef = useRef<'pan' | 'zoom'>('pan');
+  const gestureCommitTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const gestureRafRef = useRef<number | undefined>(undefined);
+  const gestureChangeRef = useRef<WaterfallViewportInteraction['onChange'] | null>(null);
+  const hoverPointerRef = useRef<{ clientX: number; pointerType: string } | null>(null);
+  const hoverRafRef = useRef<number | undefined>(undefined);
+  const gestureLayerWidthRef = useRef<number>(0);
+  const gestureRulerRangeRef = useRef<InteractionFrequencyRange | null>(null);
+  const gestureRulerVisibleRef = useRef(false);
+  const gestureGpuRangeRef = useRef<InteractionFrequencyRange | null>(null);
+  const rulerLayerRef = useRef<HTMLDivElement>(null);
+  const markerLayerRef = useRef<HTMLDivElement>(null);
+  // Imperative ruler used during viewport gestures: ticks are recomputed
+  // from the gesture view range (no CSS scale distortion) into a pooled
+  // DOM subtree that React never reconciles.
+  const gestureRulerLayerRef = useRef<HTMLDivElement>(null);
+  const gestureRulerPoolRef = useRef<Array<{
+    root: HTMLDivElement;
+    line: HTMLDivElement;
+    label: HTMLDivElement;
+    lineClass: string;
+    labelText: string;
+  }>>([]);
+  // Per-element committed marker positions captured once at gesture start.
+  // Keeping a stable list avoids querySelector/style reads on every frame.
+  const gestureMarkerSnapshotRef = useRef<Array<{
+    element: HTMLElement;
+    leftPercent: number;
+    widthPercent: number | null;
+    lastWrittenLeft: string;
+    lastWrittenWidth: string;
+  }>>([]);
+  const gestureMarkerSnapshotCapturedRef = useRef(false);
+  const gestureMarkerTransformRef = useRef<WaterfallGestureOverlayTransform | null>(null);
 
   // TX拖动状态
   const [draggingOperatorId, setDraggingOperatorId] = React.useState<string | null>(null);
@@ -939,6 +1107,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const rangeUpdateCounterRef = useRef<number>(0);
   const cachedRangeRef = useRef<{min: number, max: number} | null>(null);
   const scratchRowRef = useRef<Uint8Array | null>(null);
+  const uploadBufferRef = useRef<Uint8Array | null>(null);
+  const supplementScratchRowRef = useRef<Uint8Array | null>(null);
+  const supplementUploadBufferRef = useRef<Uint8Array | null>(null);
   const heightRef = useRef(height);
   useEffect(() => { heightRef.current = height; }, [height]);
   const minDbRef = useRef(minDb);
@@ -957,9 +1128,20 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const prevTransmittingRef = useRef<boolean | undefined>(undefined);
   const displayRowsRef = useRef<ArrayLike<number>[]>([]);
   const displayRowTimestampsRef = useRef<number[]>([]);
+  // Wide-envelope supplement rows parallel to displayRowsRef, kept at their
+  // native axis for GPU-side fallback where the detail texture has no
+  // coverage (gesture pan/zoom beyond the frozen texture axis).
+  const displaySupplementRowsRef = useRef<(Float32Array | null)[]>([]);
+  const supplementAxisRef = useRef<SpectrumAxis | null>(null);
+  const supplementHeadRowRef = useRef<number>(0);
+  const supplementRowCountRef = useRef<number>(0);
   const headRowRef = useRef<number>(0);
   const rowCountRef = useRef<number>(0);
   const textureWidthRef = useRef<number>(0);
+  const textureAllocatedWidthRef = useRef<number>(0);
+  const textureAllocatedHeightRef = useRef<number>(0);
+  const supplementAllocatedWidthRef = useRef<number>(0);
+  const supplementAllocatedHeightRef = useRef<number>(0);
   const maxTextureSizeRef = useRef<number>(4096);
   // 平滑滚动相关
   const headRowLocationRef = useRef<WebGLUniformLocation | null>(null);
@@ -971,6 +1153,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const axisTransitionActiveLocationRef = useRef<WebGLUniformLocation | null>(null);
   const axisTransitionProgressLocationRef = useRef<WebGLUniformLocation | null>(null);
   const currentAxisLocationRef = useRef<WebGLUniformLocation | null>(null);
+  const viewAxisLocationRef = useRef<WebGLUniformLocation | null>(null);
+  const supplementEnabledLocationRef = useRef<WebGLUniformLocation | null>(null);
+  const supplementAxisLocationRef = useRef<WebGLUniformLocation | null>(null);
+  const supplementHeadRowLocationRef = useRef<WebGLUniformLocation | null>(null);
+  const supplementTextureHeightLocationRef = useRef<WebGLUniformLocation | null>(null);
   const transitionAxisLocationRef = useRef<WebGLUniformLocation | null>(null);
   const transitionHeadRowLocationRef = useRef<WebGLUniformLocation | null>(null);
   const transitionTextureHeightLocationRef = useRef<WebGLUniformLocation | null>(null);
@@ -978,12 +1165,133 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const axisTransitionAnimRef = useRef<number>();
   const lastAnimatedFrameTokenRef = useRef<string | number | null>(null);
   const currentAxisRef = useRef<SpectrumAxis | null>(null);
+  // Axis represented by the bytes currently resident in the primary texture.
+  // `currentAxisRef` can advance before a replace batch is uploaded; keeping
+  // this separate prevents an append from mixing rows sampled on different
+  // frequency grids during the gesture-end handoff.
+  const textureAxisRef = useRef<SpectrumAxis | null>(null);
   const textureHeightRef = useRef<number>(Math.max(totalRows ?? 0, 1));
   const renderRef = useRef<() => void>(() => {});
   const handleResizeRef = useRef<() => void>(() => {});
   const rebuildTextureRef = useRef<(rows: ArrayLike<number>[], axis: SpectrumAxis | null) => void>(() => {});
   const processRenderBatchRef = useRef<(batch: SpectrumRenderBatch | null) => void>(() => {});
   const axis = viewState.axis ?? markerAxis;
+  const clearCommittedViewAxisOverride = useCallback(() => {
+    if (committedViewAxisOverrideTimerRef.current) {
+      clearTimeout(committedViewAxisOverrideTimerRef.current);
+      committedViewAxisOverrideTimerRef.current = null;
+    }
+    committedViewAxisOverrideRef.current = null;
+  }, []);
+
+  const applyGestureMarkerPositions = useCallback((transform: WaterfallGestureOverlayTransform | null) => {
+    // Reposition marker elements instead of scaling their layer: every
+    // percent-positioned marker keeps its own shape (1px lines, unstretched
+    // labels) while left/width follow the gesture view axis. Capture the
+    // committed positions once, then only perform style writes during the
+    // hot path. Reading style/layout in every wheel event would force a
+    // synchronous style calculation and defeat the GPU-side preview.
+    const layer = markerLayerRef.current;
+    if (!layer) {
+      return;
+    }
+    const snapshots = gestureMarkerSnapshotRef.current;
+    if (!transform) {
+      for (const snapshot of snapshots) {
+        snapshot.element.style.left = `${snapshot.leftPercent}%`;
+        snapshot.element.style.width = snapshot.widthPercent === null ? '' : `${snapshot.widthPercent}%`;
+      }
+      snapshots.length = 0;
+      gestureMarkerSnapshotCapturedRef.current = false;
+      gestureLayerWidthRef.current = 0;
+      gestureMarkerTransformRef.current = null;
+      return;
+    }
+    if (!gestureMarkerSnapshotCapturedRef.current) {
+      gestureLayerWidthRef.current = Math.max(1, layer.clientWidth || containerRef.current?.clientWidth || 1);
+      const elements = layer.querySelectorAll<HTMLElement>('[style*="left"]');
+      for (const element of elements) {
+        const left = element.style.left;
+        if (!left.endsWith('%')) continue;
+        const width = element.style.width;
+        const leftPercent = Number.parseFloat(left);
+        const widthPercent = width.endsWith('%') ? Number.parseFloat(width) : null;
+        if (!Number.isFinite(leftPercent)) continue;
+        snapshots.push({
+          element,
+          leftPercent,
+          widthPercent: widthPercent !== null && Number.isFinite(widthPercent) ? widthPercent : null,
+          lastWrittenLeft: left,
+          lastWrittenWidth: width,
+        });
+      }
+      gestureMarkerSnapshotCapturedRef.current = true;
+    }
+    const { scaleX, translateXPx } = transform;
+    const previousTransform = gestureMarkerTransformRef.current;
+    if (
+      previousTransform
+      && Math.abs(previousTransform.scaleX - scaleX) < 1e-5
+      && Math.abs(previousTransform.translateXPx - translateXPx) < 0.25
+    ) {
+      return;
+    }
+    gestureMarkerTransformRef.current = { scaleX, translateXPx };
+    const widthPx = Math.max(1, gestureLayerWidthRef.current);
+    for (const snapshot of snapshots) {
+      // A mode/frequency update may cause React to rewrite an inline style
+      // while the pointer is still down. Rebase just that element from the
+      // new committed style; unlike getBoundingClientRect this string read
+      // does not trigger layout and keeps the hot path compositor-friendly.
+      const committedLeft = snapshot.element.style.left;
+      const committedWidth = snapshot.element.style.width;
+      if (committedLeft !== snapshot.lastWrittenLeft && committedLeft.endsWith('%')) {
+        const nextLeft = Number.parseFloat(committedLeft);
+        if (Number.isFinite(nextLeft)) snapshot.leftPercent = nextLeft;
+      }
+      if (committedWidth !== snapshot.lastWrittenWidth) {
+        const nextWidth = committedWidth.endsWith('%') ? Number.parseFloat(committedWidth) : null;
+        snapshot.widthPercent = nextWidth !== null && Number.isFinite(nextWidth) ? nextWidth : null;
+      }
+      const nextLeftPercent = snapshot.leftPercent * scaleX + (translateXPx / widthPx) * 100;
+      snapshot.element.style.left = `${nextLeftPercent}%`;
+      snapshot.lastWrittenLeft = snapshot.element.style.left;
+      if (snapshot.widthPercent !== null) {
+        snapshot.element.style.width = `${snapshot.widthPercent * scaleX}%`;
+      }
+      snapshot.lastWrittenWidth = snapshot.element.style.width;
+    }
+  }, []);
+
+  const setGestureRulerVisible = useCallback((visible: boolean) => {
+    if (gestureRulerVisibleRef.current === visible) {
+      return;
+    }
+    gestureRulerVisibleRef.current = visible;
+    const gestureLayer = gestureRulerLayerRef.current;
+    const reactLayer = rulerLayerRef.current;
+    if (reactLayer) {
+      // The React ruler carries a show/hide CSS transition; suppress it so
+      // the visibility swap applies immediately.
+      reactLayer.style.transition = visible ? 'none' : '';
+      reactLayer.style.visibility = visible ? 'hidden' : '';
+    }
+    if (gestureLayer) {
+      gestureLayer.style.visibility = visible ? 'visible' : 'hidden';
+    }
+  }, []);
+
+  const clearGestureOverlays = useCallback(() => {
+    applyGestureMarkerPositions(null);
+    gestureMarkerSnapshotRef.current.length = 0;
+    gestureMarkerSnapshotCapturedRef.current = false;
+    gestureMarkerTransformRef.current = null;
+    setGestureRulerVisible(false);
+    gestureRulerRangeRef.current = null;
+    gestureLayerWidthRef.current = 0;
+    gestureRulerVisibleRef.current = false;
+    gestureGpuRangeRef.current = null;
+  }, [applyGestureMarkerPositions, setGestureRulerVisible]);
 
   const applyCycleMarkerScrollOffset = useCallback((offsetRows: number) => {
     const markerLayer = cycleMarkerLayerRef.current;
@@ -994,6 +1302,47 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const visibleRows = Math.max(textureHeightRef.current, 1);
     const offsetPercent = (offsetRows / visibleRows) * 100;
     markerLayer.style.transform = offsetPercent === 0 ? '' : `translateY(-${offsetPercent}%)`;
+  }, []);
+
+  /**
+   * Cycle boundaries are a render-only decoration. Keep a small DOM pool and
+   * update its styles imperatively so a new waterfall row never schedules a
+   * React reconciliation. This is particularly important for 100/120 Hz
+   * streams where the marker positions change every frame.
+   */
+  const renderCycleMarkers = useCallback((markers: CycleMarkerPosition[]) => {
+    const layer = cycleMarkerLayerRef.current;
+    if (!layer) {
+      return;
+    }
+
+    const pool = cycleMarkerPoolRef.current;
+    for (let index = 0; index < markers.length; index += 1) {
+      let element = pool[index];
+      if (!element) {
+        element = document.createElement('div');
+        element.className = 'absolute inset-x-0 h-px bg-white/45 shadow-[0_0_4px_rgba(255,255,255,0.28)]';
+        pool[index] = element;
+        layer.appendChild(element);
+      }
+      element.style.display = '';
+      element.style.top = `${markers[index]!.topPercent}%`;
+    }
+
+    for (let index = markers.length; index < pool.length; index += 1) {
+      pool[index]!.style.display = 'none';
+    }
+  }, []);
+
+  const clearCycleMarkers = useCallback(() => {
+    cycleMarkersRef.current = [];
+    const layer = cycleMarkerLayerRef.current;
+    if (layer) {
+      for (const element of cycleMarkerPoolRef.current) {
+        element.style.display = 'none';
+      }
+      layer.style.transform = '';
+    }
   }, []);
 
   const refreshCycleMarkers = useCallback((rowTimestamps: number[] = displayRowTimestampsRef.current) => {
@@ -1009,8 +1358,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       return;
     }
     cycleMarkersRef.current = nextMarkers;
-    setCycleMarkers(nextMarkers);
-  }, [cycleSlotMs, showCycleMarkers]);
+    renderCycleMarkers(nextMarkers);
+  }, [cycleSlotMs, renderCycleMarkers, showCycleMarkers]);
 
   const resetAutoRangeState = useCallback(() => {
     rangeUpdateCounterRef.current = 0;
@@ -1123,6 +1472,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     uniform sampler2D u_texture;
     uniform sampler2D u_transitionTexture;
     uniform sampler2D u_colorMap;
+    uniform sampler2D u_supplementTexture;
     uniform float u_minDb;
     uniform float u_maxDb;
     uniform bool u_useFloatTexture;
@@ -1133,6 +1483,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     uniform float u_axisTransitionProgress;
     uniform vec2 u_currentAxis;
     uniform vec2 u_transitionAxis;
+    uniform vec2 u_viewAxis;
+    uniform bool u_supplementEnabled;
+    uniform vec2 u_supplementAxis;
+    uniform float u_supplementHeadRow;
+    uniform float u_supplementTextureHeight;
     uniform float u_transitionHeadRow;
     uniform float u_transitionTextureHeight;
     uniform float u_themeGamma;
@@ -1161,17 +1516,22 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     }
 
     void main() {
-      float currentX = v_texCoord.x;
-      float transitionX = v_texCoord.x;
+      // The view axis describes the frequency range visible on screen. It
+      // equals u_currentAxis (the axis the texture was uploaded at) outside
+      // of gestures; during a pan/zoom gesture only u_viewAxis moves, so the
+      // viewport transform runs entirely on the GPU with no CPU resampling.
+      float currentSpan = max(u_currentAxis.y - u_currentAxis.x, 1.0);
+      float visualFrequency = mix(u_viewAxis.x, u_viewAxis.y, v_texCoord.x);
+      float currentX = (visualFrequency - u_currentAxis.x) / currentSpan;
+      float transitionX = currentX;
 
       if (u_axisTransitionActive) {
         float progress = clamp(u_axisTransitionProgress, 0.0, 1.0);
         vec2 visualAxis = mix(u_transitionAxis, u_currentAxis, progress);
-        float visualFrequency = mix(visualAxis.x, visualAxis.y, v_texCoord.x);
-        float currentSpan = max(u_currentAxis.y - u_currentAxis.x, 1.0);
+        float transitionVisualFrequency = mix(visualAxis.x, visualAxis.y, v_texCoord.x);
         float transitionSpan = max(u_transitionAxis.y - u_transitionAxis.x, 1.0);
-        currentX = (visualFrequency - u_currentAxis.x) / currentSpan;
-        transitionX = (visualFrequency - u_transitionAxis.x) / transitionSpan;
+        currentX = (transitionVisualFrequency - u_currentAxis.x) / currentSpan;
+        transitionX = (transitionVisualFrequency - u_transitionAxis.x) / transitionSpan;
       }
 
       float value = sampleWaterfallTexture(
@@ -1181,6 +1541,26 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         u_textureHeight,
         u_scrollRows
       );
+
+      // Where the detail texture has no coverage (GPU-side gesture
+      // pan/zoom), fall back to the wide-envelope supplement texture at its
+      // own native axis. Disabled during axis transitions so the transition
+      // blend stays authoritative.
+      if (
+        u_supplementEnabled
+        && !u_axisTransitionActive
+        && (currentX < 0.0 || currentX > 1.0)
+      ) {
+        float supplementSpan = max(u_supplementAxis.y - u_supplementAxis.x, 1.0);
+        float supplementX = (visualFrequency - u_supplementAxis.x) / supplementSpan;
+        value = sampleWaterfallTexture(
+          u_supplementTexture,
+          supplementX,
+          u_supplementHeadRow,
+          u_supplementTextureHeight,
+          u_scrollRows
+        );
+      }
 
       if (u_axisTransitionActive) {
         float previousValue = sampleWaterfallTexture(
@@ -1240,7 +1620,26 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   // 创建程序
   const createProgram = useCallback((gl: WebGLRenderingContext) => {
     const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
-    const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
+    // Radio SDR axes use absolute RF values (often 14 MHz+). mediump's
+    // minimum precision can quantize away kHz-sized deltas at that magnitude,
+    // which makes a GPU-side pan/zoom appear to jump or leave blank bands.
+    // Prefer highp when the implementation exposes it and retain a mediump
+    // fallback for low-end WebGL1 devices.
+    let fragmentPrecision = 'mediump';
+    try {
+      const precision = gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT);
+      if (precision && precision.precision > 0) {
+        fragmentPrecision = 'highp';
+      }
+    } catch {
+      // Some WebGL1 implementations throw for precision queries; mediump is
+      // still a valid fallback for those devices.
+    }
+    const fragmentShader = createShader(
+      gl,
+      gl.FRAGMENT_SHADER,
+      fragmentShaderSource.replace('precision mediump float;', `precision ${fragmentPrecision} float;`),
+    );
 
     if (!vertexShader || !fragmentShader) return null;
 
@@ -1302,6 +1701,14 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   }, []);
 
+  const ensureProgramBound = useCallback((gl: WebGLRenderingContext, program: WebGLProgram) => {
+    if (boundProgramRef.current === program) {
+      return;
+    }
+    gl.useProgram(program);
+    boundProgramRef.current = program;
+  }, []);
+
   // 初始化WebGL
   const initWebGL = useCallback(() => {
     const canvas = canvasRef.current;
@@ -1325,6 +1732,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
       glRef.current = gl;
       maxTextureSizeRef.current = Math.max(1, Number(gl.getParameter(gl.MAX_TEXTURE_SIZE)) || 4096);
+      textureAllocatedWidthRef.current = 0;
+      textureAllocatedHeightRef.current = 0;
+      supplementAllocatedWidthRef.current = 0;
+      supplementAllocatedHeightRef.current = 0;
+      textureAxisRef.current = null;
 
       // 创建程序
       const program = createProgram(gl);
@@ -1332,6 +1744,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
       programRef.current = program;
       gl.useProgram(program);
+      boundProgramRef.current = program;
 
       // 创建并缓存颜色映射纹理
       const colorMapTexture = gl.createTexture();
@@ -1351,8 +1764,20 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, 1, 1, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, new Uint8Array(1));
         applySpectrumTextureFilter(gl, transitionTexture, sharpPixelsRef.current);
       }
+      const supplementTexture = gl.createTexture();
+      supplementTextureRef.current = supplementTexture;
+      if (supplementTexture) {
+        gl.activeTexture(gl.TEXTURE3);
+        gl.bindTexture(gl.TEXTURE_2D, supplementTexture);
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, 1, 1, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, new Uint8Array(1));
+        applySpectrumTextureFilter(gl, supplementTexture, sharpPixelsRef.current);
+      }
       if (dataTexture) {
         gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, dataTexture);
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, 1, 1, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, new Uint8Array(1));
         applySpectrumTextureFilter(gl, dataTexture, sharpPixelsRef.current);
       }
 
@@ -1410,6 +1835,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       axisTransitionActiveLocationRef.current = gl.getUniformLocation(program, 'u_axisTransitionActive');
       axisTransitionProgressLocationRef.current = gl.getUniformLocation(program, 'u_axisTransitionProgress');
       currentAxisLocationRef.current = gl.getUniformLocation(program, 'u_currentAxis');
+      viewAxisLocationRef.current = gl.getUniformLocation(program, 'u_viewAxis');
+      supplementEnabledLocationRef.current = gl.getUniformLocation(program, 'u_supplementEnabled');
+      supplementAxisLocationRef.current = gl.getUniformLocation(program, 'u_supplementAxis');
+      supplementHeadRowLocationRef.current = gl.getUniformLocation(program, 'u_supplementHeadRow');
+      supplementTextureHeightLocationRef.current = gl.getUniformLocation(program, 'u_supplementTextureHeight');
       transitionAxisLocationRef.current = gl.getUniformLocation(program, 'u_transitionAxis');
       transitionHeadRowLocationRef.current = gl.getUniformLocation(program, 'u_transitionHeadRow');
       transitionTextureHeightLocationRef.current = gl.getUniformLocation(program, 'u_transitionTextureHeight');
@@ -1419,6 +1849,19 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       gl.uniform1i(axisTransitionActiveLocationRef.current, 0);
       gl.uniform1f(axisTransitionProgressLocationRef.current, 1.0);
       gl.uniform2f(currentAxisLocationRef.current, 0.0, 1.0);
+      gl.uniform2f(viewAxisLocationRef.current, 0.0, 1.0);
+      if (supplementEnabledLocationRef.current) {
+        gl.uniform1i(supplementEnabledLocationRef.current, 0);
+      }
+      if (supplementAxisLocationRef.current) {
+        gl.uniform2f(supplementAxisLocationRef.current, 0.0, 1.0);
+      }
+      if (supplementHeadRowLocationRef.current) {
+        gl.uniform1f(supplementHeadRowLocationRef.current, 0.0);
+      }
+      if (supplementTextureHeightLocationRef.current) {
+        gl.uniform1f(supplementTextureHeightLocationRef.current, 1.0);
+      }
       gl.uniform2f(transitionAxisLocationRef.current, 0.0, 1.0);
       gl.uniform1f(transitionHeadRowLocationRef.current, 0.0);
       gl.uniform1f(transitionTextureHeightLocationRef.current, 1.0);
@@ -1432,6 +1875,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
       const transitionTextureLocation = gl.getUniformLocation(program, 'u_transitionTexture');
       gl.uniform1i(transitionTextureLocation, 2);
+
+      const supplementTextureLocation = gl.getUniformLocation(program, 'u_supplementTexture');
+      gl.uniform1i(supplementTextureLocation, 3);
 
       // 激活纹理单元
       gl.activeTexture(gl.TEXTURE1);
@@ -1451,15 +1897,43 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const canvas = canvasRef.current;
     
     if (!gl || !canvas) return;
-
-    gl.viewport(0, 0, canvas.width, canvas.height);
-    gl.clear(gl.COLOR_BUFFER_BIT);
+    // The quad covers the complete opaque canvas, so clearing and resetting
+    // the viewport for every animation frame only adds driver work. Both are
+    // updated by handleResize when the backing store actually changes.
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }, []);
 
-  useEffect(() => {
-    renderRef.current = render;
+  // All non-animation invalidations share one RAF. This prevents a texture
+  // upload, a ruler update, and a React effect in the same turn from each
+  // issuing a separate draw. Animation callbacks use renderNow so their
+  // uniform update and draw stay in the same display frame.
+  const scheduleRender = useCallback(() => {
+    renderDirtyRef.current = true;
+    if (renderRequestRef.current !== undefined) {
+      return;
+    }
+    renderRequestRef.current = requestAnimationFrame(() => {
+      renderRequestRef.current = undefined;
+      if (!renderDirtyRef.current) {
+        return;
+      }
+      renderDirtyRef.current = false;
+      render();
+    });
   }, [render]);
+
+  const renderNow = useCallback(() => {
+    if (renderRequestRef.current !== undefined) {
+      cancelAnimationFrame(renderRequestRef.current);
+      renderRequestRef.current = undefined;
+    }
+    renderDirtyRef.current = false;
+    render();
+  }, [render]);
+
+  useEffect(() => {
+    renderRef.current = renderNow;
+  }, [renderNow]);
 
   useEffect(() => {
     const gl = glRef.current;
@@ -1471,8 +1945,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
     uploadColorMapTexture(gl, colorMapTexture, colorMap);
     applyThemeCurveUniforms(gl, program, themeCurve);
-    render();
-  }, [applyThemeCurveUniforms, colorMap, render, themeCurve, uploadColorMapTexture]);
+    scheduleRender();
+  }, [applyThemeCurveUniforms, colorMap, scheduleRender, themeCurve, uploadColorMapTexture]);
 
   useEffect(() => {
     const gl = glRef.current;
@@ -1483,8 +1957,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     applySpectrumTextureFilter(gl, textureRef.current, sharpPixels);
     gl.activeTexture(gl.TEXTURE2);
     applySpectrumTextureFilter(gl, transitionTextureRef.current, sharpPixels);
-    render();
-  }, [applySpectrumTextureFilter, render, sharpPixels]);
+    gl.activeTexture(gl.TEXTURE3);
+    applySpectrumTextureFilter(gl, supplementTextureRef.current, sharpPixels);
+    gl.activeTexture(gl.TEXTURE0);
+    scheduleRender();
+  }, [applySpectrumTextureFilter, scheduleRender, sharpPixels]);
 
   const updateViewState = useCallback((nextAxis: SpectrumAxis | null, hasData: boolean) => {
     currentAxisRef.current = nextAxis;
@@ -1529,6 +2006,15 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     rangeScale: number
   ) => {
     const start = rowIndex * width;
+    // Most TCI frames arrive already projected to the texture width. Avoid
+    // the general min/max downsampling loop in that common case.
+    if (row.length === width) {
+      for (let x = 0; x < width; x += 1) {
+        const normalizedValue = (Number(row[x]) - rangeMin) * rangeScale;
+        target[start + x] = Math.max(0, Math.min(255, Math.floor(normalizedValue)));
+      }
+      return;
+    }
     for (let x = 0; x < width; x += 1) {
       const sourceStart = Math.floor((x * row.length) / width);
       const sourceEnd = Math.max(sourceStart + 1, Math.ceil(((x + 1) * row.length) / width));
@@ -1550,14 +2036,14 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
     textureHeightRef.current = textureHeight;
     headRowRef.current = headRow;
-    gl.useProgram(program);
+    ensureProgramBound(gl, program);
     if (headRowLocationRef.current) {
       gl.uniform1f(headRowLocationRef.current, headRow);
     }
     if (textureHeightLocationRef.current) {
       gl.uniform1f(textureHeightLocationRef.current, textureHeight);
     }
-  }, []);
+  }, [ensureProgramBound]);
 
   const updateCurrentAxisUniform = useCallback((nextAxis: SpectrumAxis | null) => {
     const gl = glRef.current;
@@ -1566,9 +2052,19 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       return;
     }
 
-    gl.useProgram(program);
+    ensureProgramBound(gl, program);
     gl.uniform2f(currentAxisLocationRef.current, nextAxis.minHz, nextAxis.maxHz);
-  }, []);
+    // Outside of an active gesture the view axis tracks the texture axis
+    // (identity mapping). A rebuild mid-gesture keeps the gesture view axis.
+    const heldViewAxis = gestureViewAxisRef.current ?? committedViewAxisOverrideRef.current;
+    if (viewAxisLocationRef.current) {
+      gl.uniform2f(
+        viewAxisLocationRef.current,
+        heldViewAxis?.min ?? nextAxis.minHz,
+        heldViewAxis?.max ?? nextAxis.maxHz,
+      );
+    }
+  }, [ensureProgramBound]);
 
   const stopAxisTransition = useCallback((shouldRender = false) => {
     if (axisTransitionAnimRef.current) {
@@ -1582,7 +2078,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       return;
     }
 
-    gl.useProgram(program);
+    ensureProgramBound(gl, program);
     if (axisTransitionActiveLocationRef.current) {
       gl.uniform1i(axisTransitionActiveLocationRef.current, 0);
     }
@@ -1590,9 +2086,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       gl.uniform1f(axisTransitionProgressLocationRef.current, 1);
     }
     if (shouldRender) {
-      render();
+      scheduleRender();
     }
-  }, [render]);
+  }, [ensureProgramBound, scheduleRender]);
 
   const prepareAxisTransitionTexture = useCallback((fromAxis: SpectrumAxis, toAxis: SpectrumAxis): boolean => {
     const gl = glRef.current;
@@ -1616,12 +2112,18 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
     textureRef.current = transitionTexture;
     transitionTextureRef.current = currentTexture;
+    // Allocation metadata follows the texture object, not the role it plays
+    // in the shader. The newly promoted texture may still be a 1x1 placeholder
+    // (or have a different size), so force the next rebuild down the
+    // texImage2D allocation path instead of issuing an invalid sub upload.
+    textureAllocatedWidthRef.current = 0;
+    textureAllocatedHeightRef.current = 0;
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, currentTexture);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, transitionTexture);
 
-    gl.useProgram(program);
+    ensureProgramBound(gl, program);
     if (transitionAxisLocationRef.current) {
       gl.uniform2f(transitionAxisLocationRef.current, fromAxis.minHz, fromAxis.maxHz);
     }
@@ -1635,7 +2137,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       gl.uniform2f(currentAxisLocationRef.current, toAxis.minHz, toAxis.maxHz);
     }
     return true;
-  }, []);
+  }, [ensureProgramBound]);
 
   const startAxisTransition = useCallback((fromAxis: SpectrumAxis | null, toAxis: SpectrumAxis | null) => {
     stopAxisTransition(false);
@@ -1659,7 +2161,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     }
 
     const startedAt = performance.now();
-    gl.useProgram(program);
+    ensureProgramBound(gl, program);
     if (axisTransitionActiveLocationRef.current) {
       gl.uniform1i(axisTransitionActiveLocationRef.current, 1);
     }
@@ -1677,11 +2179,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
       const progress = Math.min(1, (performance.now() - startedAt) / duration);
       const easedProgress = easeSpectrumAxisTransition(progress);
-      currentGl.useProgram(currentProgram);
+      ensureProgramBound(currentGl, currentProgram);
       if (axisTransitionProgressLocationRef.current) {
         currentGl.uniform1f(axisTransitionProgressLocationRef.current, easedProgress);
       }
-      render();
+      renderNow();
 
       if (progress < 1) {
         axisTransitionAnimRef.current = requestAnimationFrame(animate);
@@ -1695,11 +2197,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       if (axisTransitionProgressLocationRef.current) {
         currentGl.uniform1f(axisTransitionProgressLocationRef.current, 1);
       }
-      render();
     };
 
     axisTransitionAnimRef.current = requestAnimationFrame(animate);
-  }, [prepareAxisTransitionTexture, render, stopAxisTransition, updateCurrentAxisUniform]);
+  }, [ensureProgramBound, prepareAxisTransitionTexture, renderNow, stopAxisTransition, updateCurrentAxisUniform]);
 
   const buildSegments = useCallback((actualHeight: number, currentMin: number, currentMax: number) => {
     const segments: Array<{ rowCount: number; rangeMin: number; rangeScale: number }> = [];
@@ -1745,6 +2246,37 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     return segments;
   }, [autoRange]);
 
+  const updateSupplementTextureMetadata = useCallback((textureHeight: number, headRow: number) => {
+    const gl = glRef.current;
+    const program = programRef.current;
+    if (!gl || !program || gl.isContextLost()) {
+      return;
+    }
+    ensureProgramBound(gl, program);
+    if (supplementHeadRowLocationRef.current) {
+      gl.uniform1f(supplementHeadRowLocationRef.current, headRow);
+    }
+    if (supplementTextureHeightLocationRef.current) {
+      gl.uniform1f(supplementTextureHeightLocationRef.current, textureHeight);
+    }
+  }, [ensureProgramBound]);
+
+  const updateSupplementAxisUniform = useCallback((axis: SpectrumAxis | null) => {
+    const gl = glRef.current;
+    const program = programRef.current;
+    if (!gl || !program || gl.isContextLost()) {
+      return;
+    }
+    ensureProgramBound(gl, program);
+    const enabled = axis && axis.binCount > 0 && supplementRowCountRef.current > 0;
+    if (supplementEnabledLocationRef.current) {
+      gl.uniform1i(supplementEnabledLocationRef.current, enabled ? 1 : 0);
+    }
+    if (axis && supplementAxisLocationRef.current) {
+      gl.uniform2f(supplementAxisLocationRef.current, axis.minHz, axis.maxHz);
+    }
+  }, [ensureProgramBound]);
+
   const rebuildTexture = useCallback((spectrumData: ArrayLike<number>[], nextAxis: SpectrumAxis | null) => {
     const gl = glRef.current;
     const texture = textureRef.current;
@@ -1762,7 +2294,12 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const actualHeight = visibleSpectrumData.length;
     const width = Math.min(sourceWidth, maxTextureSizeRef.current);
     const dataSize = width * textureHeight;
-    const textureData = createWaterfallUploadBuffer(width, textureHeight);
+    const textureData = ensureWaterfallUploadBuffer(uploadBufferRef.current, width, textureHeight);
+    uploadBufferRef.current = textureData;
+    // The persistent buffer may contain rows from a previous, taller batch.
+    // Clear only the upload rectangle; otherwise stale history can leak into
+    // the newly allocated texture when the stream is re-primed.
+    textureData.fill(0, 0, dataSize);
 
     let currentMin = minDb;
     let currentMax = maxDb;
@@ -1798,15 +2335,108 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width, textureHeight, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, textureData);
-    applySpectrumTextureFilter(gl, texture, sharpPixelsRef.current);
+    const uploadData = textureData.subarray(0, dataSize);
+    if (
+      textureAllocatedWidthRef.current === width
+      && textureAllocatedHeightRef.current === textureHeight
+    ) {
+      gl.texSubImage2D(
+        gl.TEXTURE_2D,
+        0,
+        0,
+        0,
+        width,
+        textureHeight,
+        gl.LUMINANCE,
+        gl.UNSIGNED_BYTE,
+        uploadData,
+      );
+    } else {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width, textureHeight, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, uploadData);
+      textureAllocatedWidthRef.current = width;
+      textureAllocatedHeightRef.current = textureHeight;
+    }
     lastDataLengthRef.current = dataSize;
     textureWidthRef.current = width;
+    // Keep the semantic axis metadata (including the source bin count) for
+    // equality checks; the physical upload width is tracked independently by
+    // textureWidthRef because MAX_TEXTURE_SIZE may clamp it.
+    textureAxisRef.current = nextAxis ? { ...nextAxis } : null;
 
     rowCountRef.current = actualHeight;
     updateTextureMetadata(textureHeight, 0);
+
+    // Rebuild the supplement ring texture from the retained wide-envelope
+    // rows, reusing the same normalization segments so both textures share
+    // one color scale. Rows have already been projected to the retained
+    // supplement axis by processRenderBatch when the DDS center moves.
+    const supplementTexture = supplementTextureRef.current;
+    const supplementAxis = supplementAxisRef.current;
+    const supplementRows = displaySupplementRowsRef.current.slice(0, textureHeight);
+    const supplementWidth = supplementAxis ? Math.min(supplementAxis.binCount, maxTextureSizeRef.current) : 0;
+    if (supplementTexture && supplementAxis && supplementWidth > 0 && supplementRows.length > 0) {
+      const supplementData = ensureWaterfallUploadBuffer(supplementUploadBufferRef.current, supplementWidth, textureHeight);
+      supplementUploadBufferRef.current = supplementData;
+      // Missing rows and frames without a supplement render as the
+      // colormap minimum.
+      supplementData.fill(0, 0, supplementWidth * textureHeight);
+
+      let supplementRowOffset = 0;
+      for (const segment of segments) {
+        const segmentEnd = Math.min(supplementRowOffset + segment.rowCount, supplementRows.length);
+        for (let y = supplementRowOffset; y < segmentEnd; y += 1) {
+          const row = supplementRows[y];
+          if (row) {
+            writeNormalizedRow(supplementData, y, row, supplementWidth, segment.rangeMin, segment.rangeScale);
+          }
+        }
+        supplementRowOffset = segmentEnd;
+        if (supplementRowOffset >= supplementRows.length) {
+          break;
+        }
+      }
+      for (let y = supplementRowOffset; y < supplementRows.length; y += 1) {
+        const row = supplementRows[y];
+        if (row) {
+          writeNormalizedRow(supplementData, y, row, supplementWidth, currentMin, fallbackScale);
+        }
+      }
+
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, supplementTexture);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      const supplementUploadData = supplementData.subarray(0, supplementWidth * textureHeight);
+      if (
+        supplementAllocatedWidthRef.current === supplementWidth
+        && supplementAllocatedHeightRef.current === textureHeight
+      ) {
+        gl.texSubImage2D(
+          gl.TEXTURE_2D,
+          0,
+          0,
+          0,
+          supplementWidth,
+          textureHeight,
+          gl.LUMINANCE,
+          gl.UNSIGNED_BYTE,
+          supplementUploadData,
+        );
+      } else {
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, supplementWidth, textureHeight, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, supplementUploadData);
+        supplementAllocatedWidthRef.current = supplementWidth;
+        supplementAllocatedHeightRef.current = textureHeight;
+      }
+      gl.activeTexture(gl.TEXTURE0);
+      supplementRowCountRef.current = supplementRows.length;
+      supplementHeadRowRef.current = 0;
+      updateSupplementTextureMetadata(textureHeight, 0);
+      updateSupplementAxisUniform(supplementAxis);
+    } else {
+      supplementRowCountRef.current = 0;
+      supplementHeadRowRef.current = 0;
+      updateSupplementAxisUniform(null);
+    }
   }, [
-    applySpectrumTextureFilter,
     autoRange,
     buildSegments,
     calculateDataRange,
@@ -1815,6 +2445,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     totalRows,
     updateCurrentAxisUniform,
     updateActualRangeState,
+    updateSupplementAxisUniform,
+    updateSupplementTextureMetadata,
     updateTextureMetadata,
     writeNormalizedRow,
   ]);
@@ -1827,14 +2459,25 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const gl = glRef.current;
     const texture = textureRef.current;
     const transitionTexture = transitionTextureRef.current;
+    const supplementTexture = supplementTextureRef.current;
     const program = programRef.current;
     releaseWaterfallTextureMemoryRefs({
       scratchRowRef,
+      uploadBufferRef,
+      supplementScratchRowRef,
+      supplementUploadBufferRef,
+      textureAllocatedWidthRef,
+      textureAllocatedHeightRef,
+      supplementAllocatedWidthRef,
+      supplementAllocatedHeightRef,
+      textureAxisRef,
       lastDataLengthRef,
       textureHeightRef,
       rowCountRef,
       headRowRef,
     });
+    supplementHeadRowRef.current = 0;
+    supplementRowCountRef.current = 0;
 
     if (!gl || !texture || gl.isContextLost()) {
       return;
@@ -1850,33 +2493,52 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, 1, 1, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, new Uint8Array(1));
     }
+    if (supplementTexture) {
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, supplementTexture);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, 1, 1, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, new Uint8Array(1));
+      gl.activeTexture(gl.TEXTURE0);
+    }
 
+    if (program) {
+      ensureProgramBound(gl, program);
+    }
     if (program && scrollRowsLocationRef.current) {
-      gl.useProgram(program);
       gl.uniform1f(scrollRowsLocationRef.current, 0);
     }
     if (program && axisTransitionActiveLocationRef.current) {
-      gl.useProgram(program);
       gl.uniform1i(axisTransitionActiveLocationRef.current, 0);
     }
     if (program && axisTransitionProgressLocationRef.current) {
-      gl.useProgram(program);
       gl.uniform1f(axisTransitionProgressLocationRef.current, 1);
     }
     if (program && headRowLocationRef.current) {
-      gl.useProgram(program);
       gl.uniform1f(headRowLocationRef.current, 0);
     }
     if (program && textureHeightLocationRef.current) {
-      gl.useProgram(program);
       gl.uniform1f(textureHeightLocationRef.current, 1);
     }
-    if (shouldRender) {
-      render();
+    if (program && supplementEnabledLocationRef.current) {
+      gl.uniform1i(supplementEnabledLocationRef.current, 0);
     }
-  }, [render]);
+    if (program && supplementHeadRowLocationRef.current) {
+      gl.uniform1f(supplementHeadRowLocationRef.current, 0);
+    }
+    if (program && supplementTextureHeightLocationRef.current) {
+      gl.uniform1f(supplementTextureHeightLocationRef.current, 1);
+    }
+    if (shouldRender) {
+      scheduleRender();
+    }
+  }, [ensureProgramBound, scheduleRender]);
 
-  const appendRowsToTexture = useCallback((rowsToAppend: ArrayLike<number>[], nextAxis: SpectrumAxis | null) => {
+  const appendRowsToTexture = useCallback((
+    rowsToAppend: ArrayLike<number>[],
+    nextAxis: SpectrumAxis | null,
+    supplementRowsToAppend: (Float32Array | null)[] = [],
+    supplementAxisChanged = false,
+  ) => {
     const gl = glRef.current;
     const texture = textureRef.current;
     const program = programRef.current;
@@ -1893,6 +2555,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const textureHeight = Math.max(1, totalRows ?? canvasRef.current?.height ?? 1);
     const width = Math.min(sourceWidth, maxTextureSizeRef.current);
     const previousTextureWidth = textureWidthRef.current;
+    const textureAxisChanged = !areAxesEqual(textureAxisRef.current, nextAxis);
 
     let txModeChanged = false;
     if (autoRange && isTransmitting !== prevTransmittingRef.current && prevTransmittingRef.current !== undefined) {
@@ -1932,38 +2595,122 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       || previousTextureHeight !== textureHeight
       || previousTextureWidth !== width
       || rowCountRef.current === 0
+      || textureAxisChanged
+      || supplementAxisChanged
     ) {
       rebuildTexture(spectrumData, nextAxis);
       return;
     }
 
     const rangeScale = currentMax > currentMin ? 255 / (currentMax - currentMin) : 1;
-    let headRow = headRowRef.current;
+    // Pack a batch in newest-to-oldest order and upload at most two
+    // contiguous ring segments. The previous implementation issued one
+    // texSubImage2D call per row, which is disproportionately expensive when
+    // the controller catches up after a dropped frame.
+    const rowCount = Math.min(rowsToAppend.length, textureHeight);
+    const sourceOffset = rowsToAppend.length - rowCount;
+    const packed = ensureWaterfallUploadBuffer(uploadBufferRef.current, width, rowCount);
+    uploadBufferRef.current = packed;
+    for (let packedRow = 0; packedRow < rowCount; packedRow += 1) {
+      const sourceRow = rowsToAppend[sourceOffset + rowCount - 1 - packedRow];
+      writeNormalizedRow(packed, packedRow, sourceRow, width, currentMin, rangeScale);
+    }
 
+    const previousHeadRow = headRowRef.current;
+    const headRow = (previousHeadRow - rowCount + textureHeight) % textureHeight;
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-
-    for (const row of rowsToAppend) {
-      headRow = (headRow - 1 + textureHeight) % textureHeight;
-      const scratchRow = ensureWaterfallScratchRow(scratchRowRef.current, width);
-      scratchRowRef.current = scratchRow;
-      writeNormalizedRow(scratchRow, 0, row, width, currentMin, rangeScale);
+    const firstSegmentRows = Math.min(rowCount, textureHeight - headRow);
+    gl.texSubImage2D(
+      gl.TEXTURE_2D,
+      0,
+      0,
+      headRow,
+      width,
+      firstSegmentRows,
+      gl.LUMINANCE,
+      gl.UNSIGNED_BYTE,
+      packed.subarray(0, firstSegmentRows * width),
+    );
+    const wrappedRows = rowCount - firstSegmentRows;
+    if (wrappedRows > 0) {
       gl.texSubImage2D(
         gl.TEXTURE_2D,
         0,
         0,
-        headRow,
+        0,
         width,
-        1,
+        wrappedRows,
         gl.LUMINANCE,
         gl.UNSIGNED_BYTE,
-        scratchRow
+        packed.subarray(firstSegmentRows * width, rowCount * width),
       );
     }
 
     rowCountRef.current = Math.min(textureHeight, rowCountRef.current + rowsToAppend.length);
     updateTextureMetadata(textureHeight, headRow);
+
+    // Mirror the append into the supplement ring texture so both stay
+    // row-aligned in time; frames without a supplement upload as the
+    // colormap minimum.
+    const supplementTexture = supplementTextureRef.current;
+    const supplementAxis = supplementAxisRef.current;
+    const supplementWidth = supplementAxis ? Math.min(supplementAxis.binCount, maxTextureSizeRef.current) : 0;
+    if (supplementTexture && supplementAxis && supplementWidth > 0 && supplementRowsToAppend.length > 0) {
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, supplementTexture);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      const supplementRowCount = Math.min(supplementRowsToAppend.length, textureHeight);
+      const supplementSourceOffset = supplementRowsToAppend.length - supplementRowCount;
+      const supplementPacked = ensureWaterfallUploadBuffer(
+        supplementUploadBufferRef.current,
+        supplementWidth,
+        supplementRowCount,
+      );
+      supplementUploadBufferRef.current = supplementPacked;
+      for (let packedRow = 0; packedRow < supplementRowCount; packedRow += 1) {
+        const sourceRow = supplementRowsToAppend[supplementSourceOffset + supplementRowCount - 1 - packedRow];
+        if (sourceRow) {
+          writeNormalizedRow(supplementPacked, packedRow, sourceRow, supplementWidth, currentMin, rangeScale);
+        } else {
+          supplementPacked.fill(0, packedRow * supplementWidth, (packedRow + 1) * supplementWidth);
+        }
+      }
+      const previousSupplementHead = supplementHeadRowRef.current;
+      const supplementHeadRow = (previousSupplementHead - supplementRowCount + textureHeight) % textureHeight;
+      const firstSupplementRows = Math.min(supplementRowCount, textureHeight - supplementHeadRow);
+      gl.texSubImage2D(
+        gl.TEXTURE_2D,
+        0,
+        0,
+        supplementHeadRow,
+        supplementWidth,
+        firstSupplementRows,
+        gl.LUMINANCE,
+        gl.UNSIGNED_BYTE,
+        supplementPacked.subarray(0, firstSupplementRows * supplementWidth),
+      );
+      const wrappedSupplementRows = supplementRowCount - firstSupplementRows;
+      if (wrappedSupplementRows > 0) {
+        gl.texSubImage2D(
+          gl.TEXTURE_2D,
+          0,
+          0,
+          0,
+          supplementWidth,
+          wrappedSupplementRows,
+          gl.LUMINANCE,
+          gl.UNSIGNED_BYTE,
+          supplementPacked.subarray(firstSupplementRows * supplementWidth, supplementRowCount * supplementWidth),
+        );
+      }
+      gl.activeTexture(gl.TEXTURE0);
+      supplementHeadRowRef.current = supplementHeadRow;
+      supplementRowCountRef.current = Math.min(textureHeight, supplementRowCountRef.current + supplementRowCount);
+      updateSupplementTextureMetadata(textureHeight, supplementHeadRow);
+      updateSupplementAxisUniform(supplementAxis);
+    }
   }, [
     autoRange,
     calculateDataRange,
@@ -1974,6 +2721,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     totalRows,
     updateCurrentAxisUniform,
     updateActualRangeState,
+    updateSupplementAxisUniform,
+    updateSupplementTextureMetadata,
     updateTextureMetadata,
     writeNormalizedRow,
   ]);
@@ -1986,6 +2735,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
     // 获取容器的实际尺寸
     const containerRect = container.getBoundingClientRect();
+    containerMetricsRef.current = {
+      left: containerRect.left,
+      width: containerRect.width,
+    };
     const pixelRatio = getWaterfallCanvasPixelRatio(window.devicePixelRatio);
     setRulerWidthPx(current => (
       Math.abs(current - containerRect.width) < 0.5 ? current : containerRect.width
@@ -2016,7 +2769,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const program = programRef.current;
     
     if (gl && program && !gl.isContextLost()) {
-      gl.useProgram(program);
+      ensureProgramBound(gl, program);
 
       // 更新viewport
       gl.viewport(0, 0, canvas.width, canvas.height);
@@ -2047,9 +2800,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       }
       
       // 立即重新渲染
-      render();
+      scheduleRender();
     }
-  }, [render]);
+  }, [ensureProgramBound, scheduleRender]);
 
   useEffect(() => {
     handleResizeRef.current = handleResize;
@@ -2063,6 +2816,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     // WebGL context loss 处理
     const handleContextLost = (e: Event) => {
       e.preventDefault();
+      boundProgramRef.current = null;
       logger.warn('WebGL context lost');
       if (verticalScrollAnimRef.current) cancelAnimationFrame(verticalScrollAnimRef.current);
       if (axisTransitionAnimRef.current) cancelAnimationFrame(axisTransitionAnimRef.current);
@@ -2090,6 +2844,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
       }
+      if (renderRequestRef.current !== undefined) {
+        cancelAnimationFrame(renderRequestRef.current);
+        renderRequestRef.current = undefined;
+      }
+      renderDirtyRef.current = false;
       animationRef.current = requestAnimationFrame(() => {
         handleResizeRef.current();
       });
@@ -2114,6 +2873,23 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       if (axisTransitionAnimRef.current) {
         cancelAnimationFrame(axisTransitionAnimRef.current);
       }
+      if (gestureRafRef.current !== undefined) {
+        cancelAnimationFrame(gestureRafRef.current);
+        gestureRafRef.current = undefined;
+      }
+      if (hoverRafRef.current !== undefined) {
+        cancelAnimationFrame(hoverRafRef.current);
+        hoverRafRef.current = undefined;
+      }
+      hoverPointerRef.current = null;
+      if (gestureCommitTimerRef.current) {
+        clearTimeout(gestureCommitTimerRef.current);
+        gestureCommitTimerRef.current = null;
+      }
+      gestureViewAxisRef.current = null;
+      clearCommittedViewAxisOverride();
+      pendingGestureRangeRef.current = null;
+      controller.setGestureViewFreeze(false);
       // 释放 WebGL 资源，防止泄漏
       const gl = glRef.current;
       if (gl) {
@@ -2121,6 +2897,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         if (programRef.current) { gl.deleteProgram(programRef.current); programRef.current = null; }
         if (textureRef.current) { gl.deleteTexture(textureRef.current); textureRef.current = null; }
         if (transitionTextureRef.current) { gl.deleteTexture(transitionTextureRef.current); transitionTextureRef.current = null; }
+        if (supplementTextureRef.current) { gl.deleteTexture(supplementTextureRef.current); supplementTextureRef.current = null; }
         if (colorMapTextureRef.current) { gl.deleteTexture(colorMapTextureRef.current); colorMapTextureRef.current = null; }
         if (positionBufferRef.current) { gl.deleteBuffer(positionBufferRef.current); positionBufferRef.current = null; }
         if (texCoordBufferRef.current) { gl.deleteBuffer(texCoordBufferRef.current); texCoordBufferRef.current = null; }
@@ -2130,9 +2907,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
           logger.debug('WEBGL_lose_context cleanup failed', error);
         }
         glRef.current = null;
+        boundProgramRef.current = null;
       }
     };
-  }, [initWebGL, releaseTextureStorage]);
+  }, [clearCommittedViewAxisOverride, controller, initWebGL, releaseTextureStorage]);
 
   const processRenderBatch = useCallback((batch: SpectrumRenderBatch | null) => {
     if (!batch) {
@@ -2148,14 +2926,18 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       stopAxisTransition(false);
       displayRowsRef.current = [];
       displayRowTimestampsRef.current = [];
+      displaySupplementRowsRef.current = [];
+      supplementAxisRef.current = null;
       rowCountRef.current = 0;
       headRowRef.current = 0;
       lastAnimatedFrameTokenRef.current = null;
+      gestureViewAxisRef.current = null;
+      clearCommittedViewAxisOverride();
+      pendingGestureRangeRef.current = null;
+      controller.setGestureViewFreeze(false);
+      clearGestureOverlays();
       applyCycleMarkerScrollOffset(0);
-      if (cycleMarkersRef.current.length > 0) {
-        cycleMarkersRef.current = [];
-        setCycleMarkers([]);
-      }
+      clearCycleMarkers();
       updateViewState(null, false);
       resetAutoRangeState();
       releaseTextureStorage();
@@ -2164,7 +2946,6 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
     const nextAxis = batch.axis;
     const maxRows = totalRows ?? WATERFALL_MAX_HISTORY_ROWS;
-
     if (batch.mode === 'replace') {
       const previousAxis = currentAxisRef.current;
       if (
@@ -2181,37 +2962,98 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
       displayRowsRef.current = batch.rows.slice(0, maxRows);
       displayRowTimestampsRef.current = batch.rowTimestamps.slice(0, maxRows);
+      displaySupplementRowsRef.current = (batch.supplementRows ?? batch.rows.map(() => null)).slice(0, maxRows);
+      supplementAxisRef.current = batch.supplementAxis ?? null;
       rowCountRef.current = displayRowsRef.current.length;
       headRowRef.current = 0;
       lastAnimatedFrameTokenRef.current = batch.frameToken;
       refreshCycleMarkers(displayRowTimestampsRef.current);
       rebuildTexture(displayRowsRef.current, nextAxis);
       updateViewState(nextAxis, true);
+      // The texture now matches the committed axis and React re-renders the
+      // overlays in the same batch, so the gesture overlays are released
+      // here. During an active gesture the next preview frame reapplies
+      // them against the new texture axis.
+      if (!gestureViewAxisRef.current) {
+        clearCommittedViewAxisOverride();
+        updateCurrentAxisUniform(nextAxis);
+        clearGestureOverlays();
+      }
 
       const gl = glRef.current;
       const program = programRef.current;
       if (gl && program && !gl.isContextLost() && scrollRowsLocationRef.current) {
-        gl.useProgram(program);
+        ensureProgramBound(gl, program);
         gl.uniform1f(scrollRowsLocationRef.current, 0);
       }
       applyCycleMarkerScrollOffset(0);
-      render();
+      scheduleRender();
       return;
     }
 
-    for (let index = 0; index < batch.rows.length; index += 1) {
-      displayRowsRef.current.unshift(batch.rows[index]);
-      displayRowTimestampsRef.current.unshift(batch.rowTimestamps[index]);
+    const batchSupplementRows = batch.supplementRows ?? batch.rows.map(() => null);
+    const alignedSupplementRows = batchSupplementRows.length === batch.rows.length
+      ? batchSupplementRows
+      : batch.rows.map((_, index) => batchSupplementRows[index] ?? null);
+    const nextSupplementAxis = batch.supplementAxis ?? null;
+    const retainedSupplementAxis = supplementAxisRef.current;
+    let supplementRowsForAppend: (Float32Array | null)[] = alignedSupplementRows;
+    let supplementAxisChanged = false;
+
+    if (nextSupplementAxis && !retainedSupplementAxis) {
+      // The first wide preview allocates the secondary ring texture. Later
+      // rows are projected into this stable axis so a moving DDS center does
+      // not force a full history rebuild on every frame.
+      supplementAxisRef.current = nextSupplementAxis;
+      supplementAxisChanged = true;
+    } else if (nextSupplementAxis && retainedSupplementAxis && !areAxesEqual(retainedSupplementAxis, nextSupplementAxis)) {
+      const retainedRange = { min: retainedSupplementAxis.minHz, max: retainedSupplementAxis.maxHz };
+      const incomingRange = { min: nextSupplementAxis.minHz, max: nextSupplementAxis.maxHz };
+      const overlap = Math.max(
+        0,
+        Math.min(retainedRange.max, incomingRange.max) - Math.max(retainedRange.min, incomingRange.min),
+      );
+      const incomingSpan = Math.max(incomingRange.max - incomingRange.min, 1);
+      if (overlap < incomingSpan * WATERFALL_SUPPLEMENT_REBASE_OVERLAP_RATIO) {
+        // Once the incoming envelope has moved mostly outside the retained
+        // one, rebase the supplement axis once. This bounds interpolation
+        // error during a long edge-tune without returning to per-frame full
+        // texture rebuilds.
+        displaySupplementRowsRef.current = displaySupplementRowsRef.current.map((row) => row
+          ? cropSpectrumToRange(row, retainedRange, incomingRange, minDbRef.current)
+          : null);
+        supplementAxisRef.current = nextSupplementAxis;
+        supplementAxisChanged = true;
+      } else {
+        supplementRowsForAppend = alignedSupplementRows.map((row) => row
+          ? cropSpectrumToRange(
+              row,
+              incomingRange,
+              retainedRange,
+              minDbRef.current,
+            )
+          : null);
+      }
     }
+
+    // The controller caps a catch-up batch at eight rows. Prepending the
+    // batch in one operation avoids repeatedly shifting the retained history
+    // array for each row.
+    displayRowsRef.current.unshift(...batch.rows);
+    displayRowTimestampsRef.current.unshift(...batch.rowTimestamps);
+    displaySupplementRowsRef.current.unshift(...supplementRowsForAppend);
     if (displayRowsRef.current.length > maxRows) {
       displayRowsRef.current.length = maxRows;
     }
     if (displayRowTimestampsRef.current.length > maxRows) {
       displayRowTimestampsRef.current.length = maxRows;
     }
+    if (displaySupplementRowsRef.current.length > maxRows) {
+      displaySupplementRowsRef.current.length = maxRows;
+    }
     refreshCycleMarkers(displayRowTimestampsRef.current);
 
-    appendRowsToTexture(batch.rows, nextAxis);
+    appendRowsToTexture(batch.rows, nextAxis, supplementRowsForAppend, supplementAxisChanged);
     updateViewState(nextAxis, true);
 
     const shouldAnimateScroll = batch.frameToken !== null && batch.frameToken !== lastAnimatedFrameTokenRef.current;
@@ -2225,10 +3067,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     }
 
     if (!shouldAnimateScroll) {
-      gl.useProgram(program);
+      ensureProgramBound(gl, program);
       gl.uniform1f(scrollRowsLocationRef.current, 0);
       applyCycleMarkerScrollOffset(0);
-      render();
+      scheduleRender();
       return;
     }
 
@@ -2238,10 +3080,9 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const animDuration = getWaterfallScrollAnimationDurationMs(frameIntervalMs, startRows);
     const animStartTime = now;
 
-    gl.useProgram(program);
+    ensureProgramBound(gl, program);
     gl.uniform1f(scrollRowsLocationRef.current, startRows);
     applyCycleMarkerScrollOffset(startRows);
-    render();
 
     const animate = () => {
       const elapsed = performance.now() - animStartTime;
@@ -2252,10 +3093,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       const currentGl = glRef.current;
       const currentProgram = programRef.current;
       if (currentGl && currentProgram && !currentGl.isContextLost() && scrollRowsLocationRef.current) {
-        currentGl.useProgram(currentProgram);
+        ensureProgramBound(currentGl, currentProgram);
         currentGl.uniform1f(scrollRowsLocationRef.current, offset);
         applyCycleMarkerScrollOffset(offset);
-        render();
+        renderNow();
       }
 
       if (progress < 1) {
@@ -2270,10 +3111,16 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   }, [
     appendRowsToTexture,
     applyCycleMarkerScrollOffset,
+    clearGestureOverlays,
+    clearCycleMarkers,
+    clearCommittedViewAxisOverride,
+    controller,
+    ensureProgramBound,
     refreshCycleMarkers,
     releaseTextureStorage,
     rebuildTexture,
-    render,
+    renderNow,
+    scheduleRender,
     frameIntervalMs,
     resetAutoRangeState,
     startAxisTransition,
@@ -2362,7 +3209,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const program = programRef.current;
     if (!gl || !program) return;
 
-    gl.useProgram(program);
+    ensureProgramBound(gl, program);
     if (minDbLocationRef.current) {
       gl.uniform1f(minDbLocationRef.current, minDb);
     }
@@ -2373,15 +3220,15 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     if (displayRowsRef.current.length > 0 && currentAxisRef.current) {
       rebuildTexture(displayRowsRef.current, currentAxisRef.current);
     }
-    render();
-  }, [minDb, maxDb, rebuildTexture, render]);
+    scheduleRender();
+  }, [ensureProgramBound, minDb, maxDb, rebuildTexture, scheduleRender]);
 
   useEffect(() => {
     if (!displayRowsRef.current.length || !currentAxisRef.current) {
       return;
     }
     rebuildTexture(displayRowsRef.current, currentAxisRef.current);
-    render();
+    scheduleRender();
   }, [
     autoRange,
     autoRangeConfig.updateInterval,
@@ -2389,7 +3236,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     autoRangeConfig.maxPercentile,
     autoRangeConfig.rangeExpansionFactor,
     rebuildTexture,
-    render,
+    scheduleRender,
   ]);
 
 
@@ -2444,33 +3291,54 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   }, [hoverCursor, showHoverProbe]);
 
   const updateHoverCursorFromPointer = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    if (markerOnly || !hasAxis || (event.pointerType !== 'mouse' && event.pointerType !== 'pen')) {
-      setHoverCursor(null);
+    // Coalesce pointermove bursts into one React update per animation frame.
+    hoverPointerRef.current = { clientX: event.clientX, pointerType: event.pointerType };
+    if (hoverRafRef.current !== undefined) {
       return;
     }
+    hoverRafRef.current = requestAnimationFrame(() => {
+      hoverRafRef.current = undefined;
+      const pointer = hoverPointerRef.current;
+      if (markerOnly || !hasAxis || !pointer || (pointer.pointerType !== 'mouse' && pointer.pointerType !== 'pen')) {
+        setHoverCursor(null);
+        return;
+      }
 
-    const container = containerRef.current;
-    if (!container) {
-      setHoverCursor(null);
-      return;
-    }
+      const container = containerRef.current;
+      if (!container) {
+        setHoverCursor(null);
+        return;
+      }
 
-    const rect = container.getBoundingClientRect();
-    if (rect.width <= 0) {
-      setHoverCursor(null);
-      return;
-    }
+      const rect = container.getBoundingClientRect();
+      containerMetricsRef.current = { left: rect.left, width: rect.width };
+      if (rect.width <= 0) {
+        setHoverCursor(null);
+        return;
+      }
 
-    const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
-    setHoverCursor({
-      ratio,
-      frequency: getWaterfallSemanticFrequencyAtRatio(ratio, minFrequency, maxFrequency, frequencyAxisTransform, FREQ_POSITION_OFFSET),
-      clientX: event.clientX,
-      containerTop: rect.top,
+      const ratio = Math.max(0, Math.min(1, (pointer.clientX - rect.left) / rect.width));
+      // During a viewport gesture the displayed range is the GPU-side view
+      // axis, not the committed texture axis — read the hover frequency
+      // from the gesture range so the probe label matches what is shown.
+      const gestureRange = gestureViewAxisRef.current;
+      const hoverMin = gestureRange ? gestureRange.min : minFrequency;
+      const hoverMax = gestureRange ? gestureRange.max : maxFrequency;
+      setHoverCursor({
+        ratio,
+        frequency: getWaterfallSemanticFrequencyAtRatio(ratio, hoverMin, hoverMax, frequencyAxisTransform, FREQ_POSITION_OFFSET),
+        clientX: pointer.clientX,
+        containerTop: rect.top,
+      });
     });
   }, [FREQ_POSITION_OFFSET, frequencyAxisTransform, hasAxis, markerOnly, maxFrequency, minFrequency]);
 
   const clearHoverCursor = useCallback(() => {
+    hoverPointerRef.current = null;
+    if (hoverRafRef.current !== undefined) {
+      cancelAnimationFrame(hoverRafRef.current);
+      hoverRafRef.current = undefined;
+    }
     setHoverCursor(null);
   }, []);
 
@@ -2520,6 +3388,17 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     return basebandFrequency;
   }, [hasAxis, isAbsoluteDisplayMode, isAbsoluteWindowedMode, referenceFrequencyHz]);
 
+  const readContainerHorizontalMetrics = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return null;
+    const cached = containerMetricsRef.current;
+    if (cached.width > 0) return cached;
+    const rect = container.getBoundingClientRect();
+    const metrics = { left: rect.left, width: rect.width };
+    containerMetricsRef.current = metrics;
+    return metrics;
+  }, []);
+
   // 计算语义频率到未变形频谱图位置的百分比
   const getFrequencyPosition = useCallback((displayFrequency: number, visualOffsetHz = FREQ_POSITION_OFFSET) => {
     if (!hasAxis) return 0;
@@ -2537,7 +3416,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     if (displayFrequency === null) return null;
 
     const position = getFrequencyPosition(displayFrequency);
-    if (!Number.isFinite(position) || position < 0 || position > 100) {
+    if (
+      !Number.isFinite(position)
+      || position < -WATERFALL_OVERLAY_RENDER_MARGIN_PERCENT
+      || position > 100 + WATERFALL_OVERLAY_RENDER_MARGIN_PERCENT
+    ) {
       return null;
     }
 
@@ -2546,17 +3429,19 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
   // 从鼠标位置计算频率
   const getFrequencyFromMousePosition = useCallback((clientX: number, visualOffsetHz = FREQ_POSITION_OFFSET) => {
-    const container = containerRef.current;
-    if (!container || !hasAxis) return 0;
+    const metrics = readContainerHorizontalMetrics();
+    if (!metrics || !hasAxis || metrics.width <= 0) return 0;
 
-    const containerRect = container.getBoundingClientRect();
-    const relativeX = clientX - containerRect.left;
-    const percentage = Math.max(0, Math.min(1, relativeX / containerRect.width));
+    const relativeX = clientX - metrics.left;
+    const percentage = Math.max(0, Math.min(1, relativeX / metrics.width));
+    const gestureRange = gestureViewAxisRef.current;
+    const interactionMin = gestureRange?.min ?? minFrequency;
+    const interactionMax = gestureRange?.max ?? maxFrequency;
 
     const displayFrequency = getWaterfallSemanticFrequencyAtRatio(
       percentage,
-      minFrequency,
-      maxFrequency,
+      interactionMin,
+      interactionMax,
       frequencyAxisTransform,
       visualOffsetHz,
     );
@@ -2565,19 +3450,21 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       : displayFrequency;
 
     return clampBasebandFrequency(basebandFrequency);
-  }, [FREQ_POSITION_OFFSET, clampBasebandFrequency, frequencyAxisTransform, hasAxis, isAbsoluteDisplayMode, maxFrequency, minFrequency, referenceFrequencyHz]);
+  }, [FREQ_POSITION_OFFSET, clampBasebandFrequency, frequencyAxisTransform, hasAxis, isAbsoluteDisplayMode, maxFrequency, minFrequency, readContainerHorizontalMetrics, referenceFrequencyHz]);
 
   const getInteractionFrequencyFromMousePosition = useCallback((clientX: number, visualOffsetHz = FREQ_POSITION_OFFSET, stepHz?: number | null) => {
-    const container = containerRef.current;
-    if (!container || !hasAxis) return 0;
+    const metrics = readContainerHorizontalMetrics();
+    if (!metrics || !hasAxis || metrics.width <= 0) return 0;
 
-    const containerRect = container.getBoundingClientRect();
-    const relativeX = clientX - containerRect.left;
-    const percentage = Math.max(0, Math.min(1, relativeX / containerRect.width));
+    const relativeX = clientX - metrics.left;
+    const percentage = Math.max(0, Math.min(1, relativeX / metrics.width));
+    const gestureRange = gestureViewAxisRef.current;
+    const interactionMin = gestureRange?.min ?? minFrequency;
+    const interactionMax = gestureRange?.max ?? maxFrequency;
     const displayFrequency = getWaterfallSemanticFrequencyAtRatio(
       percentage,
-      minFrequency,
-      maxFrequency,
+      interactionMin,
+      interactionMax,
       frequencyAxisTransform,
       visualOffsetHz,
     );
@@ -2600,6 +3487,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     isAbsoluteDisplayMode,
     maxFrequency,
     minFrequency,
+    readContainerHorizontalMetrics,
     referenceFrequencyHz,
   ]);
 
@@ -2704,6 +3592,220 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     };
   }, [FREQ_POSITION_OFFSET, frequencyAxisTransform, getInteractionFrequencyFromMousePosition, snapBandValue]);
 
+  // Keep the latest viewport-change callback reachable from timer/rAF
+  // callbacks without re-registering listeners.
+  useEffect(() => {
+    gestureChangeRef.current = effectiveLocalViewportChange ?? null;
+  }, [effectiveLocalViewportChange]);
+
+  const updateGestureRuler = useCallback((range: InteractionFrequencyRange) => {
+    const layer = gestureRulerLayerRef.current;
+    const widthPx = gestureLayerWidthRef.current > 0
+      ? gestureLayerWidthRef.current
+      : (containerRef.current?.clientWidth ?? 0);
+    if (!layer || widthPx <= 0) {
+      return;
+    }
+    const previousRange = gestureRulerRangeRef.current;
+    if (previousRange) {
+      const span = Math.max(range.max - range.min, 1);
+      // A sub-pixel movement does not change the readable ruler. Skip the
+      // allocation/tick walk until the gesture has moved far enough to be
+      // visible; the WebGL axis and markers still update every frame.
+      const minPixelDelta = Math.abs(range.min - previousRange.min) * widthPx / span;
+      const maxPixelDelta = Math.abs(range.max - previousRange.max) * widthPx / span;
+      if (minPixelDelta < 0.5 && maxPixelDelta < 0.5) {
+        return;
+      }
+    }
+    gestureRulerRangeRef.current = { ...range };
+    // Recompute ticks for the gesture view range with the same pure builder
+    // as the committed ruler, then reconcile them into a pooled DOM
+    // subtree. No scaleX means labels keep their shape at any zoom level.
+    const ticks = buildWaterfallRulerTicks(range.min, range.max, widthPx, FREQ_POSITION_OFFSET, frequencyAxisTransform);
+    const pool = gestureRulerPoolRef.current;
+    for (let index = 0; index < ticks.length; index += 1) {
+      let entry = pool[index];
+      if (!entry) {
+        const root = document.createElement('div');
+        root.className = 'absolute top-0 -translate-x-1/2';
+        const line = document.createElement('div');
+        const label = document.createElement('div');
+        label.className = 'absolute left-1/2 top-1.5 -translate-x-1/2 select-none whitespace-nowrap text-[10px] font-medium leading-none tabular-nums tracking-wide text-white/50';
+        root.appendChild(line);
+        root.appendChild(label);
+        layer.appendChild(root);
+        entry = { root, line, label, lineClass: '', labelText: '' };
+        pool[index] = entry;
+      }
+      const tick = ticks[index];
+      entry.root.style.display = '';
+      entry.root.style.left = `${tick.positionPercent}%`;
+      const kindClass = tick.kind === 'major'
+        ? 'h-4 bg-white/35'
+        : tick.kind === 'medium'
+          ? 'h-3.5 bg-white/25'
+          : 'h-2.5 bg-white/18';
+      const lineClass = `mx-auto w-px rounded-full ${kindClass}`;
+      if (entry.lineClass !== lineClass) {
+        entry.line.className = lineClass;
+        entry.lineClass = lineClass;
+      }
+      const labelText = tick.label ?? '';
+      if (entry.labelText !== labelText) {
+        entry.label.textContent = labelText;
+        entry.labelText = labelText;
+      }
+    }
+    for (let index = ticks.length; index < pool.length; index += 1) {
+      pool[index].root.style.display = 'none';
+    }
+  }, [FREQ_POSITION_OFFSET, frequencyAxisTransform]);
+
+  const applyGestureViewAxis = useCallback((range: InteractionFrequencyRange) => {
+    const gl = glRef.current;
+    const program = programRef.current;
+    const textureAxis = textureAxisRef.current ?? viewStateRef.current.axis;
+    if (!gl || !program || gl.isContextLost() || !textureAxis) {
+      return;
+    }
+    const previousRange = gestureGpuRangeRef.current;
+    if (previousRange && previousRange.min === range.min && previousRange.max === range.max) {
+      return;
+    }
+    gestureGpuRangeRef.current = { min: range.min, max: range.max };
+    ensureProgramBound(gl, program);
+    if (viewAxisLocationRef.current) {
+      gl.uniform2f(viewAxisLocationRef.current, range.min, range.max);
+    }
+    const container = containerRef.current;
+    const widthPx = gestureLayerWidthRef.current > 0
+      ? gestureLayerWidthRef.current
+      : (container?.clientWidth ?? 0);
+    if (widthPx > 0 && gestureLayerWidthRef.current === 0) {
+      gestureLayerWidthRef.current = widthPx;
+    }
+    const overlayTransform = getWaterfallGestureOverlayTransform(
+      textureAxis,
+      { minHz: range.min, maxHz: range.max },
+      widthPx,
+    );
+    applyGestureMarkerPositions(overlayTransform);
+    setGestureRulerVisible(true);
+    updateGestureRuler(range);
+    renderRef.current();
+  }, [applyGestureMarkerPositions, ensureProgramBound, setGestureRulerVisible, updateGestureRuler]);
+
+  const clearGestureCommitTimer = useCallback(() => {
+    if (gestureCommitTimerRef.current) {
+      clearTimeout(gestureCommitTimerRef.current);
+      gestureCommitTimerRef.current = null;
+    }
+  }, []);
+
+  const commitGestureViewport = useCallback(() => {
+    clearGestureCommitTimer();
+    if (gestureRafRef.current !== undefined) {
+      cancelAnimationFrame(gestureRafRef.current);
+      gestureRafRef.current = undefined;
+    }
+    const range = pendingGestureRangeRef.current;
+    // The final wheel/pointer event can arrive before the coalesced rAF. Apply
+    // that range once synchronously before releasing the GPU gesture state so
+    // the commit never exposes the previous frame for a tick.
+    if (range && gestureViewAxisRef.current && viewStateRef.current.axis) {
+      applyGestureViewAxis(range);
+    }
+    if (range) {
+      clearCommittedViewAxisOverride();
+      committedViewAxisOverrideRef.current = { ...range };
+      // A disconnected controller may never produce the replace batch that
+      // normally releases this hold. Bound the lifetime so a stale gesture
+      // cannot pin the shader indefinitely.
+      committedViewAxisOverrideTimerRef.current = setTimeout(() => {
+        committedViewAxisOverrideTimerRef.current = null;
+        committedViewAxisOverrideRef.current = null;
+        const currentAxis = currentAxisRef.current;
+        if (currentAxis && !gestureViewAxisRef.current) {
+          updateCurrentAxisUniform(currentAxis);
+          clearGestureOverlays();
+          renderRef.current();
+        }
+      }, 2_000);
+    }
+    gestureViewAxisRef.current = null;
+    pendingGestureRangeRef.current = null;
+    // Keep u_viewAxis and the overlay transform at the final gesture range:
+    // resetting them here would snap the view back to the pre-gesture axis
+    // for the frames between commit and the texture rebuild. The rebuild's
+    // updateCurrentAxisUniform resets u_viewAxis to the new texture axis
+    // (identity), and processRenderBatch clears the overlay transform once
+    // the committed axis reaches the DOM.
+    if (range) {
+      // Release the freeze before the commit so the final viewport flows
+      // through the normal updateContext -> replace rebuild path.
+      controller.setGestureViewFreeze(false);
+      gestureChangeRef.current?.(range, gestureLastSourceRef.current, 'commit');
+    }
+  }, [applyGestureViewAxis, clearCommittedViewAxisOverride, clearGestureCommitTimer, clearGestureOverlays, controller, updateCurrentAxisUniform]);
+
+  const previewGestureViewport = useCallback((
+    nextRange: InteractionFrequencyRange,
+    source: 'pan' | 'zoom',
+  ) => {
+    const change = gestureChangeRef.current;
+    if (!change) {
+      return;
+    }
+    // Without an uploaded texture axis there is nothing to transform
+    // GPU-side; fall back to the direct commit path.
+    if (!viewStateRef.current.axis) {
+      change(nextRange, source, 'commit');
+      return;
+    }
+    if (!effectiveLocalViewportSupportsPreview) {
+      // The legacy callback has no phase contract. Preserve its historical
+      // immediate-commit behavior instead of feeding it preview packets it
+      // cannot distinguish from a durable viewport update.
+      change(nextRange, source);
+      return;
+    }
+    gestureLastSourceRef.current = source;
+    // Pin the controller view range for the whole gesture: server-projected
+    // frames echo the client's debounced viewport uploads with one
+    // round-trip of lag, and without the freeze each echoed frame would
+    // re-resolve the view range and yank the texture axis mid-gesture.
+    if (!gestureViewAxisRef.current) {
+      clearCommittedViewAxisOverride();
+      gestureGpuRangeRef.current = null;
+      controller.setGestureViewFreeze(true);
+    }
+    const callbackRange = change(nextRange, source, 'preview');
+    const effective = callbackRange
+      && Number.isFinite(callbackRange.min)
+      && Number.isFinite(callbackRange.max)
+      && callbackRange.max > callbackRange.min
+      ? callbackRange
+      : nextRange;
+    localViewportRangeRef.current = effective;
+    pendingGestureRangeRef.current = effective;
+    gestureViewAxisRef.current = effective;
+    if (gestureRafRef.current === undefined) {
+      gestureRafRef.current = requestAnimationFrame(() => {
+        gestureRafRef.current = undefined;
+        const pending = pendingGestureRangeRef.current;
+        if (pending && gestureViewAxisRef.current) {
+          applyGestureViewAxis(pending);
+        }
+      });
+    }
+    clearGestureCommitTimer();
+    gestureCommitTimerRef.current = setTimeout(
+      commitGestureViewport,
+      WATERFALL_HORIZONTAL_WHEEL_SESSION_IDLE_MS,
+    );
+  }, [applyGestureViewAxis, clearCommittedViewAxisOverride, clearGestureCommitTimer, commitGestureViewport, controller, effectiveLocalViewportSupportsPreview]);
+
   const handleLocalViewportPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (!localViewportInteractionEnabled || !effectiveLocalViewportChange || event.button !== 0 || !event.isPrimary || !hasAxis) return;
     const target = event.target as HTMLElement | null;
@@ -2711,6 +3813,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     const container = containerRef.current;
     if (!container) return;
     const rect = container.getBoundingClientRect();
+    containerMetricsRef.current = { left: rect.left, width: rect.width };
     const range = viewStateRef.current.axis
       ? { min: viewStateRef.current.axis.minHz, max: viewStateRef.current.axis.maxHz }
       : { min: minFrequency, max: maxFrequency };
@@ -2727,6 +3830,13 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   }, [effectiveLocalViewportChange, hasAxis, localViewportInteractionEnabled, maxFrequency, minFrequency]);
 
   useEffect(() => {
+    // While a gesture drives the view axis GPU-side, the gesture range lives
+    // in localViewportRangeRef and must not be rebased by axis/prop updates
+    // (e.g. server-projected frame ranges or the gesture-end commit
+    // propagating back through state).
+    if (gestureViewAxisRef.current) {
+      return;
+    }
     if (!localViewportInteractionEnabled) {
       localViewportRangeRef.current = null;
       return;
@@ -2756,7 +3866,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       if (!gesture || gesture.pointerId !== event.pointerId) return;
       gesture.lastX = event.clientX;
       const deltaHz = (event.clientX - gesture.startX) * gesture.hzPerPixel;
-      effectiveLocalViewportChange({
+      previewGestureViewport({
         min: gesture.startRange.min - deltaHz,
         max: gesture.startRange.max - deltaHz,
       }, 'pan');
@@ -2766,6 +3876,10 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         const currentRange = resolveWaterfallLocalViewportRange(localViewportRangeRef.current, viewStateRef.current.axis);
         if (currentRange) localViewportRangeRef.current = currentRange;
         localViewportGestureRef.current = null;
+        // A drag gesture ends with the pointer, not with the wheel idle timer.
+        if (pendingGestureRangeRef.current) {
+          commitGestureViewport();
+        }
       }
     };
     document.addEventListener('pointermove', handleMove);
@@ -2776,92 +3890,98 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       document.removeEventListener('pointerup', handleUp);
       document.removeEventListener('pointercancel', handleUp);
     };
-  }, [effectiveLocalViewportChange, localViewportInteractionEnabled]);
+  }, [commitGestureViewport, effectiveLocalViewportChange, localViewportInteractionEnabled, previewGestureViewport]);
 
+  /**
+   * One native wheel listener owns both viewport axes. Keeping zoom and pan
+   * classification in the same handler guarantees that a diagonal
+   * trackpad packet can take exactly one path and removes a duplicate event
+   * dispatch from the hot input loop.
+   */
   useEffect(() => {
-    if (!localViewportZoomEnabled || !effectiveLocalViewportChange) return;
+    if ((!localViewportZoomEnabled && !localViewportInteractionEnabled) || !effectiveLocalViewportChange) return;
     const container = containerRef.current;
     if (!container) return;
+
     const handleWheel = (event: WheelEvent) => {
-      // Safari/macOS trackpad pinch is delivered as ctrl+wheel. Treat a
-      // vertical-dominant pinch as local zoom, while regular ctrl+wheel remains
-      // ignored by the frequency-scrolling path.
       const nowMs = Date.now();
       const axis = classifyWaterfallViewportWheelAxis(event, viewportWheelAxisLockRef.current, nowMs);
-      if (axis !== 'vertical') return;
-      viewportWheelAxisLockRef.current = { axis, expiresAt: nowMs + WATERFALL_HORIZONTAL_WHEEL_SESSION_IDLE_MS };
-      if (!event.ctrlKey && !shouldHandleWaterfallVerticalWheel(event)) return;
-      const currentRange = resolveWaterfallLocalViewportRange(
-        localViewportRangeRef.current,
-        viewStateRef.current.axis,
-      );
-      if (!currentRange) return;
-      const rect = container.getBoundingClientRect();
-      if (rect.width <= 0) return;
-      event.preventDefault();
-      const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
-      const span = currentRange.max - currentRange.min;
-      if (!Number.isFinite(span) || span <= 0) {
-        logger.warn(
-          `Rejected invalid local viewport range min=${currentRange.min} max=${currentRange.max} span=${span}`,
+      if (!axis) return;
+
+      if (axis === 'vertical' && localViewportZoomEnabled) {
+        // Safari/macOS trackpad pinch is delivered as ctrl+wheel. Treat a
+        // vertical-dominant pinch as local zoom, while regular ctrl+wheel
+        // remains isolated from horizontal frequency tuning.
+        viewportWheelAxisLockRef.current = {
+          axis,
+          expiresAt: nowMs + WATERFALL_HORIZONTAL_WHEEL_SESSION_IDLE_MS,
+        };
+        if (!event.ctrlKey && !shouldHandleWaterfallVerticalWheel(event)) return;
+        const currentRange = resolveWaterfallLocalViewportRange(
+          localViewportRangeRef.current,
+          viewStateRef.current.axis,
         );
-        localViewportRangeRef.current = null;
+        if (!currentRange) return;
+        const cachedRect = containerMetricsRef.current;
+        const rect = cachedRect.width > 0 ? cachedRect : container.getBoundingClientRect();
+        if (rect.width <= 0) return;
+        const span = currentRange.max - currentRange.min;
+        if (!Number.isFinite(span) || span <= 0) {
+          logger.warn(
+            `Rejected invalid local viewport range min=${currentRange.min} max=${currentRange.max} span=${span}`,
+          );
+          localViewportRangeRef.current = null;
+          return;
+        }
+        event.preventDefault();
+        const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+        const maxViewportSpan = effectiveLocalViewportBounds && effectiveLocalViewportBounds.max > effectiveLocalViewportBounds.min
+          ? effectiveLocalViewportBounds.max - effectiveLocalViewportBounds.min
+          : Number.POSITIVE_INFINITY;
+        const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent);
+        const zoomFactor = getWaterfallLocalZoomFactor(event, {
+          isMac,
+          pageHeightPx: typeof window !== 'undefined' ? window.innerHeight : 800,
+        });
+        const nextSpan = Math.max(200, Math.min(maxViewportSpan, span * zoomFactor));
+        const anchor = currentRange.min + ratio * span;
+        let nextMin = anchor - ratio * nextSpan;
+        if (effectiveLocalViewportBounds && effectiveLocalViewportBounds.max > effectiveLocalViewportBounds.min) {
+          const minAllowed = effectiveLocalViewportBounds.min;
+          const maxAllowed = effectiveLocalViewportBounds.max - nextSpan;
+          nextMin = Math.max(minAllowed, Math.min(maxAllowed, nextMin));
+        }
+        previewGestureViewport({ min: nextMin, max: nextMin + nextSpan }, 'zoom');
         return;
       }
-      const maxViewportSpan = effectiveLocalViewportBounds && effectiveLocalViewportBounds.max > effectiveLocalViewportBounds.min
-        ? effectiveLocalViewportBounds.max - effectiveLocalViewportBounds.min
-        : Number.POSITIVE_INFINITY;
-      const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent);
-      const zoomFactor = getWaterfallLocalZoomFactor(event, {
-        isMac,
-        pageHeightPx: typeof window !== 'undefined' ? window.innerHeight : 800,
-      });
-      const nextSpan = Math.max(200, Math.min(maxViewportSpan, span * zoomFactor));
-      const anchor = currentRange.min + ratio * span;
-      let nextMin = anchor - ratio * nextSpan;
-      if (effectiveLocalViewportBounds && effectiveLocalViewportBounds.max > effectiveLocalViewportBounds.min) {
-        const minAllowed = effectiveLocalViewportBounds.min;
-        const maxAllowed = effectiveLocalViewportBounds.max - nextSpan;
-        nextMin = Math.max(minAllowed, Math.min(maxAllowed, nextMin));
-      }
-      const nextRange = { min: nextMin, max: nextMin + nextSpan };
-      localViewportRangeRef.current = nextRange;
-      effectiveLocalViewportChange(nextRange, 'zoom');
-    };
-    container.addEventListener('wheel', handleWheel, { passive: false });
-    return () => container.removeEventListener('wheel', handleWheel);
-  }, [effectiveLocalViewportBounds, effectiveLocalViewportChange, effectiveLocalViewportRange, localViewportZoomEnabled]);
 
-  useEffect(() => {
-    if (!localViewportInteractionEnabled || !effectiveLocalViewportChange) return;
-    const container = containerRef.current;
-    if (!container) return;
-    const handleWheel = (event: WheelEvent) => {
-      const nowMs = Date.now();
-      const axis = classifyWaterfallViewportWheelAxis(event, viewportWheelAxisLockRef.current, nowMs);
-      if (axis !== 'horizontal' || !shouldHandleWaterfallHorizontalWheel(event)) return;
-      viewportWheelAxisLockRef.current = { axis, expiresAt: nowMs + WATERFALL_HORIZONTAL_WHEEL_SESSION_IDLE_MS };
+      if (axis !== 'horizontal' || !localViewportInteractionEnabled || !shouldHandleWaterfallHorizontalWheel(event)) {
+        return;
+      }
+      viewportWheelAxisLockRef.current = {
+        axis,
+        expiresAt: nowMs + WATERFALL_HORIZONTAL_WHEEL_SESSION_IDLE_MS,
+      };
       const currentRange = resolveWaterfallLocalViewportRange(localViewportRangeRef.current, viewStateRef.current.axis);
       if (!currentRange) return;
-      const rect = container.getBoundingClientRect();
+      const cachedRect = containerMetricsRef.current;
+      const rect = cachedRect.width > 0 ? cachedRect : container.getBoundingClientRect();
       if (rect.width <= 0) return;
       const rawDeltaX = Math.abs(event.deltaX) >= WATERFALL_WHEEL_AXIS_EPSILON
         ? event.deltaX
         : (event.shiftKey ? event.deltaY : 0);
       if (!Number.isFinite(rawDeltaX) || rawDeltaX === 0) return;
       event.preventDefault();
-      const span = currentRange.max - currentRange.min;
-      const deltaHz = rawDeltaX * span / rect.width;
-      const nextRange = {
+      const deltaHz = rawDeltaX * (currentRange.max - currentRange.min) / rect.width;
+      previewGestureViewport({
         min: currentRange.min + deltaHz,
         max: currentRange.max + deltaHz,
-      };
-      localViewportRangeRef.current = nextRange;
-      effectiveLocalViewportChange(nextRange, 'pan');
+      }, 'pan');
     };
+
     container.addEventListener('wheel', handleWheel, { passive: false });
     return () => container.removeEventListener('wheel', handleWheel);
-  }, [effectiveLocalViewportChange, localViewportInteractionEnabled]);
+  }, [effectiveLocalViewportBounds, effectiveLocalViewportChange, localViewportInteractionEnabled, localViewportZoomEnabled, previewGestureViewport]);
 
   const handleGenericFrequencyDragPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (!onDragFrequencyChange || event.button !== 0 || !event.isPrimary || !hasAxis) {
@@ -3376,7 +4496,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       if (!container) {
         return;
       }
-      const rect = container.getBoundingClientRect();
+      const cachedRect = containerMetricsRef.current;
+      const rect = cachedRect.width > 0 ? cachedRect : container.getBoundingClientRect();
       if (rect.width <= 0) {
         return;
       }
@@ -3497,21 +4618,14 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         />
       )}
 
-      {!markerOnly && cycleMarkers.length > 0 && (
-        <div ref={cycleMarkerLayerRef} className="pointer-events-none absolute inset-0 z-20 will-change-transform">
-          {cycleMarkers.map(marker => (
-            <div
-              key={marker.id}
-              className="absolute inset-x-0 h-px bg-white/45 shadow-[0_0_4px_rgba(255,255,255,0.28)]"
-              style={{ top: `${marker.topPercent}%` }}
-            />
-          ))}
-        </div>
+      {!markerOnly && (
+        <div ref={cycleMarkerLayerRef} className="pointer-events-none absolute inset-0 z-20 will-change-transform" />
       )}
 
       {/* Hover ruler: below interactive markers/buttons, above the WebGL canvas. */}
       <div className="pointer-events-none absolute inset-0 z-10">
         <div
+          ref={rulerLayerRef}
           className={`absolute inset-x-0 top-0 h-11 overflow-hidden transition-all duration-150 ease-out ${
             showHoverProbe ? 'translate-y-0 opacity-100' : '-translate-y-0.5 opacity-0'
           }`}
@@ -3542,6 +4656,18 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
           })}
         </div>
 
+        {/* Gesture ruler: React renders the two static background stripes
+            only; tick elements are pooled imperatively (see
+            updateGestureRuler) so React never reconciles them. */}
+        <div
+          ref={gestureRulerLayerRef}
+          className="absolute inset-x-0 top-0 h-11 overflow-hidden"
+          style={{ visibility: 'hidden' }}
+        >
+          <div className="absolute inset-0 bg-gradient-to-b from-black/55 via-black/30 to-transparent" />
+          <div className="absolute inset-x-0 top-7 h-px bg-gradient-to-r from-transparent via-white/22 to-transparent" />
+        </div>
+
         {showHoverProbe && hoverCursor && (
           <div
             className="absolute top-0 h-full -translate-x-1/2"
@@ -3566,7 +4692,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       )}
 
       {/* 频率标记层 */}
-      <div className="pointer-events-none absolute inset-0 z-30">
+      <div ref={markerLayerRef} className="pointer-events-none absolute inset-0 z-30">
         {frequencyBandOverlays.map((overlay) => {
           const override = localFrequencyBandOverride?.id === overlay.id ? localFrequencyBandOverride : null;
           const centerFrequency = override?.centerFrequency ?? overlay.centerFrequency;
@@ -3578,7 +4704,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
           if (startPosition === null || endPosition === null || centerPosition === null) {
             return null;
           }
-          if (endPosition < 0 || startPosition > 100) {
+          if (endPosition < -WATERFALL_OVERLAY_RENDER_MARGIN_PERCENT
+            || startPosition > 100 + WATERFALL_OVERLAY_RENDER_MARGIN_PERCENT) {
             return null;
           }
 
@@ -3662,7 +4789,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
           if (!Number.isFinite(linePosition) || !Number.isFinite(startPosition) || !Number.isFinite(endPosition)) {
             return null;
           }
-          if (endPosition < 0 || startPosition > 100) {
+          if (endPosition < -WATERFALL_OVERLAY_RENDER_MARGIN_PERCENT
+            || startPosition > 100 + WATERFALL_OVERLAY_RENDER_MARGIN_PERCENT) {
             return null;
           }
 
@@ -3728,7 +4856,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
 
         {presetMarkers.map((marker) => {
           const position = getFrequencyPosition(marker.frequency);
-          if (!Number.isFinite(position) || position < 0 || position > 100) {
+          if (
+            !Number.isFinite(position)
+            || position < -WATERFALL_OVERLAY_RENDER_MARGIN_PERCENT
+            || position > 100 + WATERFALL_OVERLAY_RENDER_MARGIN_PERCENT
+          ) {
             return null;
           }
 

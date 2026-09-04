@@ -43,6 +43,16 @@ export interface SpectrumRenderBatch {
   totalRows: number;
   /** Viewport gestures should switch axes immediately instead of restarting an animation per event. */
   axisTransition?: 'animate' | 'immediate';
+  /**
+   * Wide-envelope supplement rows parallel to `rows` (null entries for
+   * frames without a supplement). Rows keep their native bins — the
+   * renderer uploads them to a separate ring texture at `supplementAxis`
+   * and samples it where the detail texture has no coverage (e.g. during
+   * GPU-side gesture pan/zoom).
+   */
+  supplementRows?: (Float32Array | null)[];
+  /** Native axis shared by the supplement rows in this batch. */
+  supplementAxis?: SpectrumAxis | null;
 }
 
 export type SpectrumHistoryLimits = number | Partial<Record<SpectrumKind, number>>;
@@ -247,6 +257,7 @@ export function cropSpectrumToRange(
   fullRange: { min: number; max: number },
   targetRange: { min: number; max: number },
   fillValue = 0,
+  out?: Float32Array,
 ): Float32Array {
   if (values.length === 0) {
     return values;
@@ -261,22 +272,50 @@ export function cropSpectrumToRange(
     return values;
   }
 
-  const output = new Float32Array(values.length);
+  // Reusing a caller-provided buffer avoids per-rebuild allocation churn;
+  // the loop below overwrites every element.
+  const output = out && out.length === values.length && out !== values
+    ? out
+    : new Float32Array(values.length);
   const maxIndex = values.length - 1;
+  if (maxIndex === 0) {
+    const targetStep = targetRange.max - targetRange.min;
+    let targetFrequency = targetRange.min;
+    for (let index = 0; index < output.length; index += 1, targetFrequency += targetStep) {
+      output[index] = targetFrequency >= fullRange.min && targetFrequency <= fullRange.max
+        ? values[0]!
+        : fillValue;
+    }
+    return output;
+  }
+  const denominator = Math.max(maxIndex, 1);
+  const targetStep = (targetRange.max - targetRange.min) / denominator;
+  const sourceScale = maxIndex / fullSpan;
+  const whollyInside = targetRange.min >= fullRange.min && targetRange.max <= fullRange.max;
+  const sourceStep = targetStep * sourceScale;
+  let sourcePosition = (targetRange.min - fullRange.min) * sourceScale;
 
-  for (let index = 0; index < values.length; index += 1) {
-    const targetFrequency = targetRange.min + (index * (targetRange.max - targetRange.min)) / Math.max(values.length - 1, 1);
-    if (targetFrequency < fullRange.min || targetFrequency > fullRange.max) {
+  if (whollyInside) {
+    for (let index = 0; index < values.length; index += 1, sourcePosition += sourceStep) {
+      const leftIndex = Math.floor(sourcePosition);
+      const rightIndex = leftIndex < maxIndex ? leftIndex + 1 : maxIndex;
+      const factor = sourcePosition - leftIndex;
+      const left = values[leftIndex]!;
+      output[index] = left + (values[rightIndex]! - left) * factor;
+    }
+    return output;
+  }
+
+  for (let index = 0; index < values.length; index += 1, sourcePosition += sourceStep) {
+    if (sourcePosition < 0 || sourcePosition > maxIndex) {
       output[index] = fillValue;
       continue;
     }
-
-    const sourceRatio = (targetFrequency - fullRange.min) / fullSpan;
-    const sourcePosition = Math.min(maxIndex, Math.max(0, sourceRatio * maxIndex));
     const leftIndex = Math.floor(sourcePosition);
-    const rightIndex = Math.min(maxIndex, leftIndex + 1);
+    const rightIndex = leftIndex < maxIndex ? leftIndex + 1 : maxIndex;
     const factor = sourcePosition - leftIndex;
-    output[index] = values[leftIndex] + (values[rightIndex] - values[leftIndex]) * factor;
+    const left = values[leftIndex]!;
+    output[index] = left + (values[rightIndex]! - left) * factor;
   }
 
   return output;
@@ -288,22 +327,58 @@ function cropSpectrumWithSupplement(
   supplement: RetainedSpectrumSupplement,
   targetRange: { min: number; max: number },
   fillValue = 0,
+  out?: Float32Array,
 ): Float32Array {
   if (values.length === 0 || fullRange.max <= fullRange.min) return values;
-  const output = new Float32Array(values.length);
-  const sample = (source: Float32Array, range: { min: number; max: number }, frequency: number): number | null => {
-    if (source.length === 0 || range.max <= range.min || frequency < range.min || frequency > range.max) return null;
-    const position = ((frequency - range.min) / (range.max - range.min)) * (source.length - 1);
-    const left = Math.floor(position);
-    const right = Math.min(source.length - 1, left + 1);
-    const factor = position - left;
-    return source[left]! + (source[right]! - source[left]!) * factor;
-  };
-  for (let index = 0; index < output.length; index += 1) {
-    const frequency = targetRange.min + (index * (targetRange.max - targetRange.min)) / Math.max(output.length - 1, 1);
-    output[index] = sample(values, fullRange, frequency)
-      ?? sample(supplement.values, supplement.frequencyRange, frequency)
-      ?? fillValue;
+  if (areRangesEqual(fullRange, targetRange)) {
+    return values;
+  }
+  // When the requested viewport is wholly covered by the detail payload,
+  // skip the supplement branch and use the tighter two-pass interpolator.
+  if (targetRange.min >= fullRange.min && targetRange.max <= fullRange.max) {
+    return cropSpectrumToRange(values, fullRange, targetRange, fillValue, out);
+  }
+  const output = out && out.length === values.length && out !== values
+    ? out
+    : new Float32Array(values.length);
+  const detailMaxIndex = values.length - 1;
+  const supplementMaxIndex = supplement.values.length - 1;
+  const detailScale = detailMaxIndex / (fullRange.max - fullRange.min);
+  const supplementSpan = supplement.frequencyRange.max - supplement.frequencyRange.min;
+  const supplementScale = supplementSpan > 0 ? supplementMaxIndex / supplementSpan : 0;
+  const targetStep = (targetRange.max - targetRange.min) / Math.max(output.length - 1, 1);
+  let frequency = targetRange.min;
+
+  for (let index = 0; index < output.length; index += 1, frequency += targetStep) {
+    if (frequency >= fullRange.min && frequency <= fullRange.max) {
+      const position = Math.min(detailMaxIndex, Math.max(0, (frequency - fullRange.min) * detailScale));
+      const leftIndex = Math.floor(position);
+      const rightIndex = leftIndex < detailMaxIndex ? leftIndex + 1 : detailMaxIndex;
+      const factor = position - leftIndex;
+      const left = values[leftIndex]!;
+      output[index] = left + (values[rightIndex]! - left) * factor;
+      continue;
+    }
+
+    if (
+      supplementMaxIndex >= 0
+      && supplementSpan > 0
+      && frequency >= supplement.frequencyRange.min
+      && frequency <= supplement.frequencyRange.max
+    ) {
+      const position = Math.min(
+        supplementMaxIndex,
+        Math.max(0, (frequency - supplement.frequencyRange.min) * supplementScale),
+      );
+      const leftIndex = Math.floor(position);
+      const rightIndex = leftIndex < supplementMaxIndex ? leftIndex + 1 : supplementMaxIndex;
+      const factor = position - leftIndex;
+      const left = supplement.values[leftIndex]!;
+      output[index] = left + (supplement.values[rightIndex]! - left) * factor;
+      continue;
+    }
+
+    output[index] = fillValue;
   }
   return output;
 }
@@ -311,12 +386,13 @@ function cropSpectrumWithSupplement(
 function cropSpectrumToViewport(
   values: Float32Array,
   fullRange: { min: number; max: number },
-  viewport: OpenWebRXViewport
+  viewport: OpenWebRXViewport,
+  out?: Float32Array
 ): Float32Array {
   return cropSpectrumToRange(values, fullRange, {
     min: viewport.centerHz - viewport.spanHz / 2,
     max: viewport.centerHz + viewport.spanHz / 2,
-  });
+  }, 0, out);
 }
 
 function buildViewKey(
@@ -368,6 +444,13 @@ export class SpectrumStreamController {
   private replaceRafId: number | null = null;
   private pendingReplaceAxisTransition: 'animate' | 'immediate' = 'animate';
   private renderRowLimit: number | null = null;
+  /**
+   * While a viewport pan/zoom gesture is active, the radio SDR view range is
+   * pinned. Server-projected frames follow the client's debounced viewport
+   * uploads with one round-trip of lag; without this pin every echoed frame
+   * would yank the view range (and trigger a full rebuild) mid-gesture.
+   */
+  private gestureViewFreeze = false;
   private radioSdrOptimisticTimer: ReturnType<typeof setTimeout> | null = null;
   private radioSdrOptimisticIntent: {
     targetFrequencyHz: number;
@@ -498,6 +581,7 @@ export class SpectrumStreamController {
   reset(): void {
     this.clearBufferedFrames();
     this.clearRadioSdrOptimisticIntent({ notify: false });
+    this.gestureViewFreeze = false;
     this.context = {
       ...this.context,
       radioSdrViewRange: null,
@@ -713,6 +797,34 @@ export class SpectrumStreamController {
     this.pendingReplaceAxisTransition = 'animate';
   }
 
+  /**
+   * Pin (or release) the radio SDR view range while a viewport pan/zoom
+   * gesture runs. While frozen, neither updateContext nor incoming
+   * server-projected frames re-resolve the view range, so no replace
+   * rebuild is triggered mid-gesture. The gesture-end commit releases the
+   * freeze right before applying the final viewport.
+   */
+  setGestureViewFreeze(frozen: boolean): void {
+    const wasFrozen = this.gestureViewFreeze;
+    if (frozen && !this.gestureViewFreeze) {
+      // A server echo may have queued a replace immediately before the first
+      // pointer packet. Cancel that deferred rebuild so the gesture starts
+      // from one stable texture axis; incoming frames continue through the
+      // normal append path while the freeze is held.
+      this.cancelScheduledReplaceBatch();
+    }
+    this.gestureViewFreeze = frozen;
+    if (!frozen && wasFrozen && this.context.selectedKind === 'radio-sdr') {
+      // A mode/radio update may have changed the pending viewport while the
+      // freeze was held. Reconcile it on release so that an unchanged
+      // `radioSdrViewport` field cannot leave the rendered range stale.
+      const changed = this.applyRadioSdrViewRange(this.resolveRadioSdrViewRange(), { notify: false });
+      if (changed) {
+        this.scheduleReplaceBatch('immediate');
+      }
+    }
+  }
+
   updateContext(
     nextContext: Partial<StreamContext>,
     options: { axisTransition?: 'animate' | 'immediate' } = {},
@@ -736,7 +848,7 @@ export class SpectrumStreamController {
     const radioSdrCenterViewChanged = previous.radioSdrCenterViewMode !== this.context.radioSdrCenterViewMode
       || previous.radioSdrReferenceFrequencyHz !== this.context.radioSdrReferenceFrequencyHz;
     const radioSdrViewportChanged = !areRangesEqual(previous.radioSdrViewport, this.context.radioSdrViewport);
-    if (radioSdrCenterViewChanged || radioSdrViewportChanged) {
+    if (!this.gestureViewFreeze && (radioSdrCenterViewChanged || radioSdrViewportChanged)) {
       this.applyRadioSdrViewRange(this.resolveRadioSdrViewRange(), { notify: false });
     }
     const radioSdrViewRangeChanged = !areRangesEqual(previous.radioSdrViewRange, this.context.radioSdrViewRange);
@@ -827,7 +939,7 @@ export class SpectrumStreamController {
       cachedAxis: null,
     });
 
-    const radioSdrViewRangeChanged = frame.kind === 'radio-sdr'
+    const radioSdrViewRangeChanged = frame.kind === 'radio-sdr' && !this.gestureViewFreeze
       ? this.applyRadioSdrViewRange(this.resolveRadioSdrViewRange(), { notify: false })
       : false;
 
@@ -837,10 +949,11 @@ export class SpectrumStreamController {
         this.scheduleReplaceBatch();
       } else {
         const pendingQueue = this.pendingByKind[frame.kind];
-        pendingQueue.push({
-          ...canonicalFrame,
-          queuedAt: receivedAt,
-        });
+        // Queue the canonical frame object itself (not a copy) so view
+        // projections cached while draining the queue also land on the
+        // history entry and can be reused by the next viewport rebuild.
+        (canonicalFrame as QueuedSpectrumFrame).queuedAt = receivedAt;
+        pendingQueue.push(canonicalFrame as QueuedSpectrumFrame);
         this.trimPendingQueue(frame.kind);
         this.schedule();
       }
@@ -888,6 +1001,7 @@ export class SpectrumStreamController {
     const frames = pendingQueue.splice(0, batchSize);
     const rows: Float32Array[] = [];
     const rowTimestamps: number[] = [];
+    const transformedFrames: CanonicalSpectrumFrame[] = [];
     let axis: SpectrumAxis | null = null;
     let frameToken: number | null = null;
 
@@ -898,12 +1012,14 @@ export class SpectrumStreamController {
       }
       rows.push(transformed.values);
       rowTimestamps.push(frame.frame.timestamp);
+      transformedFrames.push(frame);
       axis = transformed.axis;
       frameToken = frame.frame.timestamp;
     }
 
     if (rows.length > 0) {
       this.lastRenderTime = now;
+      const supplementProjection = this.buildSupplementProjection(transformedFrames);
       this.pendingBatch = {
         mode: 'append',
         rows,
@@ -916,6 +1032,8 @@ export class SpectrumStreamController {
             historyLimit,
             this.renderRowLimit ?? Number.POSITIVE_INFINITY,
           ),
+        supplementRows: supplementProjection.rows,
+        supplementAxis: supplementProjection.axis,
       };
       this.notifyFrameListeners();
     }
@@ -995,6 +1113,8 @@ export class SpectrumStreamController {
         frameToken: null,
         hasBacklog: false,
         totalRows: 0,
+        supplementRows: [],
+        supplementAxis: null,
       };
     }
 
@@ -1003,6 +1123,7 @@ export class SpectrumStreamController {
       : this.histories[selectedKind].slice(0, this.renderRowLimit);
     const rows: Float32Array[] = [];
     const rowTimestamps: number[] = [];
+    const transformedFrames: CanonicalSpectrumFrame[] = [];
     let axis: SpectrumAxis | null = null;
 
     for (const frame of history) {
@@ -1012,10 +1133,13 @@ export class SpectrumStreamController {
       }
       rows.push(transformed.values);
       rowTimestamps.push(frame.frame.timestamp);
+      transformedFrames.push(frame);
       if (!axis) {
         axis = transformed.axis;
       }
     }
+
+    const supplementProjection = this.buildSupplementProjection(transformedFrames);
 
     return {
       mode: rows.length > 0 ? 'replace' : 'reset',
@@ -1026,6 +1150,51 @@ export class SpectrumStreamController {
       hasBacklog: false,
       totalRows: rows.length,
       axisTransition,
+      supplementRows: supplementProjection.rows,
+      supplementAxis: supplementProjection.axis,
+    };
+  }
+
+  /**
+   * Collect the wide-envelope supplement rows parallel to the given frames.
+   * Rows stay at their native bins; frames whose supplement range differs
+   * from the newest one are projected to it (cheap at supplement bin
+   * counts), so the renderer can keep one supplement axis per batch.
+   */
+  private buildSupplementProjection(
+    frames: CanonicalSpectrumFrame[],
+  ): { rows: (Float32Array | null)[]; axis: SpectrumAxis | null } {
+    let latest: CanonicalSpectrumFrame | null = null;
+    for (const frame of frames) {
+      if (frame.supplement && (!latest || frame.frame.timestamp >= latest.frame.timestamp)) {
+        latest = frame;
+      }
+    }
+    if (!latest?.supplement) {
+      return { rows: frames.map(() => null), axis: null };
+    }
+    const axisRange = latest.supplement.frequencyRange;
+    const rows = frames.map((frame) => {
+      if (!frame.supplement) {
+        return null;
+      }
+      if (areRangesEqual(frame.supplement.frequencyRange, axisRange)) {
+        return frame.supplement.values;
+      }
+      return cropSpectrumToRange(
+        frame.supplement.values,
+        frame.supplement.frequencyRange,
+        axisRange,
+        frame.frame.level?.min ?? 0,
+      );
+    });
+    return {
+      rows,
+      axis: {
+        minHz: axisRange.min,
+        maxHz: axisRange.max,
+        binCount: latest.supplement.values.length,
+      },
     };
   }
 
@@ -1052,6 +1221,18 @@ export class SpectrumStreamController {
     let values: Float32Array;
     let axis: SpectrumAxis;
 
+    // Reuse the previous projection buffer when its length still matches.
+    // The previous projection becomes dead the moment the rebuilt batch is
+    // handed to the renderer (synchronous handoff), and the crop loops
+    // overwrite every element. Never reuse frame.values itself: when the
+    // projection aliases the canonical frame (equal ranges) it must stay
+    // immutable.
+    const reusableOut = frame.cachedViewValues
+      && frame.cachedViewValues !== frame.values
+      && frame.cachedViewValues.length === frame.values.length
+      ? frame.cachedViewValues
+      : undefined;
+
     if (selectedKind === 'radio-sdr') {
       const range = this.context.radioSdrViewRange;
       if (!range) {
@@ -1064,12 +1245,14 @@ export class SpectrumStreamController {
             frame.supplement,
             range,
             frame.frame.level?.min ?? 0,
+            reusableOut,
           )
         : cropSpectrumToRange(
             frame.values,
             frame.frame.frequencyRange,
             range,
             frame.frame.level?.min ?? 0,
+            reusableOut,
           );
       axis = {
         minHz: range.min,
@@ -1081,7 +1264,7 @@ export class SpectrumStreamController {
       if (!viewport) {
         return null;
       }
-      values = cropSpectrumToViewport(frame.values, frame.frame.frequencyRange, viewport);
+      values = cropSpectrumToViewport(frame.values, frame.frame.frequencyRange, viewport, reusableOut);
       axis = {
         minHz: viewport.centerHz - viewport.spanHz / 2,
         maxHz: viewport.centerHz + viewport.spanHz / 2,

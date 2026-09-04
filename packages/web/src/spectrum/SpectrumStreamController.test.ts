@@ -427,6 +427,63 @@ describe('SpectrumStreamController memory behavior', () => {
     expect(Array.from(batch?.rows[0] ?? [])).toEqual([100, 150, 200, 250, 300]);
   });
 
+  it('reuses projection row buffers across viewport rebuilds without mutating canonical frames', () => {
+    const controller = new SpectrumStreamController(4);
+    controller.updateContext({
+      selectedKind: 'radio-sdr',
+      radioSdrViewport: { min: 950, max: 1050 },
+    });
+    controller.pushFrame(makeFrame('radio-sdr', 10, [0, 100, 200, 300, 400], { min: 900, max: 1100 }));
+    flushNextAnimationFrame();
+    const firstBatch = controller.consumeRenderBatch();
+    const firstRow = firstBatch?.rows[0];
+    expect(Array.from(firstRow ?? [])).toEqual([100, 150, 200, 250, 300]);
+
+    controller.updateContext({ radioSdrViewport: { min: 900, max: 1000 } });
+    // The pacing tick re-arms itself, so drain every queued frame to reach
+    // the deferred replace rebuild.
+    while (rafCallbacks.size > 0) {
+      flushNextAnimationFrame();
+    }
+    const secondBatch = controller.consumeRenderBatch();
+    const secondRow = secondBatch?.rows[0];
+
+    // The rebuilt projection reuses the same Float32Array instance with
+    // fully overwritten contents.
+    expect(secondRow).toBe(firstRow);
+    expect(Array.from(secondRow ?? [])).toEqual([0, 50, 100, 150, 200]);
+
+    // The canonical history frame must stay intact for future projections.
+    const history = getInternals(controller).histories['radio-sdr'];
+    expect(Array.from(history[0]?.values ?? [])).toEqual([0, 100, 200, 300, 400]);
+  });
+
+  it('writes crop results into a caller-provided output buffer', () => {
+    const values = new Float32Array([0, 100, 200, 300, 400]);
+    const out = new Float32Array(5);
+    const result = cropSpectrumToRange(values, { min: 900, max: 1100 }, { min: 950, max: 1050 }, 0, out);
+
+    expect(result).toBe(out);
+    expect(Array.from(result)).toEqual([100, 150, 200, 250, 300]);
+    // The source values are never written through the output buffer.
+    expect(Array.from(values)).toEqual([0, 100, 200, 300, 400]);
+
+    // A mismatched-size or self-aliasing buffer falls back to a fresh array.
+    const fresh = cropSpectrumToRange(values, { min: 900, max: 1100 }, { min: 950, max: 1050 }, 0, new Float32Array(2));
+    expect(fresh).not.toBe(values);
+    expect(fresh).toHaveLength(5);
+    const self = cropSpectrumToRange(values, { min: 900, max: 1100 }, { min: 950, max: 1050 }, 0, values);
+    expect(self).not.toBe(values);
+  });
+
+  it('keeps fill semantics for a one-bin source outside its frequency range', () => {
+    const values = new Float32Array([42]);
+    expect(Array.from(cropSpectrumToRange(values, { min: 0, max: 10 }, { min: 20, max: 30 }, -1)))
+      .toEqual([-1]);
+    expect(Array.from(cropSpectrumToRange(values, { min: 0, max: 10 }, { min: 0, max: 10 }, -1)))
+      .toEqual([42]);
+  });
+
   it('uses the wide supplement when a local viewport extends beyond the detail frame', () => {
     const controller = new SpectrumStreamController(4);
     controller.updateContext({
@@ -445,6 +502,66 @@ describe('SpectrumStreamController memory behavior', () => {
 
     expect(batch?.axis).toEqual({ minHz: 0, maxHz: 200, binCount: 3 });
     expect(Array.from(batch?.rows[0] ?? [])).toEqual([0, 200, 200]);
+  });
+
+  it('carries native supplement rows and axis in append batches', () => {
+    const controller = new SpectrumStreamController(4);
+    controller.updateContext({ selectedKind: 'radio-sdr' });
+    const frame = addSupplement(
+      makeFrame('radio-sdr', 10, [100, 200, 300], { min: 80, max: 120 }),
+      [0, 50, 100, 150, 200],
+      { min: 0, max: 200 },
+    );
+    controller.pushFrame(frame);
+    flushNextAnimationFrame();
+    const batch = controller.consumeRenderBatch();
+
+    expect(batch?.supplementAxis).toEqual({ minHz: 0, maxHz: 200, binCount: 5 });
+    expect(batch?.supplementRows).toHaveLength(batch?.rows.length ?? 0);
+    expect(Array.from(batch?.supplementRows?.[0] ?? [])).toEqual([0, 50, 100, 150, 200]);
+  });
+
+  it('keeps null supplement rows for frames without a supplement', () => {
+    const controller = new SpectrumStreamController(4);
+    controller.updateContext({ selectedKind: 'radio-sdr' });
+    controller.pushFrame(makeFrame('radio-sdr', 10, [100, 200, 300], { min: 80, max: 120 }));
+    flushNextAnimationFrame();
+    const batch = controller.consumeRenderBatch();
+
+    expect(batch?.supplementAxis).toBeNull();
+    expect(batch?.supplementRows).toEqual([null]);
+  });
+
+  it('carries supplement rows in replace batches and projects stale ranges to the newest axis', () => {
+    const controller = new SpectrumStreamController(4);
+    controller.updateContext({ selectedKind: 'radio-sdr' });
+    controller.pushFrame(addSupplement(
+      makeFrame('radio-sdr', 10, [100, 200, 300], { min: 80, max: 120 }),
+      [0, 100, 200],
+      { min: 0, max: 100 },
+    ));
+    flushNextAnimationFrame();
+    controller.pushFrame(addSupplement(
+      makeFrame('radio-sdr', 11, [110, 210, 310], { min: 80, max: 120 }),
+      [0, 50, 100, 150, 200],
+      { min: 0, max: 200 },
+    ));
+    flushNextAnimationFrame();
+    controller.consumeRenderBatch();
+
+    controller.updateContext({ radioSdrViewport: { min: 90, max: 110 } });
+    while (rafCallbacks.size > 0) {
+      flushNextAnimationFrame();
+    }
+    const batch = controller.consumeRenderBatch();
+
+    expect(batch?.mode).toBe('replace');
+    expect(batch?.supplementAxis).toEqual({ minHz: 0, maxHz: 200, binCount: 5 });
+    expect(batch?.supplementRows).toHaveLength(2);
+    // The newest frame keeps its native supplement bins.
+    expect(Array.from(batch?.supplementRows?.[0] ?? [])).toEqual([0, 50, 100, 150, 200]);
+    // The stale-range frame is projected onto the newest supplement axis.
+    expect(Array.from(batch?.supplementRows?.[1] ?? [])).toEqual([0, 200, 0]);
   });
 
   it('coalesces rapid local viewport changes into one deferred history rebuild', () => {
@@ -468,6 +585,38 @@ describe('SpectrumStreamController memory behavior', () => {
     expect(frameListener).toHaveBeenCalledTimes(1);
     expect(batch?.axis).toEqual({ minHz: 940, maxHz: 1060, binCount: 3 });
     expect(batch?.axisTransition).toBe('immediate');
+  });
+
+  it('keeps the rendered axis pinned while a gesture freeze is active', () => {
+    const controller = new SpectrumStreamController(4);
+    controller.updateContext({
+      selectedKind: 'radio-sdr',
+      radioSdrViewport: { min: 900, max: 1100 },
+    });
+    controller.pushFrame(makeFrame('radio-sdr', 10, [0, 100, 200], { min: 800, max: 1200 }));
+    flushNextAnimationFrame();
+    controller.consumeRenderBatch();
+
+    const frameListener = vi.fn();
+    controller.subscribeFrameTick(frameListener);
+    controller.setGestureViewFreeze(true);
+    // Context writes can still carry the user's pending viewport while the
+    // GPU preview is active, but they must not rebuild the CPU history.
+    controller.updateContext({ radioSdrViewport: { min: 950, max: 1050 } });
+    expect(frameListener).not.toHaveBeenCalled();
+
+    controller.pushFrame(makeFrame('radio-sdr', 11, [10, 110, 210], { min: 850, max: 1250 }));
+    while (rafCallbacks.size > 0) {
+      flushNextAnimationFrame(2000);
+    }
+    const append = controller.consumeRenderBatch();
+    expect(append?.mode).toBe('append');
+    expect(append?.axis).toEqual({ minHz: 900, maxHz: 1100, binCount: 3 });
+
+    controller.setGestureViewFreeze(false);
+    expect(rafCallbacks.size).toBe(1);
+    flushNextAnimationFrame(2200);
+    expect(controller.consumeRenderBatch()?.axis).toEqual({ minHz: 950, maxHz: 1050, binCount: 3 });
   });
 
   it('limits viewport rebuild work to the visible waterfall rows', () => {

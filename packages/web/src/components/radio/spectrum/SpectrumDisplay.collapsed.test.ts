@@ -17,12 +17,51 @@ import {
   resolveSpectrumRecoveryStateAfterFrame,
   resolveCollapsedSpectrumMarkerFrequencies,
   resolveSpectrumMarkerFrequencies,
+  shouldResetWideRadioViewportForFrequencyChange,
   resolveTciDigitalAutoZoomRange,
   SPECTRUM_RECOVERY_IDLE_STATE,
   shouldPauseSpectrumNoFrameRecovery,
 } from './SpectrumDisplay';
 
 describe('spectrum recovery state helpers', () => {
+  it('resets a wide viewport only after a normal frequency switch gets a new native range', () => {
+    expect(shouldResetWideRadioViewportForFrequencyChange({
+      previousFrequency: 14_074_000,
+      nextFrequency: 7_074_000,
+      previousNativeRange: { min: 13_882_000, max: 14_266_000 },
+      nextNativeRange: { min: 6_882_000, max: 7_266_000 },
+    })).toBe(true);
+    // DDS edge tuning changes the IQ envelope, not the operating frequency;
+    // this helper must not classify it as a VFO switch.
+    expect(shouldResetWideRadioViewportForFrequencyChange({
+      previousFrequency: 14_074_000,
+      nextFrequency: 14_074_000,
+      previousNativeRange: { min: 13_882_000, max: 14_266_000 },
+      nextNativeRange: { min: 13_900_000, max: 14_284_000 },
+    })).toBe(false);
+    expect(shouldResetWideRadioViewportForFrequencyChange({
+      previousFrequency: 14_074_000,
+      nextFrequency: 14_075_000,
+      previousNativeRange: { min: 13_882_000, max: 14_266_000 },
+      nextNativeRange: { min: 13_883_000, max: 14_267_000 },
+      currentViewport: { min: 13_900_000, max: 14_100_000 },
+    })).toBe(false);
+    expect(shouldResetWideRadioViewportForFrequencyChange({
+      previousFrequency: 14_074_000,
+      nextFrequency: 7_074_000,
+      previousNativeRange: { min: 13_882_000, max: 14_266_000 },
+      nextNativeRange: { min: 6_882_000, max: 7_266_000 },
+      ddsTuneActive: true,
+    })).toBe(true);
+    expect(shouldResetWideRadioViewportForFrequencyChange({
+      previousFrequency: 14_074_000,
+      nextFrequency: 7_074_000,
+      previousNativeRange: { min: 6_882_000, max: 7_266_000 },
+      nextNativeRange: { min: 6_882_000, max: 7_266_000 },
+      currentViewport: { min: 14_000_000, max: 14_100_000 },
+    })).toBe(true);
+  });
+
   it('allows the radio SDR floor to reach -120 dB', () => {
     expect(RADIO_SDR_RANGE_LIMITS).toEqual({
       dbfs: { min: -120, max: 0 },

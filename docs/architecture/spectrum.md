@@ -65,6 +65,11 @@ still opens on the high-resolution detail range; the wide range is the allowed
 zoom/pan envelope, not an instruction to render the coarse supplement by
 default. No second FFT is performed and the supplement is shared across all
 client projections.
+When the operating VFO frequency changes across a band, the browser waits for
+the first frame carrying the new native envelope, then replaces the old
+absolute viewport with the new detail/native range and sends that range to the
+server. A DDS edge tune does not change the operating VFO frequency and keeps
+the existing absolute viewport instead.
 Each browser negotiates its viewport (range and requested display-bin count)
 over the spectrum subscription channel. The server projects the shared frame to
 that viewport and caches identical projections for the lifetime of the frame,
@@ -79,10 +84,50 @@ standalone spectrum window therefore changes the number of rows rendered at
 radio sampling rate or FFT configuration.
 
 Viewport gestures are coalesced at the browser animation-frame boundary. A
-gesture rebuilds only the rows currently visible in the waterfall, and its axis
-changes are applied immediately instead of repeatedly restarting a smooth axis
-transition. WebSocket viewport writes remain debounced and identical viewport
-values are not sent again.
+continuous pan/zoom gesture runs in two phases. During the gesture the
+waterfall reports `preview` changes: the visible range is applied entirely
+GPU-side through the `u_viewAxis` shader uniform (view axis), while the
+uploaded detail texture keeps the last committed frequency axis (texture
+axis), so no CPU history resampling or texture rebuild happens per gesture
+step. Two guards keep the texture axis stable for the whole gesture: the
+stream controller freezes its radio SDR view range (`setGestureViewFreeze`)
+so server-projected frames, which echo the client's debounced viewport
+uploads with one round-trip of lag, cannot re-resolve the view range and
+trigger a mid-gesture rebuild; and viewport uploads to the server are
+deferred to the gesture end, so the server keeps projecting frames at the
+committed viewport and the frozen texture's edges are not eroded by fill
+values. DDS edge tuning still runs during the gesture. Where the view axis
+extends beyond the detail texture's coverage, the shader falls back to a
+second ring texture fed by the wide-envelope supplement rows: the browser
+keeps a 512-bin dBFS wide view in a stable secondary axis and cheaply
+reprojects incoming supplement rows into that axis. A large DDS center shift
+rebases the secondary axis once instead of rebuilding it for every frame, so
+gesture pan/zoom stays live at supplement resolution instead of showing
+uncovered areas, and areas beyond the supplement envelope still render at the
+colormap minimum.
+Percent-positioned DOM overlays follow the gesture without a React
+re-render: frequency markers (RX/TX lines, band overlays, presets) are
+repositioned per element — only `left`/`width` are remapped into the
+gesture view axis and restored from per-element snapshots afterwards, so
+lines and labels are never scaled — while the ruler ticks are recomputed
+from the gesture view range into a pooled imperative DOM layer. Cycle
+boundaries use the same pooled render-only path, so incoming rows do not
+schedule a component reconciliation. The waterfall ring uploads pack a
+catch-up batch into at most two contiguous `texSubImage2D` calls per texture,
+and committed rebuilds reuse texture storage and typed-array buffers. When the
+gesture ends (pointer release, or the wheel stream going idle), the freeze
+is released and a single `commit` change updates the viewport state and
+uploads the final viewport, which triggers the existing replace path: one
+history re-projection (preferring detail bins and falling back to
+supplement bins) and one full texture rebuild at the final range, after
+which the view axis returns to identity. Until that replace batch arrives, a
+short-lived committed-axis hold prevents newly appended rows from resetting
+the optimistic GPU view to the old texture axis. Rebuilds reuse per-frame
+projection buffers across viewport changes and one persistent upload
+buffer per texture, so the commit does not produce allocation churn.
+Legacy callbacks supplied through the old `onLocalViewportChange` prop bypass
+the preview path and keep their immediate-commit behavior, preserving the
+previous contract.
 
 The spectrum plus/minus controls change only this client viewport; they must not
 issue a TCI `IQ_SAMPLERATE` command. Only an explicit horizontal pan that
@@ -99,6 +144,15 @@ viewport by the native-center delta, preserving its span and sending the
 rebased viewport back to the server. Structured browser and server logs record
 gesture ranges, DDS targets, viewport updates, and frame ranges for diagnosing
 transport or alignment issues.
+
+The rendering split follows browser/WebGL guidance to keep hot-path transforms
+on the GPU, reuse texture storage with sub-image uploads, avoid synchronous
+layout/readback work, and schedule animation through `requestAnimationFrame`:
+[MDN WebGL best practices](https://developer.mozilla.org/en-US/docs/Web/API/WebGL_API/WebGL_best_practices)
+and the [WebGL texture upload specification](https://registry.khronos.org/webgl/specs/latest/1.0/).
+The fragment shader selects `highp` when the device supports it so absolute RF
+coordinates retain kHz-level deltas; low-end WebGL1 devices retain a
+`mediump` fallback.
 
 Digital FT8/FT4 operating windows are delivered as declarative frequency
 overlays in session state. For TCI, their bounds come from the protocol's
