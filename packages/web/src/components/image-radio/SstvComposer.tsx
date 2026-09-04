@@ -25,6 +25,7 @@ import {
   textLayerHandles,
   type CanvasPoint,
 } from './sstvTextLayerGeometry';
+import { formatFrequencyMHz } from '../../utils/frequencyMHz';
 
 type TextLayer = ImageTemplateTextLayer;
 type LayerInteraction =
@@ -145,7 +146,7 @@ export function SstvComposer() {
 
   const values = useMemo(() => ({
     MYCALL: operator?.context.myCall ?? '', MYGRID: operator?.context.myGrid ?? '', HISCALL: hisCall,
-    RSV: rsv, UTC: new Date().toISOString().slice(11, 16), FREQ: radio.currentRadioFrequency ? `${(radio.currentRadioFrequency / 1e6).toFixed(3)}` : '', NOTE: note,
+    RSV: rsv, UTC: new Date().toISOString().slice(11, 16), FREQ: radio.currentRadioFrequency ? formatFrequencyMHz(radio.currentRadioFrequency) : '', NOTE: note,
   }), [hisCall, note, operator?.context.myCall, operator?.context.myGrid, radio.currentRadioFrequency, rsv]);
 
   const resolveText = useCallback((text: string) => text.replace(/\{([A-Z]+)\}/g, (_match, key: keyof typeof values) => values[key] ?? ''), [values]);
