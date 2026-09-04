@@ -74,7 +74,12 @@ Each browser negotiates its viewport (range and requested display-bin count)
 over the spectrum subscription channel. The server projects the shared frame to
 that viewport and caches identical projections for the lifetime of the frame,
 so multiple operators do not trigger additional FFT work or duplicate crop/
-resample work. Browser-side viewport state remains replayable across reconnects.
+resample work. The committed browser `radioSdrViewport` is the single
+negotiation source: initialization, automatic digital zoom, band-switch reset,
+button zoom, and gesture commit all synchronize through the same debounced
+effect. GPU gesture previews never enter that state and therefore never send
+per-frame viewport requests. Browser-side viewport state remains replayable
+across reconnects.
 
 History capacity and display geometry are separate concerns. The browser keeps
 a bounded per-source history, while the waterfall chooses its active texture
@@ -172,5 +177,14 @@ may promote an automatic lower-priority selection (such as audio) to
 `radio-sdr`; explicit Profile preferences and manual source choices are not
 overridden. For TCI FT8/FT4 only, the browser initially shows the complete IQ
 range for one second, then animates to the authoritative `RX_FILTER_BAND` with
-a small visual margin. This is a local viewport presentation change and does
-not renegotiate the shared TCI sample rate.
+a small visual margin. The same presentation cycle is keyed by the active mode
+and absolute radio frequency, so a frequency change from the radio controls
+repeats the full-range preview and follows the new RX window rather than
+leaving the old band's viewport in place. The target is projected from the
+latest logical operating frequency (the requested VFO value, before a
+possibly-lagging physical readback) using the overlay's authoritative filter
+offsets while a new IQ frame/session state is in flight; scheduling waits until
+the new native envelope covers that target. A frequency drag initiated on the digital overlay
+is marked as an explicit user gesture and suppresses that one automatic cycle,
+so it does not overwrite the user's chosen position. These are local viewport
+presentation changes and do not renegotiate the shared TCI sample rate.

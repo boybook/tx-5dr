@@ -58,6 +58,8 @@ const SPECTRUM_NO_FRAME_MAX_RETRIES = 3;
 const TCI_DIGITAL_AUTO_ZOOM_DELAY_MS = 1000;
 const TCI_DIGITAL_AUTO_ZOOM_PADDING_RATIO = 0.25;
 const TCI_DIGITAL_AUTO_ZOOM_MIN_PADDING_HZ = 200;
+const TCI_DIGITAL_AUTO_ZOOM_MANUAL_INTENT_TTL_MS = 5_000;
+const TCI_DIGITAL_AUTO_ZOOM_FREQUENCY_TOLERANCE_HZ = 5_000;
 
 type ElectronWindowHelper = Window & {
   electronAPI?: {
@@ -494,6 +496,44 @@ export function resolveTciDigitalAutoZoomRange(
     max: Math.min(bounds.max, rxRange.max + padding),
   };
   return nextRange.max > nextRange.min ? nextRange : null;
+}
+
+/**
+ * Resolve the FT8/FT4 presentation range against the latest radio frequency.
+ *
+ * The session overlay is authoritative for the RX filter offsets, but it can
+ * arrive one websocket turn after a user changes frequency. Reusing those
+ * offsets around the latest absolute frequency keeps the one-second preview
+ * attached to the user's new VFO instead of briefly zooming back to the old
+ * band's window.
+ */
+export function resolveTciDigitalAutoZoomTargetRange(
+  bounds: { min: number; max: number },
+  overlay: Pick<SpectrumSessionFrequencyOverlay, 'lineFrequency' | 'rangeStartFrequency' | 'rangeEndFrequency'>,
+  referenceFrequency?: number | null,
+): { min: number; max: number } | null {
+  if (
+    !Number.isFinite(overlay.lineFrequency)
+    || !Number.isFinite(overlay.rangeStartFrequency)
+    || !Number.isFinite(overlay.rangeEndFrequency)
+    || overlay.rangeEndFrequency <= overlay.rangeStartFrequency
+  ) {
+    return null;
+  }
+
+  const centerFrequency = typeof referenceFrequency === 'number' && Number.isFinite(referenceFrequency)
+    ? referenceFrequency
+    : overlay.lineFrequency;
+  const rxRange = {
+    min: centerFrequency + (overlay.rangeStartFrequency - overlay.lineFrequency),
+    max: centerFrequency + (overlay.rangeEndFrequency - overlay.lineFrequency),
+  };
+  return resolveTciDigitalAutoZoomRange(bounds, rxRange);
+}
+
+function buildTciDigitalAutoZoomKey(modeName: string | null, frequency: number | null): string | null {
+  if (!modeName) return null;
+  return `${modeName}:${typeof frequency === 'number' && Number.isFinite(frequency) ? Math.round(frequency) : 'unknown'}`;
 }
 
 /**
@@ -1022,7 +1062,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const { operators } = useOperators();
   const { activeProfileId, activeProfile } = useProfiles();
   const radioConnection = useRadioConnectionState();
-  const { currentMode, currentRadioFrequency, engineMode, isEngineRunning, engineState } = useRadioModeState();
+  const { currentMode, currentRadioFrequency, engineMode, isEngineRunning, engineState, operatingState } = useRadioModeState();
   const { pttStatus } = usePTTState();
   const { splitTxFrequencyWritable } = useSplitState();
   const canSetFrequency = useCan('execute', 'RadioFrequency');
@@ -1075,12 +1115,13 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const previousWideRadioFrequencyRef = useRef<number | null>(null);
   const pendingWideRadioFrequencyChangeRef = useRef<{ previous: number; next: number } | null>(null);
   const previousWideNativeRangeRef = useRef<{ min: number; max: number } | null>(null);
-  const pendingWideViewportSyncRef = useRef<{ min: number; max: number } | null>(null);
   const tciViewportSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingTciViewportRef = useRef<SpectrumViewport | null>(null);
   const tciDigitalAutoZoomTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const tciDigitalAutoZoomModeRef = useRef<string | null>(null);
-  const tciDigitalAutoZoomCancelledModeRef = useRef<string | null>(null);
+  const tciDigitalAutoZoomScheduledKeyRef = useRef<string | null>(null);
+  const tciDigitalAutoZoomManualIntentRef = useRef<{ frequencyHz: number; expiresAt: number } | null>(null);
+  const tciDigitalAutoZoomFrequencyRef = useRef<number | null>(null);
+  const tciDigitalAutoZoomWaitingKeyRef = useRef<string | null>(null);
   const tciDigitalAutoZoomTransitionRef = useRef(false);
   const lastTciViewportTuneRef = useRef<number | null>(null);
   const tciDdsTuneRef = useRef<{ inFlight: boolean; pendingFrequencyHz: number | null }>({
@@ -1230,11 +1271,14 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
           ? 'absolute-fixed'
           : 'absolute-center'
   );
-  // The mode-state frequency is the first signal of a normal VFO/band
-  // switch; session state can arrive one websocket round-trip later. Prefer
-  // it here so the local absolute viewport is reset before the next frame is
-  // cropped, while still falling back to the negotiated session value.
-  const baseRadioSdrFrequency = currentRadioFrequency ?? sessionState?.currentRadioFrequency ?? null;
+  // The logical operating-state frequency is the first signal of a normal
+  // VFO/band switch; physical readback and session state can arrive later or
+  // temporarily disagree. Prefer the requested VFO value so the local
+  // absolute viewport is reset before the next frame is cropped.
+  const baseRadioSdrFrequency = operatingState?.frequency
+    ?? currentRadioFrequency
+    ?? sessionState?.currentRadioFrequency
+    ?? null;
   baseRadioSdrFrequencyRef.current = baseRadioSdrFrequency;
   radioServiceRef.current = connection.state.radioService;
   hasActiveSpectrumSubscriptionRef.current = connection.state.isConnected && !isCollapsed && Boolean(subscribedKind);
@@ -1251,7 +1295,6 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       previousWideRadioFrequencyRef.current = null;
       pendingWideRadioFrequencyChangeRef.current = null;
       previousWideNativeRangeRef.current = null;
-      pendingWideViewportSyncRef.current = null;
       return;
     }
 
@@ -1318,7 +1361,6 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       : radioSdrNativeRange;
     if (shouldResetForFrequencySwitch) {
       pendingWideRadioFrequencyChangeRef.current = null;
-      pendingWideViewportSyncRef.current = { ...initialRange };
       logger.debug('TCI viewport reset after radio frequency change', {
         rangeMinHz: initialRange.min,
         rangeMaxHz: initialRange.max,
@@ -1662,17 +1704,42 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     if (!connection.state.isConnected || !canWriteFrequency || !Number.isFinite(frequency)) return;
     const roundedFrequency = Math.round(frequency);
     if (!canWriteTargetFrequency(roundedFrequency)) return;
+
+    // A digital overlay drag is an intentional frequency gesture. Suppress
+    // the follow-up auto-zoom for this one frequency transition so the user's
+    // chosen viewport is not replaced by the FT8/FT4 presentation animation.
+    if (isTciDigitalMode) {
+      tciDigitalAutoZoomManualIntentRef.current = {
+        frequencyHz: roundedFrequency,
+        expiresAt: Date.now() + TCI_DIGITAL_AUTO_ZOOM_MANUAL_INTENT_TTL_MS,
+      };
+      if (tciDigitalAutoZoomTimerRef.current) {
+        clearTimeout(tciDigitalAutoZoomTimerRef.current);
+        tciDigitalAutoZoomTimerRef.current = null;
+      }
+      tciDigitalAutoZoomScheduledKeyRef.current = buildTciDigitalAutoZoomKey(
+        currentMode?.name ?? null,
+        tciDigitalAutoZoomFrequencyRef.current,
+      );
+    }
     try {
       const response = await setRadioFrequencyWithIntent({
         frequency: roundedFrequency,
         band: getBandFromFrequency(roundedFrequency),
         description: `${(roundedFrequency / 1_000_000).toFixed(3)} MHz`,
       });
-      if (response.success) resetOperatorsAfterOperatingStateChange();
+      if (response.success) {
+        resetOperatorsAfterOperatingStateChange();
+      } else if (tciDigitalAutoZoomManualIntentRef.current?.frequencyHz === roundedFrequency) {
+        tciDigitalAutoZoomManualIntentRef.current = null;
+      }
     } catch (error) {
+      if (tciDigitalAutoZoomManualIntentRef.current?.frequencyHz === roundedFrequency) {
+        tciDigitalAutoZoomManualIntentRef.current = null;
+      }
       logger.error('Failed to set digital base frequency from SDR overlay', error);
     }
-  }, [canWriteFrequency, canWriteTargetFrequency, connection.state.isConnected, resetOperatorsAfterOperatingStateChange]);
+  }, [canWriteFrequency, canWriteTargetFrequency, connection.state.isConnected, currentMode?.name, isTciDigitalMode, resetOperatorsAfterOperatingStateChange]);
 
   const queueTciViewportSync = useCallback((range: { min: number; max: number }) => {
     pendingTciViewportRef.current = {
@@ -1693,12 +1760,15 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     }
   }, [connection.state.radioService]);
 
+  // `radioSdrViewport` is the single owner of the committed client view.
+  // Synchronize every committed state transition here so initial/default
+  // ranges, automatic FT8/FT4 zoom, frequency-switch resets, buttons, and
+  // gesture commits all negotiate the same high-resolution server projection.
+  // GPU preview gestures do not update this state and therefore remain local.
   useEffect(() => {
-    const nextRange = pendingWideViewportSyncRef.current;
-    if (!isWideRadioSdr || !nextRange) return;
-    pendingWideViewportSyncRef.current = null;
-    queueTciViewportSync(nextRange);
-  }, [isWideRadioSdr, queueTciViewportSync, radioSdrDisplayRange, radioSdrNativeRange]);
+    if (!isWideRadioSdr || !radioSdrViewport) return;
+    queueTciViewportSync(radioSdrViewport);
+  }, [isWideRadioSdr, queueTciViewportSync, radioSdrViewport]);
 
   const flushTciDdsTune = useCallback(async () => {
     const queue = tciDdsTuneRef.current;
@@ -1741,8 +1811,13 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     if (tciDigitalAutoZoomTimerRef.current) {
       clearTimeout(tciDigitalAutoZoomTimerRef.current);
       tciDigitalAutoZoomTimerRef.current = null;
-      tciDigitalAutoZoomCancelledModeRef.current = currentMode?.name ?? null;
     }
+    // A manual viewport gesture completes the current presentation cycle. It
+    // must not suppress a later radio-frequency generation.
+    tciDigitalAutoZoomScheduledKeyRef.current = buildTciDigitalAutoZoomKey(
+      currentMode?.name ?? null,
+      tciDigitalAutoZoomFrequencyRef.current,
+    );
     const nativeSpan = radioSdrViewportBounds.max - radioSdrViewportBounds.min;
     if (!Number.isFinite(nativeSpan) || nativeSpan <= 0) return;
     const requestedSpan = Math.min(nativeSpan, Math.max(TCI_MIN_LOCAL_VIEWPORT_SPAN_HZ, next.max - next.min));
@@ -1785,10 +1860,9 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     // performs the single state update and viewport upload.
     if (phase !== 'preview') {
       setRadioSdrViewport(nextRange);
-      queueTciViewportSync(nextRange);
     }
     return nextRange;
-  }, [canWriteFrequency, currentMode?.name, isCwMode, isWideRadioSdr, queueTciDdsTune, queueTciViewportSync, radioSdrViewportBounds, viewportInteraction.canTuneAtEdge]);
+  }, [canWriteFrequency, currentMode?.name, isCwMode, isWideRadioSdr, queueTciDdsTune, radioSdrViewportBounds, viewportInteraction.canTuneAtEdge]);
 
   const handleRadioFrequencyGesture = useCallback((frequency: number) => {
     if (!canWriteFrequency || frequencyGestureTarget !== 'radio-frequency') {
@@ -2250,27 +2324,97 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       && overlay.rangeEndFrequency > overlay.rangeStartFrequency
     )) ?? null
   ), [sessionState?.interaction.frequencyOverlays]);
+  tciDigitalAutoZoomFrequencyRef.current = typeof baseRadioSdrFrequency === 'number' && Number.isFinite(baseRadioSdrFrequency)
+    ? baseRadioSdrFrequency
+    : (tciDigitalRxOverlay?.lineFrequency ?? null);
   useEffect(() => {
     const modeName = currentMode?.name ?? null;
+    const autoZoomFrequency = typeof baseRadioSdrFrequency === 'number' && Number.isFinite(baseRadioSdrFrequency)
+      ? baseRadioSdrFrequency
+      : (tciDigitalRxOverlay?.lineFrequency ?? null);
+    const autoZoomKey = buildTciDigitalAutoZoomKey(modeName, autoZoomFrequency);
     if (
       !isTciDigitalMode
       || !isWideRadioSdr
-      || !radioSdrViewportBounds
-      || !tciDigitalRxOverlay
+      || !autoZoomKey
     ) {
       if (tciDigitalAutoZoomTimerRef.current) {
         clearTimeout(tciDigitalAutoZoomTimerRef.current);
         tciDigitalAutoZoomTimerRef.current = null;
       }
-      tciDigitalAutoZoomModeRef.current = null;
-      tciDigitalAutoZoomCancelledModeRef.current = null;
+      tciDigitalAutoZoomScheduledKeyRef.current = null;
+      tciDigitalAutoZoomManualIntentRef.current = null;
+      tciDigitalAutoZoomWaitingKeyRef.current = null;
       return;
     }
-    if (tciDigitalAutoZoomCancelledModeRef.current === modeName) return;
-    if (tciDigitalAutoZoomModeRef.current === modeName) return;
+    if (!radioSdrViewportBounds || !tciDigitalRxOverlay) {
+      if (tciDigitalAutoZoomTimerRef.current) {
+        clearTimeout(tciDigitalAutoZoomTimerRef.current);
+        tciDigitalAutoZoomTimerRef.current = null;
+      }
+      tciDigitalAutoZoomScheduledKeyRef.current = null;
+      return;
+    }
 
-    tciDigitalAutoZoomModeRef.current = modeName;
+    const manualIntent = tciDigitalAutoZoomManualIntentRef.current;
+    const activeManualIntent = manualIntent && manualIntent.expiresAt > Date.now()
+      ? manualIntent
+      : null;
+    if (manualIntent && !activeManualIntent) {
+      tciDigitalAutoZoomManualIntentRef.current = null;
+    }
+    const isManualFrequencyChange = Boolean(
+      activeManualIntent
+      && Math.abs(activeManualIntent.frequencyHz - (autoZoomFrequency ?? Number.NaN))
+        <= TCI_DIGITAL_AUTO_ZOOM_FREQUENCY_TOLERANCE_HZ,
+    );
+    if (isManualFrequencyChange) {
+      tciDigitalAutoZoomManualIntentRef.current = null;
+      tciDigitalAutoZoomScheduledKeyRef.current = autoZoomKey;
+      logger.debug('TCI digital auto zoom skipped after manual overlay frequency change', {
+        mode: modeName,
+        frequencyHz: autoZoomFrequency,
+      });
+      return;
+    }
+    if (tciDigitalAutoZoomScheduledKeyRef.current === autoZoomKey) return;
+
     const fullRange = radioSdrViewportBounds;
+    const targetRange = resolveTciDigitalAutoZoomTargetRange(
+      fullRange,
+      tciDigitalRxOverlay,
+      baseRadioSdrFrequency,
+    );
+    // A frequency event can precede the new IQ envelope or the updated
+    // session overlay. Wait for a range that can actually contain the target;
+    // the numeric bounds/overlay dependencies below will retry this effect.
+    if (!targetRange) {
+      if (tciDigitalAutoZoomWaitingKeyRef.current !== autoZoomKey) {
+        tciDigitalAutoZoomWaitingKeyRef.current = autoZoomKey;
+        logger.debug('TCI digital auto zoom waiting for target range coverage', {
+          mode: modeName,
+          frequencyHz: autoZoomFrequency,
+          boundsMinHz: fullRange.min,
+          boundsMaxHz: fullRange.max,
+          overlayLineHz: tciDigitalRxOverlay.lineFrequency,
+          overlayMinHz: tciDigitalRxOverlay.rangeStartFrequency,
+          overlayMaxHz: tciDigitalRxOverlay.rangeEndFrequency,
+        });
+      }
+      return;
+    }
+
+    tciDigitalAutoZoomWaitingKeyRef.current = null;
+
+    tciDigitalAutoZoomScheduledKeyRef.current = autoZoomKey;
+    logger.debug('TCI digital auto zoom scheduled', {
+      mode: modeName,
+      frequencyHz: autoZoomFrequency,
+      fullMinHz: fullRange.min,
+      fullMaxHz: fullRange.max,
+      targetMinHz: targetRange.min,
+      targetMaxHz: targetRange.max,
+    });
     setRadioSdrViewport((current) => (
       current
       && current.min === fullRange.min
@@ -2281,20 +2425,15 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
 
     tciDigitalAutoZoomTimerRef.current = setTimeout(() => {
       tciDigitalAutoZoomTimerRef.current = null;
-      const nextRange = resolveTciDigitalAutoZoomRange(fullRange, {
-        min: tciDigitalRxOverlay.rangeStartFrequency,
-        max: tciDigitalRxOverlay.rangeEndFrequency,
-      });
-      if (!nextRange) return;
+      if (tciDigitalAutoZoomScheduledKeyRef.current !== autoZoomKey) return;
       tciDigitalAutoZoomTransitionRef.current = true;
       setRadioSdrViewport((current) => (
         current
-        && current.min === nextRange.min
-        && current.max === nextRange.max
+        && current.min === targetRange.min
+        && current.max === targetRange.max
           ? current
-          : nextRange
+          : targetRange
       ));
-      queueTciViewportSync(nextRange);
     }, TCI_DIGITAL_AUTO_ZOOM_DELAY_MS);
 
     return () => {
@@ -2303,7 +2442,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
         tciDigitalAutoZoomTimerRef.current = null;
       }
     };
-  }, [currentMode?.name, isTciDigitalMode, isWideRadioSdr, queueTciViewportSync, Boolean(radioSdrViewportBounds), tciDigitalRxOverlay?.rangeEndFrequency, tciDigitalRxOverlay?.rangeStartFrequency]);
+  }, [baseRadioSdrFrequency, currentMode?.name, isTciDigitalMode, isWideRadioSdr, radioSdrViewportBounds?.max, radioSdrViewportBounds?.min, tciDigitalRxOverlay?.lineFrequency, tciDigitalRxOverlay?.rangeEndFrequency, tciDigitalRxOverlay?.rangeStartFrequency]);
   const handleSplitFrequencyChange = useCallback((frequency: number) => {
     if (
       !canWriteFrequency
@@ -2489,8 +2628,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
       max: boundedCenter + nextSpan / 2,
     };
     setRadioSdrViewport(nextRange);
-    queueTciViewportSync(nextRange);
-  }, [isWideRadioSdr, queueTciViewportSync, radioSdrViewport, radioSdrViewportBounds, viewportInteraction.canZoom]);
+  }, [isWideRadioSdr, radioSdrViewport, radioSdrViewportBounds, viewportInteraction.canZoom]);
 
   const controls = sessionState?.controls ?? [];
   const spectrumZoomOutControl = controls.find(control => control.id === 'zoom-step' && control.action === 'out' && control.visible);

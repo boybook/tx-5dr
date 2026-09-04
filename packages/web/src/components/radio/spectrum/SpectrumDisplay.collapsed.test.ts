@@ -19,6 +19,7 @@ import {
   resolveSpectrumMarkerFrequencies,
   shouldResetWideRadioViewportForFrequencyChange,
   resolveTciDigitalAutoZoomRange,
+  resolveTciDigitalAutoZoomTargetRange,
   SPECTRUM_RECOVERY_IDLE_STATE,
   shouldPauseSpectrumNoFrameRecovery,
 } from './SpectrumDisplay';
@@ -299,6 +300,30 @@ describe('collapsed spectrum positioning', () => {
       { min: 14_000_000, max: 14_052_000 },
       { min: 14_050_000, max: 14_054_000 },
     )).toEqual({ min: 14_049_000, max: 14_052_000 });
+  });
+
+  it('anchors the auto-zoom window to the latest radio frequency while an overlay update is in flight', () => {
+    expect(resolveTciDigitalAutoZoomTargetRange(
+      { min: 7_000_000, max: 7_100_000 },
+      {
+        lineFrequency: 14_074_000,
+        rangeStartFrequency: 14_074_000,
+        rangeEndFrequency: 14_077_000,
+      },
+      7_074_000,
+    )).toEqual({ min: 7_073_250, max: 7_077_750 });
+  });
+
+  it('waits for an IQ range that covers the new frequency instead of clamping to an old band', () => {
+    expect(resolveTciDigitalAutoZoomTargetRange(
+      { min: 14_000_000, max: 14_100_000 },
+      {
+        lineFrequency: 14_074_000,
+        rangeStartFrequency: 14_074_000,
+        rangeEndFrequency: 14_077_000,
+      },
+      7_074_000,
+    )).toBeNull();
   });
 
   it('clamps digital baseband frequencies to 0-3000 Hz', () => {
