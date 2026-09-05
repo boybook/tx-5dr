@@ -15,7 +15,7 @@ import type { VersionedContestSession } from './ContestSessionRepository.js';
 import type { FT8ContestDefinition } from './FT8ContestDefinition.js';
 import type { FT8ContestQso } from './FT8ContestModules.js';
 
-export const FT8_CONTEST_MIN_PLUGIN_API_VERSION = '2.4.0';
+export const FT8_CONTEST_MIN_PLUGIN_API_VERSION = '2.5.0';
 
 export interface FT8RuntimeModule<TContest> {
   readonly id: string;

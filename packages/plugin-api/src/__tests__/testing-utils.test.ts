@@ -162,7 +162,7 @@ describe('plugin-api testing utilities', () => {
       expect(ctx.operator.callsign).toBe('W1AW');
       expect(ctx.operator.grid).toBe('FN31');
       expect(ctx.radio.isConnected).toBe(true);
-    expect(ctx.pluginApiVersion).toBe('2.4.0');
+    expect(ctx.pluginApiVersion).toBe('2.5.0');
       expect(ctx.config).toEqual({});
       expect('eventBus' in ctx).toBe(false);
     });

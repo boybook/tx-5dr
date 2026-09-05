@@ -182,7 +182,7 @@ function readContestLogbookUiAssets(): Map<string, string> {
 
 function generatePackageJson(config: PluginConfig): string {
   const devDeps: Record<string, string> = {
-    '@tx5dr/plugin-api': '^2.4.0',
+    '@tx5dr/plugin-api': '^2.5.0',
   };
 
   if (config.lang === 'ts') {
@@ -245,7 +245,7 @@ function generatePackageJson(config: PluginConfig): string {
       pluginName: config.name,
       title: config.name,
       description: `${config.name} FT8/FT4 contest strategy`,
-      minPluginApiVersion: '2.4.0',
+      minPluginApiVersion: '2.5.0',
       author: 'TX-5DR plugin author',
       license: 'GPL-3.0-only',
       categories: ['contest', 'ft8', 'ft4'],
@@ -617,7 +617,7 @@ class ContestRuntime implements StrategyRuntime {
 export const plugin = composeFT8ContestPlugin({
   name: '${config.name}',
   version: '0.1.0',
-  minPluginApiVersion: '2.4.0',
+  minPluginApiVersion: '2.5.0',
   description: 'pluginDescription',
   permissions: CONTEST_LOGBOOK_PERMISSIONS,
   contest,
@@ -817,7 +817,7 @@ describe('${config.name}', () => {
 
   it('exposes an FT8 strategy plugin', () => {
     expect(plugin.type).toBe('strategy');
-      expect(plugin.minPluginApiVersion).toBe('2.4.0');
+      expect(plugin.minPluginApiVersion).toBe('2.5.0');
     expect(contest.operating).toMatchObject({
       humanInitiation: 'required',
       maxConcurrentQsos: 1,

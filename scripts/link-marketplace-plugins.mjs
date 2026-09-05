@@ -42,6 +42,11 @@ async function linkPlugin(name) {
 const plugins = await listMarketplacePlugins();
 if (plugins.length === 0) throw new Error(`No Marketplace plugin packages found under ${externalRoot}`);
 await fs.mkdir(targetRoot, { recursive: true });
+const desired = new Set(plugins);
+for (const entry of await fs.readdir(targetRoot, { withFileTypes: true })) {
+  if (!entry.isSymbolicLink() || desired.has(entry.name)) continue;
+  await fs.unlink(path.join(targetRoot, entry.name));
+}
 const linked = [];
 for (const name of plugins) if (await linkPlugin(name)) linked.push(name);
 if (linked.length === 0) throw new Error(`No built Marketplace plugin artifacts found under ${externalRoot}`);

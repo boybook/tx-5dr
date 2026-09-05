@@ -56,6 +56,7 @@ export type {
   StrategyPluginContext,
   PluginEligibilityContext,
 } from './context.js';
+export type { PluginAfterStartupTask, PluginLifecyclePort } from './context.js';
 export type {
   HostDependencies,
   HamlibHostDependency,

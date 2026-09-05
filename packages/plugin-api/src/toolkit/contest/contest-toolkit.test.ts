@@ -195,7 +195,7 @@ describe('contest toolkit', () => {
       contest,
       runtime: () => ({}) as StrategyRuntime,
     });
-    expect(plugin.minPluginApiVersion).toBe('2.4.0');
+    expect(plugin.minPluginApiVersion).toBe('2.5.0');
     expect(() => plugin.createStrategyRuntime?.({
       ...(createMockContext() as unknown as StrategyPluginContext),
       pluginApiVersion: '2.0.0',

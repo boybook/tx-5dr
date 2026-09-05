@@ -164,6 +164,12 @@ presentation locale bundle 描述；通用页面不会写死某一场比赛的�
 `@tx5dr/core` 或 Host 内部路径导入 runtime 实现；需要标准解码、频率匹配或 QSO
 runtime 时使用该 public entrypoint。
 
+插件可以通过 `ctx.lifecycle.scheduleAfterStartup()` 注册不应阻塞 Server ready 的初始化。
+Host 会在核心服务 ready 后执行任务，并在实例重载或停止时通过 `AbortSignal` 取消任务；
+任务失败只会进入插件运行日志和后台任务状态，不会反向阻塞或回滚核心服务启动。Contest
+Logbook 使用这条机制打开历史日志、建立 snapshot 和 FrameTable 投影，页面在任务完成前
+显示可读的 opening/degraded 状态。
+
 比赛插件不再注册到 `@tx5dr/builtin-plugins`。本地联调时，在 Host worktree 执行：
 
 ```bash

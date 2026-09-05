@@ -6,7 +6,7 @@ import type { PluginUIRequestContext } from '../../helpers.js';
 import type { VersionedContestSession } from './ContestSessionRepository.js';
 import { defaultContestSession, type ContestApplicationSessionFacade, type ContestSessionContext, type ContestSessionIdentity, type ContestSessionStateFacade } from './DefaultContestSession.js';
 import { defaultContestWorkbench, type ContestWorkbenchQsoRow, type ContestWorkbenchViewModel, type DefaultContestWorkbenchOptions, type ContestWorkbenchRequest } from './DefaultContestWorkbench.js';
-import type { ContestSessionModule, ContestWorkbenchModule } from './FT8ContestPlugin.js';
+import type { ContestModuleCleanup, ContestSessionModule, ContestWorkbenchModule } from './FT8ContestPlugin.js';
 import type { ContestSessionHealth } from './DefaultContestSession.js';
 import type { FT8ContestDefinition } from './FT8ContestDefinition.js';
 import { formatFT8ContestSubmission, projectFT8ContestQsos, scoreFT8ContestQsos } from './FT8ContestDefinition.js';
@@ -267,6 +267,8 @@ export interface DefaultContestLogbookOptions<
   resolveContest?(context: ContestSessionContext): TContest;
   sessionKey?(contest: TContest, context: ContestSessionContext): string;
   stateKey?(contest: TContest, context: ContestSessionContext): string;
+  /** Defers durable logbook opening and historical projection until Host startup is ready. */
+  deferStartup?: boolean;
   adapter: ContestLogbookAdapter<
     TContest,
     TSession,
@@ -666,6 +668,8 @@ export function defaultContestLogbook<
     stateKey: options.stateKey,
     title: adapter.settings.title,
   });
+  const sessionReady = new Map<string, Promise<void>>();
+  const sessionCleanups = new Map<string, ContestModuleCleanup | undefined>();
   const refreshMessagePresentation = async (
     operatorId: string,
     context: PluginContextFor<Permissions>,
@@ -689,17 +693,50 @@ export function defaultContestLogbook<
     async setup(input) {
       const effectiveContest = options.resolveContest?.(input.context) ?? input.contest;
       activeContests.set(input.context.operator.id, effectiveContest);
-      const cleanup = await sessionBase.setup({ ...input, contest: effectiveContest });
-      await refreshMessagePresentation(
-        input.context.operator.id,
-        input.context as unknown as PluginContextFor<Permissions>,
-        effectiveContest,
-      );
-      if (!cleanup) return cleanup;
+      let resolveReady!: () => void;
+      let rejectReady!: (error: unknown) => void;
+      const ready = new Promise<void>((resolve, reject) => {
+        resolveReady = resolve;
+        rejectReady = reject;
+      });
+      sessionReady.set(input.context.operator.id, ready);
+      const initialize = async (signal?: AbortSignal): Promise<void> => {
+        if (signal?.aborted) {
+          resolveReady();
+          return;
+        }
+        try {
+          const cleanup = await sessionBase.setup({ ...input, contest: effectiveContest });
+          sessionCleanups.set(input.context.operator.id, cleanup ?? undefined);
+          await refreshMessagePresentation(
+            input.context.operator.id,
+            input.context as unknown as PluginContextFor<Permissions>,
+            effectiveContest,
+          );
+          resolveReady();
+        } catch (error) {
+          rejectReady(error);
+          throw error;
+        }
+      };
+      let cancelDeferred: (() => void) | undefined;
+      if (options.deferStartup && input.context.lifecycle) {
+        cancelDeferred = input.context.lifecycle.scheduleAfterStartup(
+          `contest-logbook:${input.context.operator.id}`,
+          (signal) => initialize(signal),
+        );
+      } else {
+        await initialize();
+      }
       return async (context) => {
         try {
-          await cleanup(context);
+          cancelDeferred?.();
+          resolveReady();
+          await ready.catch(() => undefined);
+          await sessionCleanups.get(context.operator.id)?.(context);
         } finally {
+          sessionCleanups.delete(context.operator.id);
+          sessionReady.delete(context.operator.id);
           activeContests.delete(context.operator.id);
           messagePresentations.delete(context.operator.id);
         }
@@ -710,6 +747,7 @@ export function defaultContestLogbook<
     pageId,
     getState: async ({ contest: currentContest, context }) => {
       const effectiveContest = activeContests.get(context.operator.id) ?? currentContest;
+      await sessionReady.get(context.operator.id);
       const sessionState = sessionBase.forOperator(context.operator.id).read();
       const snapshot = await sessionBase.access(context as ContestSessionContext).snapshot();
       await refreshMessagePresentation(context.operator.id, context, effectiveContest, snapshot.records);
@@ -1222,6 +1260,7 @@ export function standardFT8ContestLogbook<
     resolveContest: options.resolveContest,
     sessionKey: options.sessionKey,
     stateKey: options.stateKey,
+    deferStartup: true,
     adapter,
   });
   return module;

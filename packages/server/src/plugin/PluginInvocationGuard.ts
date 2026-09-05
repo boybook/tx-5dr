@@ -75,6 +75,7 @@ const PROTECTED_CONTEXT_KEYS = new Set<keyof RuntimePluginContext>([
   'logbookSync',
   'fetch',
   'hostDependencies',
+  'lifecycle',
 ]);
 const EVERGREEN_CONTEXT_KEYS = new Set<keyof RuntimePluginContext>(['pluginApiVersion', 'log']);
 

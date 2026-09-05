@@ -68,7 +68,7 @@ export default definePlugin({
 
 Release boundary: `2.0.1` is the containment release for the existing
 experimental/advanced `./toolkit` surface. The stable `./contest` entry point,
-root re-exports and `ft8-contest` scaffold start at `2.4.0`; the publish workflow
+root re-exports and `ft8-contest` scaffold start at `2.5.0`; the publish workflow
 rejects an older version when that stable export is present.
 
 Plugin compatibility uses the bundled `@tx5dr/plugin-api` SemVer, not the
@@ -121,7 +121,7 @@ const contest = defineFT8Contest({
 export default composeFT8ContestPlugin({
   name: 'example-ft8',
   version: '1.0.0',
-  minPluginApiVersion: '2.4.0',
+  minPluginApiVersion: '2.5.0',
   permissions: CONTEST_LOGBOOK_PERMISSIONS,
   contest,
   runtime: createContestRuntime,
@@ -601,6 +601,17 @@ focus, spacing, and typography primitives use the corresponding
 `--tx5dr-control-*`, `--tx5dr-chip-*`, `--tx5dr-table-*`, and base tokens.
 
 ## Testing
+
+慢速历史扫描、缓存预热或迁移应通过 Host 的启动后任务执行：
+
+```ts
+context.lifecycle.scheduleAfterStartup('history-prewarm', async (signal) => {
+  if (signal.aborted) return;
+  await rebuildHistory(signal);
+});
+```
+
+Host 会在 Server ready 后调度任务，并在插件实例卸载或重载时自动取消。
 
 ```typescript
 import { describe, it, expect } from 'vitest';
