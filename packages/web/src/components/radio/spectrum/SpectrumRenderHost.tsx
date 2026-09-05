@@ -24,6 +24,14 @@ function resolveTraceHeight(height: number, requested?: number): number {
   return Math.min(220, Math.max(112, Math.round(height * 0.27)));
 }
 
+export function resolveSpectrumWaterfallHeight(
+  height: number,
+  traceHeight: number,
+  standalone: boolean,
+): number {
+  return Math.max(1, standalone ? height - traceHeight : height);
+}
+
 function createTraceProps(props: WaterfallProps, height: number, viewportRuntime?: ReturnType<typeof createSpectrumViewportRuntime>): WebGLSpectrumTraceProps {
   return {
     controller: props.controller,
@@ -76,8 +84,16 @@ export const SpectrumRenderHost: React.FC<SpectrumRenderHostProps> = ({
     [traceHeight, waterfallProps],
   );
   const readOnlyWaterfallProps = useMemo<WaterfallProps>(() => {
-    if (!standalone) return waterfallProps;
-    const waterfallHeight = Math.max(1, height - traceHeight);
+    const waterfallHeight = resolveSpectrumWaterfallHeight(height, traceHeight, standalone);
+    if (!standalone) {
+      // SpectrumRenderHost owns presentation geometry. Keep the child surface
+      // on the exact same height so bottom-anchored TX/RX labels are not laid
+      // out against WebGLWaterfall's default height and clipped by the host.
+      return {
+        ...waterfallProps,
+        height: waterfallHeight,
+      };
+    }
     const waterfallRows = typeof waterfallProps.totalRows === 'number'
       ? Math.max(1, Math.round(waterfallProps.totalRows * waterfallHeight / Math.max(height, 1)))
       : waterfallProps.totalRows;
