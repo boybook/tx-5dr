@@ -1,6 +1,6 @@
 {
   "name": "@tx5dr/plugin-api",
-  "version": "2.1.0",
+  "version": "2.5.0",
   "type": "module",
   "description": "Public plugin API for TX-5DR digital radio engine",
   "license": "MIT",
@@ -44,12 +44,18 @@
       "require": "./dist/toolkit/contest/index.js",
       "types": "./dist/toolkit/contest/index.d.ts"
     },
+    "./ft8": {
+      "import": "./dist/ft8/index.js",
+      "require": "./dist/ft8/index.js",
+      "types": "./dist/ft8/index.d.ts"
+    },
+    "./contest-logbook-ui/*": "./dist/contest-logbook-ui/*",
     "./bridge": {
       "types": "./src/bridge.d.ts"
     }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && npx vite build --config contest-logbook-ui/vite.config.ts",
     "dev": "tsc --watch",
     "lint": "eslint src/**/*.ts",
     "test": "vitest run --passWithNoTests",
@@ -62,8 +68,12 @@
   },
   "devDependencies": {
     "@tx5dr/shared-config": "workspace:*",
+    "@vitejs/plugin-react": "^4.3.4",
     "eslint": "^8.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "typescript": "^5.0.0",
+    "vite": "^6.3.4",
     "vitest": "^1.0.0"
   }
 }

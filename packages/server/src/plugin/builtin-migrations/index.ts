@@ -15,14 +15,12 @@ import {
   migrateLegacySyncConfig,
   migrateLegacyLotwCertificates,
 } from './legacy-sync-migration.js';
-import { migrateWWDigiContestEntries } from './ww-digi-contest-entry-migration.js';
 
 /**
  * Map of built-in plugin names to their pre-onLoad migration functions.
  * Only plugins that need legacy config migration are listed here.
  */
 export const BUILTIN_MIGRATIONS: Record<string, (ctx: PluginContext) => Promise<void>> = {
-  'ww-digi': migrateWWDigiContestEntries,
   'lotw-sync': async (ctx) => {
     await migrateLegacyLotwCertificates(ctx);
     await migrateLegacySyncConfig({

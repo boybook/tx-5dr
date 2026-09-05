@@ -10,3 +10,4 @@ export * from './FT8ContestTestKit.js';
 export * from './DefaultContestSession.js';
 export * from './DefaultContestWorkbench.js';
 export * from './ContestQsoEnvelopeAdapter.js';
+export * from './ContestLogbook.js';

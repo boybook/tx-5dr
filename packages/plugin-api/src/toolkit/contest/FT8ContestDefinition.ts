@@ -15,6 +15,14 @@ export interface ContestRuleSource {
   readonly confirmedAt?: string;
 }
 
+/** Operator-facing rule summary kept separate from the authoritative rule URL. */
+export interface ContestRulePresentation {
+  readonly title?: string;
+  readonly summary: string;
+  readonly scoring?: string;
+  readonly exchange?: string;
+}
+
 /** Immutable identity and time boundary for one contest occurrence. */
 export interface ContestEditionDefinition {
   readonly id: string;
@@ -75,6 +83,7 @@ export interface FT8ContestDefinition<
   readonly scoring: ScoringModule<TQso>;
   readonly submission: SubmissionModule<TQso, TSubmissionOptions>;
   readonly operating: Readonly<FT8OperatingPolicy>;
+  readonly presentation?: ContestRulePresentation;
 }
 
 export interface FT8ContestDefinitionInput<
@@ -94,6 +103,7 @@ export interface FT8ContestDefinitionInput<
   scoring: ScoringModule<TQso>;
   submission: SubmissionModule<TQso, TSubmissionOptions>;
   operating?: Partial<FT8OperatingPolicy>;
+  presentation?: ContestRulePresentation;
 }
 
 const SAFE_OPERATING_DEFAULTS: FT8OperatingPolicy = {

@@ -15,6 +15,7 @@ import type {
   LogbookSyncProvider,
   OtherOperatorSnapshot,
   PluginContextBase,
+  PluginAfterStartupTask,
   RuntimePluginContext,
   RadioOperatingMode,
   PluginUIInstanceTarget,
@@ -140,6 +141,7 @@ export class PluginContextFactory {
     getPluginSettings: () => Record<string, unknown>,
     updatePluginSettings?: (patch: Record<string, unknown>) => Promise<void>,
     invokeResourceCallback?: <T>(operation: string, callback: () => T | Promise<T>) => Promise<T>,
+    scheduleAfterStartup?: (id: string, task: PluginAfterStartupTask) => () => void,
   ): Promise<RuntimePluginContext> {
     const globalStorage = await acquireSharedPluginStorage(`${pluginStorageDir}/global.json`);
     const operatorStorageName = operatorId ? `operator-${operatorId}.json` : 'instance-global.json';
@@ -219,6 +221,12 @@ export class PluginContextFactory {
       band: bandAccess,
       ui: uiBridge,
       files: fileStore,
+      lifecycle: {
+        scheduleAfterStartup(id, task) {
+          if (!scheduleAfterStartup) throw new Error('plugin_after_startup_unavailable');
+          return scheduleAfterStartup(id, task);
+        },
+      },
     };
 
     const capabilityCandidates: Partial<RuntimePluginContext> = {

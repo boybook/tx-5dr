@@ -160,6 +160,9 @@ interface Tx5drBridge {
   /** Ask the parent component to close this iframe (e.g. close a modal). */
   requestClose(): void;
 
+  /** Open an http(s) URL outside the plugin iframe. Electron uses the system default browser. */
+  openExternal(url: string): void;
+
   /** Register a callback invoked when the host theme changes. Returns an unsubscribe function. */
   onThemeChange(callback: (theme: 'dark' | 'light') => void): Tx5drBridgeUnsubscribe;
 }

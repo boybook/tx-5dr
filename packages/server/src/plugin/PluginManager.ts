@@ -33,6 +33,7 @@ import type {
   QueuedStrategyMutationResult,
   QueuedStrategyTargetRequest,
 } from '@tx5dr/plugin-api';
+import type { PluginAfterStartupTask } from '@tx5dr/plugin-api';
 import { isQueuedStrategyRuntime } from '@tx5dr/plugin-api';
 import type { EventEmitter } from 'eventemitter3';
 import {
@@ -123,6 +124,11 @@ export class PluginManager {
   private loader: PluginLoader;
   private devWatcher: PluginDevWatcher | null = null;
   private running = false;
+  private startupReady = false;
+  private readonly afterStartupTasks = new WeakMap<PluginInstance, Map<string, {
+    controller: AbortController;
+    task: PluginAfterStartupTask;
+  }>>();
   private unsubscribeFns: Array<() => void> = [];
   private _logbookSyncHost: import('./LogbookSyncHost.js').LogbookSyncHost;
   private readonly pageSessions = new PluginPageSessionStore();
@@ -342,6 +348,7 @@ export class PluginManager {
 
     logger.info('Starting plugin manager');
     this.running = true;
+    this.startupReady = false;
     try {
       if (process.env.NODE_ENV !== 'test') {
         await this._logbookSyncHost.initialize(this.deps.dataDir);
@@ -382,6 +389,7 @@ export class PluginManager {
     }
 
     logger.info('Stopping plugin manager');
+    this.startupReady = false;
     this.devWatcher?.stop();
     this.devWatcher = null;
     await this.teardownAllInstances();
@@ -390,6 +398,68 @@ export class PluginManager {
     this.unregisterEngineListeners();
     this.running = false;
     logger.info('Plugin manager stopped');
+  }
+
+  /** Starts plugin work explicitly marked as safe to run after server startup. */
+  notifyStartupReady(): void {
+    if (!this.running || this.startupReady) return;
+    this.startupReady = true;
+    for (const instances of this.instances.values()) {
+      for (const instance of instances.values()) this.runAfterStartupTasks(instance);
+    }
+    for (const instance of this.globalInstances.values()) this.runAfterStartupTasks(instance);
+  }
+
+  private scheduleAfterStartup(
+    instance: PluginInstance,
+    id: string,
+    task: PluginAfterStartupTask,
+  ): () => void {
+    const normalizedId = id.trim();
+    if (!normalizedId) throw new Error('plugin_after_startup_id_required');
+    let tasks = this.afterStartupTasks.get(instance);
+    if (!tasks) {
+      tasks = new Map();
+      this.afterStartupTasks.set(instance, tasks);
+    }
+    const previous = tasks.get(normalizedId);
+    previous?.controller.abort('replaced');
+    tasks.delete(normalizedId);
+    const controller = new AbortController();
+    tasks.set(normalizedId, { controller, task });
+    if (this.startupReady) queueMicrotask(() => this.runAfterStartupTask(instance, normalizedId));
+    return () => {
+      const current = this.afterStartupTasks.get(instance)?.get(normalizedId);
+      if (!current || current.controller !== controller) return;
+      controller.abort('cancelled');
+      this.afterStartupTasks.get(instance)?.delete(normalizedId);
+    };
+  }
+
+  private runAfterStartupTasks(instance: PluginInstance): void {
+    for (const id of this.afterStartupTasks.get(instance)?.keys() ?? []) {
+      void this.runAfterStartupTask(instance, id);
+    }
+  }
+
+  private async runAfterStartupTask(instance: PluginInstance, id: string): Promise<void> {
+    const entry = this.afterStartupTasks.get(instance)?.get(id);
+    if (!entry || entry.controller.signal.aborted || instance.lifecycle === 'disposed') return;
+    try {
+      await this.invocationGuard.invoke(instance, `after-startup:${id}`, () => entry.task(entry.controller.signal));
+    } catch (error) {
+      if (!entry.controller.signal.aborted) {
+        logger.warn(`After-startup plugin task failed: plugin=${instance.plugin.definition.name}, task=${id}`, error);
+      }
+    } finally {
+      const current = this.afterStartupTasks.get(instance)?.get(id);
+      if (current === entry) this.afterStartupTasks.get(instance)?.delete(id);
+    }
+  }
+
+  private cancelAfterStartupTasks(instance: PluginInstance): void {
+    for (const entry of this.afterStartupTasks.get(instance)?.values() ?? []) entry.controller.abort('instance-unloaded');
+    this.afterStartupTasks.delete(instance);
   }
 
   isRunning(): boolean {
@@ -406,11 +476,11 @@ export class PluginManager {
     }
     const operatorInstances = this.instances.get(operatorId)!;
 
-    for (const [pluginName, plugin] of this.loadedPlugins) {
+    await Promise.all(Array.from(this.loadedPlugins, async ([pluginName, plugin]) => {
       if ((plugin.definition.instanceScope ?? 'operator') === 'global') {
-        continue;
+        return;
       }
-      if (operatorInstances.has(pluginName)) continue;
+      if (operatorInstances.has(pluginName)) return;
 
       const configEntry = this.pluginsConfig.configs?.[pluginName];
       const enabled = this.resolveInstanceEnabled(pluginName, plugin, configEntry);
@@ -463,6 +533,7 @@ export class PluginManager {
           }
           return this.invocationGuard.invoke(instance, operation, callback);
         },
+        (id, task) => this.scheduleAfterStartup(instance, id, task),
       );
       instance.rawCtx = ctx;
       instance.ctx = this.invocationGuard.wrapContext(ctx, instance);
@@ -507,16 +578,16 @@ export class PluginManager {
       } else {
         instance.lifecycle = 'inactive';
       }
-    }
+    }));
   }
 
   private async initGlobalInstances(): Promise<void> {
-    for (const [pluginName, plugin] of this.loadedPlugins) {
+    await Promise.all(Array.from(this.loadedPlugins, async ([pluginName, plugin]) => {
       if ((plugin.definition.instanceScope ?? 'operator') !== 'global') {
-        continue;
+        return;
       }
       if (this.globalInstances.has(pluginName)) {
-        continue;
+        return;
       }
 
       const configEntry = this.pluginsConfig.configs?.[pluginName];
@@ -584,6 +655,7 @@ export class PluginManager {
           }
           return this.invocationGuard.invoke(instance, operation, callback);
         },
+        (id, task) => this.scheduleAfterStartup(instance, id, task),
       );
       instance.rawCtx = ctx;
       instance.ctx = this.invocationGuard.wrapContext(ctx, instance);
@@ -594,7 +666,7 @@ export class PluginManager {
       } else {
         instance.lifecycle = 'inactive';
       }
-    }
+    }));
   }
 
   removeInstancesForOperator(operatorId: string): void {
@@ -3032,10 +3104,15 @@ export class PluginManager {
     this.loadedPlugins = discoveredPlugins;
     logger.info(`Plugins discovered: ${Array.from(this.loadedPlugins.keys()).join(', ')}`);
 
-    await this.initGlobalInstances();
-    for (const operator of this.deps.getOperators()) {
-      await this.initInstancesForOperator(operator.config.id);
-    }
+    // Plugin instances are isolated by scope. Initialize independent global and
+    // operator instances concurrently while preserving each instance's own
+    // create -> activate lifecycle order.
+    await Promise.all([
+      this.initGlobalInstances(),
+      ...this.deps.getOperators().map((operator) => (
+        this.initInstancesForOperator(operator.config.id)
+      )),
+    ]);
   }
 
   private async teardownAllInstances(): Promise<void> {
@@ -3590,6 +3667,7 @@ export class PluginManager {
     const wasLoaded = instance.lifecycle !== 'inactive';
     if (!wasLoaded && instance.desiredLifecycle !== 'disposed') return;
     instance.lifecycle = 'stopping';
+    this.cancelAfterStartupTasks(instance);
     this.closeInstanceIngress(instance);
     await instance.rawCtx.network?.udp.closeAll().catch(() => undefined);
     this.invocationGuard.revokeInstance(instance, 'plugin instance stopping');

@@ -25,6 +25,15 @@ import type { LogbookSyncRegistrar } from './sync.js';
 import type { HostSettingsControl } from './settings.js';
 import type { HostDependencies } from './host-dependencies.js';
 
+/** A cancellable task started by Host after the core server is ready. */
+export type PluginAfterStartupTask = (signal: AbortSignal) => void | Promise<void>;
+
+/** Host-owned lifecycle services that do not block the initial plugin load. */
+export interface PluginLifecyclePort {
+  /** Schedule idempotent plugin work for the first post-startup turn. */
+  scheduleAfterStartup(id: string, task: PluginAfterStartupTask): () => void;
+}
+
 /**
  * Runtime services exposed to a plugin instance.
  *
@@ -128,6 +137,13 @@ export interface PluginContextBase {
    */
   readonly files: PluginFileStore;
 
+  /**
+   * Schedules optional initialization after the core server is ready.
+   * Registration is synchronous; the task is cancelled automatically when the
+   * plugin instance is unloaded.
+   */
+  readonly lifecycle: PluginLifecyclePort;
+
 }
 
 type CapabilityProperty<
@@ -230,7 +246,7 @@ export type PluginContext = PluginContextFor<readonly []>;
  */
 export type PluginCleanupContext = Pick<
   PluginContextBase,
-  'store' | 'log' | 'timers' | 'files' | 'operator'
+  'store' | 'log' | 'timers' | 'files' | 'operator' | 'lifecycle'
 >;
 
 /** Host-side erased runtime shape. Public plugin definitions should use `definePlugin()`. */

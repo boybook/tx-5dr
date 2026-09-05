@@ -1,5 +1,5 @@
 import type { SimulationScenarioDescriptor } from '@tx5dr/plugin-api';
-import { wwDigiAmbientIdentityPool } from './simulation-identities.js';
+import { wwDigiAmbientIdentityPool } from './ww-digi-simulation-identities.js';
 
 const GRID_MESSAGE = '{{peerCallsign}} (?<operatorCallsign>[A-Z0-9/]+) (?<operatorGrid>[A-R]{2}[0-9]{2})';
 const FINAL_MESSAGE = '{{peerCallsign}} (?<operatorCallsign>[A-Z0-9/]+) RR73';

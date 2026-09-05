@@ -246,6 +246,7 @@ async function start() {
       logger.info('no active profile, engine startup deferred until profile is configured');
     }
     bootstrapCoordinator.finalizeIfSettled();
+    clockManager.pluginManager.notifyStartupReady();
     logger.info('server startup complete');
 
     // 启动日志管理定时任务

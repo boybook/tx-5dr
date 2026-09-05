@@ -60,6 +60,10 @@ try {
   const contracts = stageAndPack('packages/contracts');
   const core = stageAndPack('packages/core');
   const pluginApi = stageAndPack('packages/plugin-api');
+  const archive = execFileSync('tar', ['-tf', pluginApi], { encoding: 'utf8' });
+  for (const asset of ['package/dist/contest-logbook-ui/contest-log.html', 'package/dist/contest-logbook-ui/assets/contest-log.js', 'package/dist/contest-logbook-ui/assets/contest-log.css']) {
+    if (!archive.split('\n').includes(asset)) throw new Error(`missing packed contest logbook UI asset: ${asset}`);
+  }
 
   writeFileSync(join(consumerRoot, 'package.json'), JSON.stringify({
     private: true,
@@ -78,6 +82,7 @@ try {
 import * as root from '@tx5dr/plugin-api';
 import * as toolkit from '@tx5dr/plugin-api/toolkit';
 import * as contest from '@tx5dr/plugin-api/contest';
+import * as ft8 from '@tx5dr/plugin-api/ft8';
 import * as testing from '@tx5dr/plugin-api/testing';
 
 const required = [
@@ -86,6 +91,9 @@ const required = [
   [toolkit.buildCabrilloDocument, 'toolkit.buildCabrilloDocument'],
   [contest.composeFT8ContestPlugin, 'contest.composeFT8ContestPlugin'],
   [contest.createFT8ContestTestKit, 'contest.createFT8ContestTestKit'],
+  [contest.standardFT8ContestLogbook, 'contest.standardFT8ContestLogbook'],
+  [ft8.createStandardQSOPluginRuntime, 'ft8.createStandardQSOPluginRuntime'],
+  [ft8.FT8MessageParser, 'ft8.FT8MessageParser'],
   [contest.createContestQsoEnvelopeAdapter, 'contest.createContestQsoEnvelopeAdapter'],
   [testing.createMockContext, 'testing.createMockContext'],
 ];

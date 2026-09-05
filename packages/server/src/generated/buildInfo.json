@@ -1,7 +1,7 @@
 {
   "channel": "nightly",
   "version": "1.0.0",
-  "pluginApiVersion": "2.1.0",
+  "pluginApiVersion": "2.5.0",
   "commit": "development",
   "commitShort": "development",
   "buildTimestamp": "development",

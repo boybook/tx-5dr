@@ -36,18 +36,6 @@ import {
 } from './assisted-qso-queue/index.js';
 
 import {
-  wwDigiStrategyPlugin,
-  wwDigiLocales,
-  wwDigiDirPath,
-  BUILTIN_WW_DIGI_PLUGIN_NAME,
-} from './ww-digi/index.js';
-
-import {
-  ftContestBuiltinPluginEntries,
-  FT_CONTEST_PLUGIN_NAMES,
-} from './ft-contests/index.js';
-
-import {
   snrFilterPlugin,
   snrFilterLocales,
   BUILTIN_SNR_FILTER_PLUGIN_NAME,
@@ -151,7 +139,6 @@ export interface BuiltinPluginEntry {
 export {
   BUILTIN_STANDARD_QSO_PLUGIN_NAME,
   BUILTIN_ASSISTED_QSO_QUEUE_PLUGIN_NAME,
-  BUILTIN_WW_DIGI_PLUGIN_NAME,
   BUILTIN_SNR_FILTER_PLUGIN_NAME,
   STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING,
   buildStandardQSODefaultTx6Message,
@@ -163,37 +150,7 @@ export {
   BUILTIN_AUTOCALL_IDLE_FREQUENCY_PLUGIN_NAME,
   BUILTIN_QSO_UDP_BROADCAST_PLUGIN_NAME,
   BUILTIN_NO_REPLY_MEMORY_FILTER_PLUGIN_NAME,
-  FT_CONTEST_PLUGIN_NAMES,
 };
-
-export { ftContestCatalog } from './ft-contests/index.js';
-export type {
-  ContestStationQso,
-  FTContestCatalogEntry,
-  FTContestPluginName,
-  GridContestQso,
-  GridSnrContestQso,
-  MemberAwareContestQso,
-  RoundupExchange,
-  RoundupQso,
-} from './ft-contests/index.js';
-
-export {
-  createWWDigiContestEntry,
-  readWWDigiContestEntry,
-  withWWDigiContestEntry,
-  wwDigiEditionId,
-  wwDigiRulesetVersion,
-  WW_DIGI_CONTEST_ID,
-  WW_DIGI_RULESET_VERSION,
-} from './ww-digi/contest-entry.js';
-export type {
-  WWDigiContestEntryInput,
-  WWDigiContestEntryView,
-  WWDigiContestSource,
-  WWDigiContestStatus,
-  WWDigiRulesetVersion,
-} from './ww-digi/contest-entry.js';
 
 // ===== Registry =====
 
@@ -212,13 +169,6 @@ export const BUILTIN_PLUGINS: BuiltinPluginEntry[] = [
     enabledByDefault: false,
     settingsNamespace: BUILTIN_STANDARD_QSO_PLUGIN_NAME,
   },
-  {
-    definition: wwDigiStrategyPlugin,
-    locales: wwDigiLocales,
-    enabledByDefault: false,
-    dirPath: wwDigiDirPath,
-  },
-  ...ftContestBuiltinPluginEntries,
   {
     definition: snrFilterPlugin,
     locales: snrFilterLocales,

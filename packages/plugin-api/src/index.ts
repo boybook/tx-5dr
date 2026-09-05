@@ -56,6 +56,7 @@ export type {
   StrategyPluginContext,
   PluginEligibilityContext,
 } from './context.js';
+export type { PluginAfterStartupTask, PluginLifecyclePort } from './context.js';
 export type {
   HostDependencies,
   HamlibHostDependency,
@@ -361,6 +362,9 @@ export type { PluginPageBoundResource } from './utils/page-scope.js';
 
 /** Composable FT8/FT4 contest rules, assembler and framework-neutral test kit. */
 export * from './toolkit/contest/index.js';
+
+/** Reusable standard FT8/FT4 QSO runtime for external strategy plugins. */
+export * from './ft8/index.js';
 
 /** QSO text field utilities. */
 export {

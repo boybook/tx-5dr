@@ -745,7 +745,7 @@ export function createMockHostSettingsControl(overrides?: Partial<HostSettingsCo
 export interface MockPluginContextOptions<
   Permissions extends readonly PluginPermission[] = readonly [],
 > {
-  /** Bundled Plugin API version exposed by the mock Host (default: `2.1.0`). */
+  /** Bundled Plugin API version exposed by the mock Host (default: `2.5.0`). */
   pluginApiVersion?: string;
   /** Initial config values (default: empty). */
   config?: Record<string, unknown>;
@@ -859,7 +859,7 @@ export function createMockContext<
   const configState = cloneJsonValue(opts.config ?? {}) as Record<string, unknown>;
 
   return {
-    pluginApiVersion: opts.pluginApiVersion ?? '2.1.0',
+    pluginApiVersion: opts.pluginApiVersion ?? '2.5.0',
     get config() {
       return cloneStructuredValue(configState);
     },
