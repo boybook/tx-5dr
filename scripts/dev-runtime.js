@@ -83,6 +83,9 @@ async function startTurbo() {
   console.log(`[dev-runtime] Web dev server port: ${selectedWebPort}`);
   console.log(`[dev-runtime] Server ready file: ${serverReadyFile}`);
   console.log(`[dev-runtime] rtc-data-audio UDP port: ${process.env.RTC_DATA_AUDIO_UDP_PORT || '50110'}`);
+  if (process.env.TX5DR_PLUGINS_DIR) {
+    console.log(`[dev-runtime] Plugin directory: ${path.resolve(process.env.TX5DR_PLUGINS_DIR)}`);
+  }
 
   // Preserve Turbo's dependency graph so workspace packages are built before
   // the server imports their dist entrypoints.
@@ -109,6 +112,9 @@ async function startTurbo() {
     TX5DR_WEB_DEV_PORT: String(selectedWebPort),
     RTC_DATA_AUDIO_UDP_PORT: process.env.RTC_DATA_AUDIO_UDP_PORT || '50110',
     RTC_DATA_AUDIO_ICE_UDP_MUX: process.env.RTC_DATA_AUDIO_ICE_UDP_MUX || '1',
+    ...(process.env.TX5DR_PLUGINS_DIR
+      ? { TX5DR_PLUGINS_DIR: path.resolve(process.env.TX5DR_PLUGINS_DIR) }
+      : {}),
     NODE_OPTIONS: withPreserveSymlinks(process.env.NODE_OPTIONS),
   };
 
