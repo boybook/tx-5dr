@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
-export const SpectrumPresetIdSchema = z.enum(['responsive', 'balanced', 'fine']);
-export const SpectrumPresetSchema = z.enum(['responsive', 'balanced', 'fine', 'custom']);
+export const SpectrumPresetIdSchema = z.enum(['responsive', 'balanced', 'block', 'fine']);
+export const SpectrumPresetSchema = z.enum(['responsive', 'balanced', 'block', 'fine', 'custom']);
 export type SpectrumPreset = z.infer<typeof SpectrumPresetSchema>;
 export type SpectrumPresetId = z.infer<typeof SpectrumPresetIdSchema>;
 
@@ -113,6 +113,19 @@ export const SPECTRUM_PRESET_DEFINITIONS: Record<SpectrumPresetId, SpectrumPrese
     preset: 'balanced',
     analysisIntervalMs: 150,
     frameRateHz: 1000 / 150,
+    fftSize: 8192,
+    targetSampleRate: 6000,
+    fftWindowDurationMs: (8192 / 6000) * 1000,
+    frequencyResolutionHz: 6000 / 8192,
+    frequencyRange: { min: 0, max: 3000 },
+    displayBinCount: 4097,
+    windowFunction: 'blackmanHarris',
+    haloReduce: false,
+  },
+  block: {
+    preset: 'block',
+    analysisIntervalMs: 600,
+    frameRateHz: 1000 / 600,
     fftSize: 8192,
     targetSampleRate: 6000,
     fftWindowDurationMs: (8192 / 6000) * 1000,

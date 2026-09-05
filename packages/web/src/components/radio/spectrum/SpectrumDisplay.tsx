@@ -3167,33 +3167,6 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                     })}
                   </div>
                   </AccordionItem>
-                {isAudioSpectrumSelected && canConfigureSpectrum && spectrumRenderConfig && (
-                  <AccordionItem key="audio-analysis" title={<span className="text-xs font-medium text-default-600">{t('spectrum.analysisSettings')}</span>}>
-                    <SpectrumAnalysisSettings
-                      config={spectrumRenderConfig}
-                      enabled={canConfigureSpectrum}
-                      pending={spectrumPresetPending}
-                      customDraft={customSpectrumDraft}
-                      customEditing={customSpectrumEditing}
-                      onPresetChange={handleSpectrumPresetChange}
-                      onCustomEditingChange={setCustomSpectrumEditing}
-                      onCustomDraftChange={setCustomSpectrumDraft}
-                    />
-                  </AccordionItem>
-                )}
-                {canConfigureTciSpectrum && tciSpectrumSettings && (
-                  <AccordionItem key="tci-analysis" title={<span className="text-xs font-medium text-default-600">{t('radio:spectrum.tciSettings.title')}</span>}>
-                    <TciSpectrumSettingsPanel
-                      settings={tciSpectrumSettings}
-                      pending={tciSpectrumSettingsPending}
-                      canWrite={canConfigureTciSpectrum}
-                      sampleRateState={tciIqSampleRateState}
-                      sampleRateDescriptor={tciIqSampleRateDescriptor}
-                      onCapabilityWrite={writeRadioCapability}
-                      onChange={handleTciSpectrumSettingsChange}
-                    />
-                  </AccordionItem>
-                )}
                 <AccordionItem key="interaction" title={<span className="text-xs font-medium text-default-600">{t('spectrum.interactionSettings')}</span>}>
                 <div className="space-y-4">
                 <div className="flex items-center justify-between gap-3 rounded-lg bg-default-100/50 px-2 py-2 dark:bg-default-50/10">
@@ -3244,6 +3217,29 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                 </AccordionItem>
                 <AccordionItem key="display" title={<span className="text-xs font-medium text-default-600">{t('spectrum.displaySettings')}</span>}>
                 <div className="space-y-4">
+                {isAudioSpectrumSelected && canConfigureSpectrum && spectrumRenderConfig && (
+                  <SpectrumAnalysisSettings
+                    config={spectrumRenderConfig}
+                    enabled={canConfigureSpectrum}
+                    pending={spectrumPresetPending}
+                    customDraft={customSpectrumDraft}
+                    customEditing={customSpectrumEditing}
+                    onPresetChange={handleSpectrumPresetChange}
+                    onCustomEditingChange={setCustomSpectrumEditing}
+                    onCustomDraftChange={setCustomSpectrumDraft}
+                  />
+                )}
+                {canConfigureTciSpectrum && tciSpectrumSettings && (
+                  <TciSpectrumSettingsPanel
+                    settings={tciSpectrumSettings}
+                    pending={tciSpectrumSettingsPending}
+                    canWrite={canConfigureTciSpectrum}
+                    sampleRateState={tciIqSampleRateState}
+                    sampleRateDescriptor={tciIqSampleRateDescriptor}
+                    onCapabilityWrite={writeRadioCapability}
+                    onChange={handleTciSpectrumSettingsChange}
+                  />
+                )}
                 {!isRadioSdrSelected && !isOpenWebRXSdrSelected && (
                   <Tabs
                     selectedKey={audioRangeSettings.mode}

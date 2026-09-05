@@ -104,6 +104,7 @@ export const SpectrumAnalysisSettings: React.FC<SpectrumAnalysisSettingsProps> =
       >
         <Tab key="responsive" title={t('spectrum.analysisPresetResponsive')} />
         <Tab key="balanced" title={t('spectrum.analysisPresetBalanced')} />
+        <Tab key="block" title={t('spectrum.analysisPresetBlock')} />
         <Tab key="fine" title={t('spectrum.analysisPresetFine')} />
         <Tab key="custom" title={t('spectrum.analysisPresetCustom')} />
       </Tabs>

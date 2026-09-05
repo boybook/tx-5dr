@@ -236,6 +236,7 @@
     "analysisPresetDescription": "Adjust refresh rate, time window, and frequency resolution",
     "analysisPresetResponsive": "Responsive",
     "analysisPresetBalanced": "Balanced",
+    "analysisPresetBlock": "Block",
     "analysisPresetFine": "Fine",
     "analysisPresetCustom": "Custom",
     "analysisPresetUpdateFailed": "Failed to update spectrum analysis preset",

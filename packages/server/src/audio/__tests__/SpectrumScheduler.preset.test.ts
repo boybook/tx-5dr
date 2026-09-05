@@ -40,6 +40,20 @@ describe('SpectrumScheduler presets', () => {
     expect(configChanged).toHaveBeenCalledTimes(1);
   });
 
+  it('provides the slow block preset for cross-cycle waterfall viewing', () => {
+    const scheduler = new SpectrumScheduler();
+    scheduler.applyPreset('block', 3);
+
+    expect(scheduler.getRenderConfig()).toMatchObject({
+      preset: 'block',
+      revision: 3,
+      analysisIntervalMs: 600,
+      frameRateHz: 1000 / 600,
+      fftSize: 8192,
+      frequencyResolutionHz: 6000 / 8192,
+    });
+  });
+
   it('keeps IF display tuning while changing the analysis preset', () => {
     const scheduler = new SpectrumScheduler();
     scheduler.setInputSignalType('icom-12k-if');

@@ -236,6 +236,7 @@
     "analysisPresetDescription": "调整刷新速度、时间窗和横向频率分辨率",
     "analysisPresetResponsive": "响应",
     "analysisPresetBalanced": "均衡",
+    "analysisPresetBlock": "分块",
     "analysisPresetFine": "精细",
     "analysisPresetCustom": "自定义",
     "analysisPresetUpdateFailed": "频谱分析档位更新失败",

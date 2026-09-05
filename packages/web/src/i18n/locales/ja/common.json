@@ -236,6 +236,7 @@
     "analysisPresetDescription": "更新速度、時間窓、周波数分解能を調整します",
     "analysisPresetResponsive": "応答優先",
     "analysisPresetBalanced": "バランス",
+    "analysisPresetBlock": "ブロック",
     "analysisPresetFine": "高精細",
     "analysisPresetCustom": "カスタム",
     "analysisPresetUpdateFailed": "スペクトル解析プリセットの更新に失敗しました",

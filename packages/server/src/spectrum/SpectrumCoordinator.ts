@@ -123,7 +123,7 @@ export class SpectrumCoordinator extends EventEmitter<SpectrumCoordinatorEvents>
       defaultKind,
       sources: [radioSource, openWebRXSource, audioSource],
       renderConfig,
-      presets: (['responsive', 'balanced', 'fine'] as const).map(getSpectrumPresetDefinition),
+      presets: (['responsive', 'balanced', 'block', 'fine'] as const).map(getSpectrumPresetDefinition),
     };
   }
 

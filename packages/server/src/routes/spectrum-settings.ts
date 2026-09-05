@@ -9,7 +9,7 @@ import {
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { requireRole } from '../auth/authPlugin.js';
 
-const PRESETS = ['responsive', 'balanced', 'fine'] as const;
+const PRESETS = ['responsive', 'balanced', 'block', 'fine'] as const;
 
 function createResponse(engine: DigitalRadioEngine, message?: string) {
   return SpectrumSettingsResponseSchema.parse({
