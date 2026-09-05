@@ -53,6 +53,7 @@ import {
   clampMonitorPlaybackBufferTarget,
   type MonitorPlaybackBufferProfile,
 } from '../../../audio/monitorPlaybackBufferPreference';
+import { enumerateVoiceInputDevices, getVoiceInputDeviceId, saveVoiceInputDeviceId, type VoiceInputDevice } from '../../../audio/audioRuntime';
 
 const logger = createLogger('RadioControl');
 
@@ -696,6 +697,10 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const [isSettingAndroidMicGain, setIsSettingAndroidMicGain] = useState(false);
   const [androidMicGainDraftDb, setAndroidMicGainDraftDb] = useState(18);
   const [isVoiceTxPopoverOpen, setIsVoiceTxPopoverOpen] = useState(false);
+  const [voiceInputDevices, setVoiceInputDevices] = useState<VoiceInputDevice[]>([]);
+  const [voiceInputDeviceId, setVoiceInputDeviceId] = useState<string | null>(() => getVoiceInputDeviceId());
+  const [isLoadingVoiceInputDevices, setIsLoadingVoiceInputDevices] = useState(false);
+  const [voiceInputDeviceError, setVoiceInputDeviceError] = useState<string | null>(null);
   const hasAutoOpenedVoiceTxUnderrunPopoverRef = React.useRef(false);
   const hasAppliedSavedAndroidMicGainRef = React.useRef(false);
 
@@ -706,6 +711,37 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const [hasActivatedMonitorPlayback, setHasActivatedMonitorPlayback] = useState(false);
   const [monitorAudioCodecPreference, setMonitorAudioCodecPreference] = useState<RealtimeAudioCodecPreference>(() => loadRealtimeAudioCodecPreference());
   const monitorWheelPixelRemainderRef = React.useRef(0);
+
+  const refreshVoiceInputDevices = React.useCallback(async () => {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    setIsLoadingVoiceInputDevices(true);
+    setVoiceInputDeviceError(null);
+    try {
+      let devices = await enumerateVoiceInputDevices();
+      // Device labels are hidden until microphone permission has been granted.
+      if (devices.length === 0 || devices.every((device) => !device.label)) {
+        try {
+          const permissionProbe = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+          permissionProbe.getTracks().forEach((track) => track.stop());
+          devices = await enumerateVoiceInputDevices();
+        } catch (error) {
+          setVoiceInputDeviceError(error instanceof DOMException && error.name === 'NotAllowedError'
+            ? t('voiceTx.microphonePermissionDenied')
+            : t('voiceTx.microphoneUnavailable'));
+        }
+      }
+      setVoiceInputDevices(devices);
+      if (voiceInputDeviceId && !devices.some((d) => d.deviceId === voiceInputDeviceId)) {
+        setVoiceInputDeviceId(null);
+        saveVoiceInputDeviceId(null);
+      }
+    } finally { setIsLoadingVoiceInputDevices(false); }
+  }, [t, voiceInputDeviceId]);
+
+  useEffect(() => {
+    if (!isVoiceTxPopoverOpen) return;
+    void refreshVoiceInputDevices();
+  }, [isVoiceTxPopoverOpen, refreshVoiceInputDevices]);
 
   useEffect(() => {
     if (!isAudioMonitorDisabledForIf) {
@@ -2211,6 +2247,39 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                     <div className="w-max max-w-[min(16rem,calc(100vw-4rem))] space-y-3 text-xs">
                       <div className="font-medium text-sm text-default-700">
                         {t('voiceTx.audioUplink')}
+                      </div>
+
+                      <div className="space-y-1.5 border-b border-divider pb-2">
+                        <div className="font-medium text-default-700">{t('voiceTx.microphone')}</div>
+                        <Select
+                          size="sm"
+                          selectedKeys={voiceInputDeviceId ? [voiceInputDeviceId] : ['default']}
+                          onOpenChange={(open) => { if (open) void refreshVoiceInputDevices(); }}
+                          onSelectionChange={(keys) => {
+                            const next = String(Array.from(keys)[0] ?? 'default');
+                            const id = next === 'default' ? null : next;
+                            setVoiceInputDeviceId(id);
+                            saveVoiceInputDeviceId(id);
+                            if (voiceCaptureController.isPTTActive) addToast({ title: t('voiceTx.microphoneNextTransmission'), color: 'warning', timeout: 3000 });
+                          }}
+                          isDisabled={voiceCaptureController.isPTTActive || isLoadingVoiceInputDevices || Boolean(voiceInputDeviceError)}
+                          aria-label={t('voiceTx.microphone')}
+                          className="min-w-56"
+                        >
+                          <SelectItem key="default">{t('voiceTx.systemDefaultMicrophone')}</SelectItem>
+                          {voiceInputDevices.map((device) => (
+                            <SelectItem key={device.deviceId}>{device.label || t('voiceTx.microphoneUnnamed')}</SelectItem>
+                          ))}
+                        </Select>
+                        {voiceInputDeviceError && (
+                          <div className="text-[11px] text-danger">
+                            {voiceInputDeviceError}{' '}
+                            <button type="button" className="underline" onClick={() => void refreshVoiceInputDevices()}>
+                              {t('voiceTx.retryMicrophonePermission')}
+                            </button>
+                          </div>
+                        )}
+                        {voiceCaptureController.isPTTActive && <div className="text-[11px] text-warning">{t('voiceTx.microphoneDisabledDuringTx')}</div>}
                       </div>
 
                       <div className="grid grid-cols-[auto_auto] gap-x-5 gap-y-1">

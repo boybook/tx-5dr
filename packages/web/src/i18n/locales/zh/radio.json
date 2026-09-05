@@ -257,7 +257,17 @@
     "dropsAndUnderruns": "弃帧 / 欠载",
     "dropsUnderrunsShort": "弃帧/欠载",
     "writeFailures": "写入失败",
-    "notDirectlyMeasured": "不可直测"
+    "notDirectlyMeasured": "不可直测",
+    "commsMicrophone": "通联麦克风",
+    "commsMicrophoneHint": "用于语音发射的电脑麦克风，与电台音频设备分开设置。",
+    "microphone": "麦克风",
+    "systemDefaultMicrophone": "系统默认麦克风",
+    "microphoneUnnamed": "未命名麦克风",
+    "microphoneNextTransmission": "麦克风将在下次发射时生效",
+    "microphoneDisabledDuringTx": "发射中不可切换麦克风",
+    "microphonePermissionDenied": "麦克风权限未授权",
+    "microphoneUnavailable": "暂时无法访问麦克风",
+    "retryMicrophonePermission": "重试"
   },
   "realtime": {
     "scopeRadio": "电台监听",
@@ -515,7 +525,11 @@
       "versionConflict": "队列已在其他位置更新，请按最新顺序重试"
     },
     "strategyActionUnavailable": "通联状态已变化，此操作不再可用。",
-    "strategyActions": { "more": "更多操作", "pickSpectrum": "从频谱选择", "cancel": "取消" },
+    "strategyActions": {
+      "more": "更多操作",
+      "pickSpectrum": "从频谱选择",
+      "cancel": "取消"
+    },
     "streamStateErrors": {
       "qsoChanged": "该通联已发生变化，请重新确认当前行后再操作。",
       "stateUnavailable": "该通联当前已不能切换到这个状态。",

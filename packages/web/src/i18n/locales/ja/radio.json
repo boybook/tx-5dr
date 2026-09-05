@@ -245,7 +245,17 @@
     "dropsAndUnderruns": "放棄されたフレーム/アンダーラン",
     "dropsUnderrunsShort": "放棄されたフレーム/アンダーラン",
     "writeFailures": "書き込みに失敗しました",
-    "notDirectlyMeasured": "直接測定できない"
+    "notDirectlyMeasured": "直接測定できない",
+    "commsMicrophone": "通信用マイク",
+    "commsMicrophoneHint": "音声送信用のコンピューターマイク。無線機のオーディオデバイスとは別に設定します。",
+    "microphone": "マイク",
+    "systemDefaultMicrophone": "システムのデフォルトマイク",
+    "microphoneUnnamed": "名前のないマイク",
+    "microphoneNextTransmission": "次回の送信からマイクを適用します",
+    "microphoneDisabledDuringTx": "送信中はマイクを変更できません",
+    "microphonePermissionDenied": "マイクの権限が拒否されました",
+    "microphoneUnavailable": "マイクを利用できません",
+    "retryMicrophonePermission": "再試行"
   },
   "realtime": {
     "scopeRadio": "無線モニター",
@@ -503,7 +513,11 @@
       "versionConflict": "別の場所でキューが更新されました。最新の順序で再試行してください"
     },
     "strategyActionUnavailable": "QSO の状態が変更されたため、この操作は使用できません。",
-    "strategyActions": { "more": "その他の操作", "pickSpectrum": "スペクトラムから選択", "cancel": "キャンセル" },
+    "strategyActions": {
+      "more": "その他の操作",
+      "pickSpectrum": "スペクトラムから選択",
+      "cancel": "キャンセル"
+    },
     "streamStateErrors": {
       "qsoChanged": "交信状態が更新されました。現在の行を確認してから再試行してください。",
       "stateUnavailable": "この交信では、その状態を選択できなくなりました。",

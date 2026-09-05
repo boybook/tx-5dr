@@ -27,6 +27,31 @@ export const VOICE_KEYER_RECORDING_AUDIO_CONSTRAINTS = {
   ...BROWSER_RADIO_AUDIO_PROCESSING_CONSTRAINTS,
 } satisfies AudioTrackConstraints;
 
+const VOICE_TX_INPUT_DEVICE_KEY = 'tx5dr.voiceTx.inputDeviceId';
+export type VoiceInputDevice = Pick<MediaDeviceInfo, 'deviceId' | 'label' | 'kind'>;
+
+export function getVoiceInputDeviceId(): string | null {
+  try {
+    const value = window.localStorage.getItem(VOICE_TX_INPUT_DEVICE_KEY);
+    return value && value !== 'default' ? value : null;
+  } catch { return null; }
+}
+
+export function saveVoiceInputDeviceId(deviceId: string | null): void {
+  try {
+    if (deviceId) window.localStorage.setItem(VOICE_TX_INPUT_DEVICE_KEY, deviceId);
+    else window.localStorage.removeItem(VOICE_TX_INPUT_DEVICE_KEY);
+  } catch { /* ignore storage failures */ }
+}
+
+export async function enumerateVoiceInputDevices(): Promise<VoiceInputDevice[]> {
+  if (!navigator.mediaDevices?.enumerateDevices) return [];
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  return devices
+    .filter((d) => d.kind === 'audioinput' && d.deviceId !== 'default')
+    .map(({ deviceId, label, kind }) => ({ deviceId, label, kind }));
+}
+
 export async function ensureInteractiveAudioContext(existing?: AudioContext | null): Promise<AudioContext> {
   const audioContext = existing ?? new AudioContext({
     latencyHint: 'interactive',
@@ -60,7 +85,10 @@ export async function requestInteractiveMicrophone(
   }
 
   const stream = await navigator.mediaDevices.getUserMedia({
-    audio: constraints,
+    audio: {
+      ...constraints,
+      ...(getVoiceInputDeviceId() ? { deviceId: { exact: getVoiceInputDeviceId()! } } : {}),
+    },
     video: false,
   });
 

@@ -257,7 +257,17 @@
     "dropsAndUnderruns": "Discards / underruns",
     "dropsUnderrunsShort": "Discards/underruns",
     "writeFailures": "Write failures",
-    "notDirectlyMeasured": "Not directly measurable"
+    "notDirectlyMeasured": "Not directly measurable",
+    "commsMicrophone": "Communications microphone",
+    "commsMicrophoneHint": "The computer microphone used for voice transmit, separate from radio audio devices.",
+    "microphone": "Microphone",
+    "systemDefaultMicrophone": "System default microphone",
+    "microphoneUnnamed": "Unnamed microphone",
+    "microphoneNextTransmission": "Microphone will apply on the next transmission",
+    "microphoneDisabledDuringTx": "Microphone cannot be changed during transmit",
+    "microphonePermissionDenied": "Microphone permission was denied",
+    "microphoneUnavailable": "The microphone is unavailable",
+    "retryMicrophonePermission": "Retry"
   },
   "realtime": {
     "scopeRadio": "radio monitoring",
@@ -515,7 +525,11 @@
       "versionConflict": "The queue was updated elsewhere; retry using the latest order"
     },
     "strategyActionUnavailable": "This action is no longer available because the QSO changed.",
-    "strategyActions": { "more": "More actions", "pickSpectrum": "Pick from spectrum", "cancel": "Cancel" },
+    "strategyActions": {
+      "more": "More actions",
+      "pickSpectrum": "Pick from spectrum",
+      "cancel": "Cancel"
+    },
     "streamStateErrors": {
       "qsoChanged": "This QSO changed before the state could be applied. Review the current row and try again.",
       "stateUnavailable": "That state is no longer available for this QSO.",
