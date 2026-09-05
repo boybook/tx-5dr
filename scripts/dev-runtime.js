@@ -11,6 +11,7 @@ if (!['web', 'electron'].includes(mode)) {
 }
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
+const LOCAL_MARKETPLACE_PLUGIN_DIR = path.join(PROJECT_ROOT, '.dev', 'plugins');
 const DEFAULT_SERVER_PORT = 4000;
 const DEFAULT_WEB_PORT = 8076;
 let turboChild = null;
@@ -68,6 +69,8 @@ function withPreserveSymlinks(nodeOptions = '') {
 }
 
 async function startTurbo() {
+  const pluginDirectory = process.env.TX5DR_PLUGINS_DIR
+    || (fs.existsSync(LOCAL_MARKETPLACE_PLUGIN_DIR) ? LOCAL_MARKETPLACE_PLUGIN_DIR : null);
   selectedServerPort = hasExplicitServerPort
     ? selectedServerPort
     : strictServerPort
@@ -83,8 +86,8 @@ async function startTurbo() {
   console.log(`[dev-runtime] Web dev server port: ${selectedWebPort}`);
   console.log(`[dev-runtime] Server ready file: ${serverReadyFile}`);
   console.log(`[dev-runtime] rtc-data-audio UDP port: ${process.env.RTC_DATA_AUDIO_UDP_PORT || '50110'}`);
-  if (process.env.TX5DR_PLUGINS_DIR) {
-    console.log(`[dev-runtime] Plugin directory: ${path.resolve(process.env.TX5DR_PLUGINS_DIR)}`);
+  if (pluginDirectory) {
+    console.log(`[dev-runtime] Plugin directory: ${path.resolve(pluginDirectory)}`);
   }
 
   // Preserve Turbo's dependency graph so workspace packages are built before
@@ -93,6 +96,7 @@ async function startTurbo() {
     'turbo',
     'run',
     'dev',
+    '--env-mode=loose',
     '--concurrency=20',
     '--filter=!@tx5dr/client-tools',
   ];
@@ -112,8 +116,10 @@ async function startTurbo() {
     TX5DR_WEB_DEV_PORT: String(selectedWebPort),
     RTC_DATA_AUDIO_UDP_PORT: process.env.RTC_DATA_AUDIO_UDP_PORT || '50110',
     RTC_DATA_AUDIO_ICE_UDP_MUX: process.env.RTC_DATA_AUDIO_ICE_UDP_MUX || '1',
-    ...(process.env.TX5DR_PLUGINS_DIR
-      ? { TX5DR_PLUGINS_DIR: path.resolve(process.env.TX5DR_PLUGINS_DIR) }
+    ...(pluginDirectory
+      ? {
+          TX5DR_PLUGINS_DIR: path.resolve(pluginDirectory),
+        }
       : {}),
     NODE_OPTIONS: withPreserveSymlinks(process.env.NODE_OPTIONS),
   };
