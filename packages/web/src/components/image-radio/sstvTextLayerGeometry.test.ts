@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import type { ImageTemplateTextLayer } from '@tx5dr/contracts';
 
 import {
+  layerHandles,
+  moveLayer,
   moveTextLayer,
   normalizeLayerRotation,
   pointInsideTextLayer,
@@ -63,5 +65,13 @@ describe('SSTV text layer geometry', () => {
     const recoveredBottom = moveTextLayer(layer, { x: 50, y: 150 }, 100, 100);
     expect(recoveredBottom.y).toBeCloseTo(0.8);
     expect(scaleTextLayer(layer, 4, 100, 100).width).toBeGreaterThan(1);
+  });
+
+  it('uses the same handles and movement constraints for image layers', () => {
+    const image = { x: 0.2, y: 0.25, width: 0.4, height: 0.3, rotation: 20 };
+    expect(layerHandles(image, 100, 100).center).toEqual({ x: 40, y: 40 });
+    const moved = moveLayer(image, { x: 80, y: 80 }, 100, 100);
+    expect(moved.x).toBeGreaterThan(image.x);
+    expect(moved.y).toBeGreaterThan(image.y);
   });
 });

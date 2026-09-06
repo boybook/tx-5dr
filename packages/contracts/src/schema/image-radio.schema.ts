@@ -266,13 +266,64 @@ export const ImageTemplateTextLayerSchema = z.object({
 });
 export type ImageTemplateTextLayer = z.infer<typeof ImageTemplateTextLayerSchema>;
 
+export const ImageTemplateImageSourceSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('artifact'), artifactId: z.string().min(1) }),
+  z.object({ type: z.literal('asset'), assetId: z.string().regex(/^[a-f0-9]{64}$/) }),
+]);
+export type ImageTemplateImageSource = z.infer<typeof ImageTemplateImageSourceSchema>;
+
+export const ImageComposerCropSchema = z.object({
+  x: z.number().min(0).max(1),
+  y: z.number().min(0).max(1),
+  width: z.number().positive().max(1),
+  height: z.number().positive().max(1),
+}).refine((crop) => crop.x + crop.width <= 1.000001 && crop.y + crop.height <= 1.000001, 'Crop must stay inside the source image');
+export type ImageComposerCrop = z.infer<typeof ImageComposerCropSchema>;
+
+export const ImageTemplateImageLayerSchema = z.object({
+  id: z.string().min(1).max(64),
+  kind: z.literal('image'),
+  source: ImageTemplateImageSourceSchema,
+  x: z.number().min(-2).max(2),
+  y: z.number().min(-2).max(2),
+  width: z.number().positive().max(4),
+  height: z.number().positive().max(4),
+  rotation: z.number().min(-180).max(180).default(0),
+  fit: z.enum(['contain', 'cover']).default('contain'),
+  crop: ImageComposerCropSchema.optional(),
+  flipX: z.boolean().optional(),
+  flipY: z.boolean().optional(),
+});
+export type ImageTemplateImageLayer = z.infer<typeof ImageTemplateImageLayerSchema>;
+
+export const ImageTemplateLayerSchema = z.union([
+  ImageTemplateTextLayerSchema,
+  ImageTemplateImageLayerSchema,
+]);
+export type ImageTemplateLayer = z.infer<typeof ImageTemplateLayerSchema>;
+
+export const ImageComposerTransformSchema = z.object({
+  x: z.number().min(-2).max(2),
+  y: z.number().min(-2).max(2),
+  width: z.number().positive().max(4),
+  height: z.number().positive().max(4),
+  rotation: z.number().min(-180).max(180).default(0),
+  fit: z.enum(['contain', 'cover']).default('cover'),
+  crop: ImageComposerCropSchema.optional(),
+  flipX: z.boolean().optional(),
+  flipY: z.boolean().optional(),
+});
+export type ImageComposerTransform = z.infer<typeof ImageComposerTransformSchema>;
+
 export const ImageTemplateSchema = z.object({
   id: z.string(),
   operatorId: z.string().optional(),
   name: z.string().min(1).max(80),
   builtIn: z.boolean().default(false),
   backgroundArtifactId: z.string().optional(),
-  layers: z.array(ImageTemplateTextLayerSchema).max(16),
+  backgroundSource: ImageTemplateImageSourceSchema.optional(),
+  backgroundTransform: ImageComposerTransformSchema.optional(),
+  layers: z.array(ImageTemplateLayerSchema).max(16),
   createdAt: z.number(),
   updatedAt: z.number(),
 });
@@ -284,8 +335,17 @@ export const ImageComposerBackgroundSchema = z.object({
   height: z.number().int().positive(),
   updatedAt: z.number(),
   imageUrl: z.string(),
+  assetId: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  transform: ImageComposerTransformSchema.optional(),
 });
 export type ImageComposerBackground = z.infer<typeof ImageComposerBackgroundSchema>;
+
+export const ImageComposerAssetSchema = z.object({
+  id: z.string().regex(/^[a-f0-9]{64}$/),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+});
+export type ImageComposerAsset = z.infer<typeof ImageComposerAssetSchema>;
 
 export const ImageRxSubscriptionSchema = z.object({ enabled: z.boolean() });
 export const SstvTxStartCommandSchema = z.object({

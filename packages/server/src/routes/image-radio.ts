@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
-import { ImagePaperSaveCommandSchema, ImageReceiveProfileSchema, ImageTemplateSchema, SstvTxEnvelopeSelectionSchema, UserRole } from '@tx5dr/contracts';
+import { ImageComposerTransformSchema, ImagePaperSaveCommandSchema, ImageReceiveProfileSchema, ImageTemplateSchema, SstvTxEnvelopeSelectionSchema, UserRole } from '@tx5dr/contracts';
 
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { AuthManager } from '../auth/AuthManager.js';
@@ -228,6 +228,46 @@ export async function imageRadioRoutes(fastify: FastifyInstance): Promise<void> 
     }
   });
 
+  fastify.patch('/composer-backgrounds/:operatorId', { preHandler: [requireRole(UserRole.OPERATOR)] }, async (request, reply) => {
+    const { operatorId } = request.params as { operatorId: string };
+    if (!canAccessOperator(request, operatorId)) return reply.code(403).send({ success: false, error: { code: 'FORBIDDEN' } });
+    const transform = ImageComposerTransformSchema.parse(request.body);
+    const { composerBackgrounds } = requireStores(engine);
+    try {
+      const background = await composerBackgrounds.updateTransform(operatorId, transform);
+      return reply.send({ success: true, background });
+    } catch (error) {
+      const code = error instanceof Error ? error.message : 'IMAGE_COMPOSER_BACKGROUND_NOT_FOUND';
+      return reply.code(404).send({ success: false, error: { code } });
+    }
+  });
+
+  fastify.post('/composer-assets/:operatorId', { preHandler: [requireRole(UserRole.OPERATOR)] }, async (request, reply) => {
+    const { operatorId } = request.params as { operatorId: string };
+    if (!canAccessOperator(request, operatorId)) return reply.code(403).send({ success: false, error: { code: 'FORBIDDEN' } });
+    const file = await request.file({ limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
+    if (!file || file.mimetype !== 'image/png') return reply.code(400).send({ success: false, error: { code: 'IMAGE_COMPOSER_ASSET_INVALID' } });
+    const { composerBackgrounds } = requireStores(engine);
+    try {
+      const asset = await composerBackgrounds.saveAsset(operatorId, await file.toBuffer());
+      return reply.code(201).send({ success: true, asset });
+    } catch (error) {
+      const code = error instanceof Error ? error.message : 'IMAGE_COMPOSER_ASSET_INVALID';
+      return reply.code(400).send({ success: false, error: { code } });
+    }
+  });
+
+  fastify.get('/composer-assets/:operatorId/:assetId/image', { preHandler: [requireRole(UserRole.OPERATOR)] }, async (request, reply) => {
+    const { operatorId, assetId } = request.params as { operatorId: string; assetId: string };
+    if (!canAccessOperator(request, operatorId)) return reply.code(403).send({ success: false, error: { code: 'FORBIDDEN' } });
+    const { composerBackgrounds } = requireStores(engine);
+    try {
+      return reply.type('image/png').header('Cache-Control', 'private, no-store').send(await composerBackgrounds.readAsset(operatorId, assetId));
+    } catch {
+      return reply.code(404).send({ success: false, error: { code: 'IMAGE_COMPOSER_ASSET_NOT_FOUND' } });
+    }
+  });
+
   fastify.get('/sstv-tx-preferences/:operatorId', { preHandler: [requireRole(UserRole.OPERATOR)] }, async (request, reply) => {
     const { operatorId } = request.params as { operatorId: string };
     if (!canAccessOperator(request, operatorId)) return reply.code(403).send({ success: false, error: { code: 'FORBIDDEN' } });
@@ -302,9 +342,27 @@ export async function imageRadioRoutes(fastify: FastifyInstance): Promise<void> 
 
   fastify.put('/templates/:id', { preHandler: [requireRole(UserRole.OPERATOR)] }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const body = ImageTemplateSchema.pick({ name: true, backgroundArtifactId: true, layers: true }).extend({ operatorId: ImageTemplateSchema.shape.operatorId.unwrap() }).parse(request.body);
+    const body = ImageTemplateSchema.pick({ name: true, backgroundArtifactId: true, backgroundSource: true, backgroundTransform: true, layers: true }).extend({ operatorId: ImageTemplateSchema.shape.operatorId.unwrap() }).parse(request.body);
     if (!canAccessOperator(request, body.operatorId)) return reply.code(403).send({ success: false, error: { code: 'FORBIDDEN' } });
-    const { templates } = requireStores(engine);
+    const { artifacts, composerBackgrounds, templates } = requireStores(engine);
+    const sources = [
+      body.backgroundSource,
+      ...body.layers.flatMap((layer) => 'kind' in layer && layer.kind === 'image' && 'source' in layer ? [layer.source] : []),
+    ].filter((source): source is NonNullable<typeof body.backgroundSource> => Boolean(source));
+    for (const source of sources) {
+      if (source.type === 'asset') {
+        try {
+          await composerBackgrounds.readAsset(body.operatorId, source.assetId);
+        } catch {
+          return reply.code(400).send({ success: false, error: { code: 'IMAGE_COMPOSER_ASSET_NOT_FOUND' } });
+        }
+      } else {
+        const artifact = artifacts.get(source.artifactId);
+        if (!artifact || artifact.operatorId && !canAccessOperator(request, artifact.operatorId)) {
+          return reply.code(400).send({ success: false, error: { code: 'IMAGE_ARTIFACT_NOT_FOUND' } });
+        }
+      }
+    }
     return reply.send({ success: true, template: await templates.save(body.operatorId, { id, ...body }) });
   });
 

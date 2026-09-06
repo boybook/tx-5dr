@@ -2,11 +2,21 @@ import type { ImageTemplateTextLayer } from '@tx5dr/contracts';
 
 export type CanvasPoint = { x: number; y: number };
 
+export type TransformableLayer = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation?: number;
+};
+
 export type TextLayerHandles = {
   center: CanvasPoint;
   scale: CanvasPoint;
   rotate: CanvasPoint;
 };
+
+export type LayerHandles = TextLayerHandles;
 
 export function textLayerInspectorPlacement(canvasLeftInWindow: number): 'side' | 'bottom' {
   return canvasLeftInWindow >= 232 ? 'side' : 'bottom';
@@ -59,6 +69,26 @@ export function textLayerHandles(
   };
 }
 
+export function layerHandles(
+  layer: TransformableLayer,
+  canvasWidth: number,
+  canvasHeight: number,
+  rotateOffsetPixels = 24,
+): LayerHandles {
+  const center = {
+    x: (layer.x + layer.width / 2) * canvasWidth,
+    y: (layer.y + layer.height / 2) * canvasHeight,
+  };
+  const rotation = layer.rotation ?? 0;
+  const scaleOffset = rotateOffset({ x: layer.width * canvasWidth / 2, y: layer.height * canvasHeight / 2 }, rotation);
+  const rotateHandleOffset = rotateOffset({ x: 0, y: -(layer.height * canvasHeight / 2 + rotateOffsetPixels) }, rotation);
+  return {
+    center,
+    scale: { x: center.x + scaleOffset.x, y: center.y + scaleOffset.y },
+    rotate: { x: center.x + rotateHandleOffset.x, y: center.y + rotateHandleOffset.y },
+  };
+}
+
 export function pointDistance(first: CanvasPoint, second: CanvasPoint): number {
   return Math.hypot(first.x - second.x, first.y - second.y);
 }
@@ -70,6 +100,18 @@ export function pointInsideTextLayer(
   canvasHeight: number,
 ): boolean {
   const { center } = textLayerHandles(layer, canvasWidth, canvasHeight);
+  const local = rotateOffset({ x: point.x - center.x, y: point.y - center.y }, -(layer.rotation ?? 0));
+  return Math.abs(local.x) <= layer.width * canvasWidth / 2
+    && Math.abs(local.y) <= layer.height * canvasHeight / 2;
+}
+
+export function pointInsideLayer(
+  point: CanvasPoint,
+  layer: TransformableLayer,
+  canvasWidth: number,
+  canvasHeight: number,
+): boolean {
+  const { center } = layerHandles(layer, canvasWidth, canvasHeight);
   const local = rotateOffset({ x: point.x - center.x, y: point.y - center.y }, -(layer.rotation ?? 0));
   return Math.abs(local.x) <= layer.width * canvasWidth / 2
     && Math.abs(local.y) <= layer.height * canvasHeight / 2;
@@ -101,6 +143,53 @@ function recoverOffCanvasAxis(center: number, extent: number, canvasSize: number
   if (center + extent <= 0) return extent >= canvasSize / 2 ? canvasSize / 2 : extent;
   if (center - extent >= canvasSize) return extent >= canvasSize / 2 ? canvasSize / 2 : canvasSize - extent;
   return center;
+}
+
+export function moveLayer<T extends TransformableLayer>(
+  layer: T,
+  center: CanvasPoint,
+  canvasWidth: number,
+  canvasHeight: number,
+): T {
+  const radians = (layer.rotation ?? 0) * Math.PI / 180;
+  const halfWidth = layer.width * canvasWidth / 2;
+  const halfHeight = layer.height * canvasHeight / 2;
+  const extentX = Math.abs(Math.cos(radians)) * halfWidth + Math.abs(Math.sin(radians)) * halfHeight;
+  const extentY = Math.abs(Math.sin(radians)) * halfWidth + Math.abs(Math.cos(radians)) * halfHeight;
+  const recoveredCenter = {
+    x: recoverOffCanvasAxis(center.x, extentX, canvasWidth),
+    y: recoverOffCanvasAxis(center.y, extentY, canvasHeight),
+  };
+  return {
+    ...layer,
+    x: clamp(recoveredCenter.x / canvasWidth - layer.width / 2, MIN_LAYER_POSITION, MAX_LAYER_POSITION),
+    y: clamp(recoveredCenter.y / canvasHeight - layer.height / 2, MIN_LAYER_POSITION, MAX_LAYER_POSITION),
+  };
+}
+
+export function scaleImageLayer<T extends TransformableLayer>(
+  layer: T,
+  requestedScale: number,
+  canvasWidth: number,
+  canvasHeight: number,
+): T {
+  const scale = clamp(requestedScale, MIN_LAYER_SIZE / layer.width, MAX_LAYER_SIZE / layer.width);
+  const { center } = layerHandles(layer, canvasWidth, canvasHeight);
+  return moveLayer({
+    ...layer,
+    width: layer.width * scale,
+    height: layer.height * scale,
+  }, center, canvasWidth, canvasHeight);
+}
+
+export function rotateLayer<T extends TransformableLayer>(
+  layer: T,
+  rotation: number,
+  canvasWidth: number,
+  canvasHeight: number,
+): T {
+  const { center } = layerHandles(layer, canvasWidth, canvasHeight);
+  return moveLayer({ ...layer, rotation: normalizeLayerRotation(rotation) }, center, canvasWidth, canvasHeight);
 }
 
 export function scaleTextLayer(

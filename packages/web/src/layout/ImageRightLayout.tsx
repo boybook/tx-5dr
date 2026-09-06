@@ -5,6 +5,7 @@ import { faImages, faPaperPlane } from '@fortawesome/free-solid-svg-icons';
 
 import { ImageHistoryTimeline } from '../components/image-radio/ImageHistoryTimeline';
 import { SstvComposer } from '../components/image-radio/SstvComposer';
+import { SSTV_COMPOSER_INSERT_IMAGE_EVENT } from '../components/image-radio/sstvComposerEvents';
 import { VoiceQSOLogCard } from '../components/voice/VoiceQSOLogCard';
 import { VoicePTTButton } from '../components/voice/VoicePTTButton';
 import { RadioControl } from '../components/radio/control/RadioControl';
@@ -29,6 +30,12 @@ export function ImageRightLayout() {
 
   useEffect(() => {
     if (isFax) setSelectedTab('history');
+  }, [isFax]);
+
+  useEffect(() => {
+    const openComposer = () => { if (!isFax) setSelectedTab('transmit'); };
+    window.addEventListener(SSTV_COMPOSER_INSERT_IMAGE_EVENT, openComposer);
+    return () => window.removeEventListener(SSTV_COMPOSER_INSERT_IMAGE_EVENT, openComposer);
   }, [isFax]);
 
   return (
@@ -75,7 +82,7 @@ export function ImageRightLayout() {
         ) : null}
       </div>
       {!isFax ? (
-        <div className="flex-shrink-0 px-2 pb-2 md:px-5">
+        <div className="flex-shrink-0 px-2 py-2 md:px-5">
           <VoiceQSOLogCard
             collapsed={qsoCollapsed}
             onCollapsedChange={setQsoCollapsed}

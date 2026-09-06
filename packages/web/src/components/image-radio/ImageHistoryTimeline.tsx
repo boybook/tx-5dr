@@ -8,6 +8,8 @@ import {
   faCheck,
   faDownload,
   faImages,
+  faPlus,
+  faReply,
   faRepeat,
   faRotate,
   faTrash,
@@ -25,11 +27,16 @@ import { formatFrequencyMHz } from '../../utils/frequencyMHz';
 import { canResendImageHistoryEntry, historyEnvelopeSelection } from './imageHistoryResend';
 import { groupImageHistoryByDay } from './imageHistoryGrouping';
 import { SstvCaptureConfirmModal } from './SstvCaptureConfirmModal';
+import { SSTV_COMPOSER_INSERT_IMAGE_EVENT } from './sstvComposerEvents';
 
 function historyFileName(entry: ImageHistoryEntry): string {
   const timestamp = new Date(entry.record.occurredAt).toISOString().replace(/[:.]/g, '-');
   const mode = entry.artifact.codecMode.replace(/[^a-zA-Z0-9_-]+/g, '-');
   return `tx5dr-${entry.record.direction}-${entry.artifact.family}-${mode}-${timestamp}.png`;
+}
+
+function isTxHistoryRecord(record: ImageHistoryEntry['record']): record is Extract<ImageHistoryEntry['record'], { direction: 'tx' }> {
+  return record.direction === 'tx';
 }
 
 async function downloadBlob(blob: Blob, fileName: string, title: string): Promise<void> {
@@ -64,6 +71,10 @@ function HistoryEntry({
   onDownload,
   onDelete,
   onResend,
+  onInsert,
+  canInsert,
+  onReply,
+  canReply,
 }: {
   entry: ImageHistoryEntry;
   canDelete: boolean;
@@ -75,11 +86,18 @@ function HistoryEntry({
   onDownload: () => void;
   onDelete: () => void;
   onResend: () => void;
+  onInsert: () => void;
+  canInsert: boolean;
+  onReply: () => void;
+  canReply: boolean;
 }) {
   const { t } = useTranslation('image');
   const [url, setUrl] = useState<string | null>(null);
-  const isTx = entry.record.direction === 'tx';
-  const interrupted = isTx && entry.record.outcome === 'interrupted';
+  const txRecord = isTxHistoryRecord(entry.record) ? entry.record : undefined;
+  const isTx = Boolean(txRecord);
+  const txOutcome = txRecord?.outcome;
+  const interrupted = txOutcome === 'interrupted';
+  const incompleteReception = !isTx && 'truncated' in entry.record && (entry.record.truncated || !entry.record.complete);
 
   useEffect(() => {
     let active = true;
@@ -117,10 +135,10 @@ function HistoryEntry({
               <div className="flex items-center gap-1.5 text-xs font-medium text-default-800">
                 <span>{t(isTx ? 'sent' : 'received')}</span>
                 {isTx ? (
-                  <span className={interrupted ? 'text-warning-500' : entry.record.outcome === 'transmitting' ? 'text-default-500' : 'text-success-500'} title={t(interrupted ? 'txInterrupted' : entry.record.outcome === 'transmitting' ? 'txInProgress' : 'txCompleted')}>
+                  <span className={interrupted ? 'text-warning-500' : txOutcome === 'transmitting' ? 'text-default-500' : 'text-success-500'} title={t(interrupted ? 'txInterrupted' : txOutcome === 'transmitting' ? 'txInProgress' : 'txCompleted')}>
                     <FontAwesomeIcon icon={interrupted ? faTriangleExclamation : faCheck} />
                   </span>
-                ) : entry.record.truncated || !entry.record.complete ? (
+                ) : incompleteReception ? (
                   <span className="text-warning-500" title={t('partialRecord')}><FontAwesomeIcon icon={faTriangleExclamation} /></span>
                 ) : null}
               </div>
@@ -135,6 +153,20 @@ function HistoryEntry({
               {formatFrequencyMHz(entry.artifact.frequency)} MHz{entry.artifact.radioMode ? ` · ${entry.artifact.radioMode}` : ''}
             </span>
             <div className="flex shrink-0 gap-0.5">
+              {canReply ? (
+                <Button size="sm" variant="flat" color="primary" className="h-7 min-w-0 px-2 text-[11px]" startContent={<FontAwesomeIcon icon={faReply} />} onPress={onReply} aria-label={t('replyImage')}>
+                  {t('replyImage')}
+                </Button>
+              ) : null}
+              {canInsert ? (
+                <Tooltip content={t('insertImage')} placement="top" delay={250} closeDelay={0}>
+                  <span className="inline-flex">
+                    <Button isIconOnly size="sm" variant="light" className="h-7 min-w-7 text-default-600" onPress={onInsert} aria-label={t('insertImage')}>
+                      <FontAwesomeIcon icon={faPlus} className="text-[11px]" />
+                    </Button>
+                  </span>
+                </Tooltip>
+              ) : null}
               {canResend ? (
                 <Tooltip content={t('sendImage')} placement="top" delay={250} closeDelay={0}>
                   <span className="inline-flex">
@@ -240,6 +272,14 @@ export function ImageHistoryTimeline() {
     });
   };
 
+  const insertImage = (entry: ImageHistoryEntry) => {
+    window.dispatchEvent(new CustomEvent(SSTV_COMPOSER_INSERT_IMAGE_EVENT, { detail: { artifactId: entry.artifact.id, mode: entry.artifact.codecMode } }));
+  };
+
+  const replyImage = (entry: ImageHistoryEntry) => {
+    window.dispatchEvent(new CustomEvent(SSTV_COMPOSER_INSERT_IMAGE_EVENT, { detail: { artifactId: entry.artifact.id, mode: entry.artifact.codecMode, reply: true } }));
+  };
+
   return (
     <>
       <div className="image-history-timeline flex h-full min-h-0 flex-col gap-2">
@@ -297,6 +337,10 @@ export function ImageHistoryTimeline() {
                         onDownload={() => void download(entry)}
                         onDelete={() => setDeleteEntry(entry)}
                         onResend={() => resend(entry)}
+                        onInsert={() => insertImage(entry)}
+                        canInsert={!isFax && Boolean(operatorId)}
+                        onReply={() => replyImage(entry)}
+                        canReply={!isFax && Boolean(operatorId) && entry.record.direction === 'rx'}
                       />
                     ))}
                   </div>

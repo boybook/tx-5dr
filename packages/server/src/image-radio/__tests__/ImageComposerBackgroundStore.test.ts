@@ -40,4 +40,20 @@ describe('ImageComposerBackgroundStore', () => {
 
     await expect(store.save('operator-a', png)).rejects.toThrow('IMAGE_COMPOSER_BACKGROUND_DIMENSIONS');
   });
+
+  it('stores immutable composer assets and background transforms', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'tx5dr-composer-background-'));
+    dirs.push(dir);
+    const store = new ImageComposerBackgroundStore(dir);
+    const png = PNG.sync.write(new PNG({ width: 4, height: 3 }));
+
+    const background = await store.save('operator-a', png);
+    expect(background.assetId).toMatch(/^[a-f0-9]{64}$/);
+    const asset = await store.saveAsset('operator-a', png);
+    expect(asset.id).toBe(background.assetId);
+    expect(PNG.sync.read(await store.readAsset('operator-a', asset.id))).toMatchObject({ width: 4, height: 3 });
+
+    const updated = await store.updateTransform('operator-a', { x: -0.1, y: 0, width: 1.2, height: 1, rotation: 15, fit: 'cover' });
+    expect(updated.transform).toMatchObject({ x: -0.1, rotation: 15 });
+  });
 });

@@ -407,6 +407,21 @@ section[role="dialog"][data-placement="center"].w-full:not(.max-w-full) {
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* Fill the remaining desktop workspace; keep a bounded responsive stage on
+   phones instead of sizing it from the space left below the controls. */
+.sstv-composer-preview-viewport {
+  flex: 1 1 0%;
+  min-height: 14rem;
+}
+
+@media (max-width: 767px) {
+  .sstv-composer-preview-viewport {
+    flex: 0 0 auto;
+    height: clamp(14rem, min(48dvh, 75vw), 34rem);
+    min-height: 0;
+  }
+}
+
 .image-radio-voice-ptt {
   display: none;
 }

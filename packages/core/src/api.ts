@@ -1122,6 +1122,23 @@ export const api = {
     return apiRequest(`/image-radio/composer-backgrounds/${encodePathSegment(operatorId)}`, { method: 'PUT', body: form }, apiBase);
   },
 
+  async updateImageComposerBackgroundTransform(operatorId: string, transform: import('@tx5dr/contracts').ImageComposerTransform, apiBase?: string): Promise<{ success: boolean; background: import('@tx5dr/contracts').ImageComposerBackground }> {
+    return apiRequest(`/image-radio/composer-backgrounds/${encodePathSegment(operatorId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(transform),
+    }, apiBase);
+  },
+
+  async uploadImageComposerAsset(operatorId: string, file: Blob, apiBase?: string): Promise<{ success: boolean; asset: import('@tx5dr/contracts').ImageComposerAsset }> {
+    const form = new FormData();
+    form.append('file', file, 'composer-image.png');
+    return apiRequest(`/image-radio/composer-assets/${encodePathSegment(operatorId)}`, { method: 'POST', body: form }, apiBase);
+  },
+
+  async getImageComposerAssetBlob(operatorId: string, assetId: string, apiBase?: string): Promise<Blob> {
+    return apiBlobRequest(`/image-radio/composer-assets/${encodePathSegment(operatorId)}/${encodePathSegment(assetId)}/image`, { cache: 'no-store' }, apiBase);
+  },
+
   async getSstvTxPreferences(operatorId: string, apiBase?: string): Promise<{ success: boolean; preferences: import('@tx5dr/contracts').SstvTxPreferences }> {
     return apiRequest(`/image-radio/sstv-tx-preferences/${encodePathSegment(operatorId)}`, { cache: 'no-store' }, apiBase);
   },
@@ -1140,7 +1157,7 @@ export const api = {
   async saveImageTemplate(template: import('@tx5dr/contracts').ImageTemplate, apiBase?: string): Promise<{ success: boolean; template: import('@tx5dr/contracts').ImageTemplate }> {
     return apiRequest(`/image-radio/templates/${encodePathSegment(template.id)}`, {
       method: 'PUT',
-      body: JSON.stringify({ operatorId: template.operatorId, name: template.name, backgroundArtifactId: template.backgroundArtifactId, layers: template.layers }),
+      body: JSON.stringify({ operatorId: template.operatorId, name: template.name, backgroundArtifactId: template.backgroundArtifactId, backgroundSource: template.backgroundSource, backgroundTransform: template.backgroundTransform, layers: template.layers }),
     }, apiBase);
   },
 

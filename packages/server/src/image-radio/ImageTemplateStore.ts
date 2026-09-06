@@ -43,10 +43,12 @@ export class ImageTemplateStore {
   }
 
   referencesArtifact(artifactId: string): boolean {
-    return this.templates.some((template) => template.backgroundArtifactId === artifactId);
+    return this.templates.some((template) => template.backgroundArtifactId === artifactId
+      || template.backgroundSource?.type === 'artifact' && template.backgroundSource.artifactId === artifactId
+      || template.layers.some((layer) => 'kind' in layer && layer.kind === 'image' && layer.source.type === 'artifact' && layer.source.artifactId === artifactId));
   }
 
-  async save(operatorId: string, input: Pick<ImageTemplate, 'id' | 'name' | 'backgroundArtifactId' | 'layers'>): Promise<ImageTemplate> {
+  async save(operatorId: string, input: Pick<ImageTemplate, 'id' | 'name' | 'backgroundArtifactId' | 'backgroundSource' | 'backgroundTransform' | 'layers'>): Promise<ImageTemplate> {
     await this.initialize();
     const now = Date.now();
     const existing = this.templates.find((item) => item.id === input.id && item.operatorId === operatorId);

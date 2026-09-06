@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-import { ImageComposerBackgroundSchema, type ImageComposerBackground } from '@tx5dr/contracts';
+import { ImageComposerAssetSchema, ImageComposerBackgroundSchema, ImageComposerTransformSchema, type ImageComposerAsset, type ImageComposerBackground, type ImageComposerTransform } from '@tx5dr/contracts';
 import { PNG } from 'pngjs';
 
 import { SafeFileWriter, loadJsonWithRecovery } from '../utils/persistence/index.js';
@@ -18,6 +18,7 @@ export class ImageComposerBackgroundStore {
   private readonly writer = new SafeFileWriter({ backups: 3 });
   private readonly indexPath: string;
   private readonly imageDir: string;
+  private readonly assetDir: string;
   private readonly backgrounds = new Map<string, ImageComposerBackground>();
   private initialized = false;
   private persistTail: Promise<void> = Promise.resolve();
@@ -25,6 +26,7 @@ export class ImageComposerBackgroundStore {
   constructor(baseDir: string) {
     this.indexPath = path.join(baseDir, 'composer-backgrounds.json');
     this.imageDir = path.join(baseDir, 'composer-backgrounds');
+    this.assetDir = path.join(baseDir, 'composer-assets');
   }
 
   async initialize(): Promise<void> {
@@ -49,7 +51,7 @@ export class ImageComposerBackgroundStore {
     return fs.readFile(this.imagePath(operatorId));
   }
 
-  async save(operatorId: string, source: Buffer): Promise<ImageComposerBackground> {
+  async saveAsset(operatorId: string, source: Buffer): Promise<ImageComposerAsset> {
     await this.initialize();
     if (source.length < 33 || source.length > MAX_BACKGROUND_BYTES
       || !source.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)
@@ -71,22 +73,57 @@ export class ImageComposerBackgroundStore {
     }
     if (decoded.width !== declaredWidth || decoded.height !== declaredHeight) throw new Error('IMAGE_COMPOSER_BACKGROUND_INVALID');
     const encoded = PNG.sync.write(decoded, { colorType: 6 });
+    const id = createHash('sha256').update(encoded).digest('hex');
+    const assetPath = this.assetPath(operatorId, id);
+    await fs.mkdir(path.dirname(assetPath), { recursive: true });
+    await this.writer.writeFile(assetPath, encoded, { backups: 0 });
+    return ImageComposerAssetSchema.parse({ id, width: decoded.width, height: decoded.height });
+  }
+
+  async readAsset(operatorId: string, assetId: string): Promise<Buffer> {
+    await this.initialize();
+    if (!/^[a-f0-9]{64}$/.test(assetId)) throw new Error('IMAGE_COMPOSER_ASSET_NOT_FOUND');
+    return fs.readFile(this.assetPath(operatorId, assetId));
+  }
+
+  async save(operatorId: string, source: Buffer): Promise<ImageComposerBackground> {
+    const asset = await this.saveAsset(operatorId, source);
     const background = ImageComposerBackgroundSchema.parse({
       operatorId,
-      width: decoded.width,
-      height: decoded.height,
+      width: asset.width,
+      height: asset.height,
+      assetId: asset.id,
       updatedAt: Date.now(),
       imageUrl: `/api/image-radio/composer-backgrounds/${encodeURIComponent(operatorId)}/image`,
     });
-    await this.writer.writeFile(this.imagePath(operatorId), encoded, { backups: 1 });
+    await this.writer.writeFile(this.imagePath(operatorId), await this.readAsset(operatorId, asset.id), { backups: 1 });
     this.backgrounds.set(operatorId, background);
     await this.persist();
     return background;
   }
 
+  async updateTransform(operatorId: string, transform: ImageComposerTransform): Promise<ImageComposerBackground> {
+    await this.initialize();
+    const current = this.backgrounds.get(operatorId);
+    if (!current) throw new Error('IMAGE_COMPOSER_BACKGROUND_NOT_FOUND');
+    const next = ImageComposerBackgroundSchema.parse({
+      ...current,
+      transform: ImageComposerTransformSchema.parse(transform),
+      updatedAt: Date.now(),
+    });
+    this.backgrounds.set(operatorId, next);
+    await this.persist();
+    return next;
+  }
+
   private imagePath(operatorId: string): string {
     const fileName = createHash('sha256').update(operatorId).digest('hex');
     return path.join(this.imageDir, `${fileName}.png`);
+  }
+
+  private assetPath(operatorId: string, assetId: string): string {
+    const owner = createHash('sha256').update(operatorId).digest('hex');
+    return path.join(this.assetDir, owner, `${assetId}.png`);
   }
 
   private persist(): Promise<void> {

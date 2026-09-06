@@ -10,6 +10,7 @@ import {
   FaxCalibrationSetCommandSchema,
   ImageReceiveProfileSchema,
   ImageTemplateSchema,
+  ImageTemplateImageLayerSchema,
   SstvTxStartCommandSchema,
 } from '../src/index.js';
 
@@ -45,6 +46,14 @@ describe('image radio contracts', () => {
     expect(() => ImageTemplateSchema.parse({ ...parsedTemplate, layers: [{ ...parsedTemplate.layers[0], strokeWidth: 0.51 }] })).toThrow();
     expect(() => ImageTemplateSchema.parse({ ...parsedTemplate, layers: [{ ...parsedTemplate.layers[0], x: -2.1 }] })).toThrow();
     expect(() => ImageTemplateSchema.parse({ id: 't', name: 'T', layers: Array.from({ length: 17 }, (_, index) => ({ ...layer, id: String(index) })), createdAt: 1, updatedAt: 1 })).toThrow();
+    expect(ImageTemplateImageLayerSchema.parse({
+      id: 'received', kind: 'image', source: { type: 'artifact', artifactId: 'artifact-1' },
+      x: 0.1, y: 0.1, width: 0.8, height: 0.8,
+    })).toMatchObject({ fit: 'contain', rotation: 0 });
+    expect(() => ImageTemplateImageLayerSchema.parse({
+      id: 'received', kind: 'image', source: { type: 'asset', assetId: 'not-a-hash' },
+      x: 0.1, y: 0.1, width: 0.8, height: 0.8,
+    })).toThrow();
     expect(SstvTxStartCommandSchema.parse({ requestId: 'request-1', operatorId: 'op', artifactId: 'a', mode: 'robot36', expectedFrequency: 14_230_000 })).toMatchObject({
       requestId: 'request-1', envelope: { enhancedPreamble: true, stationIdMode: 'fsk' },
     });

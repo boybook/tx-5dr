@@ -29,4 +29,18 @@ describe('ImageTemplateStore', () => {
     expect(store.list('operator-a').find((item) => item.id === 'shared-id')?.name).toBe('A updated');
     expect(store.list('operator-b').find((item) => item.id === 'shared-id')?.name).toBe('B');
   });
+
+  it('keeps image layer artifact references discoverable', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'tx5dr-image-template-'));
+    dirs.push(dir);
+    const store = new ImageTemplateStore(dir);
+    await store.save('operator-a', {
+      id: 'image-template',
+      name: 'Image template',
+      layers: [{ id: 'received', kind: 'image', source: { type: 'artifact', artifactId: 'artifact-1' }, x: 0.2, y: 0.2, width: 0.6, height: 0.6, rotation: 0, fit: 'contain' }],
+    });
+
+    expect(store.referencesArtifact('artifact-1')).toBe(true);
+    expect(store.referencesArtifact('artifact-2')).toBe(false);
+  });
 });
