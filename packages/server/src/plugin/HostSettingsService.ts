@@ -38,12 +38,26 @@ export class HostSettingsService {
   }
 
   getDecodeWindows(): DecodeWindowSettings {
-    return this.configManager.getDecodeWindowSettings() ?? DEFAULT_DECODE_WINDOW_SETTINGS;
+    const configured = this.configManager.getDecodeWindowSettings();
+    return DecodeWindowSettingsSchema.parse({
+      decodeDepth: configured?.decodeDepth ?? DEFAULT_DECODE_WINDOW_SETTINGS.decodeDepth,
+      ft8: configured?.ft8 ?? DEFAULT_DECODE_WINDOW_SETTINGS.ft8,
+      ft4: configured?.ft4 ?? DEFAULT_DECODE_WINDOW_SETTINGS.ft4,
+    });
   }
 
   async updateDecodeWindows(settings: DecodeWindowSettings): Promise<DecodeWindowSettings> {
     const parsed = DecodeWindowSettingsSchema.parse(settings);
-    await this.configManager.updateDecodeWindowSettings(parsed);
+    const current = this.getDecodeWindows();
+    // Older persisted configs and plugin callers may omit the newly added
+    // global depth (or either mode block). Keep those values stable while
+    // still validating the complete value that is written to disk.
+    const merged = DecodeWindowSettingsSchema.parse({
+      decodeDepth: parsed.decodeDepth ?? current.decodeDepth ?? DEFAULT_DECODE_WINDOW_SETTINGS.decodeDepth,
+      ft8: parsed.ft8 ?? current.ft8 ?? DEFAULT_DECODE_WINDOW_SETTINGS.ft8,
+      ft4: parsed.ft4 ?? current.ft4 ?? DEFAULT_DECODE_WINDOW_SETTINGS.ft4,
+    });
+    await this.configManager.updateDecodeWindowSettings(merged);
     return this.getDecodeWindows();
   }
 

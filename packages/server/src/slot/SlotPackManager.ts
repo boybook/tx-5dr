@@ -313,7 +313,13 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       windowIdx: result.windowIdx,
       timestamp: resultTimestamp,
       frameCount: filteredFrames.length,
-      processingTimeMs: result.processingTimeMs
+      processingTimeMs: result.processingTimeMs,
+      ...(result.queueWaitMs !== undefined ? { queueWaitMs: result.queueWaitMs } : {}),
+      ...(result.decodeDepth !== undefined ? { decodeDepth: result.decodeDepth } : {}),
+      ...(result.decodeStage !== undefined ? { decodeStage: result.decodeStage } : {}),
+      ...(result.nativeProcessingTimeMs !== undefined ? { nativeProcessingTimeMs: result.nativeProcessingTimeMs } : {}),
+      ...(result.late !== undefined ? { late: result.late } : {}),
+      ...(result.decodeStats !== undefined ? { decodeStats: result.decodeStats } : {}),
     });
     
     // 合并和去重帧数据。DT 使用解码器返回的原始值，不根据多窗口 offset 二次修正。

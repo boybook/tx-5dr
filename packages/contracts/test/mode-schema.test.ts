@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MODES, FT4_WINDOW_PRESETS, FT8_WINDOW_PRESETS } from '../src/schema/mode.schema';
+import { MODES, FT4_WINDOW_PRESETS, FT8_WINDOW_PRESETS, DEFAULT_DECODE_WINDOW_SETTINGS } from '../src/schema/mode.schema';
 
 describe('MODES.FT4 timing constants', () => {
   it('aligns FT4 transmitTiming with WSJT-X standard (T+0.5s signal start)', () => {
@@ -19,6 +19,13 @@ describe('MODES.FT4 timing constants', () => {
 
   it('keeps FT4 slot length at the WSJT-X standard 7.5s', () => {
     expect(MODES.FT4.slotMs).toBe(7500);
+  });
+});
+
+describe('decode depth defaults', () => {
+  it('keeps the application default at WSJT-X Deep (3)', () => {
+    expect(MODES.FT8).toBeDefined();
+    expect(DEFAULT_DECODE_WINDOW_SETTINGS.decodeDepth).toBe(3);
   });
 });
 

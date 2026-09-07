@@ -4,12 +4,14 @@ import type { DecodeRequest, DecodeResult } from '@tx5dr/contracts';
 
 const decodeCalls = vi.hoisted((): Array<{ mode: number; samples: number; options: Record<string, unknown> }> => []);
 const constructorCalls = vi.hoisted((): Array<{ maxThreads?: number }> => []);
+const conversionCalls = vi.hoisted((): number[] => []);
 const pendingMessages = vi.hoisted((): Array<{
   text: string;
   snr: number;
   deltaTime: number;
   deltaFrequency: number;
 }> => []);
+const sessionCalls = vi.hoisted((): Array<{ sessionId: string; mode: number; depth: number; stage: number | string }> => []);
 
 vi.mock('wsjtx-lib', () => {
   const WSJTXMode = {
@@ -23,6 +25,7 @@ vi.mock('wsjtx-lib', () => {
     }
 
     async convertAudioFormat(audioData: Float32Array): Promise<Int16Array> {
+      conversionCalls.push(audioData.length);
       return new Int16Array(audioData.length);
     }
 
@@ -36,6 +39,23 @@ vi.mock('wsjtx-lib', () => {
       });
       return { success: true, messages: [...pendingMessages] };
     }
+
+    beginDecodeSession(options: { sessionId: string; mode: number; decodeDepth: number }) {
+      sessionCalls.push({ sessionId: options.sessionId, mode: options.mode, depth: options.decodeDepth, stage: 'begin' });
+      let previousStage: number | string | undefined;
+      return {
+        isStageDuplicate: (stage: number | string) => typeof stage === 'number' && stage === previousStage,
+        decodeStage: async (_audio: Int16Array, stage: number | string) => {
+          previousStage = stage;
+          sessionCalls.push({ sessionId: options.sessionId, mode: options.mode, depth: options.decodeDepth, stage });
+          const message = { text: 'CQ DX STAGED OM88', snr: 3, deltaTime: 0.1, deltaFrequency: 1000 };
+          return { success: true, messages: [message], newMessages: [message], allMessages: [message] };
+        },
+        endDecodeSession: () => undefined,
+      };
+    }
+
+    endDecodeSession(_sessionId: string): void {}
   }
 
   return { WSJTXLib, WSJTXMode };
@@ -85,7 +105,7 @@ describe('WSJTXDecodeWorkerCore mode selection', () => {
         txFrequency: 0,
         threads: 1,
         apDecode: false,
-        decodeDepth: 1,
+        decodeDepth: 3,
         qsoProgress: 0,
       }),
     }]);
@@ -119,7 +139,7 @@ describe('WSJTXDecodeWorkerCore mode selection', () => {
         txFrequency: 0,
         threads: 1,
         apDecode: false,
-        decodeDepth: 1,
+        decodeDepth: 3,
       }),
     }]);
   });
@@ -156,7 +176,7 @@ describe('WSJTXDecodeWorkerCore mode selection', () => {
         txFrequency: 1500,
         threads: 1,
         apDecode: true,
-        decodeDepth: 1,
+        decodeDepth: 3,
         myCall: 'BG4IAJ',
         myGrid: 'OM96',
         dxCall: 'JA1AAA',
@@ -165,6 +185,75 @@ describe('WSJTXDecodeWorkerCore mode selection', () => {
       }),
     }]);
     expect(result.frames[0]?.freq).toBe(1000);
+  });
+
+  it('passes the configured depth and stage through one worker session', async () => {
+    decodeCalls.length = 0;
+    sessionCalls.length = 0;
+    const result = await decodeOnce({
+      slotId: 'FT8-staged-0',
+      mode: 'FT8',
+      windowIdx: 0,
+      pcm: makePcm(600),
+      sampleRate: 12000,
+      timestamp: Date.now(),
+      windowOffsetMs: -3200,
+      decodeDepth: 2,
+      decodeSessionId: 'FT8-staged-0',
+      decodeStage: 41,
+      decodeFinalWindow: false,
+      slotUtcSeconds: 1_778_592_296,
+    });
+
+    expect(sessionCalls).toEqual([
+      { sessionId: 'FT8-staged-0', mode: 0, depth: 2, stage: 'begin' },
+      { sessionId: 'FT8-staged-0', mode: 0, depth: 2, stage: 41 },
+    ]);
+    expect(result.frames).toEqual([expect.objectContaining({ message: 'CQ DX STAGED OM88' })]);
+    expect(decodeCalls).toHaveLength(0);
+  });
+
+  it('reuses unchanged audio prefixes and skips duplicate stages before preprocessing', async () => {
+    conversionCalls.length = 0;
+    sessionCalls.length = 0;
+    const decoder = new WSJTXDecodeWorkerCore(1);
+    const baseRequest = {
+      slotId: 'FT8-context-0',
+      mode: 'FT8' as const,
+      sampleRate: 12000,
+      timestamp: Date.now(),
+      windowOffsetMs: 0,
+      decodeDepth: 3,
+      decodeSessionId: 'FT8-context-0',
+      decodeFinalWindow: false,
+    };
+    await decoder.decode({ ...baseRequest, windowIdx: 0, pcm: makePcm(600), decodeStage: 41 });
+    await decoder.decode({ ...baseRequest, windowIdx: 1, pcm: makePcm(900), decodeStage: 47 });
+    await decoder.decode({ ...baseRequest, windowIdx: 2, pcm: makePcm(1200), decodeStage: 50 });
+    const duplicate = await decoder.decode({ ...baseRequest, windowIdx: 3, pcm: makePcm(1200), decodeStage: 50, decodeFinalWindow: true });
+
+    expect(conversionCalls).toEqual([600, 300, 300]);
+    expect(sessionCalls.map((call) => call.stage)).toEqual(['begin', 41, 47, 50]);
+    expect(duplicate.frames).toEqual([]);
+    expect(duplicate.nativeProcessingTimeMs).toBe(0);
+  });
+
+  it('invalidates the cached audio prefix when a later window corrects earlier samples', async () => {
+    conversionCalls.length = 0;
+    const decoder = new WSJTXDecodeWorkerCore(1);
+    const baseRequest = {
+      slotId: 'FT8-corrected-context-0',
+      mode: 'FT8' as const,
+      sampleRate: 12000,
+      timestamp: Date.now(),
+      windowOffsetMs: 0,
+      decodeDepth: 3,
+      decodeSessionId: 'FT8-corrected-context-0',
+    };
+    await decoder.decode({ ...baseRequest, windowIdx: 0, pcm: makePcm(600), decodeStage: 41, decodeFinalWindow: false });
+    const corrected = new Float32Array(900).fill(0.25);
+    await decoder.decode({ ...baseRequest, windowIdx: 1, pcm: corrected.buffer, decodeStage: 50, decodeFinalWindow: true });
+    expect(conversionCalls).toEqual([600, 900]);
   });
 });
 
@@ -283,6 +372,7 @@ class FakeDecodeWorkerProcess extends EventEmitter implements DecodeWorkerProces
   killed = false;
   env?: NodeJS.ProcessEnv;
   decodeCommands = 0;
+  receivedRequests: DecodeRequest[] = [];
   active = 0;
   maxActive = 0;
 
@@ -304,6 +394,7 @@ class FakeDecodeWorkerProcess extends EventEmitter implements DecodeWorkerProces
 
     if (message.type === 'decode' && typeof message.id === 'number' && message.request) {
       this.decodeCommands++;
+      this.receivedRequests.push(message.request);
       this.active++;
       this.maxActive = Math.max(this.maxActive, this.active);
       const request = message.request;
@@ -498,6 +589,49 @@ describe('WSJTXDecodeProcessPool scheduling', () => {
     expect(workers.every((worker) => worker.maxActive <= 1)).toBe(true);
     expect(pool.size()).toBe(0);
 
+    await pool.destroy();
+  });
+
+  it('keeps all stages of a slot on one worker and releases the affinity at the final stage', async () => {
+    const workers: FakeDecodeWorkerProcess[] = [];
+    const pool = new WSJTXDecodeProcessPool({
+      workerCount: 2,
+      readyTimeoutMs: 1000,
+      jobTimeoutMs: 1000,
+      workerFactory: (workerId, _entry, env) => {
+        const worker = new FakeDecodeWorkerProcess(workerId, env);
+        workers.push(worker);
+        return worker;
+      },
+    });
+
+    const sessionId = 'FT8-affinity-slot';
+    await pool.decode(createPoolRequest({
+      slotId: sessionId,
+      decodeSessionId: sessionId,
+      decodeStage: 41,
+      decodeFinalWindow: false,
+    }));
+    await pool.decode(createPoolRequest({
+      slotId: sessionId,
+      decodeSessionId: sessionId,
+      decodeStage: 47,
+      decodeFinalWindow: false,
+    }));
+    await pool.decode(createPoolRequest({
+      slotId: sessionId,
+      decodeSessionId: sessionId,
+      decodeStage: 50,
+      decodeFinalWindow: true,
+    }));
+
+    const stagedWorkers = workers.filter((worker) => worker.receivedRequests.some((request) => request.decodeSessionId === sessionId));
+    expect(stagedWorkers).toHaveLength(1);
+    expect(stagedWorkers[0]?.receivedRequests.map((request) => request.decodeStage)).toEqual([41, 47, 50]);
+
+    // The final stage clears the reservation, so a later slot can use either worker.
+    await pool.decode(createPoolRequest({ slotId: 'FT8-after-affinity' }));
+    expect(workers.reduce((count, worker) => count + worker.receivedRequests.filter((request) => request.slotId === 'FT8-after-affinity').length, 0)).toBe(1);
     await pool.destroy();
   });
 

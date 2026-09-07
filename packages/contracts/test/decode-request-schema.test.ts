@@ -17,6 +17,7 @@ describe('DecodeRequestSchema', () => {
     });
 
     expect(parsed.apContext).toBeUndefined();
+    expect(parsed.decodeDepth).toBeUndefined();
   });
 
   it('accepts a single AP decode context', () => {
@@ -44,5 +45,18 @@ describe('DecodeRequestSchema', () => {
       qsoProgress: 4,
       currentSlot: 'TX4',
     }));
+  });
+
+  it('accepts only the native FT8 stage values', () => {
+    const request = {
+      slotId: 'FT8-stage',
+      mode: 'FT8' as const,
+      windowIdx: 0,
+      pcm: makePcm(),
+      sampleRate: 12000,
+      decodeStage: 49,
+    };
+    expect(DecodeRequestSchema.parse(request).decodeStage).toBe(49);
+    expect(() => DecodeRequestSchema.parse({ ...request, decodeStage: 42 })).toThrow();
   });
 });

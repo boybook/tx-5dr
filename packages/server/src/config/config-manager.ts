@@ -352,6 +352,7 @@ export function validateAppConfigCandidate(value: unknown): Record<string, unkno
   assertOptionalObject(value, 'plugins');
   assertOptionalObject(value, 'rigctld');
   assertOptionalObject(value, 'cwDecoder');
+  assertOptionalObjectOrNull(value, 'decodeWindowSettings');
   assertOptionalObject(value, 'spectrum');
   assertOptionalObject(value, 'ntp');
   assertOptionalObject(value, 'observability');
@@ -400,6 +401,16 @@ export function validateAppConfigCandidate(value: unknown): Record<string, unkno
     assertOptionalFiniteNumber(value.ft8, 'transmitPower');
     assertOptionalFiniteNumber(value.ft8, 'maxQSOTimeout');
     assertOptionalFiniteNumber(value.ft8, 'maxSameTransmissionCount');
+  }
+  if (isPlainObject(value.decodeWindowSettings)) {
+    const decodeDepth = value.decodeWindowSettings.decodeDepth;
+    if (decodeDepth !== undefined
+      && (typeof decodeDepth !== 'number'
+        || !Number.isInteger(decodeDepth)
+        || decodeDepth < 1
+        || decodeDepth > 3)) {
+      throw new Error('config.decodeWindowSettings.decodeDepth must be an integer from 1 to 3');
+    }
   }
   if (isPlainObject(value.server)) {
     assertOptionalFiniteNumber(value.server, 'port');
@@ -555,6 +566,17 @@ export class ConfigManager {
     if (this.normalizeOperatorIdentityConfig(parsedConfig)) {
       logger.info('Operator callsign/grid values normalized to uppercase');
       migrated = true;
+    }
+
+    // Persist the WSJT-X-compatible global decode depth for existing configs.
+    // The in-memory default already protects reads, while this migration keeps
+    // subsequent writes and REST responses explicit and stable.
+    if (parsedConfig.decodeWindowSettings
+      && typeof parsedConfig.decodeWindowSettings === 'object'
+      && parsedConfig.decodeWindowSettings.decodeDepth === undefined) {
+      parsedConfig.decodeWindowSettings.decodeDepth = DEFAULT_DECODE_WINDOW_SETTINGS.decodeDepth;
+      migrated = true;
+      logger.info('Migrated legacy decode window settings to decode depth 3');
     }
 
     // 迁移全局 lastVolumeGain → 按模式+频段的 volumeGainMap

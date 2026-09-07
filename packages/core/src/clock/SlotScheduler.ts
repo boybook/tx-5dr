@@ -1,4 +1,4 @@
-import type { SlotInfo, DecodeRequest } from '@tx5dr/contracts';
+import type { SlotInfo, DecodeRequest, ModeDescriptor } from '@tx5dr/contracts';
 import type { SlotClock } from './SlotClock.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -37,6 +37,25 @@ export type DecodeApContextProvider = (
   windowIdx: number
 ) => DecodeRequest['apContext'] | undefined;
 
+export function resolveDecodeStage(
+  mode: Pick<ModeDescriptor, 'name'>,
+  windowDurationMs: number,
+  windowIdx: number,
+  windowCount: number,
+): DecodeRequest['decodeStage'] {
+  if (mode.name.toUpperCase() === 'FT4') {
+    return windowIdx >= windowCount - 1 ? 'ft4-final' : 'ft4-partial';
+  }
+  // Native FT8 state supports only the four WSJT-X live checkpoints. A custom
+  // duration is mapped to the closest checkpoint instead of inventing a
+  // second decoder stage vocabulary.
+  const symbols = Math.round(windowDurationMs / 288);
+  const supportedStages = [41, 47, 49, 50] as const;
+  return supportedStages.reduce((closest, candidate) =>
+    Math.abs(candidate - symbols) < Math.abs(closest - symbols) ? candidate : closest,
+  41);
+}
+
 /**
  * 时隙调度器 - 监听时隙事件并生成解码请求
  * 统一使用子窗口处理，支持单窗口和多窗口模式
@@ -48,6 +67,8 @@ export class SlotScheduler {
   private transmissionChecker?: ITransmissionChecker;
   private shouldDecodeWhileTransmitting?: () => boolean;
   private decodeApContextProvider?: DecodeApContextProvider;
+  private getDecodeDepth?: () => number;
+  private readonly decodeDepthBySlot = new Map<string, number>();
   private isActive = false;
   private readonly boundHandleSubWindow: (slotInfo: SlotInfo, windowIdx: number) => void;
 
@@ -57,7 +78,8 @@ export class SlotScheduler {
     audioBufferProvider: AudioBufferProvider,
     transmissionChecker?: ITransmissionChecker,
     shouldDecodeWhileTransmitting?: () => boolean,
-    decodeApContextProvider?: DecodeApContextProvider
+    decodeApContextProvider?: DecodeApContextProvider,
+    getDecodeDepth?: () => number,
   ) {
     this.slotClock = slotClock;
     this.decodeQueue = decodeQueue;
@@ -65,6 +87,7 @@ export class SlotScheduler {
     this.transmissionChecker = transmissionChecker;
     this.shouldDecodeWhileTransmitting = shouldDecodeWhileTransmitting;
     this.decodeApContextProvider = decodeApContextProvider;
+    this.getDecodeDepth = getDecodeDepth;
     this.boundHandleSubWindow = this.handleSubWindow.bind(this);
   }
   
@@ -87,6 +110,7 @@ export class SlotScheduler {
     
     this.isActive = false;
     this.slotClock.off('subWindow', this.boundHandleSubWindow);
+    this.decodeDepthBySlot.clear();
   }
   
   /**
@@ -123,6 +147,17 @@ export class SlotScheduler {
       // 例：FT8 offset=-3200 → 截取 11.8s，offset=-1500 → 截取 13.5s，offset=0 → 截取 15.0s
       const windowStartMs = slotInfo.startMs;
       const windowDurationMs = mode.slotMs + windowOffsetMs;
+      const windowCount = mode.windowTiming.length;
+      const stage = resolveDecodeStage(mode, windowDurationMs, windowIdx, windowCount);
+      if (!this.decodeDepthBySlot.has(slotInfo.id)) {
+        const configuredDepth = this.getDecodeDepth?.() ?? 3;
+        const depth = Number.isInteger(configuredDepth) && configuredDepth >= 1 && configuredDepth <= 3
+          ? configuredDepth
+          : 3;
+        this.decodeDepthBySlot.set(slotInfo.id, depth);
+      }
+      const decodeDepth = this.decodeDepthBySlot.get(slotInfo.id) ?? 3;
+      const decisionDeadlineMs = slotInfo.startMs + mode.slotMs + mode.transmitTiming - mode.encodeAdvance - 500;
       logger.debug(`Window capture: window=${windowIdx}, start=slotStart, duration=${windowDurationMs}ms (offset=${windowOffsetMs >= 0 ? '+' : ''}${windowOffsetMs}ms)`);
 
       // 从音频缓冲区提供者获取解码窗口数据
@@ -144,6 +179,15 @@ export class SlotScheduler {
         sampleRate: actualSampleRate, // 使用实际采样率
         timestamp: Date.now(),
         windowOffsetMs,
+        decodeDepth,
+        decodeSessionId: slotInfo.id,
+        decodeFinalWindow: windowIdx >= windowCount - 1,
+        decodeStage: stage,
+        slotUtcSeconds: slotInfo.utcSeconds,
+        decisionDeadlineMs,
+        lateRetry: false,
+        nagain: false,
+        emeDelayMs: 0,
         ...(apContext ? { apContext } : {})
       };
       
@@ -152,6 +196,8 @@ export class SlotScheduler {
       
       // 推送到解码队列
       await this.decodeQueue.push(decodeRequest);
+
+      if (windowIdx >= windowCount - 1) this.decodeDepthBySlot.delete(slotInfo.id);
       
     } catch (error) {
       logger.error(`Failed to handle sub-window: slot=${slotInfo.id}, window=${windowIdx}, error=${error instanceof Error ? error.message : String(error)}`);

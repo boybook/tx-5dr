@@ -1308,7 +1308,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       this.audioStreamManager.getAudioProvider(),
       this._operatorManager,
       () => ConfigManager.getInstance().getFT8Config().decodeWhileTransmitting ?? false,
-      (slotInfo, windowIdx) => this._operatorManager.getDecodeApContext(slotInfo, windowIdx)
+      (slotInfo, windowIdx) => this._operatorManager.getDecodeApContext(slotInfo, windowIdx),
+      () => ConfigManager.getInstance().getDecodeWindowSettings()?.decodeDepth ?? 3,
     );
 
     const spectrumSettings = ConfigManager.getInstance().getSpectrumSettings();

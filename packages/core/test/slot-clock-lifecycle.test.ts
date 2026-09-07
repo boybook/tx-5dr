@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { EventEmitter } from 'eventemitter3';
 import type { ModeDescriptor, SlotInfo } from '@tx5dr/contracts';
 import { SlotClock } from '../src/clock/SlotClock.js';
-import { SlotScheduler } from '../src/clock/SlotScheduler.js';
+import { SlotScheduler, resolveDecodeStage } from '../src/clock/SlotScheduler.js';
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -64,6 +64,47 @@ test('SlotScheduler removes the old subWindow listener on stop/start', async () 
   await wait(10);
 
   assert.deepStrictEqual(decodeRequests, [{ slotId: 'TEST-1-1000', mode: 'FT8', windowIdx: 0 }]);
+});
+
+test('resolveDecodeStage maps existing FT8 window timings to WSJT-X stages', () => {
+  const mode: ModeDescriptor = {
+    name: 'FT8', slotMs: 15000, toleranceMs: 100,
+    windowTiming: [-3200, -1500, -800, -300, -150], transmitTiming: 500, encodeAdvance: 0,
+  };
+  assert.equal(resolveDecodeStage(mode, 11800, 0, 5), 41);
+  assert.equal(resolveDecodeStage(mode, 13500, 1, 5), 47);
+  assert.equal(resolveDecodeStage(mode, 14200, 2, 5), 49);
+  assert.equal(resolveDecodeStage(mode, 14700, 3, 5), 50);
+  assert.equal(resolveDecodeStage(mode, 14850, 4, 5), 50);
+  assert.equal(resolveDecodeStage(mode, 12400, 0, 1), 41);
+});
+
+test('SlotScheduler snapshots depth and emits session stage metadata per slot', async () => {
+  class FakeSlotClock extends EventEmitter<{ subWindow: (slotInfo: SlotInfo, windowIdx: number) => void }> {
+    getMode(): ModeDescriptor {
+      return { name: 'FT8', slotMs: 15000, toleranceMs: 100, windowTiming: [-3200, -1500, -300], transmitTiming: 500, encodeAdvance: 0 };
+    }
+  }
+  const slotClock = new FakeSlotClock();
+  const requests: any[] = [];
+  const scheduler = new SlotScheduler(
+    slotClock as unknown as any,
+    { push: async (request) => { requests.push(request); }, size: () => 0 },
+    { getBuffer: async () => new ArrayBuffer(32), getSampleRate: () => 12000 },
+    undefined, undefined, undefined, () => 2,
+  );
+  scheduler.start();
+  const slotInfo: SlotInfo = { id: 'FT8-depth-15000', startMs: 15000, phaseMs: 0, driftMs: 0, cycleNumber: 1, utcSeconds: 15, mode: 'FT8' };
+  slotClock.emit('subWindow', slotInfo, 0);
+  slotClock.emit('subWindow', slotInfo, 1);
+  slotClock.emit('subWindow', slotInfo, 2);
+  await wait(10);
+  scheduler.stop();
+  assert.deepStrictEqual(requests.map((request) => [request.decodeDepth, request.decodeStage, request.decodeSessionId, request.decodeFinalWindow]), [
+    [2, 41, 'FT8-depth-15000', false],
+    [2, 47, 'FT8-depth-15000', false],
+    [2, 50, 'FT8-depth-15000', true],
+  ]);
 });
 
 test('SlotScheduler tags FT4 decode requests with FT4 mode', async () => {

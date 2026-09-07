@@ -125,6 +125,8 @@ export const FT4_WINDOW_PRESETS: Record<string, number[]> = {
 
 /** Per-mode decode-window presets and optional custom timing windows. */
 export const DecodeWindowSettingsSchema = z.object({
+  /** Global WSJT-X compatible decode depth: 1=Fast, 2=Normal, 3=Deep. */
+  decodeDepth: z.number().int().min(1).max(3).optional(),
   ft8: z.object({
     preset: z.enum(['maximum', 'balanced', 'lightweight', 'minimum', 'custom']).default('balanced'),
     customWindowTiming: z.array(z.number().int().min(-5000).max(1000)).optional(),
@@ -138,6 +140,7 @@ export const DecodeWindowSettingsSchema = z.object({
 export type DecodeWindowSettings = z.infer<typeof DecodeWindowSettingsSchema>;
 
 export const DEFAULT_DECODE_WINDOW_SETTINGS: DecodeWindowSettings = {
+  decodeDepth: 3,
   ft8: {
     preset: 'balanced',
   },

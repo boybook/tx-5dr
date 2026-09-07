@@ -36,6 +36,12 @@ export const DecodeWorkerCurrentJobSchema = z.object({
   startedAt: z.number(),
   elapsedMs: z.number(),
   requestAudioDurationMs: z.number().optional(),
+  decodeDepth: z.number().int().min(1).max(3).optional(),
+  decodeStage: z.union([
+    z.literal(41), z.literal(47), z.literal(49), z.literal(50),
+    z.enum(['ft4-partial', 'ft4-final']),
+  ]).optional(),
+  decisionDeadlineMs: z.number().optional(),
 });
 
 export const DecodeWorkerTelemetryWorkerSchema = z.object({
@@ -67,6 +73,11 @@ export const DecodeWorkerTelemetrySummarySchema = z.object({
   restartAttempts: z.number().int().nonnegative().optional(),
   workerEntry: z.string().optional(),
   workerMode: z.enum(['development', 'production']).optional(),
+  nativeDecodeTiming: z.object({
+    p50Ms: z.number().nonnegative(),
+    p95Ms: z.number().nonnegative(),
+    sampleCount: z.number().int().nonnegative(),
+  }).optional(),
 });
 
 export const DecodeWorkerTelemetrySnapshotSchema = z.object({

@@ -662,7 +662,7 @@ export function createMockHostSettingsControl(overrides?: Partial<HostSettingsCo
     decodeWhileTransmitting: false,
     spectrumWhileTransmitting: true,
   };
-  const decodeWindows: DecodeWindowSettings = { ft8: { preset: 'balanced' }, ft4: { preset: 'balanced' } };
+  const decodeWindows: DecodeWindowSettings = { decodeDepth: 3, ft8: { preset: 'balanced' }, ft4: { preset: 'balanced' } };
   const realtime: RealtimeSettings = { transportPolicy: 'auto', rtcDataAudioPublicHost: null, rtcDataAudioPublicUdpPort: null };
   const frequencyPresets: HostFrequencyPresetsSettings = {
     presets: [{ band: '20m', mode: 'FT8', radioMode: 'USB', frequency: 14_074_000, description: '20m FT8' }],

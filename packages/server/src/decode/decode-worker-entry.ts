@@ -137,6 +137,9 @@ async function handleDecode(command: DecodeCommand): Promise<void> {
     requestAudioDurationMs: command.request.sampleRate > 0
       ? (command.request.pcm.byteLength / Float32Array.BYTES_PER_ELEMENT / command.request.sampleRate) * 1000
       : undefined,
+    ...(command.request.decodeDepth !== undefined ? { decodeDepth: command.request.decodeDepth } : {}),
+    ...(command.request.decodeStage !== undefined ? { decodeStage: command.request.decodeStage } : {}),
+    ...(command.request.decisionDeadlineMs !== undefined ? { decisionDeadlineMs: command.request.decisionDeadlineMs } : {}),
   };
   sendTelemetry();
 

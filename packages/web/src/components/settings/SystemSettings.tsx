@@ -41,6 +41,7 @@ import { RemoteAccessSettingsCard } from './RemoteAccessSettingsCard';
 import { applyRemoteAccessPreset, normalizeRemoteAccessOrigins, validateRemoteAccessDraft } from './remoteAccessDraft';
 
 interface DecodeWindowState {
+  decodeDepth: number;
   ft8Preset: string;
   ft8CustomWindows: number[];
   ft4Preset: string;
@@ -182,6 +183,7 @@ function NtpServerReorderItem({
 }
 
 const DEFAULT_DECODE_WINDOW_STATE: DecodeWindowState = {
+  decodeDepth: DEFAULT_DECODE_WINDOW_SETTINGS.decodeDepth ?? 3,
   ft8Preset: DEFAULT_DECODE_WINDOW_SETTINGS.ft8?.preset ?? 'balanced',
   ft8CustomWindows: [...FT8_WINDOW_PRESETS[DEFAULT_DECODE_WINDOW_SETTINGS.ft8?.preset ?? 'balanced']],
   ft4Preset: DEFAULT_DECODE_WINDOW_SETTINGS.ft4?.preset ?? 'balanced',
@@ -213,6 +215,7 @@ function buildDecodeWindowState(settings?: DecodeWindowSettings): DecodeWindowSt
   const ft4Preset = resolvedSettings.ft4?.preset ?? DEFAULT_DECODE_WINDOW_STATE.ft4Preset;
 
   return {
+    decodeDepth: resolvedSettings.decodeDepth ?? DEFAULT_DECODE_WINDOW_STATE.decodeDepth,
     ft8Preset,
     ft8CustomWindows: resolvedSettings.ft8?.customWindowTiming ?? [...(FT8_WINDOW_PRESETS[ft8Preset] ?? DEFAULT_DECODE_WINDOW_STATE.ft8CustomWindows)],
     ft4Preset,
@@ -942,6 +945,7 @@ export const SystemSettings = forwardRef<
   const hasDecodeWindowChanges = () => {
     return (
       decodeWindowState.ft8Preset !== originalDecodeWindowState.ft8Preset ||
+      decodeWindowState.decodeDepth !== originalDecodeWindowState.decodeDepth ||
       decodeWindowState.ft4Preset !== originalDecodeWindowState.ft4Preset ||
       JSON.stringify(decodeWindowState.ft8CustomWindows) !== JSON.stringify(originalDecodeWindowState.ft8CustomWindows) ||
       JSON.stringify(decodeWindowState.ft4CustomWindows) !== JSON.stringify(originalDecodeWindowState.ft4CustomWindows)
@@ -1150,6 +1154,7 @@ export const SystemSettings = forwardRef<
       // 保存解码窗口设置
       if (hasDecodeWindowChanges()) {
         const dwSettings: Record<string, unknown> = {
+          decodeDepth: decodeWindowState.decodeDepth,
           ft8: {
             preset: decodeWindowState.ft8Preset,
             ...(decodeWindowState.ft8Preset === 'custom' ? { customWindowTiming: decodeWindowState.ft8CustomWindows } : {}),
@@ -2258,6 +2263,26 @@ export const SystemSettings = forwardRef<
           <div>
             <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.decodeWindowTitle')}</h4>
             <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>{t('system.decodeWindowDesc')}</p>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <Select
+              label={t('system.decodeDepth')}
+              selectedKeys={[String(decodeWindowState.decodeDepth)]}
+              onSelectionChange={(keys) => {
+                const value = Number(Array.from(keys)[0]);
+                if (Number.isInteger(value) && value >= 1 && value <= 3) {
+                  setDecodeWindowState(prev => ({ ...prev, decodeDepth: value }));
+                }
+              }}
+              isDisabled={isSaving}
+              variant="bordered"
+              className="flex-1"
+            >
+              <SelectItem key="1" textValue={t('system.decodeDepthFast')}>{t('system.decodeDepthFast')}</SelectItem>
+              <SelectItem key="2" textValue={t('system.decodeDepthNormal')}>{t('system.decodeDepthNormal')}</SelectItem>
+              <SelectItem key="3" textValue={t('system.decodeDepthDeep')}>{t('system.decodeDepthDeep')}</SelectItem>
+            </Select>
           </div>
 
           {/* FT8 解码策略 */}

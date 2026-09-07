@@ -141,7 +141,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     try {
       const parsed = DecodeWindowSettingsSchema.parse(request.body);
-      await hostSettings.updateDecodeWindows(parsed);
+      const saved = await hostSettings.updateDecodeWindows(parsed);
 
       // 通知引擎应用新的窗口时序
       const engine = DigitalRadioEngine.getInstance();
@@ -151,10 +151,10 @@ export async function settingsRoutes(fastify: FastifyInstance) {
         success: true,
         message: 'Decode window settings saved',
         data: {
-          settings: parsed,
+          settings: saved,
           resolved: {
-            ft8: resolveWindowTiming('FT8', parsed) ?? FT8_WINDOW_PRESETS.balanced,
-            ft4: resolveWindowTiming('FT4', parsed) ?? FT4_WINDOW_PRESETS.balanced,
+            ft8: resolveWindowTiming('FT8', saved) ?? FT8_WINDOW_PRESETS.balanced,
+            ft4: resolveWindowTiming('FT4', saved) ?? FT4_WINDOW_PRESETS.balanced,
           },
         },
       });

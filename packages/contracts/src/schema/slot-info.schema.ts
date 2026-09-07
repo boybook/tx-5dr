@@ -133,11 +133,40 @@ export const DecodeRequestSchema = z.object({
   timestamp: z.number().default(() => Date.now()),
   /** 窗口时间偏移（毫秒） */
   windowOffsetMs: z.number().default(0),
+  /** Global WSJT-X-compatible decoder depth captured at slot start. */
+  decodeDepth: z.number().int().min(1).max(3).optional(),
+  /** Native decoder session identifier for staged FT8 calls. */
+  decodeSessionId: z.string().min(1).max(63).optional(),
+  decodeFinalWindow: z.boolean().optional(),
+  /** FT8 stage symbols or FT4 partial/final stage. */
+  decodeStage: z.union([
+    z.literal(41), z.literal(47), z.literal(49), z.literal(50),
+    z.enum(['ft4-partial', 'ft4-final']),
+  ]).optional(),
+  /** UTC slot timestamp in Unix seconds, when known. */
+  slotUtcSeconds: z.number().int().nonnegative().optional(),
+  /** Absolute decision deadline used for observability and late-result policy. */
+  decisionDeadlineMs: z.number().finite().optional(),
+  /** Optional explicit post-cycle retry request. */
+  lateRetry: z.boolean().optional(),
+  /** Official nagain/EME delay controls for an explicit retry. */
+  nagain: z.boolean().optional(),
+  emeDelayMs: z.number().int().min(0).max(10_000).optional(),
   /** 可选的单操作员 AP decode 上下文 */
   apContext: DecodeApContextSchema.optional()
 });
 
 export type DecodeRequest = z.infer<typeof DecodeRequestSchema>;
+
+/** Native stage counters exposed for observation; they never select depth. */
+export const DecodeStatsSchema = z.object({
+  stageSymbols: z.number().int().nonnegative(),
+  candidateCount: z.number().int().nonnegative(),
+  decodedCount: z.number().int().nonnegative(),
+  averageCount: z.number().int().nonnegative(),
+});
+
+export type DecodeStats = z.infer<typeof DecodeStatsSchema>;
 
 /**
  * 解码结果，用于SlotScheduler内部
@@ -153,10 +182,20 @@ export const DecodeResultSchema = z.object({
   timestamp: z.number().default(() => Date.now()),
   /** 处理耗时（毫秒） */
   processingTimeMs: z.number().nonnegative().default(0),
+  /** Time spent waiting in the decode process pool before dispatch. */
+  queueWaitMs: z.number().nonnegative().optional(),
   /** 错误信息（如果有） */
   error: z.string().optional(),
   /** 窗口时间偏移（毫秒） */
-  windowOffsetMs: z.number().default(0)
+  windowOffsetMs: z.number().default(0),
+  decodeDepth: z.number().int().min(1).max(3).optional(),
+  decodeStage: z.union([
+    z.literal(41), z.literal(47), z.literal(49), z.literal(50),
+    z.enum(['ft4-partial', 'ft4-final']),
+  ]).optional(),
+  nativeProcessingTimeMs: z.number().nonnegative().optional(),
+  late: z.boolean().optional(),
+  decodeStats: DecodeStatsSchema.optional(),
 });
 
 export type DecodeResult = z.infer<typeof DecodeResultSchema>;
@@ -195,7 +234,16 @@ export const SlotPackSchema = z.object({
     windowIdx: z.number(),
     timestamp: z.number(),
     frameCount: z.number(),
-    processingTimeMs: z.number()
+    processingTimeMs: z.number(),
+    queueWaitMs: z.number().nonnegative().optional(),
+    decodeDepth: z.number().int().min(1).max(3).optional(),
+    decodeStage: z.union([
+      z.literal(41), z.literal(47), z.literal(49), z.literal(50),
+      z.enum(['ft4-partial', 'ft4-final']),
+    ]).optional(),
+    nativeProcessingTimeMs: z.number().nonnegative().optional(),
+    late: z.boolean().optional(),
+    decodeStats: DecodeStatsSchema.optional(),
   })).default([]),
   /** Dial/band context active when this slot was created. */
   frequencyContext: SlotPackFrequencyContextSchema.optional()
