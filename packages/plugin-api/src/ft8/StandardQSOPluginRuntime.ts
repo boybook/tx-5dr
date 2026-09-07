@@ -1200,7 +1200,10 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
             grid: this.context.targetGrid,
             frequency,
             mode: this.context.config.mode.name,
-            startTime: this.qsoStartTime || now,
+            // ADIF TIME_ON/LoTW use the time the two-way contact was
+            // established, which is when this completion effect is created.
+            // qsoStartTime is only the beginning of the calling attempt.
+            startTime: now,
             endTime: now,
             reportSent: this.context.reportSent?.toString(),
             reportReceived: this.context.reportReceived?.toString(),
