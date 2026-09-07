@@ -56,6 +56,7 @@ const TCI_AUDIO_NEGOTIATION_COMMANDS = new Set([
   'audio_stream_samples',
   'tx_stream_audio_buffering',
 ]);
+const TCI_FREQUENCY_COMMANDS = new Set(['vfo', 'dds', 'modulation']);
 
 export class TciConnection extends EventEmitter<IRadioConnectionEvents> implements IRadioConnection {
   private readonly ioQueue = new RadioIoQueue({ label: 'TCI WebSocket' });
@@ -250,6 +251,8 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
         protocolName: handshake.identity.programName,
         protocolVersion: handshake.identity.protocolVersion,
         dialect: handshake.dialect.dialect.id,
+        frequencyConfirmation: handshake.dialect.dialect.frequencyWriteAcknowledgement ?? 'state',
+        ddsConfirmation: handshake.dialect.dialect.ddsWriteAcknowledgement ?? 'state',
         confidence: handshake.dialect.confidence,
         warnings: handshake.dialect.warnings,
         endpoint: connectedUrl,
@@ -283,16 +286,39 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
   async setFrequency(frequency: number): Promise<void> {
     await this.runTask('setFrequency', async () => {
       this.checkConnected();
-      const targetFrequency = Math.round(frequency);
-      if (this.isFrequencyAlreadyApplied(targetFrequency)) {
-        logger.debug('TCI state matched before write', { operation: 'setFrequency', frequency: targetFrequency });
-        this.lastKnownFrequency = targetFrequency;
-        return;
-      }
-      await this.client!.setFrequency(targetFrequency);
-      this.lastKnownFrequency = targetFrequency;
-      this.emit('frequencyChanged', targetFrequency);
+      await this.writeOperatingFrequency(Math.round(frequency));
     }, { critical: true });
+  }
+
+  /** Called inside the connection queue; the client owns protocol confirmation. */
+  private async writeOperatingFrequency(targetFrequency: number): Promise<void> {
+    const client = this.client!;
+    const tci = this.currentConfig?.tci;
+    const address = { receiver: tci?.receiver ?? 0, vfo: tci?.vfo ?? 0 };
+    if (this.isFrequencyAlreadyApplied(targetFrequency)) return;
+    const startedAt = performance.now();
+    logger.debug('TCI VFO write started', { ...address, requestedHz: targetFrequency });
+    try {
+      await client.setFrequency(targetFrequency);
+      // A successful write has real protocol evidence. Project that state,
+      // avoiding a second optimistic event for the same VFO notification.
+      this.syncStateFromClient();
+      logger.debug('TCI VFO write confirmed', {
+        ...address,
+        requestedHz: targetFrequency,
+        observedHz: client.getState().frequencies[`${address.receiver}:${address.vfo}`],
+        elapsedMs: Math.round(performance.now() - startedAt),
+      });
+    } catch (error) {
+      logger.warn('TCI VFO write not confirmed', {
+        ...address,
+        requestedHz: targetFrequency,
+        observedHz: client.getState().frequencies[`${address.receiver}:${address.vfo}`],
+        elapsedMs: Math.round(performance.now() - startedAt),
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   }
 
   async setDdsFrequency(frequency: number, receiver = this.currentConfig?.tci?.receiver ?? 0): Promise<void> {
@@ -310,6 +336,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
       logger.info('TCI DDS center-frequency write completed', {
         receiver,
         frequencyHz: targetFrequency,
+        reportedIqCenterHz: this.client!.getState().dds[String(receiver)],
       });
     }, { critical: true });
   }
@@ -407,26 +434,11 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
 
       if (request.frequency !== undefined) {
         const targetFrequency = Math.round(request.frequency);
-        if (this.isFrequencyAlreadyApplied(targetFrequency)) {
-          logger.debug('TCI state matched before write', { operation: 'applyOperatingState.setFrequency', frequency: targetFrequency });
-          this.lastKnownFrequency = targetFrequency;
+        try {
+          await this.writeOperatingFrequency(targetFrequency);
           frequencyApplied = true;
-        } else {
-          try {
-            await this.client!.setFrequency(targetFrequency);
-            this.lastKnownFrequency = targetFrequency;
-            this.emit('frequencyChanged', targetFrequency);
-            frequencyApplied = true;
-          } catch (error) {
-            if (!isTciCommandTimeout(error)) {
-              throw error;
-            }
-            logger.warn('TCI write timeout tolerated', {
-              operation: 'applyOperatingState.setFrequency',
-              frequency: targetFrequency,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }
+        } catch (error) {
+          if (!isTciCommandTimeout(error)) throw error;
         }
       }
 
@@ -771,7 +783,16 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     });
     client.on('error', (error) => this.emit('error', this.convertError(error, 'event')));
     client.on('state', () => this.syncStateFromClient());
+    client.on('tci:tx', (raw) => {
+      if (this.client !== client) return;
+      const name = raw.split(':', 1)[0]?.toLowerCase();
+      if (TCI_FREQUENCY_COMMANDS.has(name)) logger.debug('TCI frequency command sent', { raw });
+    });
     client.on('command', (command) => {
+      if (this.client !== client) return;
+      if (TCI_FREQUENCY_COMMANDS.has(command.name)) {
+        logger.debug('TCI frequency state received', { command: command.name, args: command.args });
+      }
       if (TCI_AUDIO_NEGOTIATION_COMMANDS.has(command.name)) {
         logger.debug('TCI audio negotiation command observed', {
           command: command.name,

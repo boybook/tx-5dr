@@ -68,8 +68,8 @@ client projections.
 When the operating VFO frequency changes across a band, the browser waits for
 the first frame carrying the new native envelope, then replaces the old
 absolute viewport with the new detail/native range and sends that range to the
-server. A DDS edge tune does not change the operating VFO frequency and keeps
-the existing absolute viewport instead.
+server. A DDS edge tune retains the gesture viewport instead of creating a
+local VFO intent; any VFO movement reported by the radio remains authoritative.
 Each browser negotiates its viewport (range and requested display-bin count)
 over the spectrum subscription channel. The server projects the shared frame to
 that viewport and caches identical projections for the lifetime of the frame,
@@ -149,6 +149,29 @@ viewport by the native-center delta, preserving its span and sending the
 rebased viewport back to the server. Structured browser and server logs record
 gesture ranges, DDS targets, viewport updates, and frame ranges for diagnosing
 transport or alignment issues.
+
+Frequency confirmation belongs to the negotiated `tci-client-node` dialect;
+the application adapter must not branch on a vendor name. Standard dialects
+require target state equality. Thetis VFO writes require a matching receiver,
+channel, and target, using an asynchronous broadcast or one read-only query
+within the original deadline. Direct frequency writes used before TX must
+also complete this confirmation; sending bytes is not proof of tuning.
+`PhysicalRadioManager` retains its operating-state readback after mode changes.
+
+Thetis DDS writes and notifications use different coordinates: its receiver
+center is the write argument, but the reported IQ center includes its CW pitch
+shift. A DDS transaction waits for a fresh receiver-specific report, and the IQ
+source retains that reported center without guessing a pitch or substituting
+the requested frequency. The server may move its VFO alongside DDS; such VFO
+notifications remain authoritative. The application adds no VFO optimistic
+update for DDS. Missing reports fail within the existing timeout, and disconnects
+cancel confirmation listeners and pending queries. Reconnects discard cached
+state and old-transport events.
+
+Protocol evidence: Thetis `handleVFOMessage`, `handleDDS`, `sendDDS`, and
+`GetDSPcwPitchShiftToZero` in the upstream
+[TCI server](https://github.com/ramdor/Thetis/blob/852bf0ef0b4f3886a13fc2846489aee16f361872/Project%20Files/Source/Console/TCIServer.cs)
+and [console](https://github.com/ramdor/Thetis/blob/852bf0ef0b4f3886a13fc2846489aee16f361872/Project%20Files/Source/Console/console.cs).
 
 The rendering split follows browser/WebGL guidance to keep hot-path transforms
 on the GPU, reuse texture storage with sub-image uploads, avoid synchronous

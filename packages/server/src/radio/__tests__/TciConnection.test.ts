@@ -402,6 +402,94 @@ describe('TciConnection', () => {
 
     await connection.disconnect('test complete');
   });
+
+  it('confirms Thetis band switches by readback and preserves CW-shifted DDS state', async () => {
+    server = new MockTciServer({
+      startupCommands: [
+        'PROTOCOL:Thetis,2.0;',
+        'DEVICE:ANAN7000DLE;',
+        'VFO:0,0,14074000;',
+        'DDS:0,14074000;',
+        'MODULATION:0,CWU;',
+        'READY;',
+      ],
+    });
+    let frequencyHz = 14_074_000;
+    let iqCenterHz = 14_074_000;
+    // Only queries produce a state response. Writes cannot be acknowledged
+    // merely because their command bytes reached the socket.
+    server.onCommand(({ socket, command }) => {
+      if (command.name === 'vfo') {
+        if (command.args.length === 3) frequencyHz = Number(command.args[2]);
+        else socket.send(`VFO:0,0,${frequencyHz};`);
+        return true;
+      }
+      if (command.name === 'dds') {
+        if (command.args.length === 2) iqCenterHz = Number(command.args[1]) - 600;
+        else socket.send(`DDS:0,${iqCenterHz};`);
+        return true;
+      }
+      return false;
+    });
+    await server.start();
+    const endpoint = new URL(server.url());
+    const connection = new TciConnection({ writeTimeoutMs: 1000 });
+
+    await connection.connect({
+      type: 'tci',
+      tci: {
+        host: endpoint.hostname,
+        port: Number(endpoint.port),
+        dialect: 'auto',
+        autoDiscoverPorts: true,
+        receiver: 0,
+        trx: 0,
+        vfo: 0,
+        audioEnabled: true,
+        audioSampleRate: 12000,
+      },
+    });
+
+    const changes: number[] = [];
+    connection.on('frequencyChanged', (value) => changes.push(value));
+    await expect(connection.applyOperatingState({ frequency: 7_074_000 })).resolves.toMatchObject({ frequencyApplied: true });
+    await expect(connection.getFrequency()).resolves.toBe(7_074_000);
+    await expect(connection.setDdsFrequency(7_075_000)).resolves.toBeUndefined();
+    expect(changes).toEqual([7_074_000]);
+    expect(server.receivedCommands.map((command) => command.raw)).toEqual(expect.arrayContaining([
+      'VFO:0,0,7074000', 'VFO:0,0', 'DDS:0,7075000', 'DDS:0',
+    ]));
+    expect(connection.getState()).toBe(RadioConnectionState.CONNECTED);
+
+    await connection.disconnect('test complete');
+  });
+
+  it('rejects an unconfirmed Thetis direct frequency write before a TX caller can proceed', async () => {
+    server = new MockTciServer({
+      startupCommands: ['PROTOCOL:Thetis,2.0;', 'DEVICE:Odyssey;', 'VFO:0,0,14074000;', 'TRX:0,false;', 'READY;'],
+    });
+    server.onCommand(({ command }) => command.name === 'vfo');
+    await server.start();
+    const endpoint = new URL(server.url());
+    const connection = new TciConnection({ writeTimeoutMs: 60 });
+    await connection.connect({
+      type: 'tci',
+      tci: {
+        host: endpoint.hostname, port: Number(endpoint.port),
+        dialect: 'auto', autoDiscoverPorts: false,
+        receiver: 0, trx: 0, vfo: 0,
+        audioEnabled: true, audioSampleRate: 12000,
+      },
+    });
+    const changes: number[] = [];
+    connection.on('frequencyChanged', (value) => changes.push(value));
+    await expect(connection.setFrequency(7_074_000)).rejects.toThrow(/Timed out confirming TCI VFO/);
+    expect(changes).toEqual([]);
+    expect(connection.isHealthy()).toBe(true);
+    expect(server.receivedCommands.filter((command) => command.name === 'vfo').map((command) => command.raw))
+      .toEqual(['VFO:0,0,7074000', 'VFO:0,0']);
+    await connection.disconnect('test complete');
+  });
 });
 
 describe('resolveTciEndpointCandidates', () => {
