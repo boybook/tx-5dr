@@ -25,6 +25,7 @@ site repository.
 
 ## Decisions
 
+- [Client notification ownership](decisions/client-notifications.md)
 - [External device panel boundary](decisions/device-panel-boundary.md)
 - [TX audio input source capability](decisions/tx-audio-input-source.md)
 - [DeepCW engine integration](decisions/deepcw-engine-integration.md)

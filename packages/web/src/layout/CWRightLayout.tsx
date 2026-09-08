@@ -13,7 +13,7 @@ import { CWQSOLogCard } from '../components/cw/CWQSOLogCard';
 import { CWRecentQSOList } from '../components/cw/CWRecentQSOList';
 import { CWRightTopTabs } from '../components/cw/CWRightTopTabs';
 import { ThemeToggle } from '../components/common/ThemeToggle';
-import { QSONotificationToggleButton } from '../components/common/QSONotificationToggleButton';
+import { ClientNotificationButton } from '../components/common/ClientNotificationButton';
 import { ServerHealthButton } from '../components/system/ServerHealthButton';
 import { SettingsButton } from '../components/common/SettingsButton';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
@@ -143,7 +143,7 @@ export const CWRightLayout: React.FC = () => {
               </div>
               <div className="flex items-center gap-0">
                 <ServerHealthButton />
-                <QSONotificationToggleButton />
+                <ClientNotificationButton />
                 <ThemeToggle variant="dropdown" size="sm" />
                 <SettingsButton />
               </div>

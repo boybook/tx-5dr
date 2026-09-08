@@ -508,6 +508,32 @@
       "noSources": "当前安装中没有可提交的日志文件。"
     }
   },
+  "clientNotifications": {
+    "title": "提醒设置",
+    "replyTitle": "有人回应我时提醒",
+    "soundSettings": "音效设置",
+    "sound": "音效",
+    "preview": "试听音效",
+    "volume": "音量",
+    "activateAudio": "启用音频",
+    "storageError": "无法在此设备上保存提醒设置。",
+    "audioStatus": {
+      "locked": "音频尚未激活",
+      "error": "音效加载或播放失败",
+      "unsupported": "当前环境不支持音效播放",
+      "ready": "音频已就绪"
+    },
+    "sounds": {
+      "glass": "清脆",
+      "glassLong": "清脆长音",
+      "pluck": "轻拨",
+      "pluckAlt": "轻拨 2",
+      "confirmation": "确认",
+      "confirmationAlt": "确认 2",
+      "bong": "钟音",
+      "question": "询问音"
+    }
+  },
   "qsoNotifications": {
     "title": "QSO 系统提醒",
     "description": "记录 QSO 时，在系统级通知中心弹出提醒。仅在页面不在前台时触发，避免和当前界面提示重复。",

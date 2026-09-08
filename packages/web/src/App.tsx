@@ -23,7 +23,8 @@ import { ServerStatusPage } from './pages/ServerStatusPage';
 import { LoginPage } from './pages/LoginPage';
 import { OpenWebRXProfileSelectModal } from './components/radio/profile/OpenWebRXProfileSelectModal';
 import { GlobalModalHost } from './components/app/GlobalModalHost';
-import { QSONotificationBridge } from './components/app/QSONotificationBridge';
+import { ClientNotificationBridge } from './components/app/ClientNotificationBridge';
+import { ClientNotificationProvider } from './notifications/ClientNotificationProvider';
 import { useViewportHeightCssVar } from './hooks/useViewportHeight';
 import { GlobalShortcutBridge } from './components/app/GlobalShortcutBridge';
 import { UpdateNotificationProvider } from './components/app/UpdateNotificationProvider';
@@ -124,7 +125,6 @@ function AppContent() {
 
       {/* OpenWebRX SDR Profile 手动选择弹窗 */}
       <OpenWebRXProfileSelectModal />
-      <QSONotificationBridge />
     </div>
   );
 }
@@ -152,11 +152,14 @@ function AuthGate() {
   return (
     <AppErrorBoundary>
       <RadioProvider key={authKey}>
-        <UpdateNotificationProvider>
-          <ImageRadioProvider><AppContent /></ImageRadioProvider>
-          <GlobalShortcutBridge />
-          <GlobalModalHost />
-        </UpdateNotificationProvider>
+        <ClientNotificationProvider>
+          <ClientNotificationBridge />
+          <UpdateNotificationProvider>
+            <ImageRadioProvider><AppContent /></ImageRadioProvider>
+            <GlobalShortcutBridge />
+            <GlobalModalHost />
+          </UpdateNotificationProvider>
+        </ClientNotificationProvider>
       </RadioProvider>
     </AppErrorBoundary>
   );

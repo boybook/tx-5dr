@@ -15,7 +15,7 @@ import { VoicePTTButton } from '../components/voice/VoicePTTButton';
 import { VoiceKeyerCard } from '../components/voice/VoiceKeyerCard';
 import { VoiceRightTopTabs } from '../components/voice/VoiceRightTopTabs';
 import { ThemeToggle } from '../components/common/ThemeToggle';
-import { QSONotificationToggleButton } from '../components/common/QSONotificationToggleButton';
+import { ClientNotificationButton } from '../components/common/ClientNotificationButton';
 import { ServerHealthButton } from '../components/system/ServerHealthButton';
 import { SettingsButton } from '../components/common/SettingsButton';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
@@ -244,7 +244,7 @@ export const VoiceRightLayout: React.FC = () => {
               </div>
               <div className="flex items-center gap-0">
                 <ServerHealthButton />
-                <QSONotificationToggleButton />
+                <ClientNotificationButton />
                 <ThemeToggle variant="dropdown" size="sm" />
             <SettingsButton />
               </div>

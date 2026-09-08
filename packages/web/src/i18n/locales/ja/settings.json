@@ -506,6 +506,32 @@
       "noSources": "このインストールには送信可能なログがありません。"
     }
   },
+  "clientNotifications": {
+    "title": "通知設定",
+    "replyTitle": "自局への応答を音で通知",
+    "soundSettings": "通知音の設定",
+    "sound": "通知音",
+    "preview": "試聴",
+    "volume": "音量",
+    "activateAudio": "音声を有効にする",
+    "storageError": "この端末に通知設定を保存できませんでした。",
+    "audioStatus": {
+      "locked": "音声の有効化が必要です",
+      "error": "通知音の読み込みまたは再生に失敗しました",
+      "unsupported": "この環境では通知音を再生できません",
+      "ready": "音声の準備完了"
+    },
+    "sounds": {
+      "glass": "グラス",
+      "glassLong": "グラス（ロング）",
+      "pluck": "プラック",
+      "pluckAlt": "プラック 2",
+      "confirmation": "確認音",
+      "confirmationAlt": "確認音 2",
+      "bong": "ベル",
+      "question": "問いかけ"
+    }
+  },
   "qsoNotifications": {
     "title": "QSOシステムリマインダー",
     "description": "QSO を記録すると、システムレベルの通知センターにリマインダーがポップアップ表示されます。現在のインターフェイス プロンプトとの重複を避けるために、ページがフォアグラウンドにない場合にのみトリガーされます。",

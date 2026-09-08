@@ -16,7 +16,7 @@ import { useLanguage, type LanguageMode } from '../../hooks/useLanguage';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faRotateLeft, faPalette } from '@fortawesome/free-solid-svg-icons';
 import { InteractiveColorPicker } from './InteractiveColorPicker';
-import { QSONotificationSettingsCard } from './QSONotificationSettingsCard';
+import { ClientNotificationSettings } from './ClientNotificationSettings';
 import {
   type DisplayNotificationSettings as DisplaySettings,
   type FrameTableCycleBackgrounds,
@@ -347,7 +347,10 @@ export const DisplayNotificationSettings = forwardRef<
 
   return (
     <div className="space-y-6">
-      <QSONotificationSettingsCard />
+      <section className="space-y-4 border-t border-divider py-4">
+        <h4 className="text-base font-semibold">{t('settings:clientNotifications.title')}</h4>
+        <ClientNotificationSettings />
+      </section>
 
       {/* 语言设置 */}
       <Card shadow="none" radius="lg" classNames={{ base: "border border-divider bg-content1" }}>

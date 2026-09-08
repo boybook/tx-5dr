@@ -508,6 +508,32 @@
       "noSources": "No supported log files are available on this installation."
     }
   },
+  "clientNotifications": {
+    "title": "Notification settings",
+    "replyTitle": "Alert when someone replies to me",
+    "soundSettings": "Sound settings",
+    "sound": "Sound",
+    "preview": "Preview sound",
+    "volume": "Volume",
+    "activateAudio": "Enable audio",
+    "storageError": "Notification settings could not be saved on this device.",
+    "audioStatus": {
+      "locked": "Audio needs activation",
+      "error": "Sound could not be loaded or played",
+      "unsupported": "Audio is unavailable in this environment",
+      "ready": "Audio ready"
+    },
+    "sounds": {
+      "glass": "Glass",
+      "glassLong": "Glass (long)",
+      "pluck": "Pluck",
+      "pluckAlt": "Pluck 2",
+      "confirmation": "Confirmation",
+      "confirmationAlt": "Confirmation 2",
+      "bong": "Bong",
+      "question": "Question"
+    }
+  },
   "qsoNotifications": {
     "title": "QSO System Notifications",
     "description": "Show a system-level notification when a QSO is logged. Notifications only fire while the page is in the background to avoid duplicating the foreground UI.",

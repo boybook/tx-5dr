@@ -7,10 +7,10 @@ import {
   requestNotificationPermission,
 } from './notificationDriver';
 import {
-  getQsoNotificationPreferences,
-  QSO_NOTIFICATION_SETTINGS_CHANGED_EVENT,
-  saveQsoNotificationPreferences,
-} from './qsoNotificationPreferences';
+  getClientNotificationPreferences,
+  CLIENT_NOTIFICATION_SETTINGS_CHANGED_EVENT,
+  updateClientNotificationPreferences,
+} from './clientNotificationPreferences';
 import {
   resolveQsoNotificationRuntimeState,
   type QsoNotificationRuntimeState,
@@ -18,15 +18,15 @@ import {
 
 type EnableQsoNotificationResult =
   | { ok: true; permission: BrowserNotificationPermission }
-  | { ok: false; reason: 'unsupported' | 'denied' | 'dismissed' };
+  | { ok: false; reason: 'unsupported' | 'denied' | 'dismissed' | 'storage' };
 
 function readState(): QsoNotificationRuntimeState {
-  const preferences = getQsoNotificationPreferences();
+  const preferences = getClientNotificationPreferences();
   return resolveQsoNotificationRuntimeState({
     supported: isNotificationSupported(),
     secureContext: isNotificationSecureContext(),
     permission: getNotificationPermissionState(),
-    preferenceEnabled: preferences.enabled,
+    preferenceEnabled: preferences.qsoEnabled,
   });
 }
 
@@ -48,7 +48,7 @@ export function useQsoNotificationController() {
     };
 
     window.addEventListener('storage', handleStateChange);
-    window.addEventListener(QSO_NOTIFICATION_SETTINGS_CHANGED_EVENT, handleStateChange);
+    window.addEventListener(CLIENT_NOTIFICATION_SETTINGS_CHANGED_EVENT, handleStateChange);
     window.addEventListener('focus', handleStateChange);
     document.addEventListener('visibilitychange', handleStateChange);
 
@@ -65,7 +65,7 @@ export function useQsoNotificationController() {
     return () => {
       disposed = true;
       window.removeEventListener('storage', handleStateChange);
-      window.removeEventListener(QSO_NOTIFICATION_SETTINGS_CHANGED_EVENT, handleStateChange);
+      window.removeEventListener(CLIENT_NOTIFICATION_SETTINGS_CHANGED_EVENT, handleStateChange);
       window.removeEventListener('focus', handleStateChange);
       document.removeEventListener('visibilitychange', handleStateChange);
       permissionStatus?.removeEventListener('change', handleStateChange);
@@ -73,12 +73,13 @@ export function useQsoNotificationController() {
   }, [refresh]);
 
   const setPreferenceEnabled = useCallback((enabled: boolean) => {
-    saveQsoNotificationPreferences({ enabled });
+    const saved = updateClientNotificationPreferences({ qsoEnabled: enabled });
     refresh();
+    return saved;
   }, [refresh]);
 
   const disable = useCallback(() => {
-    setPreferenceEnabled(false);
+    return setPreferenceEnabled(false);
   }, [setPreferenceEnabled]);
 
   const enable = useCallback(async (): Promise<EnableQsoNotificationResult> => {
@@ -87,7 +88,7 @@ export function useQsoNotificationController() {
     }
 
     if (state.permission === 'granted') {
-      setPreferenceEnabled(true);
+      if (!setPreferenceEnabled(true)) return { ok: false, reason: 'storage' };
       return { ok: true, permission: 'granted' };
     }
 
@@ -99,7 +100,7 @@ export function useQsoNotificationController() {
     refresh();
 
     if (permission === 'granted') {
-      setPreferenceEnabled(true);
+      if (!setPreferenceEnabled(true)) return { ok: false, reason: 'storage' };
       return { ok: true, permission };
     }
 
