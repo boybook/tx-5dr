@@ -207,7 +207,7 @@ export function SstvComposer() {
   const stationIdBlocked = txEnvelope.stationIdMode !== 'none' && !stationIdAvailable;
   const durationSeconds = estimateSstvTxDurationSeconds(mode, stationCallsign, txEnvelope);
   const txProgress = txStatus?.estimatedTotalSamples
-    ? Math.min(100, Math.round((txStatus.samplesEmitted / txStatus.estimatedTotalSamples) * 100))
+    ? Math.min(txStatus.phase === 'completed' ? 100 : 99, Math.round((txStatus.samplesEmitted / txStatus.estimatedTotalSamples) * 100))
     : 0;
   const selectedTemplate = templates.find((template) => template.id === selectedTemplateId);
   const deleteTemplate = templates.find((template) => template.id === deleteTemplateId);

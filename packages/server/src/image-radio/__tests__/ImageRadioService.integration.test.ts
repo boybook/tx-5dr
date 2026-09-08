@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { EventEmitter } from 'eventemitter3';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SstvEncoder } from 'rasterwave-node';
 
 import { ImageArtifactStore } from '../ImageArtifactStore.js';
@@ -28,13 +28,15 @@ class FakePlayback {
   readonly sampleRate = 12_000;
   readonly frameSamples = 1_200;
   queuedAudioMs = 0;
+  holdOutput = false;
+  endGate?: Promise<void>;
   private started = false;
   private chunks: Float32Array[] = [];
   private options?: { onPlaybackChunk?: (samples: Float32Array, sampleRate: number) => void };
   configure(options?: { onPlaybackChunk?: (samples: Float32Array, sampleRate: number) => void }) { this.options = options; }
   async write(samples: Float32Array) {
     const chunk = new Float32Array(samples);
-    if (!this.started) {
+    if (!this.started || this.holdOutput) {
       this.chunks.push(chunk);
       this.queuedAudioMs += chunk.length / this.sampleRate * 1_000;
       return;
@@ -44,10 +46,13 @@ class FakePlayback {
   }
   async start() {
     this.started = true;
+    if (!this.holdOutput) this.flush();
+  }
+  flush() {
     for (const chunk of this.chunks.splice(0)) this.options?.onPlaybackChunk?.(chunk, this.sampleRate);
     this.queuedAudioMs = 0;
   }
-  async end() { this.queuedAudioMs = 0; this.started = false; }
+  async end() { await this.endGate; this.queuedAudioMs = 0; this.started = false; }
   async abort() { this.queuedAudioMs = 0; this.started = false; this.chunks = []; }
 }
 
@@ -63,6 +68,42 @@ class FakePhysicalTx {
 }
 
 describe('ImageRadioService native streaming integration', () => {
+  it('advances transmit progress only when output is submitted and completes after drain', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'tx5dr-image-progress-'));
+    dirs.push(dir);
+    const audio = new FakeAudioStream();
+    audio.playback.holdOutput = true;
+    let releaseDrain!: () => void;
+    audio.playback.endGate = new Promise<void>((resolve) => { releaseDrain = resolve; });
+    const store = new ImageArtifactStore(dir);
+    const history = new ImageHistoryStore(dir);
+    const physicalTx = new FakePhysicalTx();
+    const service = new ImageRadioService(audio as never, store, history, physicalTx as never, () => 14_230_000, () => 'USB');
+    await service.start('sstv');
+    const artifact = await store.save({
+      family: 'sstv', direction: 'tx', operatorId: 'op', codecMode: 'robot8Bw', pixelFormat: 'rgb8',
+      width: 160, height: 120, pixels: new Uint8Array(160 * 120 * 3),
+      frequency: 14_230_000, radioMode: 'USB', complete: true,
+    });
+    try {
+      expect(await service.startSstvTx({
+        requestId: 'tx-progress', operatorId: 'op', artifactId: artifact.id,
+        mode: 'robot8Bw', expectedFrequency: 14_230_000,
+        envelope: { enhancedPreamble: false, stationIdMode: 'none' },
+      })).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(service.getStatus().tx.phase).toBe('draining'));
+      expect(service.getStatus().tx).toMatchObject({ samplesEmitted: 0, encoderStage: 'finished' });
+      audio.playback.flush();
+      expect(service.getStatus().tx.samplesEmitted).toBe(service.getStatus().tx.estimatedTotalSamples);
+      expect(service.getStatus().tx.phase).toBe('draining');
+      expect(physicalTx.getSnapshot().phase).toBe('draining');
+    } finally {
+      releaseDrain();
+      await vi.waitFor(() => expect(service.getStatus().tx.phase).toBe('completed'));
+      await service.stop();
+    }
+  });
+
   it('emits Robot 36 rows before EOF and persists the completed image', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'tx5dr-image-service-'));
     dirs.push(dir);

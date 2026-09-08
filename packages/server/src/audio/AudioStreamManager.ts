@@ -2471,9 +2471,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     }
 
     const sampleRate = radioAdapter ? this.getInternalSampleRate() : this.outputSampleRate;
-    const frameSamples = radioAdapter
-      ? ICOM_WLAN_TX_CHUNK_SIZE
-      : Math.max(64, this.outputBufferSize || 1024);
+    const frameSamples = radioAdapter?.kind === 'tci'
+      ? Math.max(1, radioAdapter.adapter.getTxAudioSyncSnapshot()?.samplesPerFrame ?? 512)
+      : radioAdapter
+        ? ICOM_WLAN_TX_CHUNK_SIZE
+        : Math.max(64, this.outputBufferSize || 1024);
     const highWaterSamples = sampleRate;
     const lowWaterSamples = Math.round(sampleRate * 0.3);
     const playbackId = ++this.playbackSequence;
@@ -2547,9 +2549,25 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           queuedSamples -= chunk.length;
           releaseBackpressure();
 
-          const producedMs = submittedSamples / sampleRate * 1000;
-          const leadMs = producedMs - (performance.now() - hrStart);
-          if (leadMs > 100) await new Promise<void>((resolve) => setTimeout(resolve, Math.min(leadMs - 100, 25)));
+          // A bounded sleep is only a polling slice, not permission to send
+          // another frame. TCI can queue PCM much faster than CHRONO consumes it.
+          const pacingStartedAt = performance.now();
+          for (;;) {
+            if (aborted) throw aborted;
+            if (this.isPlaybackStopRequested(playbackId)) throw new Error('playback interrupted');
+            const leadMs = submittedSamples / sampleRate * 1000 - (performance.now() - hrStart);
+            const txSync = radioAdapter?.kind === 'tci' ? radioAdapter.adapter.getTxAudioSyncSnapshot() : null;
+            const queueExcessMs = txSync ? txSync.queuedAudioMs - txSync.targetLeadMs : 0;
+            // CHRONO owns the TCI clock. Refill its reserve after late timer
+            // wakeups instead of pacing each frame with a relative timeout.
+            const waitMs = txSync ? queueExcessMs : leadMs - 100;
+            if (waitMs <= 0) break;
+            if (queueExcessMs > 0 && performance.now() - pacingStartedAt >= 5_000) {
+              throw new Error('TCI SSTV audio consumption stalled');
+            }
+            const waitSliceMs = Math.max(1, Math.min(25, txSync?.recommendedPumpIntervalMs ?? 25));
+            await new Promise<void>((resolve) => setTimeout(resolve, Math.min(waitMs, waitSliceMs)));
+          }
 
           let observedChunk = chunk;
           if (radioAdapter) {
@@ -2603,6 +2621,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           await this.waitForOutputDrain({ timeoutMs: Math.max(2000, Math.ceil(remainingLeadMs) + 2000) });
         }
       } catch (error) {
+        aborted = error instanceof Error ? error : new Error(String(error));
         rejectFirstStart(error);
         throw error;
       } finally {
@@ -2630,6 +2649,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         queuedSamples += samples.length;
         wake();
         if (queuedSamples > highWaterSamples) await new Promise<void>((resolve) => backpressureWaiters.push(resolve));
+        if (aborted) throw aborted;
       },
       start: async () => {
         if (!started) {

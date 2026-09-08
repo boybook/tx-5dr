@@ -95,6 +95,30 @@ sequenceDiagram
 
 The public UDP setting is deliberately append-only. A bad FRP endpoint should not break local candidates, and session startup still has `ws-compat` as the guaranteed fallback.
 
+## SSTV Transmit Timing
+
+`AudioStreamManager.openDeterministicPlayback` owns SSTV output pacing and
+backpressure. Its producer queue is bounded independently of the output sink.
+For TCI, the CHRONO-consumed queue snapshot is the pacing clock: refill to the
+negotiated target lead, with at most one submitted frame beyond that target.
+Short timer waits only poll for room; late wakeups refill the reserve without
+accumulating per-frame timing drift. Other sinks use cumulative sample duration
+against a monotonic clock and recheck the lead after every wait.
+
+The TCI reserve absorbs scheduling jitter within its buffered duration. It cannot
+guarantee uninterrupted output through an event-loop or transport stall longer
+than the reserve. A TCI queue that blocks a write for five seconds fails the
+session so the physical TX coordinator can release PTT. Cancellation is checked
+on every pacing iteration, and output failures reject blocked producers.
+
+`ImageRadioService` advances `samplesEmitted` and feeds the local decoder from
+the same paced output-submission callback, independently of encoder read-ahead.
+`encoderStage` and `currentRow` remain encoder diagnostics. Submission can lead
+physical playback by the bounded sink reserve; it is not a hardware playhead.
+The local preview ends at the raster boundary, before any station ID or guard.
+The UI reserves 100 percent for `completed`, which requires output drain and
+successful physical lease release.
+
 ## Voice Keyer TX Monitor
 
 Voice keyer monitoring is part of the voice source layer, not a transport-specific shortcut.

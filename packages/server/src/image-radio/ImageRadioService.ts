@@ -370,7 +370,15 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     const sessionId = randomUUID();
     const playback = this.audioStream.openDeterministicPlayback({
       playbackKind: 'sstv',
-      onPlaybackChunk: (samples, sampleRate) => this.acceptTxPreviewAudio(sessionId, samples, sampleRate),
+      onPlaybackChunk: (samples, sampleRate) => {
+        if (this.activeTx?.sessionId !== sessionId) return;
+        this.updateTx({
+          ...this.txStatus,
+          revision: this.txStatus.revision + 1,
+          samplesEmitted: Math.min(this.txStatus.estimatedTotalSamples, this.txStatus.samplesEmitted + samples.length),
+        });
+        this.acceptTxPreviewAudio(sessionId, samples, sampleRate);
+      },
     });
     const stationId = envelope.stationIdMode === 'none'
       ? { kind: 'none' as const }
@@ -1096,7 +1104,6 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
         if (this.activeTx) this.activeTx.revision += 1;
         this.updateTx({
           ...this.txStatus, revision: this.activeTx?.revision ?? this.txStatus.revision + 1,
-          samplesEmitted: progress.samplesEmitted,
           estimatedTotalSamples: progress.estimatedTotalSamples,
           currentRow: progress.currentRow,
           encoderStage: progress.stage,
