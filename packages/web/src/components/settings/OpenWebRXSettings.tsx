@@ -26,6 +26,7 @@ import {
 } from '@fortawesome/free-solid-svg-icons';
 import { api } from '@tx5dr/core';
 import type { OpenWebRXStationConfig, OpenWebRXListenStatus, OpenWebRXProfile } from '@tx5dr/contracts';
+import { formatFrequencyMHz } from '../../utils/frequencyMHz';
 import { useAudioMonitorPlayback } from '../../hooks/useAudioMonitorPlayback';
 import { createLogger } from '../../utils/logger';
 import {
@@ -462,7 +463,7 @@ export function OpenWebRXSettings() {
                           placeholder="14074000"
                           value={listenFrequency}
                           onValueChange={setListenFrequency}
-                          description={listenFrequency ? `${(parseInt(listenFrequency) / 1000000).toFixed(3)} MHz` : ''}
+                          description={listenFrequency ? `${formatFrequencyMHz(parseInt(listenFrequency))} MHz` : ''}
                           className="flex-1"
                           size="sm"
                         />
@@ -530,7 +531,7 @@ export function OpenWebRXSettings() {
                       placeholder="14074000"
                       value={listenFrequency}
                       onValueChange={setListenFrequency}
-                      description={listenFrequency ? `${(parseInt(listenFrequency) / 1000000).toFixed(3)} MHz` : ''}
+                      description={listenFrequency ? `${formatFrequencyMHz(parseInt(listenFrequency))} MHz` : ''}
                       className="flex-1"
                       size="sm"
                     />
@@ -560,7 +561,7 @@ export function OpenWebRXSettings() {
                   <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-default-400">
                     {listenStatus?.centerFreq && (
                       <span>
-                        {t('openwebrx.centerFreq')}: {(listenStatus.centerFreq / 1000000).toFixed(3)} MHz
+                        {t('openwebrx.centerFreq')}: {formatFrequencyMHz(listenStatus.centerFreq)} MHz
                         {listenStatus.sampleRate && ` (BW: ${(listenStatus.sampleRate / 1000).toFixed(0)} kHz)`}
                       </span>
                     )}

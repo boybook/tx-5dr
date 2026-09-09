@@ -22,6 +22,7 @@ import { api, getDisplayMode } from '@tx5dr/core';
 import { useWSEvent } from '../../hooks/useWSEvent';
 import { useCWKeyer } from '../../hooks/useCWKeyer';
 import type { QSORecord } from '@tx5dr/contracts';
+import { formatFrequencyMHz } from '../../utils/frequencyMHz';
 import { openLogbookWindow } from '../../utils/windowManager';
 import { setCWQSOHisCallsign, setCWQSOTrst, setCWQSORrst, useCWQSODraft } from '../../store/cwQsoDraftStore';
 
@@ -485,7 +486,7 @@ export const CWQSOLogCard: React.FC<CWQSOLogCardProps> = ({
 
         {/* Auto-filled info */}
         <div className="flex gap-4 text-xs text-default-400">
-          <span>{t('radio:cw.qso.frequency')}: <span className="font-mono">{((displayedFrequency || 0) / 1000000).toFixed(3)} MHz</span></span>
+          <span>{t('radio:cw.qso.frequency')}: <span className="font-mono">{formatFrequencyMHz(displayedFrequency || 0)} MHz</span></span>
           <span>{t('radio:cw.qso.mode')}: <span className="font-mono">{displayedMode}</span></span>
         </div>
 

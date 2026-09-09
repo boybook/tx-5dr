@@ -7,6 +7,7 @@ import type {
   SpectrumSessionState,
   SpectrumSessionSourceMode,
 } from '@tx5dr/contracts';
+import { formatFrequencyMHz } from '../utils/frequencyMHz.js';
 import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { FrequencyManager } from '../radio/FrequencyManager.js';
 import { ConfigManager } from '../config/config-manager.js';
@@ -38,7 +39,7 @@ const OPENWEBRX_DETAIL_OFFSET_HZ = 1500;
 const VOICE_FREQUENCY_GESTURE_STEP_HZ = 1000;
 
 function formatPresetMarkerLabel(frequencyHz: number): string {
-  return `${(frequencyHz / 1_000_000).toFixed(3)} MHz`;
+  return `${formatFrequencyMHz(frequencyHz)} MHz`;
 }
 
 interface SpectrumSessionCoordinatorEvents {

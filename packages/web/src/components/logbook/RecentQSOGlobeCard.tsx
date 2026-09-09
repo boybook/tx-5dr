@@ -22,6 +22,7 @@ import {
   type WorkedGridLabel,
   type WorkedGridLine,
 } from '../../utils/logbookGlobe';
+import { formatFrequencyMHz } from '../../utils/frequencyMHz';
 
 const logger = createLogger('RecentQSOGlobeCard');
 
@@ -795,7 +796,7 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
         arcDashAnimateTime="dashAnimateTime"
         arcLabel={(arc) => {
           const globeArc = arc as GlobeArc;
-          return `${globeArc.callsign} · ${globeArc.grid}<br/>${globeArc.mode} · ${(globeArc.frequency / 1_000_000).toFixed(3)} MHz<br/>${formatUtcTime(globeArc.startTime)} UTC`;
+          return `${globeArc.callsign} · ${globeArc.grid}<br/>${globeArc.mode} · ${formatFrequencyMHz(globeArc.frequency)} MHz<br/>${formatUtcTime(globeArc.startTime)} UTC`;
         }}
         ringsData={visibleRings}
         ringLat="lat"

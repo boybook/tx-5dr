@@ -47,6 +47,7 @@ import { createSpectrumNegotiator } from './spectrumNegotiation';
 import type { FrameDisplayMessage, FrameGroup } from '../../components/radio/digital/FramesTable';
 import type { RadioState } from './types';
 import { resolveOperatorTargetCallsigns } from '../../utils/operatorTargets';
+import { formatFrequencyMHz } from '../../utils/frequencyMHz';
 
 const logger = createLogger('RadioStore');
 const MAX_VALID_DATE_MS = 8_640_000_000_000_000;
@@ -73,7 +74,7 @@ function buildFrequencyContext(
     ...(currentMode ? { mode: currentMode } : {}),
     ...(currentRadioMode ? { radioMode: currentRadioMode } : {}),
     ...(band && band !== 'Unknown' ? { band } : {}),
-    description: `${(currentRadioFrequency / 1_000_000).toFixed(3)} MHz`,
+    description: `${formatFrequencyMHz(currentRadioFrequency)} MHz`,
   };
 }
 

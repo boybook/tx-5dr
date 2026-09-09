@@ -45,6 +45,7 @@ import {
 } from './IRadioConnection.js';
 import type { TxAudioInputSource } from '@tx5dr/contracts';
 import { ICOM_CONNECTOR_SOURCE_MAP } from '../txAudioInput/TxAudioInputProvider.js';
+import { formatFrequencyMHz } from '../../utils/frequencyMHz.js';
 
 const logger = createLogger('IcomWlanConnection');
 
@@ -397,7 +398,7 @@ export class IcomWlanConnection
 
     try {
       await this.rig!.setFrequency(frequency);
-      logger.debug(`Frequency set: ${(frequency / 1000000).toFixed(3)} MHz`);
+      logger.debug(`Frequency set: ${formatFrequencyMHz(frequency)} MHz`);
     } catch (error) {
       throw this.convertError(error, 'setFrequency');
     }
@@ -896,7 +897,7 @@ export class IcomWlanConnection
       try {
         const freq = await this.rig!.readOperatingFrequency({ timeout: 5000 });
         if (freq !== null) {
-          logger.debug(`Connection test passed, current frequency: ${(freq / 1000000).toFixed(3)} MHz`);
+          logger.debug(`Connection test passed, current frequency: ${formatFrequencyMHz(freq)} MHz`);
         } else {
           throw new Error('Test connection failed: unable to get frequency');
         }

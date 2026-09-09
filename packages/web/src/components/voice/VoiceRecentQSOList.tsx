@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
 import { api, getDisplayMode } from '@tx5dr/core';
 import type { DigitalRadioEngineEvents, QSORecord } from '@tx5dr/contracts';
+import { formatFrequencyMHz } from '../../utils/frequencyMHz';
 import { QrzCallsignLink } from '../common/QrzCallsignLink';
 
 const logger = createLogger('VoiceRecentQSOList');
@@ -121,7 +122,7 @@ export const VoiceRecentQSOList: React.FC<VoiceRecentQSOListProps> = ({
   };
 
   const formatFreq = (freqHz: number): string => {
-    return (freqHz / 1000000).toFixed(3);
+    return formatFrequencyMHz(freqHz);
   };
 
   const getDateKey = (timestamp: number): string => {

@@ -58,6 +58,7 @@ import { RadioState, type RadioInput } from '../state-machines/types.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { buildFrequencyOperatingStateRequest } from './frequencyRadioMode.js';
 import { isCapabilityTemporarilyDisabled } from './capabilities/definitions.js';
+import { formatFrequencyMHz } from '../utils/frequencyMHz.js';
 
 const logger = createLogger('PhysicalRadioManager');
 const NORMAL_FREQUENCY_POLL_MS = 2000;
@@ -1245,7 +1246,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
           source: 'program',
         });
       }
-      logger.debug(`Frequency set: ${(freq / 1000000).toFixed(3)} MHz`);
+      logger.debug(`Frequency set: ${formatFrequencyMHz(freq)} MHz`);
       return true;
     } catch (error) {
       if (isExplicitOptionalRadioCapabilityError(error)) {
@@ -1751,7 +1752,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     try {
       const currentFreq = await this.connection.getFrequency();
-      logger.info(`Connection test passed, current frequency: ${(currentFreq / 1000000).toFixed(3)} MHz`);
+      logger.info(`Connection test passed, current frequency: ${formatFrequencyMHz(currentFreq)} MHz`);
     } catch (error) {
       logger.error(`Connection test failed: ${(error as Error).message}`);
       this.handleConnectionError(error as Error);
@@ -2906,7 +2907,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       if (this.shouldIgnoreFrequencyObservation(frequency, this.frequencyWriteEpoch, 'connection-event')) {
         return;
       }
-      logger.debug(`Frequency changed: ${(frequency / 1000000).toFixed(3)} MHz`);
+      logger.debug(`Frequency changed: ${formatFrequencyMHz(frequency)} MHz`);
       this.updateKnownFrequency(frequency);
       this.emitRadioFrequencyChanged(frequency, {
         confirmation: 'confirmed',
@@ -3155,7 +3156,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     try {
       const currentFrequency = await this.getFrequency();
       if (currentFrequency > 0) {
-        logger.debug(`Captured initial frequency during bootstrap: ${(currentFrequency / 1000000).toFixed(3)} MHz`);
+        logger.debug(`Captured initial frequency during bootstrap: ${formatFrequencyMHz(currentFrequency)} MHz`);
         this.updateKnownFrequency(currentFrequency);
         this.emitRadioFrequencyChanged(currentFrequency, {
           confirmation: 'confirmed',
@@ -3592,9 +3593,9 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         logger.debug(
           `Frequency changed: ${
             previousKnownFrequency
-              ? (previousKnownFrequency / 1000000).toFixed(3)
+              ? formatFrequencyMHz(previousKnownFrequency)
               : 'N/A'
-          } MHz -> ${(currentFrequency / 1000000).toFixed(3)} MHz`
+          } MHz -> ${formatFrequencyMHz(currentFrequency)} MHz`
         );
 
         if (previousKnownFrequency !== null) {
@@ -3611,7 +3612,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         this.queuePostFrequencyCapabilityRefresh('frequencyMonitor');
       } else if (previousKnownFrequency === null && currentFrequency > 0) {
         // 首次获取频率
-        logger.debug(`Initial frequency: ${(currentFrequency / 1000000).toFixed(3)} MHz`);
+        logger.debug(`Initial frequency: ${formatFrequencyMHz(currentFrequency)} MHz`);
         this.updateKnownFrequency(currentFrequency);
       }
     } catch (error) {

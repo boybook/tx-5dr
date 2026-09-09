@@ -15,6 +15,7 @@ import { SpectrumController } from 'hamlib/spectrum';
 import type { ManagedSpectrumConfig, SpectrumLine, SpectrumSupportSummary } from 'hamlib/spectrum';
 import serialport from 'serialport';
 import type { LevelMeterReading, MeterCapabilities, SerialConfig, TxAudioInputSource } from '@tx5dr/contracts';
+import { formatFrequencyMHz } from '../../utils/frequencyMHz.js';
 import {
   type MeterDecodeStrategy,
   resolveHamlibMeterDecodeStrategy,
@@ -3463,7 +3464,7 @@ export class HamlibConnection
 
       this.lastSuccessfulOperation = Date.now();
       this.currentFrequencyHz = frequency;
-      logger.debug(`Frequency set: ${(frequency / 1000000).toFixed(3)} MHz`);
+      logger.debug(`Frequency set: ${formatFrequencyMHz(frequency)} MHz`);
     } catch (error) {
       throw this.convertError(error, 'setFrequency');
     }
@@ -3796,7 +3797,7 @@ export class HamlibConnection
         try {
           await this.writeSplitFrequencyForVfo(txFrequency, txVfo);
           this.lastSuccessfulOperation = Date.now();
-          logger.debug(`Split TX frequency set: ${(txFrequency / 1000000).toFixed(3)} MHz`);
+          logger.debug(`Split TX frequency set: ${formatFrequencyMHz(txFrequency)} MHz`);
           return;
         } catch (error) {
           lastError = error;
@@ -3823,7 +3824,7 @@ export class HamlibConnection
       ]);
 
       this.lastSuccessfulOperation = Date.now();
-      logger.debug(`Split TX freq/mode set: ${(txFrequency / 1000000).toFixed(3)} MHz ${txMode} ${txWidth}Hz`);
+      logger.debug(`Split TX freq/mode set: ${formatFrequencyMHz(txFrequency)} MHz ${txMode} ${txWidth}Hz`);
     } catch (error) {
       throw this.convertError(error, 'setSplitFreqMode');
     }
