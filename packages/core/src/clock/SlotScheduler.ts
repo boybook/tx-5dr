@@ -69,6 +69,9 @@ export class SlotScheduler {
   private decodeApContextProvider?: DecodeApContextProvider;
   private getDecodeDepth?: () => number;
   private readonly decodeDepthBySlot = new Map<string, number>();
+  private lastDiagnosticLogAt = 0;
+  private diagnosticRequests = 0;
+  private diagnosticCompletions = 0;
   private isActive = false;
   private readonly boundHandleSubWindow: (slotInfo: SlotInfo, windowIdx: number) => void;
 
@@ -190,12 +193,37 @@ export class SlotScheduler {
         emeDelayMs: 0,
         ...(apContext ? { apContext } : {})
       };
+
+      this.diagnosticRequests++;
+      const now = Date.now();
+      if (now - this.lastDiagnosticLogAt >= 30_000) {
+        this.lastDiagnosticLogAt = now;
+        logger.info('decode pipeline diagnostic snapshot', {
+          slotId: slotInfo.id,
+          windowIdx,
+          mode: decodeRequest.mode,
+          slotStartMs: slotInfo.startMs,
+          slotUtcSeconds: slotInfo.utcSeconds,
+          decodeDepth,
+          decodeStage: stage,
+          decodeSessionId: decodeRequest.decodeSessionId,
+          queueSize: this.decodeQueue.size(),
+          requestsSinceLastSnapshot: this.diagnosticRequests,
+          completionsSinceLastSnapshot: this.diagnosticCompletions,
+          pcmBytes: pcmBuffer.byteLength,
+          sampleRate: actualSampleRate,
+          decisionDeadlineMs,
+        });
+        this.diagnosticRequests = 0;
+        this.diagnosticCompletions = 0;
+      }
       
       const offsetSign = windowOffsetMs >= 0 ? '+' : '';
       logger.debug(`Decode request: slot=${slotInfo.id}, window=${windowIdx}, offset=${offsetSign}${windowOffsetMs}ms, duration=${windowDurationMs}ms, pcm=${(pcmBuffer.byteLength/1024).toFixed(1)}KB, sampleRate=${actualSampleRate}Hz`);
       
       // 推送到解码队列
       await this.decodeQueue.push(decodeRequest);
+      this.diagnosticCompletions++;
 
       if (windowIdx >= windowCount - 1) this.decodeDepthBySlot.delete(slotInfo.id);
       

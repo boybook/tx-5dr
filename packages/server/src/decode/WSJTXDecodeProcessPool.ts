@@ -315,6 +315,7 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
   private readonly performanceNow: () => number;
   private readonly apDecodeSuppressedUntilMs = new Map<DecodeRequest['mode'], number>();
   private readonly nativeDecodeDurationsMs: number[] = [];
+  private lastDiagnosticLogAt = 0;
   private nextJobId = 1;
   private nextWorkerId = 1;
   private readonly initialDesiredWorkers: number;
@@ -382,6 +383,33 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
       return Promise.reject(new Error('decode worker pool has been destroyed'));
     }
     this.refreshHealthStatus();
+    const now = Date.now();
+    if (now - this.lastDiagnosticLogAt >= 30_000) {
+      this.lastDiagnosticLogAt = now;
+      logger.info('decode worker pool diagnostic snapshot', {
+        trigger: 'decode-request',
+        status: this.healthStatus,
+        request: {
+          slotId: request.slotId,
+          windowIdx: request.windowIdx,
+          mode: request.mode,
+          decodeSessionId: request.decodeSessionId,
+          decodeStage: request.decodeStage,
+          decodeDepth: request.decodeDepth,
+          decodeFinalWindow: request.decodeFinalWindow,
+          lateRetry: request.lateRetry,
+        },
+        queue: {
+          pendingJobs: this.pending.length,
+          activeJobs: this.getActiveJobCount(),
+          readyWorkers: this.getReadyWorkerCount(),
+          workerProcesses: this.workers.size,
+          desiredWorkers: this.desiredWorkers,
+        },
+        lastFailure: this.lastFailure,
+        restartAttempts: this.restartAttempts,
+      });
+    }
     if (this.healthStatus === 'unavailable' && this.getReadyWorkerCount() === 0) {
       return Promise.reject(new Error(`decode worker unavailable: ${this.lastFailure ?? 'no worker is ready'}`));
     }
