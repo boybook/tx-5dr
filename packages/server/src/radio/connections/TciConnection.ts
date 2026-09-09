@@ -7,7 +7,6 @@ import {
   TciTxAudioSync,
   normalizeSampleType,
   payloadToFloat32,
-  float32ToPcm16,
   type TciTxAudioSyncSnapshot,
   type TciTxChronoRequest,
   type TciStreamFrame,
@@ -93,6 +92,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
   private handshakeResult: TciHandshakeResult | null = null;
   private connectedUrl: string | null = null;
   private audioRunning = false;
+  private lineOutRunning = false;
   private readonly audioStreamOwners = new Set<string>();
   private txAudioSync: TciTxAudioSync | null = null;
   private txChronoTraceLogged = false;
@@ -653,6 +653,10 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     return this.currentConfig?.tci?.audioSampleRate ?? DEFAULT_TCI_AUDIO_RATE;
   }
 
+  supportsNativeLineOutStream(): boolean {
+    return this.handshakeResult?.dialect.dialect.lineOutStreamMode === 'native-stream';
+  }
+
   getTciIqSupport(): TciIqCapabilities {
     if (this.client?.isConnected()) {
       try {
@@ -722,6 +726,26 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
       this.audioStreamOwners.delete(owner);
       throw error;
     }
+  }
+
+  async startLineOutStream(): Promise<void> {
+    this.checkConnected();
+    if (!this.supportsNativeLineOutStream()) {
+      throw new Error('TCI dialect does not provide a native Line Out stream');
+    }
+    if (this.lineOutRunning) return;
+    await this.client!.startLineOut(this.currentConfig?.tci?.receiver ?? 0);
+    await this.client!.setMonitorEnabled(true);
+    this.lineOutRunning = true;
+  }
+
+  async stopLineOutStream(): Promise<void> {
+    if (!this.client?.isConnected() || !this.lineOutRunning) {
+      this.lineOutRunning = false;
+      return;
+    }
+    await this.client.stopLineOut(this.currentConfig?.tci?.receiver ?? 0);
+    this.lineOutRunning = false;
   }
 
   async stopAudioStream(owner = 'rx'): Promise<void> {
@@ -801,6 +825,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
       }
     });
     client.on('rxAudioFrame', (frame) => this.handleRxAudioFrame(frame));
+    client.on('lineoutAudioFrame', (frame) => this.handleLineOutAudioFrame(frame));
     client.on('txChrono', (request) => {
       if (this.client !== client) return;
       this.handleTxChrono(request);
@@ -1116,11 +1141,28 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
   }
 
   private handleRxAudioFrame(frame: TciStreamFrame): void {
+    if (this.lineOutRunning) return;
     try {
       const samples = payloadToFloat32(frame);
-      this.emit('audioFrame', float32ToPcm16(samples), { timestampMs: Date.now() });
+      this.emit('audioFrame', samples, { timestampMs: Date.now(), sampleRate: frame.sampleRate, channels: frame.channels });
     } catch (error) {
       this.emit('error', this.convertError(error, 'rxAudioFrame'));
+    }
+  }
+
+  private handleLineOutAudioFrame(frame: TciStreamFrame): void {
+    try {
+      const decoded = payloadToFloat32(frame);
+      let samples = decoded;
+      if (frame.channels === 2) {
+        samples = new Float32Array(Math.floor(decoded.length / 2));
+        for (let i = 0; i < samples.length; i += 1) {
+          samples[i] = (decoded[i * 2]! + decoded[i * 2 + 1]!) / 2;
+        }
+      }
+      this.emit('audioFrame', samples, { timestampMs: Date.now(), sampleRate: frame.sampleRate, channels: 1 });
+    } catch (error) {
+      this.emit('error', this.convertError(error, 'lineoutAudioFrame'));
     }
   }
 
@@ -1161,6 +1203,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     this.client = null;
     this.backgroundTasksStarted = false;
     this.audioRunning = false;
+    this.lineOutRunning = false;
     this.audioStreamOwners.clear();
     this.resetTxAudioSync('connection-cleanup');
     await meterSession?.close().catch((error) => logger.debug('TCI meter stream cleanup failed', error));

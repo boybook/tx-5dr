@@ -57,7 +57,7 @@
     "rasterwave-node": "0.5.0",
     "rubato-fft-node": "^0.2.0",
     "serialport": "^13.0.0",
-    "tci-client-node": "^0.5.4",
+    "tci-client-node": "portal:../../../tci-client-node",
     "wav": "^1.0.2",
     "wsjtx-lib": "2.2.0",
     "xstate": "^5.23.0",

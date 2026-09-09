@@ -14,10 +14,11 @@ export interface IcomWlanAudioAdapterEvents {
  * ICOM WLAN 音频适配器
  * 负责音频数据的接收和发送（零重采样优化：ICOM 原生 12kHz）
  *
- * 注意：本适配器只负责协议转换（PCM16 ↔ Float32）并通过 'audioData' 事件转发，
+ * 注意：连接层负责一次性完成 PCM16 -> Float32 解码，本适配器只转发规范化帧，
  * RX 时间线的环形缓冲区统一由 AudioStreamManager 维护（见 ingestInputSamples）。
  */
 export class IcomWlanAudioAdapter extends EventEmitter<IcomWlanAudioAdapterEvents> {
+  private readonly handleAudioFrameBound = (samples: Float32Array, meta?: AudioFrameMeta) => this.handleAudioFrame(samples, meta);
   private icomConnection: IcomWlanConnection;
   private icomSampleRate: number; // ICOM 采样率（12kHz）
   private isReceiving = false;
@@ -42,7 +43,7 @@ export class IcomWlanAudioAdapter extends EventEmitter<IcomWlanAudioAdapterEvent
     logger.info('Starting audio reception');
 
     // 订阅 ICOM 音频事件
-    this.icomConnection.on('audioFrame', this.handleAudioFrame.bind(this));
+    this.icomConnection.on('audioFrame', this.handleAudioFrameBound);
 
     this.isReceiving = true;
     logger.info('Audio reception started');
@@ -60,7 +61,7 @@ export class IcomWlanAudioAdapter extends EventEmitter<IcomWlanAudioAdapterEvent
     logger.info('Stopping audio reception');
 
     // 取消订阅
-    this.icomConnection.off('audioFrame', this.handleAudioFrame.bind(this));
+    this.icomConnection.off('audioFrame', this.handleAudioFrameBound);
 
     this.isReceiving = false;
     logger.info('Audio reception stopped');
@@ -69,14 +70,11 @@ export class IcomWlanAudioAdapter extends EventEmitter<IcomWlanAudioAdapterEvent
   /**
    * 处理 ICOM 音频帧（零重采样优化）
    */
-  private handleAudioFrame(pcm16: Buffer, meta?: AudioFrameMeta): void {
+  private handleAudioFrame(samples: Float32Array, meta?: AudioFrameMeta): void {
     try {
-      // 将 PCM16 Buffer 转换为 Float32Array
-      const samples12kHz = this.pcm16ToFloat32(pcm16);
-
-      // 转发给 AudioStreamManager 统一写入 RX 时间线（ICOM 原生 12kHz，无需重采样）
+      // 转发给 AudioStreamManager 统一写入 RX 时间线。
       // 透传线级 seq/timestamp 供 RingBuffer 做精确丢包检测
-      this.emit('audioData', samples12kHz, meta);
+      this.emit('audioData', samples, meta);
 
     } catch (error) {
       logger.error('Failed to process audio frame', error);
@@ -102,22 +100,6 @@ export class IcomWlanAudioAdapter extends EventEmitter<IcomWlanAudioAdapterEvent
     }
   }
 
-
-  /**
-   * PCM16 Buffer 转换为 Float32Array
-   */
-  private pcm16ToFloat32(buffer: Buffer): Float32Array {
-    const samples = new Float32Array(buffer.length / 2);
-
-    for (let i = 0; i < samples.length; i++) {
-      // 读取 16 位有符号整数（小端）
-      const int16 = buffer.readInt16LE(i * 2);
-      // 转换为 [-1.0, 1.0] 范围的浮点数
-      samples[i] = int16 / 32768.0;
-    }
-
-    return samples;
-  }
 
   /**
    * 获取接收状态

@@ -1575,7 +1575,9 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                   />
                   <Select
                     label={t('radio.tciDialect')}
-                    selectedKeys={[config.tci?.dialect ?? 'auto']}
+                    selectedKeys={[config.tci?.dialect === 'expertsdr-1.9-2.0'
+                      ? 'expertsdr3-1.9-2.0'
+                      : config.tci?.dialect ?? 'auto']}
                     onSelectionChange={keys => {
                       const dialect = String(Array.from(keys)[0] ?? 'auto') as NonNullable<HamlibConfig['tci']>['dialect'];
                       updateTciConfig({ dialect });
@@ -1586,7 +1588,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
                       ['auto', 'Auto'],
                       ['expertsdr-1.4', 'ExpertSDR / TCI 1.4'],
                       ['expertsdr-1.5-1.8', 'ExpertSDR / TCI 1.5-1.8'],
-                      ['expertsdr-1.9-2.0', 'ExpertSDR / TCI 1.9-2.0'],
+                      ['expertsdr3-1.9-2.0', 'ExpertSDR3 / TCI 1.9-2.0'],
                       ['aethersdr-1.5', 'AetherSDR'],
                       ['thetis-2.0', 'Thetis'],
                       ['generic-observed', 'Generic observed'],

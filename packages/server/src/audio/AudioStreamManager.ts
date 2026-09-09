@@ -554,7 +554,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         this.icomWlanAudioAdapter.on('audioData', (samples: Float32Array, meta?: AudioFrameMeta) => {
           void this.ingestInputSamples(
             samples,
-            this.icomWlanAudioAdapter?.getSampleRate() ?? DEFAULT_INPUT_PROCESSING_SAMPLE_RATE,
+            meta?.sampleRate ?? this.icomWlanAudioAdapter?.getSampleRate() ?? DEFAULT_INPUT_PROCESSING_SAMPLE_RATE,
             'icom-wlan',
             meta,
           );
@@ -592,12 +592,12 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
         this.usingTciInput = true;
         this.tciAudioAdapter.startReceiving();
-        this.tciAudioAdapter.on('audioData', (samples: Float32Array, meta?: AudioFrameMeta) => {
+        this.tciAudioAdapter.on('audioData', (samples: Float32Array, frameMeta?: AudioFrameMeta) => {
           void this.ingestInputSamples(
             samples,
-            this.tciAudioAdapter?.getSampleRate() ?? DEFAULT_INPUT_PROCESSING_SAMPLE_RATE,
+            frameMeta?.sampleRate ?? this.tciAudioAdapter?.getSampleRate() ?? DEFAULT_INPUT_PROCESSING_SAMPLE_RATE,
             'tci',
-            meta,
+            frameMeta,
           );
         });
         this.tciAudioAdapter.on('error', (error: Error) => {

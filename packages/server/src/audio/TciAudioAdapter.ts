@@ -12,11 +12,11 @@ export interface TciAudioAdapterEvents {
 
 /**
  * TCI audio adapter for SunSDR/ExpertSDR.
- * It keeps the app-facing path identical to the ICOM WLAN adapter: RX PCM16
- * frames become Float32 samples, and TX Float32 chunks are sent as TCI audio.
+ * It keeps the app-facing path identical to the ICOM WLAN adapter: RX frames
+ * arrive as canonical Float32 samples, and TX Float32 chunks are sent as TCI audio.
  */
 export class TciAudioAdapter extends EventEmitter<TciAudioAdapterEvents> {
-  private readonly handleAudioFrameBound = (pcm16: Buffer, meta?: AudioFrameMeta) => this.handleAudioFrame(pcm16, meta);
+  private readonly handleAudioFrameBound = (samples: Float32Array, meta?: AudioFrameMeta) => this.handleAudioFrame(samples, meta);
   private readonly handleErrorBound = (error: Error) => this.emit('error', error);
   private isReceiving = false;
 
@@ -33,7 +33,10 @@ export class TciAudioAdapter extends EventEmitter<TciAudioAdapterEvents> {
 
     this.tciConnection.on('audioFrame', this.handleAudioFrameBound);
     this.tciConnection.on('error', this.handleErrorBound);
-    void this.tciConnection.startAudioStream('rx-input').catch((error) => {
+    const start = this.tciConnection.supportsNativeLineOutStream?.()
+      ? this.tciConnection.startLineOutStream!.bind(this.tciConnection)
+      : () => this.tciConnection.startAudioStream('rx-input');
+    void Promise.resolve(start()).catch((error) => {
       logger.error('Failed to start TCI audio stream', error);
       this.emit('error', error instanceof Error ? error : new Error(String(error)));
     });
@@ -48,7 +51,10 @@ export class TciAudioAdapter extends EventEmitter<TciAudioAdapterEvents> {
 
     this.tciConnection.off('audioFrame', this.handleAudioFrameBound);
     this.tciConnection.off('error', this.handleErrorBound);
-    void this.tciConnection.stopAudioStream('rx-input').catch((error) => {
+    const stop = this.tciConnection.supportsNativeLineOutStream?.()
+      ? this.tciConnection.stopLineOutStream!.bind(this.tciConnection)
+      : () => this.tciConnection.stopAudioStream('rx-input');
+    void Promise.resolve(stop()).catch((error) => {
       logger.debug('Failed to stop TCI audio stream', error);
     });
     this.isReceiving = false;
@@ -97,20 +103,13 @@ export class TciAudioAdapter extends EventEmitter<TciAudioAdapterEvents> {
     return this.tciConnection.getTxAudioSyncSnapshot?.() ?? null;
   }
 
-  private handleAudioFrame(pcm16: Buffer, meta?: AudioFrameMeta): void {
+  private handleAudioFrame(samples: Float32Array, meta?: AudioFrameMeta): void {
     try {
-      this.emit('audioData', this.pcm16ToFloat32(pcm16), meta);
+      this.emit('audioData', samples, meta);
     } catch (error) {
       logger.error('Failed to process TCI audio frame', error);
       this.emit('error', error instanceof Error ? error : new Error(String(error)));
     }
   }
 
-  private pcm16ToFloat32(buffer: Buffer): Float32Array {
-    const samples = new Float32Array(buffer.length / 2);
-    for (let i = 0; i < samples.length; i += 1) {
-      samples[i] = buffer.readInt16LE(i * 2) / 32768;
-    }
-    return samples;
-  }
 }

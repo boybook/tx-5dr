@@ -39,6 +39,14 @@ The radio bypass exists to avoid hidden latency from the digital ring buffer.
 
 - Soundcard radio input emits `nativeAudioInputData` before digital resampling.
 - ICOM WLAN emits native 12 kHz frames without extra conversion.
+- Radio connection adapters normalize wire formats once at their boundary and
+  expose Float32 frames with source-rate metadata to the server audio path.
+- TCI Line Out frames are downmixed to mono at the connection boundary; the
+  unified input path performs the single required resample into the digital
+  processing rate.
+- TCI dialects declare whether `LINE_OUT_START` creates a network stream or
+  controls a local VAC path. The server only selects Line Out as an input
+  source for the `native-stream` dialect behavior.
 - `NativeRadioRxSource` subscribes to native input frames and TX monitor frames.
 - `RealtimeRxAudioRouter` chooses `NativeRadioRxSource` for every `scope === 'radio'` session.
 - OpenWebRX preview continues to use `BufferedPreviewRxSource` backed by `BufferedPreviewAudioService`.

@@ -57,7 +57,7 @@ describe('TciConnection', () => {
       receiver: 0,
       trx: 1,
       vfo: 0,
-      dialect: 'expertsdr-1.9-2.0',
+      dialect: 'expertsdr3-1.9-2.0',
     });
 
     await connection.setFrequency(21_074_000);
@@ -89,7 +89,7 @@ describe('TciConnection', () => {
     await server.start();
     const endpoint = new URL(server.url());
     const connection = new TciConnection();
-    const audioFrame = onceEvent<Buffer>(connection, 'audioFrame');
+    const audioFrame = onceEvent<Float32Array>(connection, 'audioFrame');
     const meterFrames: MeterData[] = [];
     connection.on('meterData', (data) => meterFrames.push(data));
 
@@ -112,8 +112,8 @@ describe('TciConnection', () => {
 
     await connection.startAudioStream();
     server.sendRxAudioFrame({ sampleType: TciSampleType.FLOAT32, samples: new Float32Array([0, 0.5, -0.5]) });
-    const [pcm16] = await audioFrame;
-    expect(Array.from(payloadToFloat32(pcm16, TciSampleType.INT16))).toEqual([0, expect.closeTo(0.5, 4), expect.closeTo(-0.5, 4)]);
+    const [samples] = await audioFrame;
+    expect(Array.from(samples)).toEqual([0, expect.closeTo(0.5, 4), expect.closeTo(-0.5, 4)]);
 
     await connection.beginTxAudio();
     expect(connection.getTxAudioSyncSnapshot()).toMatchObject({

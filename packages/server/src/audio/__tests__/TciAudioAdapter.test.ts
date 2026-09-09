@@ -11,6 +11,9 @@ class MockTciConnection extends EventEmitter {
   sendAudio = vi.fn().mockResolvedValue(undefined);
   getAudioSampleRate = vi.fn(() => 12000);
   getTxAudioSyncSnapshot = vi.fn(() => ({ samplesPerFrame: 512, targetLeadMs: 150, recommendedPumpIntervalMs: 8 }));
+  supportsNativeLineOutStream = vi.fn(() => false);
+  startLineOutStream = vi.fn().mockResolvedValue(undefined);
+  stopLineOutStream = vi.fn().mockResolvedValue(undefined);
 }
 
 describe('TciAudioAdapter', () => {
@@ -22,10 +25,7 @@ describe('TciAudioAdapter', () => {
 
     adapter.startReceiving();
     await Promise.resolve();
-    const pcm16 = Buffer.alloc(4);
-    pcm16.writeInt16LE(0, 0);
-    pcm16.writeInt16LE(16384, 2);
-    connection.emit('audioFrame', pcm16);
+    connection.emit('audioFrame', new Float32Array([0, 0.5]), { sampleRate: 12000, channels: 1 });
 
     expect(connection.startAudioStream).toHaveBeenCalledWith('rx-input');
     expect(frames).toHaveLength(1);
@@ -53,6 +53,22 @@ describe('TciAudioAdapter', () => {
     expect(connection.waitForTxAudioDrain).toHaveBeenCalledWith(250);
     expect(connection.endTxAudio).toHaveBeenCalledOnce();
     expect(connection.stopAudioStream).toHaveBeenCalledWith('tx-output');
+  });
+
+  it('uses the dialect-selected native Line Out stream when available', async () => {
+    const connection = new MockTciConnection();
+    connection.supportsNativeLineOutStream.mockReturnValue(true);
+    const adapter = new TciAudioAdapter(connection as never);
+
+    adapter.startReceiving();
+    await Promise.resolve();
+    expect(connection.startLineOutStream).toHaveBeenCalledOnce();
+    expect(connection.startAudioStream).not.toHaveBeenCalled();
+
+    adapter.stopReceiving();
+    await Promise.resolve();
+    expect(connection.stopLineOutStream).toHaveBeenCalledOnce();
+    expect(connection.stopAudioStream).not.toHaveBeenCalled();
   });
 
   it('sends TX Float32 samples through the TCI connection', async () => {

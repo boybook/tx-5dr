@@ -17,6 +17,8 @@ import type { RadioIoQueueSnapshot } from './RadioIoQueue.js';
 export interface AudioFrameMeta {
   seq?: number;
   timestampMs?: number;
+  sampleRate?: number;
+  channels?: number;
 }
 
 /**
@@ -180,7 +182,8 @@ export interface IRadioConnectionEvents {
    * 音频帧（ICOM WLAN / TCI）
    * @param meta 可选的线级元数据：seq（线级序列号，用于丢包检测）、timestampMs（RX 到达时间，诊断用）
    */
-  audioFrame: (pcm16: Buffer, meta?: AudioFrameMeta) => void;
+  /** Canonical server audio: Float32 mono samples with the source rate in meta. */
+  audioFrame: (samples: Float32Array, meta?: AudioFrameMeta) => void;
 
   /**
    * 数值表数据

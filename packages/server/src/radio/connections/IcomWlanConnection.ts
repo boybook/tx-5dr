@@ -2031,8 +2031,18 @@ export class IcomWlanConnection
 
     // 音频数据
     this.rig.events.on('audio', (frame) => {
-      // 转发音频帧给上层，并携带线级 seq 与 RX 到达时间用于丢包检测/诊断
-      this.emit('audioFrame', frame.pcm16, { seq: frame.seq, timestampMs: frame.timestampMs });
+      // Convert once at the protocol boundary. The server audio contract is
+      // Float32 mono, so downstream consumers never perform PCM round trips.
+      const samples = new Float32Array(frame.pcm16.length / 2);
+      for (let index = 0; index < samples.length; index += 1) {
+        samples[index] = frame.pcm16.readInt16LE(index * 2) / 32768;
+      }
+      this.emit('audioFrame', samples, {
+        seq: frame.seq,
+        timestampMs: frame.timestampMs,
+        sampleRate: this.getAudioSampleRate(),
+        channels: 1,
+      });
     });
 
     this.rig.events.on('scopeFrame', (frame) => {
