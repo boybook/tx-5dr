@@ -11,7 +11,6 @@ import { useAbility, useCan, useHasMinRole } from '../../../store/authStore';
 import { createLogger } from '../../../utils/logger';
 import { setPreferredSpectrumKind } from '../../../utils/spectrumPreferences';
 import { useTargetRxFrequencies, type RxFrequency } from '../../../hooks/useTargetRxFrequencies';
-import { useCapabilityWriter } from '../../../radio-capability/CapabilityRegistry';
 import { useTxFrequencies, type TxFrequency } from '../../../hooks/useTxFrequencies';
 import { getWaterfallCanvasPixelRatio, WebGLWaterfall, WATERFALL_LEGACY_FREQUENCY_POSITION_OFFSET_HZ, WATERFALL_MAX_HISTORY_ROWS } from './WebGLWaterfall';
 import type { AutoRangeConfig, FrequencyBandOverlay, FrequencyBandOverlayChange, PresetMarker, TxBandOverlay } from './WebGLWaterfall';
@@ -1073,7 +1072,6 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   const canControlRadio = useCan('execute', 'RadioControl');
   const tciIqSampleRateState = useCapabilityState('tci_iq_sample_rate');
   const tciIqSampleRateDescriptor = useCapabilityDescriptor('tci_iq_sample_rate');
-  const writeRadioCapability = useCapabilityWriter();
   const [tciSpectrumSettings, setTciSpectrumSettings] = useState<TciSpectrumSettings | null>(null);
   const [tciSpectrumSettingsPending, setTciSpectrumSettingsPending] = useState(false);
   const canToggleInputSignal = useHasMinRole(UserRole.ADMIN);
@@ -3236,7 +3234,6 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
                     canWrite={canConfigureTciSpectrum}
                     sampleRateState={tciIqSampleRateState}
                     sampleRateDescriptor={tciIqSampleRateDescriptor}
-                    onCapabilityWrite={writeRadioCapability}
                     onChange={handleTciSpectrumSettingsChange}
                   />
                 )}

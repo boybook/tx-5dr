@@ -1,52 +1,18 @@
-import React, { useCallback } from 'react';
-import { Switch, Tooltip } from '@heroui/react';
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleInfo } from '@fortawesome/free-solid-svg-icons';
+import { Button } from '@heroui/react';
 import { useTranslation } from 'react-i18next';
-import type { CapabilityComponentProps } from '../CapabilityRegistry';
-import { useCan } from '../../store/authStore';
-import { getCapabilityUnavailableText, isCapabilityInteractive } from '../availability';
+import type { CapabilityComponentProps } from '../control-types';
+import { capabilityShortLabel } from '../control-presentation';
 
-export const BooleanCapabilityPanel: React.FC<CapabilityComponentProps> = ({
-  capabilityId,
-  state,
-  descriptor,
-  onWrite,
-}) => {
+export function BooleanCapability({ descriptor, capabilityId, state, interactive, onWrite }: CapabilityComponentProps) {
   const { t } = useTranslation();
-  const canControl = useCan('execute', 'RadioControl');
-  const canWrite = descriptor.writable;
-  const isInteractive = isCapabilityInteractive(state, canControl, canWrite);
-  const unavailableText = getCapabilityUnavailableText(state, t, capabilityId);
-  const enabled = typeof state?.value === 'boolean' ? state.value : false;
-
-  const handleToggle = useCallback(() => {
-    onWrite(capabilityId, !enabled);
-  }, [capabilityId, enabled, onWrite]);
-
-  return (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex-1">
-          <div className="flex items-center gap-1">
-            <span className="text-sm font-medium">{t(descriptor.labelI18nKey)}</span>
-            {descriptor.descriptionI18nKey && (
-              <Tooltip content={t(descriptor.descriptionI18nKey)} size="sm" placement="top" classNames={{ content: 'max-w-[240px] text-xs' }}>
-                <FontAwesomeIcon icon={faCircleInfo} className="text-default-300 text-xs cursor-help" />
-              </Tooltip>
-            )}
-          </div>
-        </div>
-        <Switch
-          isSelected={enabled}
-          onValueChange={handleToggle}
-          isDisabled={!isInteractive}
-          size="sm"
-        />
-      </div>
-      {unavailableText && (
-        <p className="text-xs text-warning-600">{unavailableText}</p>
-      )}
-    </div>
-  );
-};
+  const known = typeof state?.value === 'boolean';
+  const enabled = state?.value === true;
+  const label = capabilityShortLabel(descriptor, t);
+  if (!descriptor.writable) return <span className="cap-item"><span>{label}</span><span>{known ? t(enabled ? 'radio:capability.quick.on' : 'radio:capability.quick.off') : '—'}</span></span>;
+  return <Button size="sm" variant="flat" color={known && enabled ? 'primary' : 'default'} className="cap-button cap-value-toggle"
+    aria-label={t(descriptor.labelI18nKey)} aria-pressed={known ? enabled : 'mixed'}
+    isDisabled={!interactive || !known}
+    onPress={() => { if (interactive && known) onWrite(capabilityId, !enabled); }}>
+    {label}{!known && <span>—</span>}
+  </Button>;
+}

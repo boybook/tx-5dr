@@ -1,125 +1,101 @@
-/**
- * CapabilityRegistry - 电台能力组件注册表
- *
- * 每个能力 ID 可以注册：
- * - panelComponent: 在 RadioControlPanel Modal 中的完整控件
- * - surfaceComponent: 在 RadioControl 工具栏 Popover 中的紧凑控件（可选）
- */
+import { memo, useCallback, useEffect, useState, type ComponentType } from 'react';
+import { Tooltip } from '@heroui/react';
+import { useTranslation } from 'react-i18next';
+import { WSMessageType, type CapabilityDescriptor, type CapabilityState } from '@tx5dr/contracts';
+import { useCapabilityDescriptors, useConnection } from '../store/radioStore';
+import { useCapabilityEnvironment } from './CapabilityEnvironment';
+import { getCapabilityUnavailableText, isCapabilityInteractive } from './availability';
+import { capabilityTargetLabel } from './control-presentation';
+import { controlEditingKey } from './control-values';
+import { useCapabilitySubmission } from './useCapabilitySubmission';
+import type { CapabilityComponentProps } from './control-types';
+import { BooleanCapability } from './components/BooleanCapability';
+import { NumberLevelCapability } from './components/NumberLevelCapability';
+import { EnumCapability } from './components/EnumCapability';
+import { ActionCapability } from './components/ActionCapability';
+import './controls.css';
 
-import React from 'react';
-import type { CapabilityDescriptor, CapabilityState } from '@tx5dr/contracts';
-import { WSMessageType } from '@tx5dr/contracts';
-import { useConnection, useRadioState, useCapabilityDescriptors } from '../store/radioStore';
-import { BooleanCapabilityPanel } from './components/BooleanCapability';
-import { EnumCapabilityPanel } from './components/EnumCapability';
-import { NumberLevelCapabilityPanel } from './components/NumberLevelCapability';
-import { ActionCapabilityPanel } from './components/ActionCapability';
+export type { CapabilityComponentProps } from './control-types';
+const registry = new Map<string, ComponentType<CapabilityComponentProps>>();
+const defaults = { boolean: BooleanCapability, number: NumberLevelCapability, enum: EnumCapability, action: ActionCapability };
 
-// ===== 组件 Props 接口 =====
+/** Register behavior overrides, never a second component for a different container. */
+export function registerCapabilityComponent(id: string, component: ComponentType<CapabilityComponentProps>): void { registry.set(id, component); }
+export function getCapabilityComponent(id: string, descriptor: CapabilityDescriptor): ComponentType<CapabilityComponentProps> {
+  return registry.get(id) ?? defaults[descriptor.valueType];
+}
 
-export interface CapabilityComponentProps {
-  /** 能力 ID */
-  capabilityId: string;
-  /** 当前运行时状态（undefined = 尚未收到数据） */
-  state: CapabilityState | undefined;
-  /** 静态描述符 */
+export function useCapabilityAccess(descriptor: CapabilityDescriptor, state: CapabilityState | undefined, active = true) {
+  const environment = useCapabilityEnvironment();
+  const { t } = useTranslation();
+  const allowed = environment.canControl && (descriptor.id !== 'tci_iq_sample_rate' || environment.isAdmin);
+  const busy = Boolean(descriptor.requiresIdle && environment.transmitting);
+  const interactive = active && environment.connected && !busy && isCapabilityInteractive(state, allowed, descriptor.writable);
+  const reason = !environment.connected ? t('radio:capability.panel.notConnected')
+    : !state?.supported ? t('radio:capability.panel.notSupported')
+      : busy ? t('radio:capability.panel.unavailableBusy')
+        : !allowed ? t('radio:capability.quick.noPermission')
+          : getCapabilityUnavailableText(state, t, descriptor.id)
+            ?? (descriptor.writable ? null : t('radio:capability.quick.readOnly'));
+  return { environment, interactive, reason };
+}
+
+/** Cards, pins and popovers share one renderer and edit lifetime, with optional companion inputs. */
+export const CapabilityControl = memo(function CapabilityControl({ descriptor, state, active = true, draftEditor, showSliderInput = true }: {
   descriptor: CapabilityDescriptor;
-  /** 写入回调（由父组件通过 WS 发送命令） */
-  onWrite: (id: string, value?: boolean | number | string, action?: boolean) => void;
-}
+  state: CapabilityState | undefined;
+  active?: boolean;
+  draftEditor?: CapabilityComponentProps['draftEditor'];
+  showSliderInput?: boolean;
+}) {
+  const { t } = useTranslation();
+  const { environment, interactive, reason } = useCapabilityAccess(descriptor, state, active);
+  const Component = getCapabilityComponent(descriptor.id, descriptor);
+  const onWrite = useCallback<CapabilityComponentProps['onWrite']>((_id, value, action) => {
+    if (interactive) return environment.write(descriptor, value, action);
+  }, [descriptor, environment.write, interactive]);
+  const submission = useCapabilitySubmission({ state, enabled: interactive, scope: `${environment.scope}:${controlEditingKey(descriptor)}`, onWrite });
+  const target = capabilityTargetLabel(descriptor, t);
+  const writeError = submission.timedOut ? t('radio:capability.quick.confirmationTimeout') : submission.error;
+  const summary = [t(descriptor.labelI18nKey), target, descriptor.descriptionI18nKey ? t(descriptor.descriptionI18nKey) : null,
+    reason, state?.lastError, writeError, submission.pending ? t('radio:capability.quick.awaitingConfirmation') : null].filter(Boolean).join(' · ');
+  const control = <span className="cap-item" data-capability-id={descriptor.id} aria-busy={submission.pending}>
+      <Component key={`${environment.scope}:${controlEditingKey(descriptor)}`} capabilityId={descriptor.id} descriptor={descriptor}
+        state={environment.connected ? submission.displayState : undefined} interactive={interactive} scope={environment.scope} onWrite={submission.write} draftEditor={draftEditor} showSliderInput={showSliderInput} tooltipContent={summary} />
+      {descriptor.target?.scope === 'global' && <span className="text-[11px] text-default-500">{t('radio:capability.panel.targetGlobal')}</span>}
+      {(state?.availability === 'unavailable' || state?.lastError) && <span className="text-warning-600 text-[11px]" aria-label={reason ?? state.lastError}>{t('radio:capability.quick.unavailable')}</span>}
+      {submission.error && !state?.lastError && <span className="text-warning-600 text-[11px]">{t('radio:capability.quick.unconfirmed')}</span>}
+    </span>;
+  // Numeric controls separate the slider value tooltip from capability details.
+  if (Component === NumberLevelCapability) return control;
+  return <Tooltip content={summary} delay={350} closeDelay={0} size="sm" classNames={{ content: 'max-w-[300px] text-xs' }}>
+    {control}
+  </Tooltip>;
+});
 
-export type PanelCapabilityComponent = React.ComponentType<CapabilityComponentProps>;
-export type SurfaceCapabilityComponent = React.ComponentType<CapabilityComponentProps>;
-
-interface CapabilityRegistryEntry {
-  panel: PanelCapabilityComponent;
-  surface?: SurfaceCapabilityComponent;
-}
-
-// ===== 注册表 =====
-
-const registry = new Map<string, CapabilityRegistryEntry>();
-
-/**
- * 注册能力组件
- * @param id - 能力 ID
- * @param panel - 面板版本（完整控件，用于 Modal）
- * @param surface - 工具栏版本（紧凑控件，可选）
- */
-export function registerCapabilityComponent(
-  id: string,
-  panel: PanelCapabilityComponent,
-  surface?: SurfaceCapabilityComponent,
-): void {
-  registry.set(id, { panel, surface });
-}
-
-/**
- * 获取面板组件（用于 RadioControlPanel）
- */
-export function getPanelComponent(id: string, descriptor?: CapabilityDescriptor): PanelCapabilityComponent | undefined {
-  return registry.get(id)?.panel ?? (descriptor ? {
-    boolean: BooleanCapabilityPanel, number: NumberLevelCapabilityPanel,
-    enum: EnumCapabilityPanel, action: ActionCapabilityPanel,
-  }[descriptor.valueType] : undefined);
-}
-
-/**
- * 获取工具栏 surface 组件
- */
-export function getSurfaceComponent(id: string): SurfaceCapabilityComponent | undefined {
-  return registry.get(id)?.surface;
-}
-
-// ===== onWrite Hook =====
-
-/**
- * 返回能力写入回调，通过 WebSocket 发送 WRITE_RADIO_CAPABILITY 命令
- */
-export function useCapabilityWriter(): (id: string, value?: boolean | number | string, action?: boolean) => void {
-  const connection = useConnection();
-  const { state: radioState } = useRadioState();
+/** Existing compound operating-state UIs share this same guarded writer. */
+export function useCapabilityWriter(): CapabilityComponentProps['onWrite'] {
+  const environment = useCapabilityEnvironment();
   const descriptors = useCapabilityDescriptors();
-
-  return React.useCallback(
-    (id: string, value?: boolean | number | string, action?: boolean) => {
-      if (!radioState.radioConnected) return;
-      const wsClient = connection.state.radioService?.wsClientInstance;
-      if (!wsClient) return;
-      wsClient.send(WSMessageType.WRITE_RADIO_CAPABILITY, { id, value, action, sessionId: descriptors.get(id)?.sessionId });
-    },
-    [connection.state.radioService, radioState.radioConnected, descriptors],
-  );
+  return useCallback((id, value, action) => { const descriptor = descriptors.get(id); if (descriptor) return environment.write(descriptor, value, action); }, [descriptors, environment.write]);
 }
 
-/**
- * 返回能力刷新回调和 loading 状态。
- * 发送 REFRESH_RADIO_CAPABILITIES 命令后进入 loading，
- * 收到 radioCapabilityList 事件（refreshAll 完成信号）时结束 loading。
- */
 export function useCapabilityRefresher(): { refresh: () => void; isRefreshing: boolean } {
   const connection = useConnection();
-  const [isRefreshing, setIsRefreshing] = React.useState(false);
-
-  React.useEffect(() => {
-    const wsClient = connection.state.radioService?.wsClientInstance;
+  const { connected, scope } = useCapabilityEnvironment();
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const wsClient = connection.state.radioService?.wsClientInstance;
+  useEffect(() => { setIsRefreshing(false); }, [scope, connected]);
+  useEffect(() => {
     if (!wsClient || !isRefreshing) return;
-
-    const handleComplete = () => {
-      setIsRefreshing(false);
-    };
-    wsClient.onWSEvent('radioCapabilityList', handleComplete);
-    return () => {
-      wsClient.offWSEvent('radioCapabilityList', handleComplete);
-    };
-  }, [connection.state.radioService, isRefreshing]);
-
-  const refresh = React.useCallback(() => {
-    const wsClient = connection.state.radioService?.wsClientInstance;
-    if (!wsClient || isRefreshing) return;
-    setIsRefreshing(true);
-    wsClient.send(WSMessageType.REFRESH_RADIO_CAPABILITIES, {});
-  }, [connection.state.radioService, isRefreshing]);
-
+    const complete = () => setIsRefreshing(false);
+    wsClient.onWSEvent('radioCapabilityList', complete);
+    const timeout = setTimeout(complete, 10000);
+    return () => { clearTimeout(timeout); wsClient.offWSEvent('radioCapabilityList', complete); };
+  }, [wsClient, isRefreshing]);
+  const refresh = useCallback(() => {
+    if (!wsClient || !connected || isRefreshing) return;
+    setIsRefreshing(true); wsClient.send(WSMessageType.REFRESH_RADIO_CAPABILITIES, {});
+  }, [wsClient, connected, isRefreshing]);
   return { refresh, isRefreshing };
 }

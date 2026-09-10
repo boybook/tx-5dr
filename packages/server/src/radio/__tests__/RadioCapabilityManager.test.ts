@@ -72,6 +72,21 @@ describe('RadioCapabilityManager', () => {
     vi.restoreAllMocks();
   });
 
+  it('returns an isolated single-capability cache snapshot without additional radio reads', async () => {
+    const manager = new RadioCapabilityManager();
+    const getSQL = vi.fn(async () => 0.45);
+    await manager.onConnected(new MockConnection(RadioConnectionType.ICOM_WLAN, { getSQL }) as never);
+    const reads = getSQL.mock.calls.length;
+    const cached = manager.getCapabilityState('sql');
+    expect(cached?.value).toBe(0.45);
+    cached!.value = 0.9;
+    expect(manager.getCapabilityState('sql')?.value).toBe(0.45);
+    expect(manager.getCapabilityState('missing')).toBeUndefined();
+    expect(getSQL).toHaveBeenCalledTimes(reads);
+    manager.onDisconnected();
+    expect(manager.getCapabilityState('sql')).toBeUndefined();
+  });
+
   it('handles unsupported optional probe errors without rejecting onConnected', async () => {
     const manager = new RadioCapabilityManager();
     const getSQL = vi.fn().mockRejectedValue(new Error('SQL level not supported by this radio'));

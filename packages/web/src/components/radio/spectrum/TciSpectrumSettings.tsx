@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Slider } from '@heroui/react';
 import { useTranslation } from 'react-i18next';
 import type { CapabilityDescriptor, CapabilityState, TciSpectrumSettings } from '@tx5dr/contracts';
-import { EnumCapabilityPanel } from '../../../radio-capability/components/EnumCapability';
+import { CapabilityControl } from '../../../radio-capability/CapabilityRegistry';
 
 export interface TciSpectrumSettingsProps {
   settings: TciSpectrumSettings;
@@ -10,7 +10,6 @@ export interface TciSpectrumSettingsProps {
   canWrite: boolean;
   sampleRateState?: CapabilityState;
   sampleRateDescriptor?: CapabilityDescriptor;
-  onCapabilityWrite?: (id: string, value?: boolean | number | string, action?: boolean) => void;
   onChange: (settings: TciSpectrumSettings) => void;
 }
 
@@ -20,7 +19,6 @@ export const TciSpectrumSettingsPanel: React.FC<TciSpectrumSettingsProps> = ({
   canWrite,
   sampleRateState,
   sampleRateDescriptor,
-  onCapabilityWrite,
   onChange,
 }) => {
   const { t } = useTranslation('radio');
@@ -73,13 +71,12 @@ export const TciSpectrumSettingsPanel: React.FC<TciSpectrumSettingsProps> = ({
         getValue={(value) => `${value} ms`}
         showTooltip
       />
-      {sampleRateState?.supported && sampleRateDescriptor && onCapabilityWrite && (
-        <EnumCapabilityPanel
-          capabilityId="tci_iq_sample_rate"
+      {sampleRateState?.supported && sampleRateDescriptor && (
+        <div className="radio-capability-controls"><CapabilityControl
           state={sampleRateState}
           descriptor={sampleRateDescriptor}
-          onWrite={onCapabilityWrite}
-        />
+          active={canWrite && !pending}
+        /></div>
       )}
     </div>
   );

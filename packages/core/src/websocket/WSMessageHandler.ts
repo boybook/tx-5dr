@@ -196,6 +196,10 @@ export class WSMessageHandler extends WSEventEmitter {
    * @param message 消息对象
    */
   private dispatchMessageEvent(messageType: string, message: Record<string, unknown>): void {
+    // Correlated capability snapshots are write receipts, not a new live broadcast.
+    // Their raw-message consumer owns completion; replaying a late receipt into the
+    // state stream could overwrite a newer value from another completed write.
+    if (messageType === WSMessageType.RADIO_CAPABILITY_CHANGED && typeof message.id === 'string') return;
     const eventName = WS_MESSAGE_EVENT_MAP[messageType];
     if (eventName) {
       // 动态发射事件

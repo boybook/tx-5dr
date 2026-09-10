@@ -6,6 +6,7 @@ import { createLogger } from '../../utils/logger';
 import { getWebSocketClientInstanceId } from '../../utils/wsClientInstance';
 import { type RadioService, getOrCreateRadioService } from '../../services/radioService';
 import { useAuth } from '../authStore';
+import { CapabilityEnvironmentProvider } from '../../radio-capability/CapabilityEnvironment';
 import {
   AudioSidecarContext,
   AndroidOperatorAudioContext,
@@ -593,7 +594,7 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
                               <MyRelatedTimelineContext.Provider value={myRelatedTimelineContextValue}>
                                 <AudioSidecarContext.Provider value={radioState.audioSidecar}>
                                   <AndroidOperatorAudioContext.Provider value={radioState.androidOperatorAudio}>
-                                    {children}
+                                    <CapabilityEnvironmentProvider>{children}</CapabilityEnvironmentProvider>
                                   </AndroidOperatorAudioContext.Provider>
                                 </AudioSidecarContext.Provider>
                               </MyRelatedTimelineContext.Provider>

@@ -1887,6 +1887,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     return this.capabilityManager.getCapabilitySnapshot();
   }
 
+  getCapabilityState(id: string): CapabilityState | undefined {
+    return this.capabilityManager.getCapabilityState(id);
+  }
+
   getSupportedRadioModeOptions(): string[] {
     const snapshot = this.capabilityManager.getCapabilitySnapshot();
     const state = snapshot.capabilities.find((capability) => capability.id === 'radio_mode');

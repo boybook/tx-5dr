@@ -106,6 +106,10 @@ export class RadioCapabilityManager extends EventEmitter<RadioCapabilityManagerE
     return this.runtime.getCapabilityStates();
   }
 
+  getCapabilityState(id: string): CapabilityState | undefined {
+    return this.runtime.getCapabilityState(id);
+  }
+
   getCapabilityDescriptors(): CapabilityDescriptor[] {
     return this.runtime.getCapabilityDescriptors();
   }

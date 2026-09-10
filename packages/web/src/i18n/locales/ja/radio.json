@@ -722,12 +722,12 @@
       "description": "音声圧縮器の圧縮量を調整します。値が高くなるほど、圧縮がより明確になり、平均送信音量も高くなりますが、音声の歪みが発生する可能性も高くなります。"
     },
     "monitor_gain": {
-      "label": "モニターゲイン",
-      "description": "無線機の内蔵送信モニタリング (MONI) ボリュームを調整します。モニターを無効にするには 0 に設定します。ローカルのヘッドフォンまたはスピーカーで自分の送信オーディオをモニタリングするには、値を増やします。"
+      "label": "無線機の送信モニター音量",
+      "description": "無線機が提供する単位で送信モニター音量を調整します。モニターのオン・オフは別に制御します。"
     },
     "monitor_enabled": {
-      "label": "モニター",
-      "description": "MON 機能を公開する無線機で送信音声モニターをオン/オフします。"
+      "label": "無線機の送信モニター",
+      "description": "無線機側の送信モニター（MON）を制御します。TX-5DR のローカル再生とは別の設定です。"
     },
     "apf_enabled": {
       "label": "APF",
@@ -1066,6 +1066,63 @@
     "tx_audio_gain": {
       "label": "TCI 送信音声ゲイン",
       "description": "RF 出力とは別に TCI 音声ゲインを調整します。"
+    },
+    "quick": {
+      "title": "無線機クイック操作",
+      "pinned": "固定済み",
+      "pin": "クイック操作に固定",
+      "pinGroup": "グループ全体を固定",
+      "unpin": "固定を解除",
+      "moveBefore": "{{name}}を上へ",
+      "moveAfter": "{{name}}を下へ",
+      "remove": "{{name}}を削除",
+      "missing": "現在の接続では利用できない機能です。無線機操作パネルで固定を解除できます。",
+      "noPermission": "無線機の操作権限が必要です",
+      "readOnly": "読み取り専用",
+      "unavailable": "利用不可",
+      "on": "オン",
+      "off": "オフ",
+      "steps": "段階",
+      "apply": "適用",
+      "invalidGroup": "全項目と下限・上限を確認してください。",
+      "groups": {
+        "rx_filter_band": "RX 通過帯域",
+        "tx_filter_band": "TX 通過帯域",
+        "nb_parameters": "NB 設定"
+      },
+      "short": {
+        "nb": "NB",
+        "nr": "NR",
+        "auto_notch": "ANF",
+        "apf_enabled": "APF",
+        "monitor_enabled": "MON",
+        "agc_mode": "AGC",
+        "rf_gain": "RF",
+        "mic_gain": "MIC",
+        "sql": "SQL",
+        "sql_enabled": "SQL",
+        "rit_enabled": "RIT",
+        "rit_offset": "RIT",
+        "xit_enabled": "XIT",
+        "xit_offset": "XIT",
+        "tuner_switch": "ATU",
+        "split_enabled": "SPLIT",
+        "af_gain": "音量",
+        "monitor_gain": "MON 音量",
+        "rf_power": "出力",
+        "mute": "消音",
+        "tuner_tune": "同調",
+        "rx_filter_low": "RX 下限",
+        "rx_filter_high": "上限",
+        "tx_filter_low": "TX 下限",
+        "tx_filter_high": "上限",
+        "nb_threshold": "NB しきい値",
+        "nb_pulse_length": "パルス幅"
+      },
+      "manage": "クイック操作を整理",
+      "awaitingConfirmation": "無線機からの確認待ち",
+      "unconfirmed": "未確認",
+      "confirmationTimeout": "無線機からの確認がタイムアウトしました。"
     }
   },
   "cw": {

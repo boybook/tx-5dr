@@ -1,318 +1,78 @@
-/**
- * NumberLevelCapability - 通用数值能力面板组件
- *
- * - percent 模式：使用 Slider，适合 rf_power / af_gain / sql / mic_gain / nb_level / nr_level
- * - value 模式：使用数字输入框，适合 RIT/XIT/中继偏移等非归一化参数
- */
-
-import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Input, Slider, Tab, Tabs, Tooltip } from '@heroui/react';
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleInfo } from '@fortawesome/free-solid-svg-icons';
+import { useCallback, useState } from 'react';
+import { Button, ButtonGroup, Input, Slider, Tooltip } from '@heroui/react';
 import { useTranslation } from 'react-i18next';
-import type { CapabilityComponentProps } from '../CapabilityRegistry';
-import type { CapabilityDescriptor } from '@tx5dr/contracts';
-import { useCan } from '../../store/authStore';
-import { getCapabilityUnavailableText, isCapabilityInteractive } from '../availability';
-import { formatCapabilityNumber, fromDisplayNumber, toDisplayNumber, toDisplayStep } from '../display-utils';
+import type { CapabilityComponentProps } from '../control-types';
+import { capabilityShortLabel } from '../control-presentation';
+import { formatCapabilityNumber } from '../display-utils';
+import { useNumberControl } from '../useNumberControl';
+import { canUseRfPowerDiscreteMode, findDiscreteOptionIndex, getDiscreteNumberOptions, getDiscreteOptionDisplayText, inputStep,
+  numberInputWidth, shouldUseDiscreteSlider, toInputNumber, type RfPowerInteractionMode } from '../control-values';
 
-const WRITE_DEBOUNCE_MS = 150;
-const DISCRETE_MATCH_EPSILON = 1e-6;
-export type RfPowerInteractionMode = 'percent' | 'hamlib-discrete';
-const RF_POWER_MODE_TABS_CLASSNAMES = {
-  base: 'max-w-fit',
-  tabList: 'gap-1 rounded-md bg-default-100 p-0.5',
-  tab: 'h-6 min-w-0 px-2',
-  tabContent: 'text-[11px] leading-none',
-  cursor: 'rounded-[6px]',
-} as const;
+export { canUseRfPowerDiscreteMode, findDiscreteOptionIndex, getDiscreteNumberOptions, getDiscreteOptionDisplayText, shouldUseDiscreteSlider } from '../control-values';
 
-export function getDiscreteNumberOptions(descriptor: CapabilityDescriptor) {
-  return (descriptor.discreteOptions ?? []).filter(
-    (option): option is { value: number; label?: string; labelI18nKey?: string } => typeof option.value === 'number',
-  );
-}
-
-export function isRfPowerCapability(capabilityId: string): boolean {
-  return capabilityId === 'rf_power';
-}
-
-export function canUseRfPowerDiscreteMode(
-  capabilityId: string,
-  discreteOptions: Array<{ value: number }>,
-): boolean {
-  return isRfPowerCapability(capabilityId) && discreteOptions.length >= 2;
-}
-
-export function shouldUseDiscreteSlider(
-  capabilityId: string,
-  usesSlider: boolean,
-  discreteOptions: Array<{ value: number }>,
-  rfPowerMode: RfPowerInteractionMode,
-): boolean {
-  if (!usesSlider || discreteOptions.length < 2) {
-    return false;
-  }
-
-  if (!isRfPowerCapability(capabilityId)) {
-    return true;
-  }
-
-  return rfPowerMode === 'hamlib-discrete';
-}
-
-export function findDiscreteOptionIndex(
-  options: Array<{ value: number }>,
-  value: number | null | undefined,
-): number {
-  if (!options.length || value === null || value === undefined || !Number.isFinite(value)) {
-    return 0;
-  }
-
-  const exactIndex = options.findIndex((option) => Math.abs(option.value - value) < DISCRETE_MATCH_EPSILON);
-  if (exactIndex >= 0) {
-    return exactIndex;
-  }
-
-  let nearestIndex = 0;
-  let nearestDelta = Number.POSITIVE_INFINITY;
-  options.forEach((option, index) => {
-    const delta = Math.abs(option.value - value);
-    if (delta < nearestDelta) {
-      nearestDelta = delta;
-      nearestIndex = index;
-    }
-  });
-  return nearestIndex;
-}
-
-export function getDiscreteOptionDisplayText(
-  options: ReturnType<typeof getDiscreteNumberOptions>,
-  descriptor: CapabilityDescriptor,
-  value: number,
-  t: (key: string) => string,
-): string {
-  const option = options[findDiscreteOptionIndex(options, value)];
-  if (!option) {
-    return formatCapabilityNumber(value, descriptor, true);
-  }
-  if (option.labelI18nKey) {
-    return t(option.labelI18nKey);
-  }
-  if (option.label) {
-    return option.label;
-  }
-  return formatCapabilityNumber(option.value, descriptor, true);
-}
-
-export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
-  capabilityId,
-  state,
-  descriptor,
-  onWrite,
-}) => {
+export function NumberLevelCapability({ descriptor, capabilityId, state, interactive, scope, onWrite, draftEditor, showSliderInput = true, tooltipContent }: CapabilityComponentProps) {
   const { t } = useTranslation();
-  const canControl = useCan('execute', 'RadioControl');
-
-  const isSupported = state?.supported ?? false;
-  const canWrite = descriptor.writable;
-  const isInteractive = isCapabilityInteractive(state, canControl, canWrite);
-  const unavailableText = getCapabilityUnavailableText(state, t, capabilityId);
-  const serverValue = typeof state?.value === 'number' ? state.value : null;
-  const range = descriptor.range ?? { min: 0, max: 1, step: 0.01 };
-  const inputLimits = descriptor.range ?? descriptor.limits;
-  const usesSlider = descriptor.display?.mode === 'percent';
-  const discreteOptions = getDiscreteNumberOptions(descriptor);
-  const [rfPowerMode, setRfPowerMode] = useState<RfPowerInteractionMode>('percent');
-  const showRfPowerModeToggle = canUseRfPowerDiscreteMode(capabilityId, discreteOptions);
-  const isDiscreteSlider = shouldUseDiscreteSlider(capabilityId, usesSlider, discreteOptions, rfPowerMode);
-
-  const [localValue, setLocalValue] = useState<number | null>(serverValue);
-  const [inputValue, setInputValue] = useState<string>(
-    serverValue !== null ? formatCapabilityNumber(serverValue, descriptor, false) : ''
-  );
-
-  const isDragging = useRef(false);
-  useEffect(() => {
-    if (!isDragging.current && serverValue !== null) {
-      setLocalValue(serverValue);
-      setInputValue(formatCapabilityNumber(serverValue, descriptor, false));
-    }
-  }, [descriptor, serverValue]);
-
-  const discreteSignature = useMemo(
-    () => discreteOptions.map((option) => `${option.value}:${option.label ?? option.labelI18nKey ?? ''}`).join('|'),
-    [discreteOptions],
-  );
-  useEffect(() => {
-    if (isRfPowerCapability(capabilityId)) {
-      setRfPowerMode('percent');
-    }
-  }, [capabilityId, descriptor.id, discreteSignature]);
-
-  const writeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingValue = useRef<number | null>(null);
-
-  const cancelPendingWrite = useCallback(() => {
-    if (writeTimer.current) {
-      clearTimeout(writeTimer.current);
-      writeTimer.current = null;
-    }
-    pendingValue.current = null;
-    isDragging.current = false;
-  }, []);
-
-  useEffect(() => () => {
-    cancelPendingWrite();
-  }, [cancelPendingWrite, descriptor.sessionId, onWrite]);
-
-  const scheduleWrite = useCallback(
-    (value: number) => {
-      pendingValue.current = value;
-      if (writeTimer.current) clearTimeout(writeTimer.current);
-      writeTimer.current = setTimeout(() => {
-        if (pendingValue.current !== null) {
-          onWrite(capabilityId, pendingValue.current);
-          pendingValue.current = null;
-        }
-        writeTimer.current = null;
-      }, WRITE_DEBOUNCE_MS);
-    },
-    [capabilityId, onWrite],
-  );
-
-  const commitInputValue = useCallback(() => {
-    const parsed = Number(inputValue);
-    if (!Number.isFinite(parsed)) {
-      if (serverValue !== null) {
-        setInputValue(formatCapabilityNumber(serverValue, descriptor, false));
-      }
-      return;
-    }
-
-    const rawValue = fromDisplayNumber(parsed, descriptor);
-    const clamped = Math.min(inputLimits?.max ?? Infinity, Math.max(inputLimits?.min ?? -Infinity, rawValue));
-    setLocalValue(clamped);
-    setInputValue(formatCapabilityNumber(clamped, descriptor, false));
-    onWrite(capabilityId, clamped);
-  }, [capabilityId, descriptor, inputValue, onWrite, inputLimits?.max, inputLimits?.min, serverValue]);
-
-  const handleSliderChange = useCallback(
-    (value: number | number[]) => {
-      const nextValue = Array.isArray(value) ? value[0] : value;
-      const resolvedValue = isDiscreteSlider
-        ? discreteOptions[Math.max(0, Math.min(discreteOptions.length - 1, Math.round(nextValue)))]?.value ?? range.min
-        : nextValue;
-      isDragging.current = true;
-      setLocalValue(resolvedValue);
-      scheduleWrite(resolvedValue);
-    },
-    [discreteOptions, isDiscreteSlider, range.min, scheduleWrite],
-  );
-
-  const handleSliderChangeEnd = useCallback(() => {
-    isDragging.current = false;
-    if (writeTimer.current) {
-      clearTimeout(writeTimer.current);
-      writeTimer.current = null;
-    }
-    if (pendingValue.current !== null) {
-      onWrite(capabilityId, pendingValue.current);
-      pendingValue.current = null;
-    }
-  }, [capabilityId, onWrite]);
-
-  const handleRfPowerModeChange = useCallback(
-    (key: React.Key) => {
-      cancelPendingWrite();
-      setRfPowerMode(String(key) as RfPowerInteractionMode);
-    },
-    [cancelPendingWrite],
-  );
-
-  const displayValue = localValue ?? serverValue ?? range.min;
-  const discreteSliderValue = findDiscreteOptionIndex(discreteOptions, displayValue);
-  const displayMin = inputLimits?.min === undefined ? undefined : toDisplayNumber(inputLimits.min, descriptor);
-  const displayMax = inputLimits?.max === undefined ? undefined : toDisplayNumber(inputLimits.max, descriptor);
-  const inverted = (descriptor.display?.transform?.scale ?? 1) < 0;
-  const minDisplayValue = inverted ? displayMax : displayMin;
-  const maxDisplayValue = inverted ? displayMin : displayMax;
-  const displayText = !descriptor.readable
-    ? (state?.meta?.acknowledgement === 'sent' ? t('radio:capability.panel.sent') : '—')
-    : isSupported && (localValue !== null || serverValue !== null)
-    ? (isDiscreteSlider
-      ? getDiscreteOptionDisplayText(discreteOptions, descriptor, displayValue, t)
-      : formatCapabilityNumber(displayValue, descriptor, true))
-    : '—';
-
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1">
-          <span className="text-sm font-medium">{t(descriptor.labelI18nKey)}</span>
-          {descriptor.descriptionI18nKey && (
-            <Tooltip content={t(descriptor.descriptionI18nKey)} size="sm" placement="top" classNames={{ content: 'max-w-[240px] text-xs' }}>
-              <FontAwesomeIcon icon={faCircleInfo} className="text-default-300 text-xs cursor-help" />
-            </Tooltip>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          {showRfPowerModeToggle && (
-            <Tabs
-              size="sm"
-              selectedKey={rfPowerMode}
-              onSelectionChange={handleRfPowerModeChange}
-              isDisabled={!isInteractive}
-              aria-label={t('radio:capability.rf_power.label')}
-              classNames={RF_POWER_MODE_TABS_CLASSNAMES}
-            >
-              <Tab key="percent" title={t('radio:capability.rf_power.modes.percent')} />
-              <Tab key="hamlib-discrete" title={t('radio:capability.rf_power.modes.hamlib')} />
-            </Tabs>
-          )}
-          <span className="whitespace-nowrap text-xs text-default-400 font-mono">{displayText}</span>
-        </div>
-      </div>
-
-      {usesSlider ? (
-        <Slider
-          size="sm"
-          minValue={isDiscreteSlider ? 0 : range.min}
-          maxValue={isDiscreteSlider ? discreteOptions.length - 1 : range.max}
-          step={isDiscreteSlider ? 1 : (range.step ?? 0.01)}
-          value={isDiscreteSlider ? discreteSliderValue : displayValue}
-          onChange={handleSliderChange}
-          onChangeEnd={handleSliderChangeEnd}
-          isDisabled={!isInteractive}
-          className="w-full"
-          aria-label={t(descriptor.labelI18nKey)}
-        />
-      ) : (
-        <Input
-          size="sm"
-          type="number"
-          value={inputValue}
-          onValueChange={setInputValue}
-          onBlur={commitInputValue}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              commitInputValue();
-            }
-          }}
-          min={minDisplayValue}
-          max={maxDisplayValue}
-          step={inputLimits?.step === undefined ? 'any' : toDisplayStep(inputLimits.step, descriptor)}
-          isDisabled={!isInteractive}
-          aria-label={t(descriptor.labelI18nKey)}
-        />
-      )}
-
-      {!isSupported && (
-        <p className="text-xs text-default-400">{t('radio:capability.panel.notSupported')}</p>
-      )}
-      {unavailableText && (
-        <p className="text-xs text-warning-600">{unavailableText}</p>
-      )}
-    </div>
-  );
-};
+  const [mode, setMode] = useState<RfPowerInteractionMode>('percent');
+  const [sliderHovered, setSliderHovered] = useState(false);
+  const [sliderFocused, setSliderFocused] = useState(false);
+  const options = getDiscreteNumberOptions(descriptor);
+  const limits = descriptor.range ?? descriptor.limits;
+  const range = descriptor.range;
+  const hasRange = Boolean(range && Number.isFinite(range.min) && Number.isFinite(range.max) && range.max > range.min);
+  const usesSlider = !draftEditor && hasRange;
+  const discrete = shouldUseDiscreteSlider(capabilityId, usesSlider, options, mode)
+    || (!usesSlider && options.length > 0 && capabilityId !== 'rf_power');
+  const write = useCallback((value: number) => onWrite(capabilityId, value), [capabilityId, onWrite]);
+  const edit = useNumberControl({ descriptor, state, enabled: interactive && !draftEditor, scope, discrete, onWrite: write });
+  const label = capabilityShortLabel(descriptor, t);
+  const actualText = state?.value == null ? '—' : formatCapabilityNumber(Number(state.value), descriptor);
+  const detailsTooltip = { content: tooltipContent, delay: 350, closeDelay: 0, size: 'sm' as const, classNames: { content: 'max-w-[300px] text-xs' } };
+  if (!descriptor.writable) return <Tooltip {...detailsTooltip}><span className="cap-item"><span className="cap-label text-default-500">{label}</span><span className="cap-number-label">{actualText}</span></span></Tooltip>;
+  const min = limits?.min == null ? undefined : toInputNumber(limits.min, descriptor);
+  const max = limits?.max == null ? undefined : toInputNumber(limits.max, descriptor);
+  const inverted = descriptor.display?.mode !== 'percent' && (descriptor.display?.transform?.scale ?? 1) < 0;
+  const formatZero = formatCapabilityNumber(0, descriptor);
+  const unit = formatZero.replace(formatCapabilityNumber(0, descriptor, false), '').trim();
+  const showModes = canUseRfPowerDiscreteMode(capabilityId, options) && !draftEditor;
+  const sliderValue = edit.displayValue ?? range?.min ?? 0;
+  const selectedOption = discrete && edit.displayValue !== null ? getDiscreteOptionDisplayText(options, descriptor, edit.displayValue, key => t(key)) : null;
+  const showInput = !usesSlider || showSliderInput;
+  const sliderValueText = edit.displayValue === null ? '—' : selectedOption ?? formatCapabilityNumber(edit.displayValue, descriptor);
+  const labelElement = <span className="cap-label text-default-500">{label}</span>;
+  return <Tooltip {...detailsTooltip} isDisabled={!showInput}><span className="cap-item">
+    {showInput ? labelElement : <Tooltip {...detailsTooltip}>{labelElement}</Tooltip>}
+    {showModes && <ButtonGroup size="sm" className="gap-px" aria-label={t('radio:capability.rf_power.label')}>
+      {(['percent', 'hamlib-discrete'] as const).map(value => <Tooltip key={value} content={t(`radio:capability.rf_power.modes.${value === 'percent' ? 'percent' : 'hamlib'}`)}>
+        <Button className="cap-button cap-segment cap-value-toggle" variant="flat" color={mode === value ? 'primary' : 'default'} aria-pressed={mode === value}
+          isDisabled={!interactive} onPress={() => { edit.cancel(); setMode(value); }}>{value === 'percent' ? '%' : t('radio:capability.quick.steps')}</Button>
+      </Tooltip>)}
+    </ButtonGroup>}
+    {usesSlider && range && <Slider size="sm" aria-label={t(descriptor.labelI18nKey)}
+      minValue={discrete ? 0 : range.min} maxValue={discrete ? options.length - 1 : range.max} step={discrete ? 1 : range.step ?? 0.01}
+      value={discrete ? findDiscreteOptionIndex(options, edit.displayValue) : sliderValue}
+      isDisabled={!interactive || (descriptor.readable && edit.actual === null)}
+      showTooltip={!showInput}
+      tooltipProps={{ content: sliderValueText, size: 'sm', delay: 0, closeDelay: 0, classNames: { content: 'text-xs tabular-nums' },
+        isOpen: sliderHovered || sliderFocused ? true : undefined }}
+      onMouseEnter={() => setSliderHovered(true)} onMouseLeave={() => setSliderHovered(false)}
+      onFocus={event => setSliderFocused(event.target.matches(':focus-visible'))} onBlur={() => setSliderFocused(false)}
+      classNames={{ base: 'cap-slider', track: 'cap-slider-track', thumb: 'cap-slider-thumb bg-primary after:bg-primary' }}
+      onChange={value => { const number = Array.isArray(value) ? value[0] : value; edit.slide(discrete ? options[Math.round(number)]?.value ?? range.min : number); }}
+      onChangeEnd={edit.endSlide} />}
+    {showInput && <>
+    <Input size="sm" type="number" aria-label={t(descriptor.labelI18nKey)} value={draftEditor?.text ?? edit.input} placeholder="—"
+      classNames={{ base: 'cap-input', inputWrapper: 'cap-input-wrapper', input: 'cap-input-field' }}
+      style={{ width: numberInputWidth(descriptor, edit.actual) }}
+      min={inverted ? max : min} max={inverted ? min : max} step={inputStep(descriptor)}
+      onValueChange={draftEditor?.onChange ?? edit.edit} onBlur={draftEditor ? undefined : edit.commit} isDisabled={!interactive}
+      onKeyDown={event => {
+        if (draftEditor) return;
+        if (event.key === 'Enter') { event.preventDefault(); edit.commit(); }
+        if (event.key === 'Escape') { event.preventDefault(); edit.cancel(); }
+      }} />
+    {unit && <span className="cap-number-label text-default-500">{unit}</span>}
+    {selectedOption && <span className="cap-number-label text-default-500">{selectedOption}</span>}
+    </>}
+    {!descriptor.readable && state?.meta?.acknowledgement === 'sent' && <span className="text-[11px] text-default-500">{t('radio:capability.panel.sent')}</span>}
+  </span></Tooltip>;
+}

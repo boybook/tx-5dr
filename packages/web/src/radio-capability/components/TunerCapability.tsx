@@ -1,136 +1,50 @@
-/**
- * TunerCapability - 天调能力组件
- *
- * TunerCapabilityPanel: 用于 RadioControlPanel Modal（完整卡片，含开关+调谐按钮+SWR）
- * TunerCapabilitySurface: 用于 RadioControl 工具栏（Popover 内容，与现有 UI 保持一致）
- */
-
-import React, { useState, useCallback } from 'react';
-import { Switch, Button, Tooltip } from '@heroui/react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Button } from '@heroui/react';
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleInfo, faWaveSquare } from '@fortawesome/free-solid-svg-icons';
+import { faWaveSquare } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
 import { WSMessageType } from '@tx5dr/contracts';
-import type { CapabilityComponentProps } from '../CapabilityRegistry';
-import { useCapabilityWriter } from '../CapabilityRegistry';
-import { useCapabilityState, useConnection, useCurrentOperatorId, usePTTState } from '../../store/radioStore';
-
+import { CapabilityControl } from '../CapabilityRegistry';
+import type { CapabilityComponentProps } from '../control-types';
+import { BooleanCapability } from './BooleanCapability';
+import { ActionCapability } from './ActionCapability';
+import { useCapabilityDescriptor, useCapabilityState, useConnection, useCurrentOperatorId, usePTTState } from '../../store/radioStore';
 import { useCan } from '../../store/authStore';
-import { createLogger } from '../../utils/logger';
-import { getCapabilityUnavailableText, isCapabilityAvailable } from '../availability';
+import { isCapabilityAvailable } from '../availability';
 
-const logger = createLogger('TunerCapability');
-
-// ===== Panel 版本（Modal 内完整控件）=====
-
-export const TunerCapabilityPanel: React.FC<CapabilityComponentProps> = ({
-  capabilityId,
-  state,
-  descriptor,
-  onWrite,
-}) => {
+/** Tuner prerequisites wrap the same scalar controls used by every other capability. */
+export function TunerCapabilityControl(props: CapabilityComponentProps) {
   const { t } = useTranslation();
-  const canControl = useCan('execute', 'RadioControl');
-  const [isLoading, setIsLoading] = useState(false);
   const switchState = useCapabilityState('tuner_switch');
   const tuneState = useCapabilityState('tuner_tune');
+  const [pending, setPending] = useState(false);
+  const pendingRef = useRef(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tuning = switchState?.meta?.status === 'tuning';
+  useEffect(() => {
+    pendingRef.current = false; setPending(false);
+    if (timer.current) clearTimeout(timer.current);
+    return () => { if (timer.current) clearTimeout(timer.current); };
+  }, [props.scope, props.interactive, props.state?.updatedAt, props.state?.lastError]);
+  const available = props.interactive && !pending && !tuning && (props.capabilityId === 'tuner_switch'
+    || (switchState?.value === true && isCapabilityAvailable(switchState) && isCapabilityAvailable(tuneState)));
+  const onWrite = useCallback<CapabilityComponentProps['onWrite']>((id, value, action) => {
+    if (!available || pendingRef.current) return;
+    pendingRef.current = true; setPending(true); props.onWrite(id, value, action);
+    timer.current = setTimeout(() => { pendingRef.current = false; setPending(false); }, 2000);
+  }, [available, props.onWrite]);
+  const controlProps = { ...props, interactive: available, onWrite };
+  const swr = props.state?.meta?.swr;
+  return <span className="cap-item">
+    {props.capabilityId === 'tuner_switch' ? <BooleanCapability {...controlProps} /> : <ActionCapability {...controlProps} />}
+    {(pending || tuning) && <span className="text-[11px] text-warning-600" role="status">{t('radio:tuner.tuning')}</span>}
+    {props.capabilityId === 'tuner_switch' && typeof swr === 'number' && Number.isFinite(swr) && <span className="cap-number-label">SWR {swr.toFixed(2)}</span>}
+  </span>;
+}
 
-  // tuner_switch 和 tuner_tune 共用一个面板卡片（compoundGroup）
-  // 这里根据 compoundRole 渲染不同控件
-  const role = descriptor.compoundRole;
-
-  if (role === 'switch') {
-    const enabled = typeof state?.value === 'boolean' ? state.value : false;
-    const isSupported = state?.supported ?? false;
-    const isAvailable = isCapabilityAvailable(state);
-    const unavailableText = getCapabilityUnavailableText(state, t, capabilityId)
-      ?? getCapabilityUnavailableText(tuneState, t, 'tuner_tune');
-    const swr = (state?.meta as { swr?: number } | undefined)?.swr;
-
-    const handleToggle = useCallback(async () => {
-      if (!canControl || !isAvailable || isLoading) return;
-      setIsLoading(true);
-      try {
-        onWrite(capabilityId, !enabled);
-      } finally {
-        // 等待 WS 确认后 setIsLoading(false)，通过 state 变化检测
-        setTimeout(() => setIsLoading(false), 2000);
-      }
-    }, [canControl, isAvailable, isLoading, capabilityId, enabled, onWrite]);
-
-    return (
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex-1">
-          <div className="flex items-center gap-1">
-            <span className="text-sm font-medium">{t(descriptor.labelI18nKey)}</span>
-            {descriptor.descriptionI18nKey && (
-              <Tooltip content={t(descriptor.descriptionI18nKey)} size="sm" placement="top" classNames={{ content: 'max-w-[240px] text-xs' }}>
-                <FontAwesomeIcon icon={faCircleInfo} className="text-default-300 text-xs cursor-help" />
-              </Tooltip>
-            )}
-          </div>
-          {swr !== undefined && (
-            <div className={`text-xs font-mono mt-0.5 ${
-              swr < 1.5 ? 'text-success' : swr < 2.0 ? 'text-warning' : 'text-danger'
-            }`}>
-              SWR {swr.toFixed(2)}
-            </div>
-          )}
-          {unavailableText && (
-            <div className="text-xs text-warning-600 mt-0.5">{unavailableText}</div>
-          )}
-        </div>
-        <Switch
-          isSelected={enabled}
-          onValueChange={handleToggle}
-          isDisabled={!isSupported || !isAvailable || !canControl || isLoading}
-          size="sm"
-        />
-      </div>
-    );
-  }
-
-  if (role === 'action') {
-    // tuner_switch 的状态用于判断调谐器是否已启用
-    const tunerEnabled = typeof switchState?.value === 'boolean' ? switchState.value : false;
-    const tuningStatus = (switchState?.meta as { status?: string } | undefined)?.status;
-    const isTuning = tuningStatus === 'tuning';
-    const isTuneLoading = isLoading || isTuning;
-    const isSupported = state?.supported ?? false;
-    const isAvailable = isCapabilityAvailable(state) && isCapabilityAvailable(switchState);
-
-    const handleTune = useCallback(async () => {
-      if (!canControl || !isAvailable || isTuneLoading || !tunerEnabled) return;
-      setIsLoading(true);
-      logger.info('Manual tuning triggered');
-      onWrite(capabilityId, undefined, true);
-      setTimeout(() => setIsLoading(false), 2000);
-    }, [canControl, isAvailable, isTuneLoading, tunerEnabled, capabilityId, onWrite]);
-
-    return (
-      <div className="space-y-1">
-        <Button
-          size="sm"
-          variant="flat"
-          color={isTuneLoading ? 'warning' : 'default'}
-          onPress={handleTune}
-          isLoading={isTuneLoading}
-          isDisabled={!isSupported || !isAvailable || !canControl || !tunerEnabled || isTuneLoading}
-          className="w-full"
-        >
-          {isTuneLoading ? t('radio:tuner.tuning') : t(descriptor.labelI18nKey)}
-        </Button>
-      </div>
-    );
-  }
-
-  return null;
-};
-
-// ===== Surface 版本（工具栏 Popover 内容）=====
-
-export const TunerCapabilitySurface: React.FC = () => {
+/** The existing tone-tune workflow remains a dedicated operation beside the shared capability controls. */
+export function TunerCapabilitySurface() {
   const { t } = useTranslation();
   const canControl = useCan('execute', 'RadioControl');
   const connection = useConnection();
@@ -138,161 +52,46 @@ export const TunerCapabilitySurface: React.FC = () => {
   const { pttStatus, tuneToneStatus } = usePTTState();
   const switchState = useCapabilityState('tuner_switch');
   const tuneState = useCapabilityState('tuner_tune');
-  const onWrite = useCapabilityWriter();
-
-  const [isSwitchLoading, setIsSwitchLoading] = useState(false);
-  const [isTuneLoading, setIsTuneLoading] = useState(false);
+  const switchDescriptor = useCapabilityDescriptor('tuner_switch');
+  const tuneDescriptor = useCapabilityDescriptor('tuner_tune');
   const [now, setNow] = useState(Date.now());
-
-  const enabled = typeof switchState?.value === 'boolean' ? switchState.value : false;
-  const tunerSupported = switchState?.supported ?? false;
-  const tuneSupported = tuneState?.supported ?? false;
-  const tunerAvailable = isCapabilityAvailable(switchState);
-  const tuneAvailable = isCapabilityAvailable(tuneState);
-  const unavailableText = getCapabilityUnavailableText(switchState, t, 'tuner_switch')
-    ?? getCapabilityUnavailableText(tuneState, t, 'tuner_tune');
-  const tuningStatus = (switchState?.meta as { status?: string } | undefined)?.status;
-  const swr = (switchState?.meta as { swr?: number } | undefined)?.swr;
-  const isTuning = tuningStatus === 'tuning';
-  const isManualTuneLoading = isTuneLoading || isTuning;
-  const tuneToneActive = tuneToneStatus.active;
-  const tuneToneBusy = pttStatus.isTransmitting && !tuneToneActive;
-  const tuneToneElapsedSec = tuneToneStatus.startedAt
-    ? Math.max(0, Math.floor((now - tuneToneStatus.startedAt) / 1000))
-    : 0;
-
-  React.useEffect(() => {
-    if (!tuneToneActive) {
-      return undefined;
-    }
-    const id = window.setInterval(() => setNow(Date.now()), 500);
-    return () => window.clearInterval(id);
-  }, [tuneToneActive]);
-
-  React.useEffect(() => {
-    if (!tuneToneStatus.error) {
-      return;
-    }
-    addToast({
-      title: t('radio:tuner.toneStartFailed'),
-      description: tuneToneStatus.error,
-      color: 'danger',
-      timeout: 5000,
-    });
+  const active = tuneToneStatus.active;
+  const busy = pttStatus.isTransmitting && !active;
+  const elapsed = tuneToneStatus.startedAt ? Math.max(0, Math.floor((now - tuneToneStatus.startedAt) / 1000)) : 0;
+  useEffect(() => {
+    if (!active) return;
+    const id = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(id);
+  }, [active]);
+  useEffect(() => {
+    if (tuneToneStatus.error) addToast({ title: t('radio:tuner.toneStartFailed'), description: tuneToneStatus.error, color: 'danger', timeout: 5000 });
   }, [t, tuneToneStatus.error]);
-
-  if (!canControl) {
-    return null;
-  }
-
-  const handleToggle = useCallback(() => {
-    if (!canControl || !tunerAvailable) return;
-    setIsSwitchLoading(true);
-    onWrite('tuner_switch', !enabled);
-    setTimeout(() => setIsSwitchLoading(false), 2000);
-  }, [canControl, tunerAvailable, enabled, onWrite]);
-
-  const handleTune = useCallback(() => {
-    if (!canControl || !tunerAvailable || !tuneAvailable || !enabled || isManualTuneLoading) return;
-    setIsTuneLoading(true);
-    logger.info('Manual tuning triggered from surface');
-    onWrite('tuner_tune', undefined, true);
-    setTimeout(() => setIsTuneLoading(false), 2000);
-  }, [canControl, tunerAvailable, tuneAvailable, enabled, isManualTuneLoading, onWrite]);
-
-  const handleTuneTone = useCallback(() => {
+  if (!canControl) return null;
+  const handleTone = () => {
     const wsClient = connection.state.radioService?.wsClientInstance;
-    if (!wsClient || tuneToneBusy) return;
-
-    if (tuneToneActive) {
-      wsClient.send(WSMessageType.STOP_TUNE_TONE, {});
-      return;
-    }
-
-    wsClient.send(WSMessageType.START_TUNE_TONE, currentOperatorId ? { operatorId: currentOperatorId } : {});
-  }, [connection.state.radioService, currentOperatorId, tuneToneActive, tuneToneBusy]);
-
-  return (
-    <div className="w-64 max-w-[calc(100vw-3rem)] py-2 space-y-3">
-      <section className="space-y-2">
-        <div>
-          <div className="text-sm font-medium text-default-700">{t('radio:tuner.builtInTitle')}</div>
-          <p className="text-xs text-default-500">{t('radio:tuner.builtInDescription')}</p>
-        </div>
-
-        {tunerSupported || tuneSupported ? (
-          <>
-            {tunerSupported && (
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-sm">{t('radio:capability.tuner_switch.label')}</span>
-                <Switch
-                  isSelected={enabled}
-                  onValueChange={handleToggle}
-                  isDisabled={!canControl || !tunerAvailable || isSwitchLoading}
-                  size="sm"
-                />
-              </div>
-            )}
-
-            {tuneSupported && (
-              <Button
-                size="sm"
-                variant="flat"
-                color={isManualTuneLoading ? 'warning' : 'default'}
-                onPress={handleTune}
-                isLoading={isManualTuneLoading}
-                isDisabled={!canControl || !tunerAvailable || !tuneAvailable || !enabled || isManualTuneLoading}
-                className="w-full"
-              >
-                {isManualTuneLoading ? t('radio:tuner.tuning') : t('radio:capability.tuner_tune.label')}
-              </Button>
-            )}
-
-            {swr !== undefined && (
-              <div className="pt-2 border-t border-divider">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-default-500">SWR</span>
-                  <span className={`font-mono font-medium ${
-                    swr < 1.5 ? 'text-success' : swr < 2.0 ? 'text-warning' : 'text-danger'
-                  }`}>
-                    {swr.toFixed(2)}
-                  </span>
-                </div>
-              </div>
-            )}
-            {unavailableText && (
-              <p className="text-xs text-warning-600">{unavailableText}</p>
-            )}
-          </>
-        ) : (
-          <p className="rounded-md bg-default-100 px-2 py-1.5 text-xs text-default-500">
-            {t('radio:tuner.builtInUnsupported')}
-          </p>
-        )}
-      </section>
-
-      <section className="space-y-2 border-t border-divider pt-3">
-        <div>
-          <div className="text-sm font-medium text-default-700">{t('radio:tuner.externalTitle')}</div>
-          <p className="text-xs text-default-500">{t('radio:tuner.externalDescription')}</p>
-        </div>
-        <Button
-          size="sm"
-          variant={tuneToneActive ? 'solid' : 'flat'}
-          color="danger"
-          onPress={handleTuneTone}
-          isDisabled={!connection.state.isConnected || tuneToneBusy}
-          className="w-full font-medium"
-          startContent={<FontAwesomeIcon icon={faWaveSquare} className="text-xs" />}
-        >
-          {tuneToneActive
-            ? t('radio:tuner.stopToneTune', { seconds: tuneToneElapsedSec })
-            : t('radio:tuner.startToneTune')}
-        </Button>
-        {tuneToneBusy && (
-          <p className="text-xs text-warning-600">{t('radio:tuner.toneBusy')}</p>
-        )}
-      </section>
-    </div>
-  );
-};
+    if (!wsClient || busy) return;
+    if (active) wsClient.send(WSMessageType.STOP_TUNE_TONE, {});
+    else wsClient.send(WSMessageType.START_TUNE_TONE, currentOperatorId ? { operatorId: currentOperatorId } : {});
+  };
+  return <div className="radio-capability-controls w-64 max-w-[calc(100vw-3rem)] py-2 space-y-3">
+    <section className="space-y-2">
+      <div className="text-sm font-medium">{t('radio:tuner.builtInTitle')}</div>
+      <p className="text-xs text-default-500">{t('radio:tuner.builtInDescription')}</p>
+      <div className="cap-item">
+        {switchDescriptor && switchState?.supported && <CapabilityControl descriptor={switchDescriptor} state={switchState} />}
+        {tuneDescriptor && tuneState?.supported && <CapabilityControl descriptor={tuneDescriptor} state={tuneState} />}
+      </div>
+      {!switchState?.supported && !tuneState?.supported && <p className="text-xs text-default-500">{t('radio:tuner.builtInUnsupported')}</p>}
+    </section>
+    <section className="space-y-2 border-t border-divider pt-3">
+      <div className="text-sm font-medium">{t('radio:tuner.externalTitle')}</div>
+      <p className="text-xs text-default-500">{t('radio:tuner.externalDescription')}</p>
+      <Button size="sm" variant={active ? 'solid' : 'flat'} color="danger" onPress={handleTone}
+        isDisabled={!connection.state.isConnected || busy} className="w-full font-medium"
+        startContent={<FontAwesomeIcon icon={faWaveSquare} className="text-xs" />}>
+        {active ? t('radio:tuner.stopToneTune', { seconds: elapsed }) : t('radio:tuner.startToneTune')}
+      </Button>
+      {busy && <p className="text-xs text-warning-600">{t('radio:tuner.toneBusy')}</p>}
+    </section>
+  </div>;
+}

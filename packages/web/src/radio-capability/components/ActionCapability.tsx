@@ -1,12 +1,12 @@
 import { Button } from '@heroui/react';
 import { useTranslation } from 'react-i18next';
-import type { CapabilityComponentProps } from '../CapabilityRegistry';
-import { useCan } from '../../store/authStore';
-import { isCapabilityInteractive } from '../availability';
+import type { CapabilityComponentProps } from '../control-types';
+import { capabilityShortLabel } from '../control-presentation';
 
-export function ActionCapabilityPanel({ capabilityId, descriptor, state, onWrite }: CapabilityComponentProps) {
+export function ActionCapability({ descriptor, capabilityId, interactive, onWrite }: CapabilityComponentProps) {
   const { t } = useTranslation();
-  const canControl = useCan('execute', 'RadioControl');
-  return <Button size="sm" variant="flat" isDisabled={!isCapabilityInteractive(state, canControl, descriptor.writable)}
-    onPress={() => onWrite(capabilityId, undefined, true)}>{t(descriptor.labelI18nKey)}</Button>;
+  return <Button size="sm" variant="bordered" className="cap-button" aria-label={t(descriptor.labelI18nKey)}
+    isDisabled={!interactive} onPress={() => { if (interactive) onWrite(capabilityId, undefined, true); }}>
+    {capabilityShortLabel(descriptor, t)}
+  </Button>;
 }

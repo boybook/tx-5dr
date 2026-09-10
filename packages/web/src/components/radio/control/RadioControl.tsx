@@ -8,6 +8,7 @@ import type { AudioSidecarStatusPayload } from '@tx5dr/contracts';
 import { AudioSidecarStatus } from '@tx5dr/contracts';
 import { RadioErrorHistoryModal } from './RadioErrorHistoryModal';
 import { RadioControlPanel } from './RadioControlPanel';
+import { RadioQuickControls } from '../../../radio-capability/RadioQuickControls';
 import { RadioControlPluginToolbar } from './RadioControlPluginToolbar';
 import { TunerCapabilitySurface } from '../../../radio-capability/components/TunerCapability';
 import { api, ApiError } from '@tx5dr/core';
@@ -626,6 +627,9 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   );
   // RadioControlPanel 弹窗状态
   const [isControlPanelOpen, setIsControlPanelOpen] = useState(false);
+  const openControlPanel = React.useCallback(() => {
+    if (canOpenRadioControl) setIsControlPanelOpen(true);
+  }, [canOpenRadioControl]);
 
   // 天调按钮状态（从能力系统读取，需在顶层调用 Hook）
   const tunerSwitchCapState = useCapabilityState('tuner_switch');
@@ -1855,6 +1859,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   }, [availableFrequencies, buildCurrentCustomFrequencyOption, radioMode.currentMode?.name, radioState.currentRadioFrequency, radioState.operatingState]);
 
   return (
+    <>
+    <RadioQuickControls active={!isControlPanelOpen} onOpenPanel={canOpenRadioControl ? openControlPanel : undefined} />
     <Card shadow="none" className="w-full overflow-visible border-none bg-content2 dark:bg-content1" classNames={{ base: 'overflow-visible border-none bg-content2 dark:bg-content1 shadow-none' }}>
       <CardBody className="relative flex flex-col gap-0 overflow-visible px-4 py-2 pt-3 cursor-default select-none">
       <span ref={frequencyMeasureRef} aria-hidden="true" className={SELECT_TEXT_MEASURE_CLASS}>
@@ -1873,7 +1879,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
               isDecoding: radioMode.isDecoding,
             }}
             profileName={activeProfile?.name}
-            onPress={radioConnection.radioConnected ? () => setIsControlPanelOpen(true) : (isAdmin ? onOpenRadioSettings : undefined)}
+            onPress={radioConnection.radioConnected ? openControlPanel : (isAdmin ? onOpenRadioSettings : undefined)}
             canConfigure={isAdmin}
             canOperate={isOperator}
           />
@@ -1886,7 +1892,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                   size="sm"
                   className="text-default-400 min-w-unit-6 min-w-6 w-6 h-6"
                   aria-label={t('control.openRadioControl')}
-                  onPress={() => setIsControlPanelOpen(true)}
+                  onPress={openControlPanel}
                 >
                   <FontAwesomeIcon icon={faSlidersH} className="text-xs" />
                 </Button>
@@ -2808,5 +2814,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
       </Modal>
       </CardBody>
     </Card>
+    </>
   );
 };

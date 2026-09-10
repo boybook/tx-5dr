@@ -1,106 +1,33 @@
-import React, { useMemo } from 'react';
-import { Select, SelectItem, Tab, Tabs, Tooltip } from '@heroui/react';
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCircleInfo } from '@fortawesome/free-solid-svg-icons';
+import { Button, ButtonGroup, Select, SelectItem } from '@heroui/react';
 import { useTranslation } from 'react-i18next';
-import type { CapabilityComponentProps } from '../CapabilityRegistry';
-import { useCan } from '../../store/authStore';
-import { useHasMinRole } from '../../store/authStore';
-import { UserRole } from '@tx5dr/contracts';
+import type { CapabilityComponentProps } from '../control-types';
+import { capabilityShortLabel } from '../control-presentation';
 import { formatCapabilityOption } from '../display-utils';
-import { getCapabilityUnavailableText, isCapabilityInteractive } from '../availability';
 
-export const EnumCapabilityPanel: React.FC<CapabilityComponentProps> = ({
-  capabilityId,
-  state,
-  descriptor,
-  onWrite,
-}) => {
+export function EnumCapability({ descriptor, capabilityId, state, interactive, onWrite }: CapabilityComponentProps) {
   const { t } = useTranslation();
-  const canControl = useCan('execute', 'RadioControl');
-  const isAdmin = useHasMinRole(UserRole.ADMIN);
-  const isSupported = state?.supported ?? false;
-  const canWrite = descriptor.writable;
-  const isInteractive = isCapabilityInteractive(
-    state,
-    canControl,
-    canWrite && (capabilityId === 'tci_iq_sample_rate' ? isAdmin : true),
-  );
-  const unavailableText = getCapabilityUnavailableText(state, t, capabilityId);
   const options = descriptor.options ?? [];
-
-  const selectedKey = useMemo(() => {
-    if (state?.value === null || state?.value === undefined) {
-      return undefined;
-    }
-    return String(state.value);
-  }, [state?.value]);
-
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center gap-1">
-        <span className="text-sm font-medium">{t(descriptor.labelI18nKey)}</span>
-        {descriptor.descriptionI18nKey && (
-          <Tooltip content={t(descriptor.descriptionI18nKey)} size="sm" placement="top" classNames={{ content: 'max-w-[240px] text-xs' }}>
-            <FontAwesomeIcon icon={faCircleInfo} className="text-default-300 text-xs cursor-help" />
-          </Tooltip>
-        )}
-      </div>
-
-      {options.length > 0 && options.length <= 4 ? (
-        <Tabs
-          size="sm"
-          fullWidth
-          selectedKey={selectedKey ?? undefined}
-          onSelectionChange={(key) => {
-            const option = options.find((item) => String(item.value) === String(key));
-            if (
-              option
-              && isInteractive
-              && String(option.value) !== selectedKey
-            ) {
-              onWrite(capabilityId, option.value);
-            }
-          }}
-          isDisabled={!isInteractive}
-          aria-label={t(descriptor.labelI18nKey)}
-        >
-          {options.map((option) => (
-            <Tab key={String(option.value)} title={formatCapabilityOption(option, descriptor, t)} />
-          ))}
-        </Tabs>
-      ) : (
-        <Select
-          size="sm"
-          selectedKeys={selectedKey ? [selectedKey] : []}
-          onSelectionChange={(keys) => {
-            const nextKey = Array.from(keys)[0];
-            const option = options.find((item) => String(item.value) === String(nextKey));
-            if (
-              option
-              && isInteractive
-              && String(option.value) !== selectedKey
-            ) {
-              onWrite(capabilityId, option.value);
-            }
-          }}
-          isDisabled={!isInteractive || options.length === 0}
-          aria-label={t(descriptor.labelI18nKey)}
-        >
-          {options.map((option) => (
-            <SelectItem key={String(option.value)}>
-              {formatCapabilityOption(option, descriptor, t)}
-            </SelectItem>
-          ))}
-        </Select>
-      )}
-
-      {!isSupported && (
-        <p className="text-xs text-default-400">{t('radio:capability.panel.notSupported')}</p>
-      )}
-      {unavailableText && (
-        <p className="text-xs text-warning-600">{unavailableText}</p>
-      )}
-    </div>
-  );
-};
+  const selected = state?.value == null ? null : String(state.value);
+  const current = options.find(option => String(option.value) === selected);
+  const label = capabilityShortLabel(descriptor, t);
+  const choose = (key: string) => {
+    const option = options.find(item => String(item.value) === key);
+    if (interactive && option && selected !== key) onWrite(capabilityId, option.value);
+  };
+  if (!descriptor.writable) return <span className="cap-item"><span>{label}</span><span>{current ? formatCapabilityOption(current, descriptor, t) : state?.value ?? '—'}</span></span>;
+  return <span className="cap-item">
+    <span className="cap-label text-default-500">{label}</span>
+    {options.length > 0 && options.length <= 4 ? <ButtonGroup size="sm" variant="flat" className="flex-wrap gap-px" aria-label={t(descriptor.labelI18nKey)}>
+      {options.map(option => <Button key={String(option.value)} className="cap-button cap-segment cap-value-toggle" color={String(option.value) === selected ? 'primary' : 'default'}
+        aria-pressed={String(option.value) === selected} isDisabled={!interactive}
+        onPress={() => choose(String(option.value))}>{formatCapabilityOption(option, descriptor, t)}</Button>)}
+    </ButtonGroup> : <Select size="sm" aria-label={t(descriptor.labelI18nKey)} disallowEmptySelection
+      classNames={{ base: 'cap-select', trigger: 'cap-select-trigger', innerWrapper: 'w-full', value: 'cap-select-value', selectorIcon: 'right-1 w-3 h-3' }}
+      style={{ width: `calc(${Math.min(26, Math.max(6, ...options.map(o => formatCapabilityOption(o, descriptor, t).length)))}ch + 34px)` }}
+      selectedKeys={current ? [String(current.value)] : []} placeholder="—" isDisabled={!interactive || !options.length}
+      onSelectionChange={keys => { if (keys !== 'all') { const key = [...keys][0]; if (key != null) choose(String(key)); } }}>
+      {options.map(option => <SelectItem key={String(option.value)}>{formatCapabilityOption(option, descriptor, t)}</SelectItem>)}
+    </Select>}
+    {!descriptor.readable && state?.meta?.acknowledgement === 'sent' && <span className="text-[11px] text-default-500">{t('radio:capability.panel.sent')}</span>}
+  </span>;
+}

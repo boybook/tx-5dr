@@ -19,6 +19,11 @@ export function buildCapabilityGroupPayload(descriptors: CapabilityDescriptor[],
       if (typeof value !== 'number' || !Number.isFinite(value)
         || (limits?.min !== undefined && value < limits.min) || (limits?.max !== undefined && value > limits.max)) throw new Error('Invalid numeric group value');
     }
+    if (d.valueType === 'boolean' && typeof value !== 'boolean') throw new Error('Invalid boolean group value');
+    if (d.valueType === 'enum' && !d.options?.some(option => option.value === value)) throw new Error('Invalid enum group value');
+  }
+  for (const [low, high] of [['rx_filter_low', 'rx_filter_high'], ['tx_filter_low', 'tx_filter_high']]) {
+    if (typeof values[low] === 'number' && typeof values[high] === 'number' && values[low] >= values[high]) throw new Error('Invalid filter boundaries');
   }
   return WriteCapabilityGroupPayloadSchema.parse({ groupId: group.id, sessionId, values });
 }

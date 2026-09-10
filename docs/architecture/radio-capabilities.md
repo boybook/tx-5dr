@@ -45,6 +45,73 @@ checks confirmed PTT state again when the queued write starts. These parameter
 bindings do not expose PTT, tune transmission, device power or arbitrary CAT.
 Plugin capability snapshots remain read-only; no general plugin write port is added.
 
+## Web control ownership
+
+Capability cards, user-pinned quick controls and the capability portion of existing
+popovers use one HeroUI renderer per value type. Cards own full labels, descriptions
+and pin affordances; the renderer owns the compact control, display conversion and
+current edit. Capability-specific prerequisites, such as the tuner switch before a
+tune action, wrap these same controls. Physical power and tune-tone transmission
+keep their dedicated workflows.
+
+Quick controls occupy a separate HeroUI card with larger gaps between capabilities
+than within a capability. Shared sliders reserve space for their thumbs at both
+endpoints. Quick sliders show their value on hover, drag or keyboard focus; their
+labels show capability details in a separate tooltip. The same renderer keeps the
+companion numeric input in the full panel. Numbers without sliders and atomic-group
+drafts retain their inputs in either container.
+The quick card reserves a trailing action column for opening the existing full
+panel, aligned with the first row while controls wrap independently. `RadioControl`
+owns the shared modal state and permission gate for all its panel entries.
+
+The Web radio provider supplies one capability edit environment. It binds writes to
+the selected Profile, connection lifetime and descriptor target, and checks current
+permission/idle requirements at dispatch. Changing that context, disabling a view
+or unmounting invalidates unsent edits. Initial Profile hydration may follow the
+WebSocket capability snapshot and must accept that snapshot without awaiting a
+replacement. Switching away from a known Profile still invalidates its descriptors
+until a new snapshot arrives, including switches that pass through a null Profile.
+Opening the capability modal disables quick
+control editing and cancels its pending debounce; closing destroys modal drafts.
+The shared capability renderer keeps a local pending proposal after a slider is
+released or a text input is committed. It does not publish that proposal to the
+radio store. The latest operation owns this presentation until its matching write
+receipt returns; older completions cannot overwrite it. A receipt can bridge the
+short interval before the corresponding normal state broadcast reaches the view.
+Failures restore the last authoritative state, and context changes discard the
+pending presentation. Normal host broadcasts remain the radio store's authority.
+
+Scalar WebSocket writes use the existing optional envelope `id` as a request ID;
+`data.id` remains the capability ID. After the existing guarded write completes,
+the server returns one `radioCapabilityChanged` snapshot to that client with the
+same envelope ID, or an `error` with that ID. The snapshot reads only the capability
+cache and adds no radio query. Requests without an envelope ID retain their original
+broadcast-only behavior. No new message types or TCI commands are introduced.
+
+Correlated capability snapshots are receipts, not new live broadcasts: the core
+message handler delivers them on the raw request channel without replaying them
+into the radio state stream. This prevents a late receipt from replacing a newer
+normal broadcast. The Web connection owns a single listener while writes are
+pending, validates receipts with the existing schemas, and cancels waits when its
+scope ends. Each wait is bounded to five seconds without polling or resending.
+
+Numeric text commits once on Enter or blur and can be cancelled with Escape. Slider
+updates share a 150 ms debounce and flush the final pending value on release. Atomic
+groups own all field drafts and submit only complete validated values. A visual
+`compoundGroup` does not force pinning its other members; a `writeGroup` does.
+
+Pins are client layout preferences, persisted by Profile ID in versioned local
+storage. They contain only capability/group identities and order, never parameter
+values, targets or sessions. Pinning and sorting do no radio I/O. Missing pinned
+capabilities retain a removable placeholder. An on-demand menu in the modal header
+owns ordering/removal, including missing entries; pin icons use a neutral visual
+state distinct from radio on/off controls. Other tabs can synchronize this layout
+through one shared storage listener.
+
+Controls subscribe to the existing separate capability contexts. Stable descriptor,
+state and callback identities let unchanged controls skip rendering. Adding pins
+adds no protocol queries, capability pollers or audio/spectrum subscriptions.
+
 ## Observation and lifetime
 
 TCI startup and broadcast parameters share one library state store. The library

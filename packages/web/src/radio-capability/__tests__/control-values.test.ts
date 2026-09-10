@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { CapabilityDescriptor } from '@tx5dr/contracts';
 import { formatCapabilityNumber, fromDisplayNumber, toDisplayNumber, toDisplayStep } from '../display-utils';
 import { buildCapabilityGroupPayload } from '../group-values';
-import { getPanelComponent } from '../CapabilityRegistry';
+import { getCapabilityComponent } from '../CapabilityRegistry';
 
 const base: CapabilityDescriptor = { id: 'af_gain', category: 'audio', valueType: 'number', readable: true, writable: true,
   updateMode: 'event', labelI18nKey: 'radio:capability.af_gain.label', hasSurfaceControl: false };
@@ -25,8 +25,8 @@ describe('native capability display', () => {
     expect(toDisplayStep(1000, frequency)).toBe(1);
   });
   it('renders new capabilities by declared value type without a vendor registration', () => {
-    expect(getPanelComponent('future_host_number', base)).toBeDefined();
-    expect(getPanelComponent('future_host_action', { ...base, valueType: 'action' })).toBeDefined();
+    expect(getCapabilityComponent('future_host_number', base)).toBeDefined();
+    expect(getCapabilityComponent('future_host_action', { ...base, valueType: 'action' })).toBeDefined();
   });
 });
 

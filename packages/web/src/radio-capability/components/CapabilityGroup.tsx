@@ -1,83 +1,79 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Input } from '@heroui/react';
+import { memo, useLayoutEffect, useRef, useState } from 'react';
+import { Button } from '@heroui/react';
 import { api } from '@tx5dr/core';
-import type { CapabilityDescriptor, CapabilityValue } from '@tx5dr/contracts';
+import type { CapabilityDescriptor, CapabilityState, CapabilityValue } from '@tx5dr/contracts';
 import { useTranslation } from 'react-i18next';
-import { useCapabilityStates } from '../../store/radioStore';
-import { useCan } from '../../store/authStore';
+import { CapabilityControl } from '../CapabilityRegistry';
+import { useCapabilityEnvironment } from '../CapabilityEnvironment';
+import { buildCapabilityGroupPayload, getCapabilityGroupValues } from '../group-values';
+import { controlEditingKey } from '../control-values';
+import { formatCapabilityNumber, fromDisplayNumber } from '../display-utils';
+import { isCapabilityInteractive } from '../availability';
 import { getApiBaseUrl } from '../../utils/config';
 import { createLogger } from '../../utils/logger';
-import { getPanelComponent } from '../CapabilityRegistry';
-import { isCapabilityInteractive } from '../availability';
-import { buildCapabilityGroupPayload, getCapabilityGroupValues } from '../group-values';
-import { formatCapabilityNumber, fromDisplayNumber, toDisplayNumber, toDisplayStep } from '../display-utils';
 
 const logger = createLogger('CapabilityGroup');
 
-export function CapabilityGroupPanel({ descriptors }: { descriptors: CapabilityDescriptor[] }) {
+export const CapabilityGroupControl = memo(function CapabilityGroupControl({ descriptors, states, active = true }: {
+  descriptors: CapabilityDescriptor[];
+  states: Map<string, CapabilityState>;
+  active?: boolean;
+}) {
   const { t } = useTranslation();
-  const states = useCapabilityStates();
-  const canControl = useCan('execute', 'RadioControl');
-  const [draft, setDraft] = useState<Record<string, CapabilityValue>>({});
+  const environment = useCapabilityEnvironment();
+  const [draft, setDraft] = useState<Record<string, string>>({});
   const [pending, setPending] = useState(false);
   const [failed, setFailed] = useState(false);
-  const mounted = useRef(true);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const onEdit = useCallback((id: string, value?: CapabilityValue) => {
-    if (value !== undefined) { setDraft((previous) => ({ ...previous, [id]: value })); setFailed(false); }
-  }, []);
+  const key = `${environment.scope}:${descriptors.map(controlEditingKey).join('|')}`;
+  const enabled = active && environment.connected && environment.canControl && descriptors.every(d =>
+    isCapabilityInteractive(states.get(d.id), true, d.writable) && (!d.requiresIdle || !environment.transmitting));
+  const live = useRef({ key, enabled, mounted: true });
+  live.current = { ...live.current, key, enabled };
+  const inFlight = useRef(false);
+  const generation = useRef(0);
+  useLayoutEffect(() => {
+    generation.current += 1;
+    live.current.mounted = true;
+    setDraft({}); setPending(false); setFailed(false); inFlight.current = false;
+    return () => { live.current.mounted = false; };
+  }, [key, enabled]);
   const actual = getCapabilityGroupValues(descriptors, states);
-  const values = { ...actual, ...draft };
-  for (const d of descriptors) {
-    if (d.valueType === 'number' && typeof draft[d.id] === 'string') {
-      const input = String(draft[d.id]).trim();
-      values[d.id] = input ? fromDisplayNumber(Number(input), d) : NaN;
-    }
+  const values: Record<string, CapabilityValue> = { ...actual };
+  for (const descriptor of descriptors) {
+    const text = draft[descriptor.id];
+    if (text !== undefined) values[descriptor.id] = text.trim() ? descriptor.display?.mode === 'percent'
+      ? Number(text) / 100 : fromDisplayNumber(Number(text), descriptor) : NaN;
   }
-  const enabled = descriptors.every((d) => isCapabilityInteractive(states.get(d.id), canControl, d.writable));
-  const complete = descriptors.every((d) => Object.prototype.hasOwnProperty.call(values, d.id)
-    && (d.valueType !== 'number' || typeof values[d.id] === 'number' && Number.isFinite(values[d.id])));
   const dirty = Object.keys(draft).length > 0;
-  const renderedDescriptors = useMemo(() => descriptors.map((d) => pending ? { ...d, writable: false } : d), [descriptors, pending]);
-
+  let payload: ReturnType<typeof buildCapabilityGroupPayload> | null = null;
+  try { payload = buildCapabilityGroupPayload(descriptors, values); } catch { /* Incomplete/invalid drafts stay local. */ }
   const apply = async () => {
-    if (!enabled || !complete || !dirty || pending) return;
-    setPending(true); setFailed(false);
+    if (!enabled || !dirty || !payload || inFlight.current) return;
+    const requestKey = key;
+    const requestGeneration = generation.current;
+    inFlight.current = true; setPending(true); setFailed(false);
     try {
-      await api.writeRadioCapabilityGroup(buildCapabilityGroupPayload(descriptors, values), getApiBaseUrl());
+      await api.writeRadioCapabilityGroup(payload, getApiBaseUrl());
     } catch (error) {
       logger.warn('Radio parameter group was not applied', error);
-      if (mounted.current) setFailed(true);
+      if (live.current.mounted && live.current.key === requestKey && generation.current === requestGeneration) setFailed(true);
     } finally {
-      if (mounted.current) { setPending(false); setDraft({}); }
+      if (live.current.mounted && live.current.key === requestKey && generation.current === requestGeneration) { inFlight.current = false; setPending(false); setDraft({}); }
     }
   };
-
-  return <div className="space-y-3">
-    {renderedDescriptors.map((d) => {
-      if (d.valueType === 'number') {
-        const limits = d.range ?? d.limits;
-        const current = actual[d.id];
-        const text = draft[d.id] !== undefined ? String(draft[d.id]) : typeof current === 'number' ? String(toDisplayNumber(current, d)) : '';
-        return <Input key={d.id} size="sm" type="number" label={t(d.labelI18nKey)} value={text}
-          onValueChange={(value) => onEdit(d.id, value)}
-          min={limits?.min === undefined ? undefined : toDisplayNumber(limits.min, d)}
-          max={limits?.max === undefined ? undefined : toDisplayNumber(limits.max, d)}
-          step={toDisplayStep(limits?.step ?? 1, d)}
-          description={typeof current === 'number' ? formatCapabilityNumber(current, d)
-            : t(states.get(d.id)?.supported ? 'radio:capability.panel.unknownState' : 'radio:capability.panel.notSupported')}
-          isDisabled={pending || !isCapabilityInteractive(states.get(d.id), canControl, d.writable)} />;
-      }
-      const Component = getPanelComponent(d.id, d);
-      const state = states.get(d.id);
-      if (!Component) return null;
-      return <Component key={d.id} capabilityId={d.id} descriptor={d}
-        state={state ? { ...state, value: values[d.id] ?? null } : undefined} onWrite={onEdit} />;
-    })}
-    <div className="flex justify-end gap-2">
-      <Button size="sm" variant="light" isDisabled={!dirty || pending} onPress={() => { setDraft({}); setFailed(false); }}>{t('radio:capability.panel.cancelGroup')}</Button>
-      <Button size="sm" color="primary" isLoading={pending} isDisabled={!enabled || !complete || !dirty || pending} onPress={() => { void apply(); }}>{t('radio:capability.panel.applyGroup')}</Button>
-    </div>
-    {failed && <p role="alert" className="text-xs text-danger">{t('radio:capability.panel.groupFailed')}</p>}
-  </div>;
-}
+  return <span className="cap-item" data-capability-group={descriptors[0]?.writeGroup?.id}>
+    {descriptors.map(descriptor => <CapabilityControl key={descriptor.id} descriptor={descriptor} state={states.get(descriptor.id)} active={enabled && !pending}
+      draftEditor={{
+        text: draft[descriptor.id] ?? (typeof actual[descriptor.id] === 'number' ? formatCapabilityNumber(actual[descriptor.id] as number, descriptor, false) : ''),
+        onChange: text => { if (enabled && !inFlight.current) { setDraft(previous => ({ ...previous, [descriptor.id]: text })); setFailed(false); } },
+      }} />)}
+    {dirty && <span className="cap-item">
+      <Button size="sm" className="cap-button" color="primary" isDisabled={!enabled || !payload || pending} isLoading={pending} onPress={() => { void apply(); }}>{t('radio:capability.quick.apply')}</Button>
+      <Button size="sm" className="cap-button" variant="light" isDisabled={pending} onPress={() => { setDraft({}); setFailed(false); }}>{t('radio:capability.panel.cancelGroup')}</Button>
+    </span>}
+    {dirty && !payload && <span className="text-warning-600 text-[11px]" role="status">{t('radio:capability.quick.invalidGroup')}</span>}
+    {failed && <span className="text-danger text-[11px]" role="alert">{t('radio:capability.panel.groupFailed')}</span>}
+  </span>;
+}, (previous, next) => previous.active === next.active && previous.descriptors.length === next.descriptors.length
+  && previous.descriptors.every((descriptor, index) => descriptor === next.descriptors[index]
+    && previous.states.get(descriptor.id) === next.states.get(descriptor.id)));

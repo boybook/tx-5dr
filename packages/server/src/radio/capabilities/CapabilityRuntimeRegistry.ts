@@ -428,6 +428,11 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
     return structuredClone(this.buildSnapshot());
   }
 
+  /** A detached cached state for one control; reading it never performs protocol I/O. */
+  getCapabilityState(id: string): CapabilityState | undefined {
+    return this.descriptorCache.has(id) ? structuredClone(this.cachedState(id)) : undefined;
+  }
+
   getCapabilityDescriptors(): CapabilityDescriptor[] {
     if (this.descriptorCache.size === 0) {
       return [];
@@ -914,28 +919,14 @@ export class CapabilityRuntimeRegistry extends EventEmitter<CapabilityRuntimeEve
 
     return this.definitions
       .filter((definition) => this.descriptorCache.has(definition.id))
-      .map((definition) => {
-        const cached = this.valueCache.get(definition.id);
-        if (cached) return cached;
+      .map((definition) => this.cachedState(definition.id));
+  }
 
-        if (this.supportedCapabilities.has(definition.id)) {
-          return {
-            id: definition.id,
-            supported: true,
-            availability: 'available',
-            value: null,
-            updatedAt: Date.now(),
-          };
-        }
-
-        return {
-          id: definition.id,
-          supported: false,
-          availability: 'unknown',
-          value: null,
-          updatedAt: Date.now(),
-        };
-      });
+  private cachedState(id: string): CapabilityState {
+    const cached = this.valueCache.get(id);
+    if (cached) return cached;
+    const supported = this.supportedCapabilities.has(id);
+    return { id, supported, availability: supported ? 'available' : 'unknown', value: null, updatedAt: Date.now() };
   }
 
   private normalizeProbeResult(result: ProbeSupportResult): { supported: boolean; source?: CapabilitySupportSource } {

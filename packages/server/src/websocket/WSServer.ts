@@ -403,7 +403,7 @@ export class WSServer extends WSMessageHandler {
   private sstvTxOwners = new Map<string, { sessionId: string; operatorId: string }>();
   private spectrumProjectionCache = new Map<string, SpectrumFrame>();
   private spectrumProjectionFrame: SpectrumFrame | null = null;
-  private commandHandlers: Partial<Record<WSMessageType, (data: unknown, connectionId: string) => Promise<void> | void>>;
+  private commandHandlers: Partial<Record<WSMessageType, (data: unknown, connectionId: string, requestId?: string) => Promise<void> | void>>;
 
   static getInstance(): WSServer | null {
     return WSServer.instance;
@@ -467,7 +467,7 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.RADIO_MANUAL_RECONNECT]: () => this.handleRadioManualReconnect(),
       [WSMessageType.RADIO_STOP_RECONNECT]: () => this.handleRadioStopReconnect(),
       [WSMessageType.AUDIO_RETRY_NOW]: () => this.handleAudioRetryNow(),
-      [WSMessageType.WRITE_RADIO_CAPABILITY]: (data, id) => this.handleWriteRadioCapability(id, data),
+      [WSMessageType.WRITE_RADIO_CAPABILITY]: (data, id, requestId) => this.handleWriteRadioCapability(id, data, requestId),
       [WSMessageType.WRITE_RADIO_CAPABILITY_GROUP]: (data, id) => this.handleWriteRadioCapabilityGroup(id, data),
       [WSMessageType.REFRESH_RADIO_CAPABILITIES]: () => this.handleRefreshRadioCapabilities(),
       [WSMessageType.SET_SPLIT_FREQUENCY]: (data, id) => this.handleSetSplitFrequency(id, data),
@@ -950,10 +950,16 @@ export class WSServer extends WSMessageHandler {
   /**
    * 处理客户端命令（含 CASL 权限检查）
    */
-  private async handleClientCommand(connectionId: string, message: { type: string; data: unknown }): Promise<void> {
+  private async handleClientCommand(connectionId: string, message: { type: string; data: unknown; id?: string }): Promise<void> {
 
     const connection = this.getConnection(connectionId);
     if (!connection) return;
+
+    const requestId = typeof message.id === 'string' ? message.id : undefined;
+    const sendCommandError = (data: Record<string, unknown>) => {
+      if (requestId) connection.send(WSMessageType.ERROR, data, requestId);
+      else connection.send(WSMessageType.ERROR, data);
+    };
 
     const msgType = message.type as WSMessageType;
 
@@ -972,7 +978,7 @@ export class WSServer extends WSMessageHandler {
 
     const access = WSServer.COMMAND_ACCESS[msgType];
     if (!access) {
-      connection.send(WSMessageType.ERROR, {
+      sendCommandError({
         message: 'command_not_allowed',
         code: 'FORBIDDEN',
         details: { command: message.type },
@@ -981,7 +987,7 @@ export class WSServer extends WSMessageHandler {
     }
 
     if (!connection.hasResolvedIdentity()) {
-      connection.send(WSMessageType.ERROR, {
+      sendCommandError({
         message: 'authentication_required',
         code: 'UNAUTHORIZED',
         details: { command: message.type },
@@ -991,7 +997,7 @@ export class WSServer extends WSMessageHandler {
 
     const handshakeOptional = msgType === WSMessageType.CLIENT_HANDSHAKE || msgType === WSMessageType.GET_STATUS;
     if ((access.requiresHandshake || !handshakeOptional) && !connection.isHandshakeCompleted()) {
-      connection.send(WSMessageType.ERROR, {
+      sendCommandError({
         message: 'handshake_required',
         code: 'UNAUTHORIZED',
         details: { command: message.type },
@@ -1000,7 +1006,7 @@ export class WSServer extends WSMessageHandler {
     }
 
     if (access.minRole && !connection.hasMinRole(access.minRole)) {
-      connection.send(WSMessageType.ERROR, {
+      sendCommandError({
         message: 'insufficient_permission',
         code: 'FORBIDDEN',
         details: { command: message.type },
@@ -1009,7 +1015,7 @@ export class WSServer extends WSMessageHandler {
     }
 
     if (!access.publicViewer && connection.isPublicViewer()) {
-      connection.send(WSMessageType.ERROR, {
+      sendCommandError({
         message: 'insufficient_permission',
         code: 'FORBIDDEN',
         details: { command: message.type },
@@ -1024,7 +1030,7 @@ export class WSServer extends WSMessageHandler {
         const data = message.data as any;
         const operatorId = data?.operatorId;
         if (!operatorId) {
-          connection.send(WSMessageType.ERROR, {
+          sendCommandError({
             message: 'operator_id_required',
             code: 'FORBIDDEN',
             details: { command: message.type },
@@ -1034,7 +1040,7 @@ export class WSServer extends WSMessageHandler {
 
         const conditionKey = required.subject === 'Transmission' ? 'operatorId' : 'id';
         if (!connection.canPerform(required.action, required.subject, { [conditionKey]: operatorId })) {
-          connection.send(WSMessageType.ERROR, {
+          sendCommandError({
             message: 'no_operator_access',
             code: 'FORBIDDEN',
             details: { operatorId },
@@ -1042,7 +1048,7 @@ export class WSServer extends WSMessageHandler {
           return;
         }
       } else if (!connection.canPerform(required.action, required.subject)) {
-        connection.send(WSMessageType.ERROR, {
+        sendCommandError({
           message: 'insufficient_permission',
           code: 'FORBIDDEN',
           details: { command: message.type },
@@ -1053,7 +1059,8 @@ export class WSServer extends WSMessageHandler {
 
     const handler = this.commandHandlers[msgType];
     if (handler) {
-      await handler(message.data, connectionId);
+      if (requestId) await handler(message.data, connectionId, requestId);
+      else await handler(message.data, connectionId);
     } else {
       logger.warn('unknown message type', { type: message.type });
     }
@@ -3035,7 +3042,7 @@ export class WSServer extends WSMessageHandler {
    * 处理写入电台能力命令
    * 权限: execute:RadioControl（由 COMMAND_ABILITIES 映射）
    */
-  private async handleWriteRadioCapability(connectionId: string, data: unknown): Promise<void> {
+  private async handleWriteRadioCapability(connectionId: string, data: unknown, requestId?: string): Promise<void> {
     try {
       const payload = WriteCapabilityPayloadSchema.parse(data);
 
@@ -3046,12 +3053,19 @@ export class WSServer extends WSMessageHandler {
       logger.info('writeRadioCapability command', { id: payload.id, value: payload.value, action: payload.action });
 
       const radioManager = this.digitalRadioEngine.getRadioManager();
+      const connectionAtWrite = requestId ? radioManager.getCurrentConnection() : null;
       await radioManager.writeCapability(payload.id, payload.value, payload.action, payload.sessionId);
+      if (requestId) {
+        if (!connectionAtWrite || radioManager.getCurrentConnection() !== connectionAtWrite) throw new Error('Radio capability session changed');
+        const state = radioManager.getCapabilityState(payload.id);
+        if (!state) throw new Error('Radio capability state is no longer available');
+        this.sendToConnection(connectionId, WSMessageType.RADIO_CAPABILITY_CHANGED, state, requestId);
+      }
     } catch (error) {
       logger.error('writeRadioCapability failed', error);
-      this.sendToConnection(connectionId, WSMessageType.ERROR, {
-        message: `Failed to write capability: ${(error as Error).message}`,
-      });
+      const failure = { message: `Failed to write capability: ${(error as Error).message}` };
+      if (requestId) this.sendToConnection(connectionId, WSMessageType.ERROR, failure, requestId);
+      else this.sendToConnection(connectionId, WSMessageType.ERROR, failure);
     }
   }
 

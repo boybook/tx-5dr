@@ -734,12 +734,12 @@
       "description": "调整语音压缩器的压缩量。数值越高，压缩越明显、平均发射音量越高，但也更容易产生语音失真。"
     },
     "monitor_gain": {
-      "label": "监听增益",
-      "description": "调节电台内置发射监听（MONI）音量。设为 0 视为关闭监听；提高数值可在本机耳机或扬声器中监听自己的发射音频。"
+      "label": "电台自监听音量",
+      "description": "调节电台侧的发射自监听音量，单位遵循当前电台的能力描述；自监听开关单独控制。"
     },
     "monitor_enabled": {
-      "label": "监听开关",
-      "description": "控制支持 MON 功能的电台发射监听开关。"
+      "label": "电台自监听",
+      "description": "控制电台侧的发射自监听（MON），与 TX-5DR 本机监听播放分别控制。"
     },
     "apf_enabled": {
       "label": "APF",
@@ -1158,6 +1158,63 @@
     "tx_audio_gain": {
       "label": "TCI 发射音频增益",
       "description": "调整发送给宿主的 TCI 音频增益，与 RF 功率分开。"
+    },
+    "quick": {
+      "title": "电台快捷控制",
+      "pinned": "已固定",
+      "pin": "固定到快捷条",
+      "pinGroup": "固定整组",
+      "unpin": "取消固定",
+      "moveBefore": "上移 {{name}}",
+      "moveAfter": "下移 {{name}}",
+      "remove": "移除 {{name}}",
+      "missing": "当前连接未提供此能力；可在电台能力面板取消固定。",
+      "noPermission": "没有电台控制权限",
+      "readOnly": "只读",
+      "unavailable": "不可用",
+      "on": "开",
+      "off": "关",
+      "steps": "档位",
+      "apply": "应用",
+      "invalidGroup": "请检查完整参数及上下边界。",
+      "groups": {
+        "rx_filter_band": "RX 通带",
+        "tx_filter_band": "TX 通带",
+        "nb_parameters": "NB 参数"
+      },
+      "short": {
+        "nb": "NB",
+        "nr": "NR",
+        "auto_notch": "ANF",
+        "apf_enabled": "APF",
+        "monitor_enabled": "MON",
+        "agc_mode": "AGC",
+        "rf_gain": "RF",
+        "mic_gain": "MIC",
+        "sql": "SQL",
+        "sql_enabled": "SQL",
+        "rit_enabled": "RIT",
+        "rit_offset": "RIT",
+        "xit_enabled": "XIT",
+        "xit_offset": "XIT",
+        "tuner_switch": "ATU",
+        "split_enabled": "SPLIT",
+        "af_gain": "音量",
+        "monitor_gain": "自监听",
+        "rf_power": "功率",
+        "mute": "静音",
+        "tuner_tune": "调谐",
+        "rx_filter_low": "RX 下界",
+        "rx_filter_high": "上界",
+        "tx_filter_low": "TX 下界",
+        "tx_filter_high": "上界",
+        "nb_threshold": "NB 阈值",
+        "nb_pulse_length": "脉冲长度"
+      },
+      "manage": "整理快捷项",
+      "awaitingConfirmation": "等待电台确认",
+      "unconfirmed": "未确认",
+      "confirmationTimeout": "等待电台确认超时。"
     }
   },
   "cw": {

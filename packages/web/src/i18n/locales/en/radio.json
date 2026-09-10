@@ -734,12 +734,12 @@
       "description": "Adjusts how strongly the speech compressor acts on transmit audio. Higher values increase average loudness but can make voice audio sound more distorted or fatiguing."
     },
     "monitor_gain": {
-      "label": "Monitor Gain",
-      "description": "Adjusts the radio transmit monitor (MONI) level. A value of 0 effectively turns monitor audio off; higher values let you hear more of your own transmitted audio in the rig speaker or headphones."
+      "label": "Radio TX monitor level",
+      "description": "Adjusts the radio-side transmit monitor level using the units reported by the radio. The monitor switch is controlled separately."
     },
     "monitor_enabled": {
-      "label": "Monitor",
-      "description": "Enables or disables transmit audio monitoring on radios that expose the MON function."
+      "label": "Radio TX monitor",
+      "description": "Controls the radio-side transmit monitor (MON), independently of local TX-5DR monitor playback."
     },
     "apf_enabled": {
       "label": "APF",
@@ -1158,6 +1158,63 @@
     "tx_audio_gain": {
       "label": "TCI transmit audio gain",
       "description": "Adjust TCI audio gain independently of RF output power."
+    },
+    "quick": {
+      "title": "Quick radio controls",
+      "pinned": "Pinned",
+      "pin": "Pin to quick controls",
+      "pinGroup": "Pin entire group",
+      "unpin": "Unpin",
+      "moveBefore": "Move {{name}} up",
+      "moveAfter": "Move {{name}} down",
+      "remove": "Remove {{name}}",
+      "missing": "This connection does not provide this capability. Unpin it in the radio control panel.",
+      "noPermission": "Radio control permission required",
+      "readOnly": "Read only",
+      "unavailable": "Unavailable",
+      "on": "On",
+      "off": "Off",
+      "steps": "Steps",
+      "apply": "Apply",
+      "invalidGroup": "Check all fields and the lower/upper boundaries.",
+      "groups": {
+        "rx_filter_band": "RX filter",
+        "tx_filter_band": "TX filter",
+        "nb_parameters": "NB parameters"
+      },
+      "short": {
+        "nb": "NB",
+        "nr": "NR",
+        "auto_notch": "ANF",
+        "apf_enabled": "APF",
+        "monitor_enabled": "MON",
+        "agc_mode": "AGC",
+        "rf_gain": "RF",
+        "mic_gain": "MIC",
+        "sql": "SQL",
+        "sql_enabled": "SQL",
+        "rit_enabled": "RIT",
+        "rit_offset": "RIT",
+        "xit_enabled": "XIT",
+        "xit_offset": "XIT",
+        "tuner_switch": "ATU",
+        "split_enabled": "SPLIT",
+        "af_gain": "AF",
+        "monitor_gain": "MON level",
+        "rf_power": "Power",
+        "mute": "Mute",
+        "tuner_tune": "Tune",
+        "rx_filter_low": "RX low",
+        "rx_filter_high": "High",
+        "tx_filter_low": "TX low",
+        "tx_filter_high": "High",
+        "nb_threshold": "NB threshold",
+        "nb_pulse_length": "Pulse length"
+      },
+      "manage": "Organize quick controls",
+      "awaitingConfirmation": "Waiting for radio confirmation",
+      "unconfirmed": "Unconfirmed",
+      "confirmationTimeout": "Timed out waiting for radio confirmation."
     }
   },
   "cw": {

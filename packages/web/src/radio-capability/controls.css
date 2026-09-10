@@ -1,0 +1,36 @@
+.radio-capability-controls {
+  --cap-control-height: 26px;
+  --cap-control-radius: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.radio-capability-controls .cap-item { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px; max-width: 100%; flex: 0 0 auto; }
+.radio-capability-controls .cap-button { height: var(--cap-control-height); min-height: var(--cap-control-height); min-width: 30px; padding: 0 6px; font-size: 12px; gap: 4px; }
+.radio-capability-controls .cap-panel-button { width: var(--cap-control-height); min-width: var(--cap-control-height); padding: 0; }
+/* Include grouped middle buttons, whose HeroUI corner selectors are more specific. */
+.radio-capability-controls .cap-button,
+.radio-capability-controls button.cap-button.cap-segment { border-radius: var(--cap-control-radius); }
+.radio-capability-controls .cap-value-toggle[aria-pressed=true] { box-shadow: inset 0 -2px 0 currentColor; }
+.radio-capability-controls .cap-segment { min-width: 23px; padding: 0 4px; }
+.radio-capability-controls .cap-input { width: auto; min-width: 0; flex: 0 0 auto; }
+.radio-capability-controls .cap-input-wrapper { height: var(--cap-control-height); min-height: var(--cap-control-height); padding: 0 3px; border-radius: 4px; box-shadow: none; }
+.radio-capability-controls .cap-input-field { font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; padding: 0; }
+.radio-capability-controls .cap-input-field::-webkit-inner-spin-button,
+.radio-capability-controls .cap-input-field::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.radio-capability-controls .cap-input-field[type=number] { -moz-appearance: textfield; }
+.radio-capability-controls .cap-select { flex: 0 1 auto; width: auto; min-width: 0; max-width: 220px; }
+.radio-capability-controls .cap-select-trigger { height: var(--cap-control-height); min-height: var(--cap-control-height); padding: 0 24px 0 6px; border-radius: 4px; gap: 4px; }
+.radio-capability-controls .cap-select-value { font-size: 12px; }
+/* Keep a full thumb radius and focus allowance inside both ends of the slider. */
+.radio-capability-controls .cap-slider { width: 88px; flex: 0 0 88px; padding-inline: 8px; gap: 0; min-height: var(--cap-control-height); justify-content: center; }
+.radio-capability-controls .cap-slider-track { height: 3px; border: 0; }
+.radio-capability-controls .cap-slider-thumb { width: 12px; height: 12px; }
+.radio-capability-controls .cap-slider-thumb::after { width: 12px; height: 12px; }
+.radio-capability-controls .cap-label { white-space: nowrap; }
+.radio-capability-controls .cap-number-label { font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 11px; }
+@media (pointer: coarse) {
+  .radio-capability-controls { --cap-control-height: 44px; }
+  .radio-capability-controls .cap-button { min-width: 44px; }
+  .radio-capability-controls .cap-input-field, .radio-capability-controls .cap-select-value { font-size: 16px; }
+  .radio-capability-controls .cap-slider { width: 96px; flex-basis: 96px; }
+}
