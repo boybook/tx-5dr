@@ -9,7 +9,11 @@
 import React from 'react';
 import type { CapabilityDescriptor, CapabilityState } from '@tx5dr/contracts';
 import { WSMessageType } from '@tx5dr/contracts';
-import { useConnection, useRadioState } from '../store/radioStore';
+import { useConnection, useRadioState, useCapabilityDescriptors } from '../store/radioStore';
+import { BooleanCapabilityPanel } from './components/BooleanCapability';
+import { EnumCapabilityPanel } from './components/EnumCapability';
+import { NumberLevelCapabilityPanel } from './components/NumberLevelCapability';
+import { ActionCapabilityPanel } from './components/ActionCapability';
 
 // ===== 组件 Props 接口 =====
 
@@ -53,8 +57,11 @@ export function registerCapabilityComponent(
 /**
  * 获取面板组件（用于 RadioControlPanel）
  */
-export function getPanelComponent(id: string): PanelCapabilityComponent | undefined {
-  return registry.get(id)?.panel;
+export function getPanelComponent(id: string, descriptor?: CapabilityDescriptor): PanelCapabilityComponent | undefined {
+  return registry.get(id)?.panel ?? (descriptor ? {
+    boolean: BooleanCapabilityPanel, number: NumberLevelCapabilityPanel,
+    enum: EnumCapabilityPanel, action: ActionCapabilityPanel,
+  }[descriptor.valueType] : undefined);
 }
 
 /**
@@ -72,15 +79,16 @@ export function getSurfaceComponent(id: string): SurfaceCapabilityComponent | un
 export function useCapabilityWriter(): (id: string, value?: boolean | number | string, action?: boolean) => void {
   const connection = useConnection();
   const { state: radioState } = useRadioState();
+  const descriptors = useCapabilityDescriptors();
 
   return React.useCallback(
     (id: string, value?: boolean | number | string, action?: boolean) => {
       if (!radioState.radioConnected) return;
       const wsClient = connection.state.radioService?.wsClientInstance;
       if (!wsClient) return;
-      wsClient.send(WSMessageType.WRITE_RADIO_CAPABILITY, { id, value, action });
+      wsClient.send(WSMessageType.WRITE_RADIO_CAPABILITY, { id, value, action, sessionId: descriptors.get(id)?.sessionId });
     },
-    [connection.state.radioService, radioState.radioConnected],
+    [connection.state.radioService, radioState.radioConnected, descriptors],
   );
 }
 

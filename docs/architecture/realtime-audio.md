@@ -47,6 +47,10 @@ The radio bypass exists to avoid hidden latency from the digital ring buffer.
 - TCI dialects declare whether `LINE_OUT_START` creates a network stream or
   controls a local VAC path. The server only selects Line Out as an input
   source for the `native-stream` dialect behavior.
+- The first native Line Out start in a radio connection attempts to enable MON
+  once. Later user/host MON changes are respected during stream restarts in that
+  connection. Parameter state and writes follow the
+  [radio capability ownership contract](radio-capabilities.md).
 - `NativeRadioRxSource` subscribes to native input frames and TX monitor frames.
 - `RealtimeRxAudioRouter` chooses `NativeRadioRxSource` for every `scope === 'radio'` session.
 - OpenWebRX preview continues to use `BufferedPreviewRxSource` backed by `BufferedPreviewAudioService`.

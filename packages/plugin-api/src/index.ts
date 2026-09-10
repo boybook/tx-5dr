@@ -287,6 +287,7 @@ export type {
   CapabilityList,
   CapabilityState,
   CapabilityDescriptor,
+  CapabilityTarget,
   CapabilityValue,
   WriteCapabilityPayload,
   RadioPowerRequest,

@@ -29,6 +29,9 @@ export function getCapabilityUnavailableText(
   t: Translate,
   capabilityId?: string,
 ): string | null {
+  if (state?.supported && getCapabilityAvailability(state) === 'unknown') {
+    return t('radio:capability.panel.unknownState', 'Waiting for radio state.');
+  }
   if (!state?.supported || getCapabilityAvailability(state) !== 'unavailable') {
     return null;
   }

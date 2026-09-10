@@ -39,7 +39,8 @@
     "generate:dxcc": "node scripts/generate-dxcc-data.mjs",
     "sync:cty": "node scripts/sync-cty-data.mjs",
     "make:autoupdate": "electron-builder --config electron-builder.config.cjs --publish never",
-    "make:linux": "electron-builder --config electron-builder.config.cjs --linux --publish never"
+    "make:linux": "electron-builder --config electron-builder.config.cjs --linux --publish never",
+    "test:tci-controls-integration": "yarn workspace @tx5dr/server exec vitest run --root ../.. scripts/tests/tci-controls.integration.test.ts"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.1",

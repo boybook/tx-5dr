@@ -679,7 +679,15 @@
       "rf": "RF",
       "audio": "Audio",
       "operation": "Operation",
-      "system": "System"
+      "system": "System",
+      "applyGroup": "Apply group",
+      "cancelGroup": "Cancel changes",
+      "groupFailed": "The settings could not be applied. The radio-reported state has been restored.",
+      "targetGlobal": "Global setting",
+      "targetReceiver": "Receiver {{receiver}}",
+      "targetChannel": "Receiver {{receiver}} · VFO {{channel}}",
+      "unknownState": "Waiting for radio state.",
+      "sent": "Setting sent"
     },
     "tuner_switch": {
       "label": "Auto Tuner",
@@ -867,7 +875,16 @@
     },
     "agc_mode": {
       "label": "AGC Speed",
-      "description": "Sets the automatic gain control response speed. Faster modes react more aggressively to sudden strong signals, while slower modes often sound smoother for voice reception. Available modes depend on the radio model."
+      "description": "Sets the automatic gain control response speed. Faster modes react more aggressively to sudden strong signals, while slower modes often sound smoother for voice reception. Available modes depend on the radio model.",
+      "options": {
+        "normal": "Normal",
+        "med": "Medium",
+        "off": "Off",
+        "fast": "Fast",
+        "slow": "Slow",
+        "long": "Long",
+        "custom": "Custom"
+      }
     },
     "preamp": {
       "label": "Preamp",
@@ -981,6 +998,166 @@
         "minus": "Minus",
         "plus": "Plus"
       }
+    },
+    "master_volume": {
+      "label": "Master volume",
+      "description": "Adjust the host master output volume."
+    },
+    "master_mute": {
+      "label": "Master mute",
+      "description": "Mute the host master audio output."
+    },
+    "agc_gain": {
+      "label": "AGC gain",
+      "description": "Adjust the receiver AGC control independently of hardware RF gain."
+    },
+    "sql_enabled": {
+      "label": "Squelch",
+      "description": "Enable or disable squelch for the current receiver."
+    },
+    "sql_threshold": {
+      "label": "Squelch threshold",
+      "description": "Show the squelch threshold reported by the host."
+    },
+    "nb_threshold": {
+      "label": "NB threshold",
+      "description": "Apply together with the pulse length."
+    },
+    "nb_pulse_length": {
+      "label": "NB pulse length",
+      "description": "Apply together with the triggering threshold."
+    },
+    "anc_enabled": {
+      "label": "Adaptive noise cancellation",
+      "description": "Toggle the host ANC processing."
+    },
+    "notch_filter_enabled": {
+      "label": "Notch filter module",
+      "description": "Toggle the host notch filter module."
+    },
+    "binaural_enabled": {
+      "label": "Binaural effect",
+      "description": "Control the host effect; TX-5DR monitoring remains mono."
+    },
+    "surround_enabled": {
+      "label": "Spatial audio effect",
+      "description": "Control the host effect; TX-5DR monitoring remains mono."
+    },
+    "rx_filter_low": {
+      "label": "RX passband low edge",
+      "description": "Offset from the receive frequency; apply with the high edge."
+    },
+    "rx_filter_high": {
+      "label": "RX passband high edge",
+      "description": "Preserve sideband orientation; apply with the low edge."
+    },
+    "tx_filter_low": {
+      "label": "TX passband low edge",
+      "description": "Apply with the high edge while the radio is idle."
+    },
+    "tx_filter_high": {
+      "label": "TX passband high edge",
+      "description": "Apply with the low edge while the radio is idle."
+    },
+    "digl_offset": {
+      "label": "DIGL frequency offset",
+      "description": "Set the host DIGL mode offset."
+    },
+    "digu_offset": {
+      "label": "DIGU frequency offset",
+      "description": "Set the host DIGU mode offset."
+    },
+    "cw_macro_speed": {
+      "label": "CW macro speed",
+      "description": "Adjust the speed used by the host CW macros."
+    },
+    "cw_macro_delay": {
+      "label": "CW macro delay",
+      "description": "Adjust the delay before sending a CW macro."
+    },
+    "tune_power": {
+      "label": "Tune power",
+      "description": "Set tune power without starting a transmission."
+    },
+    "receiver_enabled": {
+      "label": "Receiver enabled",
+      "description": "Control the current receiver; the primary receiver may be read-only."
+    },
+    "rx_channel_enabled": {
+      "label": "Receive channel enabled",
+      "description": "Control the current VFO channel; the primary channel is always enabled."
+    },
+    "vfo_locked": {
+      "label": "VFO lock state",
+      "description": "Show the VFO lock state reported by the host."
+    },
+    "tx_permitted": {
+      "label": "Host permits transmission",
+      "description": "Show transmit permission for the current target."
+    },
+    "actual_tx_frequency": {
+      "label": "Actual transmit frequency",
+      "description": "Show the actual transmit frequency reported by the host."
+    },
+    "nr_algorithm": {
+      "label": "NR algorithm",
+      "description": "Select a noise reduction algorithm supported by the host.",
+      "options": {
+        "0": "Off",
+        "1": "NR1",
+        "2": "NR2",
+        "3": "NR3",
+        "4": "NR4"
+      }
+    },
+    "nb_algorithm": {
+      "label": "NB algorithm",
+      "description": "Select a noise blanker algorithm supported by the host.",
+      "options": {
+        "0": "Off",
+        "1": "NB1",
+        "2": "NB2"
+      }
+    },
+    "attenuator_enabled": {
+      "label": "Step attenuator",
+      "description": "Toggle the host step attenuator."
+    },
+    "attenuator_level": {
+      "label": "Attenuation",
+      "description": "Show attenuation reported by the host."
+    },
+    "preamp_attenuation": {
+      "label": "Preamp and attenuation setting",
+      "description": "Show the current hardware front-end setting."
+    },
+    "agc_auto": {
+      "label": "Automatic AGC",
+      "description": "Toggle automatic AGC control."
+    },
+    "center_tuning": {
+      "label": "Center tuning (CTUN)",
+      "description": "Toggle host center tuning while the radio is idle."
+    },
+    "vfo_sync": {
+      "label": "VFO synchronization",
+      "description": "Toggle VFO synchronization while the radio is idle."
+    },
+    "vfo_swap": {
+      "label": "Swap VFOs",
+      "description": "Swap the host VFOs while the radio is idle."
+    },
+    "fm_deviation": {
+      "label": "FM deviation",
+      "description": "Select an FM deviation supported by the host."
+    },
+    "tx_profile": {
+      "label": "Transmit profile",
+      "description": "Select an advertised host transmit profile while the radio is idle."
+    },
+    "tx_audio_gain": {
+      "label": "TCI transmit audio gain",
+      "description": "Adjust TCI audio gain independently of RF output power."
     }
   },
   "cw": {

@@ -37,7 +37,7 @@ export const CapabilityOptionValueSchema = z.union([z.string(), z.number()]);
 export type CapabilityOptionValue = z.infer<typeof CapabilityOptionValueSchema>;
 
 /** Runtime value carried by a radio capability state. */
-export const CapabilityValueSchema = z.union([z.boolean(), z.number(), z.string()]);
+export const CapabilityValueSchema = z.union([z.boolean(), z.number().finite(), z.string()]);
 export type CapabilityValue = z.infer<typeof CapabilityValueSchema>;
 
 export const CapabilityAvailabilitySchema = z.enum(['available', 'unavailable', 'unknown']);
@@ -68,7 +68,7 @@ export type CapabilityOption = z.infer<typeof CapabilityOptionSchema>;
 export const CapabilityDisplayModeSchema = z.enum(['percent', 'value']);
 export type CapabilityDisplayMode = z.infer<typeof CapabilityDisplayModeSchema>;
 
-export const CapabilityDisplayUnitSchema = z.enum(['Hz', 'kHz', 'toneHz', 'code', 'state']);
+export const CapabilityDisplayUnitSchema = z.enum(['Hz', 'kHz', 'toneHz', 'code', 'state', 'dB', 'ms', 'WPM', 'percent']);
 export type CapabilityDisplayUnit = z.infer<typeof CapabilityDisplayUnitSchema>;
 
 /**
@@ -79,13 +79,32 @@ export const CapabilityDisplaySchema = z.object({
   unit: CapabilityDisplayUnitSchema.optional(),
   decimals: z.number().int().min(0).optional(),
   signed: z.boolean().optional(),
+  /** Display = value * scale + offset; the capability's stored unit is unchanged. */
+  transform: z.object({ scale: z.number().finite().refine((n) => n !== 0), offset: z.number().finite() }).optional(),
 });
 export type CapabilityDisplay = z.infer<typeof CapabilityDisplaySchema>;
+
+/** The host fixes the target for this descriptor; clients cannot retarget a write. */
+export const CapabilityTargetSchema = z.discriminatedUnion('scope', [
+  z.object({ scope: z.literal('global') }),
+  z.object({ scope: z.literal('receiver'), receiver: z.number().int().nonnegative() }),
+  z.object({ scope: z.literal('trx'), trx: z.number().int().nonnegative() }),
+  z.object({ scope: z.literal('channel'), receiver: z.number().int().nonnegative(), channel: z.number().int().nonnegative() }),
+]);
+export type CapabilityTarget = z.infer<typeof CapabilityTargetSchema>;
 
 /** Host-provided descriptor that defines one capability for the current session. */
 export const CapabilityDescriptorSchema = z.object({
   /** 全局唯一能力 ID，如 'tuner_switch', 'rf_power', 'lock_mode' */
   id: z.string(),
+  /** Opaque connection epoch, used to reject delayed writes after a Profile change. */
+  sessionId: z.string().optional(),
+  target: CapabilityTargetSchema.optional(),
+  /** All members must be submitted together through the group command. */
+  writeGroup: z.object({ id: z.string(), members: z.array(z.string()).min(2) }).optional(),
+  requiresIdle: z.boolean().optional(),
+  /** Partial native limits, when a device does not declare a complete slider range. */
+  limits: z.object({ min: z.number().finite().optional(), max: z.number().finite().optional(), step: z.number().positive().optional() }).optional(),
 
   /** 能力分类，用于前端面板分组渲染 */
   category: CapabilityCategorySchema,
@@ -220,15 +239,33 @@ export const WriteCapabilityPayloadSchema = z.object({
   value: CapabilityValueSchema.optional(),
   /** 触发动作（action 类能力，传 true） */
   action: z.boolean().optional(),
+  sessionId: z.string().optional(),
 });
 
 export type WriteCapabilityPayload = z.infer<typeof WriteCapabilityPayloadSchema>;
+
+/** One atomic parameter group. Values remain scalar for existing capability consumers. */
+export const WriteCapabilityGroupPayloadSchema = z.object({
+  groupId: z.string().min(1),
+  sessionId: z.string().min(1),
+  values: z.record(CapabilityValueSchema),
+}).strict();
+export type WriteCapabilityGroupPayload = z.infer<typeof WriteCapabilityGroupPayloadSchema>;
 
 // ============================================================
 // 能力 ID 字面量联合类型（方便类型检查）
 // ============================================================
 
 export const CAPABILITY_IDS = [
+  'master_volume', 'master_mute', 'agc_gain', 'sql_enabled', 'sql_threshold',
+  'nb_threshold', 'nb_pulse_length', 'anc_enabled', 'notch_filter_enabled',
+  'binaural_enabled', 'surround_enabled', 'rx_filter_low', 'rx_filter_high',
+  'tx_filter_low', 'tx_filter_high', 'digl_offset', 'digu_offset',
+  'cw_macro_speed', 'cw_macro_delay', 'tune_power', 'receiver_enabled',
+  'rx_channel_enabled', 'vfo_locked', 'tx_permitted', 'actual_tx_frequency',
+  'nr_algorithm', 'nb_algorithm', 'attenuator_enabled', 'attenuator_level',
+  'preamp_attenuation', 'agc_auto', 'center_tuning', 'vfo_sync', 'vfo_swap',
+  'fm_deviation', 'tx_profile', 'tx_audio_gain',
   'tuner_switch',
   'tuner_tune',
   'rf_power',

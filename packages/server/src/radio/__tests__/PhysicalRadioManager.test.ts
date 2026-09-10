@@ -692,7 +692,7 @@ describe('PhysicalRadioManager', () => {
 
     expect(getSnapshot).toHaveBeenCalledTimes(1);
     expect(refreshAll).toHaveBeenCalledTimes(1);
-    expect(writeCapability).toHaveBeenCalledWith('af_gain', 0.5, undefined);
+    expect(writeCapability).toHaveBeenCalledWith('af_gain', 0.5, undefined, undefined);
     expect(testManager.connection.setTuner).not.toHaveBeenCalled();
   });
 

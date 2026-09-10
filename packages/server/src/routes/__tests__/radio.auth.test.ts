@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
+import { buildAbility, emptyAbility } from '../../auth/ability.js';
 
 const secretRadioConfig = {
   type: 'icom-wlan',
@@ -38,6 +39,7 @@ vi.mock('../../config/config-manager.js', () => ({
 }));
 
 const radioManager = {
+  writeCapabilityGroup: vi.fn(async () => undefined),
   isConnected: vi.fn(() => false),
   getConnectionStatus: vi.fn(() => RadioConnectionStatus.DISCONNECTED),
   getRadioInfo: vi.fn(async () => null),
@@ -94,6 +96,7 @@ describe('radioRoutes authorization', () => {
     });
     fastify.addHook('onRequest', async (request: FastifyRequest) => {
       const role = request.headers['x-role'];
+      request.ability = typeof role === 'string' ? buildAbility({ role: role as UserRole }) : emptyAbility();
       request.authUser = typeof role === 'string'
         ? {
           tokenId: 'test-token',
@@ -123,6 +126,22 @@ describe('radioRoutes authorization', () => {
 
     expect(anonymous.statusCode).toBe(401);
     expect(viewer.statusCode).toBe(403);
+  });
+
+  it('authorizes and validates atomic parameter groups before dispatch', async () => {
+    radioManager.writeCapabilityGroup.mockClear();
+    const url = '/api/radio/capability-groups/rx_filter_band';
+    const payload = { sessionId: 'session', values: { rx_filter_low: -3000, rx_filter_high: -50 } };
+    expect((await fastify.inject({ method: 'POST', url, payload })).statusCode).toBe(401);
+    expect((await fastify.inject({ method: 'POST', url, payload, headers: { 'x-role': UserRole.VIEWER } })).statusCode).toBe(403);
+    expect(radioManager.writeCapabilityGroup).not.toHaveBeenCalled();
+    const allowed = await fastify.inject({ method: 'POST', url, payload, headers: { 'x-role': UserRole.ADMIN } });
+    expect(allowed.statusCode).toBe(200);
+    expect(radioManager.writeCapabilityGroup).toHaveBeenCalledWith('rx_filter_band', payload.values, 'session');
+    radioManager.writeCapabilityGroup.mockClear();
+    const retarget = await fastify.inject({ method: 'POST', url, payload: { ...payload, receiver: 1 }, headers: { 'x-role': UserRole.ADMIN } });
+    expect(retarget.statusCode).toBeGreaterThanOrEqual(400);
+    expect(radioManager.writeCapabilityGroup).not.toHaveBeenCalled();
   });
 
 

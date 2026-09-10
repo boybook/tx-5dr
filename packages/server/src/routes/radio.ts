@@ -13,7 +13,7 @@ const logger = createLogger('RadioRoute');
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { ProfileManager } from '../config/ProfileManager.js';
-import { DdsFrequencyRequestSchema, HamlibConfigSchema, SetDdsFrequencyResponseSchema, UserRole, WriteCapabilityPayloadSchema } from '@tx5dr/contracts';
+import { DdsFrequencyRequestSchema, HamlibConfigSchema, SetDdsFrequencyResponseSchema, UserRole, WriteCapabilityGroupPayloadSchema, WriteCapabilityPayloadSchema } from '@tx5dr/contracts';
 import { requireAbility, requireAbilityFor, requireRole } from '../auth/authPlugin.js';
 import type { HamlibConfig } from '@tx5dr/contracts';
 import serialport from 'serialport';
@@ -1396,8 +1396,15 @@ export async function radioRoutes(fastify: FastifyInstance) {
       : {};
     const body = WriteCapabilityPayloadSchema.omit({ id: true }).parse(rawBody);
 
-    await radioManager.writeCapability(id, body?.value, body?.action);
+    await radioManager.writeCapability(id, body?.value, body?.action, body?.sessionId);
 
+    return reply.send({ success: true });
+  });
+
+  fastify.post('/capability-groups/:groupId', { preHandler: [requireAbility('execute', 'RadioControl')] }, async (req, reply) => {
+    const { groupId } = req.params as { groupId: string };
+    const body = WriteCapabilityGroupPayloadSchema.omit({ groupId: true }).parse(req.body);
+    await radioManager.writeCapabilityGroup(groupId, body.values, body.sessionId);
     return reply.send({ success: true });
   });
 

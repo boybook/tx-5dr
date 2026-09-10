@@ -667,7 +667,15 @@
       "rf": "無線周波数",
       "audio": "オーディオ",
       "operation": "操作",
-      "system": "システム"
+      "system": "システム",
+      "applyGroup": "まとめて適用",
+      "cancelGroup": "変更を取消",
+      "groupFailed": "設定を適用できませんでした。無線機が報告した状態に戻しました。",
+      "targetGlobal": "全体設定",
+      "targetReceiver": "受信機 {{receiver}}",
+      "targetChannel": "受信機 {{receiver}} · VFO {{channel}}",
+      "unknownState": "無線機の状態を待っています。",
+      "sent": "設定を送信しました"
     },
     "tuner_switch": {
       "label": "オートチューナー",
@@ -823,7 +831,16 @@
     },
     "agc_mode": {
       "label": "AGC速度",
-      "description": "自動ゲイン制御 (AGC) の応答速度を設定します。高速モードは突然の強い信号を抑制するのに適しており、低速モードは安定した音声聴力を維持するのに適しています。利用可能な具体的なギアは無線機のモデルによって異なります。"
+      "description": "自動ゲイン制御 (AGC) の応答速度を設定します。高速モードは突然の強い信号を抑制するのに適しており、低速モードは安定した音声聴力を維持するのに適しています。利用可能な具体的なギアは無線機のモデルによって異なります。",
+      "options": {
+        "normal": "通常",
+        "med": "中速",
+        "off": "オフ",
+        "fast": "高速",
+        "slow": "低速",
+        "long": "ロング",
+        "custom": "カスタム"
+      }
     },
     "preamp": {
       "label": "プリアンプ",
@@ -889,6 +906,166 @@
         "minus": "負の周波数シフト",
         "plus": "正の周波数シフト"
       }
+    },
+    "master_volume": {
+      "label": "マスター音量",
+      "description": "ホスト全体の出力音量を調整します。"
+    },
+    "master_mute": {
+      "label": "全体ミュート",
+      "description": "ホスト全体の音声出力をミュートします。"
+    },
+    "agc_gain": {
+      "label": "AGC ゲイン",
+      "description": "ハードウェアの RF ゲインとは別に受信 AGC を調整します。"
+    },
+    "sql_enabled": {
+      "label": "スケルチ",
+      "description": "現在の受信機のスケルチを切り替えます。"
+    },
+    "sql_threshold": {
+      "label": "スケルチしきい値",
+      "description": "ホストが報告したスケルチしきい値を表示します。"
+    },
+    "nb_threshold": {
+      "label": "NB しきい値",
+      "description": "パルス長と一緒に適用します。"
+    },
+    "nb_pulse_length": {
+      "label": "NB パルス長",
+      "description": "トリガーしきい値と一緒に適用します。"
+    },
+    "anc_enabled": {
+      "label": "適応ノイズキャンセル",
+      "description": "ホストの ANC 処理を切り替えます。"
+    },
+    "notch_filter_enabled": {
+      "label": "ノッチフィルターモジュール",
+      "description": "ホストのノッチフィルターモジュールを切り替えます。"
+    },
+    "binaural_enabled": {
+      "label": "バイノーラル効果",
+      "description": "ホストの効果を操作します。TX-5DR のモニター音声はモノラルです。"
+    },
+    "surround_enabled": {
+      "label": "空間音響効果",
+      "description": "ホストの効果を操作します。TX-5DR のモニター音声はモノラルです。"
+    },
+    "rx_filter_low": {
+      "label": "RX 通過帯域の下限",
+      "description": "受信周波数からのオフセットです。上限と一緒に適用します。"
+    },
+    "rx_filter_high": {
+      "label": "RX 通過帯域の上限",
+      "description": "サイドバンドの向きを保持し、下限と一緒に適用します。"
+    },
+    "tx_filter_low": {
+      "label": "TX 通過帯域の下限",
+      "description": "無線機の待機中に上限と一緒に適用します。"
+    },
+    "tx_filter_high": {
+      "label": "TX 通過帯域の上限",
+      "description": "無線機の待機中に下限と一緒に適用します。"
+    },
+    "digl_offset": {
+      "label": "DIGL 周波数オフセット",
+      "description": "ホストの DIGL モードのオフセットを設定します。"
+    },
+    "digu_offset": {
+      "label": "DIGU 周波数オフセット",
+      "description": "ホストの DIGU モードのオフセットを設定します。"
+    },
+    "cw_macro_speed": {
+      "label": "CW マクロ速度",
+      "description": "ホストの CW マクロ送信速度を調整します。"
+    },
+    "cw_macro_delay": {
+      "label": "CW マクロ遅延",
+      "description": "CW マクロ送信開始前の遅延を調整します。"
+    },
+    "tune_power": {
+      "label": "チューン出力",
+      "description": "送信を開始せずにチューン出力を設定します。"
+    },
+    "receiver_enabled": {
+      "label": "受信機の有効化",
+      "description": "現在の受信機を操作します。主受信機は読み取り専用の場合があります。"
+    },
+    "rx_channel_enabled": {
+      "label": "受信チャンネルの有効化",
+      "description": "現在の VFO チャンネルを操作します。主チャンネルは常に有効です。"
+    },
+    "vfo_locked": {
+      "label": "VFO ロック状態",
+      "description": "ホストが報告した VFO ロック状態を表示します。"
+    },
+    "tx_permitted": {
+      "label": "ホストの送信許可",
+      "description": "現在の対象の送信許可を表示します。"
+    },
+    "actual_tx_frequency": {
+      "label": "実際の送信周波数",
+      "description": "ホストが報告した実際の送信周波数を表示します。"
+    },
+    "nr_algorithm": {
+      "label": "NR アルゴリズム",
+      "description": "ホストが対応するノイズ低減アルゴリズムを選択します。",
+      "options": {
+        "0": "オフ",
+        "1": "NR1",
+        "2": "NR2",
+        "3": "NR3",
+        "4": "NR4"
+      }
+    },
+    "nb_algorithm": {
+      "label": "NB アルゴリズム",
+      "description": "ホストが対応するノイズブランカーのアルゴリズムを選択します。",
+      "options": {
+        "0": "オフ",
+        "1": "NB1",
+        "2": "NB2"
+      }
+    },
+    "attenuator_enabled": {
+      "label": "ステップアッテネーター",
+      "description": "ホストのステップアッテネーターを切り替えます。"
+    },
+    "attenuator_level": {
+      "label": "減衰量",
+      "description": "ホストが報告した減衰量を表示します。"
+    },
+    "preamp_attenuation": {
+      "label": "プリアンプと減衰設定",
+      "description": "現在のハードウェアフロントエンド設定を表示します。"
+    },
+    "agc_auto": {
+      "label": "自動 AGC",
+      "description": "自動 AGC 制御を切り替えます。"
+    },
+    "center_tuning": {
+      "label": "センターチューニング CTUN",
+      "description": "無線機の待機中にセンターチューニングを切り替えます。"
+    },
+    "vfo_sync": {
+      "label": "VFO 同期",
+      "description": "無線機の待機中に VFO 同期を切り替えます。"
+    },
+    "vfo_swap": {
+      "label": "VFO を交換",
+      "description": "無線機の待機中にホストの VFO を交換します。"
+    },
+    "fm_deviation": {
+      "label": "FM 周波数偏移",
+      "description": "ホストが対応する FM 周波数偏移を選択します。"
+    },
+    "tx_profile": {
+      "label": "送信プロファイル",
+      "description": "無線機の待機中にホストが公開する送信プロファイルを選択します。"
+    },
+    "tx_audio_gain": {
+      "label": "TCI 送信音声ゲイン",
+      "description": "RF 出力とは別に TCI 音声ゲインを調整します。"
     }
   },
   "cw": {

@@ -6,6 +6,8 @@ export type RadioIoTaskOptions = {
   name?: string;
   critical?: boolean;
   lowPriority?: boolean;
+  /** Replace only a queued task with the same ID; its waiters receive the latest result. */
+  replacePending?: boolean;
   context?: RadioIoTaskContext;
 };
 
@@ -155,8 +157,15 @@ export class RadioIoQueue {
   ): Promise<T> {
     const dedupeKey = this.getDedupeKey(options);
     if (dedupeKey) {
+      if (options.replacePending) {
+        const pending = this.queue.find((item) => item.dedupeKey === dedupeKey && item.options.replacePending);
+        if (pending) {
+          pending.task = task as (sessionId: number) => Promise<unknown>;
+          return pending.promise as Promise<T>;
+        }
+      }
       const existing = this.dedupedTasks.get(dedupeKey);
-      if (existing) {
+      if (existing && !options.replacePending) {
         return existing as Promise<T>;
       }
     }

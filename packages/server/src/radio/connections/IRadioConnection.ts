@@ -240,6 +240,8 @@ export type RadioConnectionConfig = HamlibConfig;
  * 所有电台连接实现必须实现此接口
  */
 export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
+  /** Session-scoped dynamic bindings; protocol details remain inside the connection. */
+  getCapabilityBindings?(): import('../capabilities/types.js').RadioCapabilityBindings;
   /**
    * Normalized physical TX audio input routing. Optional because many CAT
    * backends (including generic Hamlib/rigctld) do not expose this setting.

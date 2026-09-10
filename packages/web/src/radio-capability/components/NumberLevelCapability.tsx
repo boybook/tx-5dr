@@ -14,7 +14,7 @@ import type { CapabilityComponentProps } from '../CapabilityRegistry';
 import type { CapabilityDescriptor } from '@tx5dr/contracts';
 import { useCan } from '../../store/authStore';
 import { getCapabilityUnavailableText, isCapabilityInteractive } from '../availability';
-import { formatCapabilityNumber, fromDisplayNumber, toDisplayNumber } from '../display-utils';
+import { formatCapabilityNumber, fromDisplayNumber, toDisplayNumber, toDisplayStep } from '../display-utils';
 
 const WRITE_DEBOUNCE_MS = 150;
 const DISCRETE_MATCH_EPSILON = 1e-6;
@@ -120,6 +120,7 @@ export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
   const unavailableText = getCapabilityUnavailableText(state, t, capabilityId);
   const serverValue = typeof state?.value === 'number' ? state.value : null;
   const range = descriptor.range ?? { min: 0, max: 1, step: 0.01 };
+  const inputLimits = descriptor.range ?? descriptor.limits;
   const usesSlider = descriptor.display?.mode === 'percent';
   const discreteOptions = getDiscreteNumberOptions(descriptor);
   const [rfPowerMode, setRfPowerMode] = useState<RfPowerInteractionMode>('percent');
@@ -163,7 +164,7 @@ export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
 
   useEffect(() => () => {
     cancelPendingWrite();
-  }, [cancelPendingWrite]);
+  }, [cancelPendingWrite, descriptor.sessionId, onWrite]);
 
   const scheduleWrite = useCallback(
     (value: number) => {
@@ -190,11 +191,11 @@ export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
     }
 
     const rawValue = fromDisplayNumber(parsed, descriptor);
-    const clamped = Math.min(range.max, Math.max(range.min, rawValue));
+    const clamped = Math.min(inputLimits?.max ?? Infinity, Math.max(inputLimits?.min ?? -Infinity, rawValue));
     setLocalValue(clamped);
     setInputValue(formatCapabilityNumber(clamped, descriptor, false));
     onWrite(capabilityId, clamped);
-  }, [capabilityId, descriptor, inputValue, onWrite, range.max, range.min, serverValue]);
+  }, [capabilityId, descriptor, inputValue, onWrite, inputLimits?.max, inputLimits?.min, serverValue]);
 
   const handleSliderChange = useCallback(
     (value: number | number[]) => {
@@ -231,9 +232,14 @@ export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
 
   const displayValue = localValue ?? serverValue ?? range.min;
   const discreteSliderValue = findDiscreteOptionIndex(discreteOptions, displayValue);
-  const minDisplayValue = usesSlider ? range.min : toDisplayNumber(range.min, descriptor);
-  const maxDisplayValue = usesSlider ? range.max : toDisplayNumber(range.max, descriptor);
-  const displayText = isSupported
+  const displayMin = inputLimits?.min === undefined ? undefined : toDisplayNumber(inputLimits.min, descriptor);
+  const displayMax = inputLimits?.max === undefined ? undefined : toDisplayNumber(inputLimits.max, descriptor);
+  const inverted = (descriptor.display?.transform?.scale ?? 1) < 0;
+  const minDisplayValue = inverted ? displayMax : displayMin;
+  const maxDisplayValue = inverted ? displayMin : displayMax;
+  const displayText = !descriptor.readable
+    ? (state?.meta?.acknowledgement === 'sent' ? t('radio:capability.panel.sent') : '—')
+    : isSupported && (localValue !== null || serverValue !== null)
     ? (isDiscreteSlider
       ? getDiscreteOptionDisplayText(discreteOptions, descriptor, displayValue, t)
       : formatCapabilityNumber(displayValue, descriptor, true))
@@ -293,9 +299,9 @@ export const NumberLevelCapabilityPanel: React.FC<CapabilityComponentProps> = ({
               commitInputValue();
             }
           }}
-          min={String(minDisplayValue)}
-          max={String(maxDisplayValue)}
-          step={String(toDisplayNumber(range.step ?? 1, descriptor))}
+          min={minDisplayValue}
+          max={maxDisplayValue}
+          step={inputLimits?.step === undefined ? 'any' : toDisplayStep(inputLimits.step, descriptor)}
           isDisabled={!isInteractive}
           aria-label={t(descriptor.labelI18nKey)}
         />

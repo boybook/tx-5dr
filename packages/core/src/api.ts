@@ -3,6 +3,7 @@ import { createLogger } from './utils/logger.js';
 const logger = createLogger('API');
 
 import type {
+  WriteCapabilityGroupPayload,
   HelloResponse,
   AudioDevicesResponse,
   AudioDeviceSettings,
@@ -558,6 +559,12 @@ function normalizeOperatorRequest<T extends CreateRadioOperatorRequest | UpdateR
 // ========== API 对象 ==========
 
 export const api = {
+  /** Applies all scalar members of one host-declared radio parameter group atomically. */
+  async writeRadioCapabilityGroup(payload: WriteCapabilityGroupPayload, apiBase?: string): Promise<{ success: boolean }> {
+    return apiRequest<{ success: boolean }>(`/radio/capability-groups/${encodeURIComponent(payload.groupId)}`, {
+      method: 'POST', body: JSON.stringify({ values: payload.values, sessionId: payload.sessionId }),
+    }, apiBase);
+  },
   // ========== 基础API ==========
   
   /**

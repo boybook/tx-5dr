@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'eventemitter3';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { type DigitalRadioEngineEvents, MODES } from '@tx5dr/contracts';
@@ -66,7 +66,8 @@ describe('PluginContextFactory storage readiness', () => {
       () => ({}),
     );
 
-    expect(ctx.pluginApiVersion).toBe('2.4.0');
+    const manifest = JSON.parse(await readFile(new URL('../../../../plugin-api/package.json', import.meta.url), 'utf8'));
+    expect(ctx.pluginApiVersion).toBe(manifest.version);
     expect(ctx.store.global.get('existing')).toEqual({ ok: true });
   });
 });

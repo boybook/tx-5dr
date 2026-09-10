@@ -17,6 +17,21 @@ function createDeferred<T>() {
 }
 
 describe('RadioIoQueue', () => {
+  it('keeps an active SET and replaces only its pending successor with the latest value', async () => {
+    const queue = new RadioIoQueue();
+    const release = createDeferred<void>();
+    const events: number[] = [];
+    const options = { sessionId: 1, id: 'volume', replacePending: true };
+    const first = queue.run(options, async () => { events.push(1); await release.promise; return 1; });
+    await vi.waitFor(() => expect(events).toEqual([1]));
+    const second = queue.run(options, async () => { events.push(2); return 2; });
+    const third = queue.run(options, async () => { events.push(3); return 3; });
+    expect(queue.getSnapshot().pendingCount).toBe(1);
+    release.resolve();
+    expect(await Promise.all([first, second, third])).toEqual([1, 3, 3]);
+    expect(events).toEqual([1, 3]);
+  });
+
   it('lets critical tasks jump ahead of queued normal tasks without interrupting the active task', async () => {
     const queue = new RadioIoQueue();
     const events: string[] = [];

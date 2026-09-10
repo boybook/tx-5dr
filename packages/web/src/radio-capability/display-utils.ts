@@ -14,6 +14,7 @@ function formatSigned(value: number, signed: boolean | undefined, decimals: numb
 }
 
 export function toDisplayNumber(rawValue: number, descriptor: CapabilityDescriptor): number {
+  if (descriptor.display?.transform) return rawValue * descriptor.display.transform.scale + descriptor.display.transform.offset;
   switch (descriptor.display?.unit) {
     case 'kHz':
       return rawValue / 1000;
@@ -25,6 +26,7 @@ export function toDisplayNumber(rawValue: number, descriptor: CapabilityDescript
 }
 
 export function fromDisplayNumber(displayValue: number, descriptor: CapabilityDescriptor): number {
+  if (descriptor.display?.transform) return (displayValue - descriptor.display.transform.offset) / descriptor.display.transform.scale;
   switch (descriptor.display?.unit) {
     case 'kHz':
       return Math.round(displayValue * 1000);
@@ -56,9 +58,20 @@ export function formatCapabilityNumber(value: number, descriptor: CapabilityDesc
       return `${numberText} kHz`;
     case 'toneHz':
       return `${numberText} Hz`;
+    case 'dB':
+    case 'ms':
+    case 'WPM':
+      return `${numberText} ${descriptor.display.unit}`;
+    case 'percent':
+      return `${numberText}%`;
     default:
       return numberText;
   }
+}
+
+/** A step is a difference; offsets must never be applied to it. */
+export function toDisplayStep(step: number, descriptor: CapabilityDescriptor): number {
+  return Number(Math.abs(toDisplayNumber(step, descriptor) - toDisplayNumber(0, descriptor)).toPrecision(12));
 }
 
 export function formatCapabilityOption(option: CapabilityOption, descriptor: CapabilityDescriptor, t: TFunction): string {

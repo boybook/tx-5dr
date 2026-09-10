@@ -1,5 +1,8 @@
 import { EventEmitter } from 'eventemitter3';
 import { performance } from 'node:perf_hooks';
+import { randomUUID } from 'node:crypto';
+import { createTciCapabilityBindings } from '../capabilities/tci-bindings.js';
+import type { RadioCapabilityBindings } from '../capabilities/types.js';
 import {
   TciClient,
   TciError,
@@ -58,6 +61,9 @@ const TCI_AUDIO_NEGOTIATION_COMMANDS = new Set([
 const TCI_FREQUENCY_COMMANDS = new Set(['vfo', 'dds', 'modulation']);
 
 export class TciConnection extends EventEmitter<IRadioConnectionEvents> implements IRadioConnection {
+  private capabilityBindings?: RadioCapabilityBindings;
+  private capabilitySessionId = randomUUID();
+  private monitorInitializationAttempted = false;
   private readonly ioQueue = new RadioIoQueue({ label: 'TCI WebSocket' });
   private ioSessionId = 0;
   private client: TciClient | null = null;
@@ -168,6 +174,9 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
 
     this.currentConfig = config;
     this.ioSessionId += 1;
+    this.capabilityBindings = undefined;
+    this.capabilitySessionId = randomUUID();
+    this.monitorInitializationAttempted = false;
     this.lastKnownFrequency = null;
     this.lastKnownMode = null;
     this.lastKnownPtt = null;
@@ -561,6 +570,38 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     }, { id: 'getRFPower' });
   }
 
+  getCapabilityBindings(): RadioCapabilityBindings {
+    this.checkConnected();
+    if (this.capabilityBindings) return this.capabilityBindings;
+    const client = this.client!;
+    const session = this.ioSessionId;
+    const assertSession = () => {
+      if (this.client !== client || this.ioSessionId !== session || !this.isConnected()) {
+        throw new RadioError({ code: RadioErrorCode.INVALID_STATE, message: 'TCI capability session expired',
+          userMessage: 'Radio connection changed', severity: RadioErrorSeverity.WARNING });
+      }
+    };
+    this.capabilityBindings = createTciCapabilityBindings(client, {
+      sessionId: this.capabilitySessionId,
+      receiver: this.currentConfig?.tci?.receiver ?? 0,
+      trx: this.currentConfig?.tci?.trx ?? 0,
+      channel: this.currentConfig?.tci?.vfo ?? 0,
+      run: (name, task, observation, replacePending) => this.runTask(name, async () => {
+        assertSession();
+        return task();
+      }, { id: observation || replacePending ? name : undefined, lowPriority: observation, replacePending }),
+      assertIdle: () => {
+        assertSession();
+        if (this.lastKnownPtt !== false || this.pttWriteUncertain) {
+          throw new RadioError({ code: RadioErrorCode.INVALID_OPERATION, message: 'Radio must be confirmed idle for this setting',
+            userMessage: 'Radio is busy or its transmit state is unknown', severity: RadioErrorSeverity.WARNING,
+            context: { recoverable: true } });
+        }
+      },
+    });
+    return this.capabilityBindings;
+  }
+
   setKnownFrequency(frequencyHz: number): void {
     if (Number.isFinite(frequencyHz) && frequencyHz > 0) {
       this.lastKnownFrequency = frequencyHz;
@@ -684,7 +725,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     const cached = this.client.getState().rxFilterBands[String(receiver)];
     if (cached) return [cached[0], cached[1]];
     if (this.tciRxFilterBandReadPromise) return this.tciRxFilterBandReadPromise;
-    this.tciRxFilterBandReadPromise = this.client.getRxFilterBand(receiver)
+    this.tciRxFilterBandReadPromise = this.runTask('getTciRxFilterBand', () => this.client!.getRxFilterBand(receiver), { id: 'getTciRxFilterBand', lowPriority: true })
       .catch(() => undefined)
       .then((band) => band && Number.isFinite(band[0]) && Number.isFinite(band[1]) && band[1] >= band[0]
         ? [band[0], band[1]] as [number, number]
@@ -729,14 +770,22 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
   }
 
   async startLineOutStream(): Promise<void> {
-    this.checkConnected();
-    if (!this.supportsNativeLineOutStream()) {
-      throw new Error('TCI dialect does not provide a native Line Out stream');
-    }
-    if (this.lineOutRunning) return;
-    await this.client!.startLineOut(this.currentConfig?.tci?.receiver ?? 0);
-    await this.client!.setMonitorEnabled(true);
-    this.lineOutRunning = true;
+    await this.runTask('startLineOutStream', async () => {
+      this.checkConnected();
+      if (!this.supportsNativeLineOutStream()) throw new Error('TCI dialect does not provide a native Line Out stream');
+      if (this.lineOutRunning) return;
+      const client = this.client!;
+      const sessionId = this.ioSessionId;
+      await client.startLineOut(this.currentConfig?.tci?.receiver ?? 0);
+      this.assertSession(sessionId);
+      this.lineOutRunning = true;
+      if (!this.monitorInitializationAttempted) {
+        this.monitorInitializationAttempted = true;
+        const monitor = client.getControlCapabilities().find((control) => control.id === 'mon_enable');
+        try { if (monitor?.support !== 'unsupported') await client.setMonitorEnabled(true); }
+        catch (error) { logger.warn('TCI monitor initialization was not confirmed', error); }
+      }
+    });
   }
 
   async stopLineOutStream(): Promise<void> {
@@ -744,8 +793,12 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
       this.lineOutRunning = false;
       return;
     }
-    await this.client.stopLineOut(this.currentConfig?.tci?.receiver ?? 0);
-    this.lineOutRunning = false;
+    await this.runTask('stopLineOutStream', async () => {
+      const sessionId = this.ioSessionId;
+      await this.client?.stopLineOut(this.currentConfig?.tci?.receiver ?? 0);
+      this.assertSession(sessionId);
+      this.lineOutRunning = false;
+    });
   }
 
   async stopAudioStream(owner = 'rx'): Promise<void> {
@@ -1228,14 +1281,25 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
   private async runTask<T>(
     name: string,
     task: () => Promise<T>,
-    options: { id?: string; critical?: boolean } = {},
+    options: { id?: string; critical?: boolean; lowPriority?: boolean; replacePending?: boolean } = {},
   ): Promise<T> {
-    return this.ioQueue.run({ sessionId: this.ioSessionId, name, id: options.id, critical: options.critical }, async () => {
+    const sessionId = this.ioSessionId;
+    return this.ioQueue.run({ sessionId, name, id: options.id, critical: options.critical, lowPriority: options.lowPriority, replacePending: options.replacePending }, async () => {
       try {
-        return await task();
+        this.assertSession(sessionId);
+        const result = await task();
+        this.assertSession(sessionId);
+        return result;
       } catch (error) {
         throw this.convertError(error, name);
       }
+    });
+  }
+
+  private assertSession(sessionId: number): void {
+    if (this.ioSessionId !== sessionId) throw new RadioError({
+      code: RadioErrorCode.INVALID_STATE, message: 'TCI operation belongs to an expired connection session',
+      userMessage: 'Radio connection changed', severity: RadioErrorSeverity.WARNING,
     });
   }
 
@@ -1296,6 +1360,13 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
       return error;
     }
     const message = error instanceof Error ? error.message : String(error);
+    if (operation.startsWith('control.') && error instanceof TciError
+      && !['disconnected', 'not-connected', 'connect-timeout'].includes(error.code)) {
+      return new RadioError({ code: RadioErrorCode.INVALID_OPERATION,
+        message: `TCI control operation failed (${operation}): ${message}`,
+        userMessage: 'Radio parameter operation was not confirmed', severity: RadioErrorSeverity.WARNING,
+        cause: error, context: { recoverable: true, operation, protocol: 'tci' } });
+    }
     const isTciError = error instanceof TciError;
     const isWriteTimeout = isTciCommandTimeout(error) && isTciWriteOperation(operation);
     const code = isTciError && error.code === 'connect-timeout'

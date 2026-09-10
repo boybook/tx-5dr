@@ -1943,6 +1943,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     id: string,
     value?: CapabilityValue,
     action?: boolean,
+    sessionId?: string,
   ): Promise<void> {
     if (!this.connection || !this.isConnected()) {
       throw new RadioError({
@@ -1970,7 +1971,12 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       return;
     }
 
-    return this.capabilityManager.writeCapability(id, value, action);
+    return this.capabilityManager.writeCapability(id, value, action, sessionId);
+  }
+
+  async writeCapabilityGroup(groupId: string, values: Record<string, CapabilityValue>, sessionId: string): Promise<void> {
+    if (!this.connection || !this.isConnected()) throw new Error('Radio not connected');
+    await this.capabilityManager.writeCapabilityGroup(groupId, values, sessionId);
   }
 
   async applyRepeaterDuplexConfig(config?: RepeaterDuplexConfig | null): Promise<RepeaterDuplexApplyResult> {
@@ -3636,7 +3642,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         }
 
         logger.debug('Refreshing radio capabilities after frequency change', { reason });
-        await this.capabilityManager.refreshAll();
+        await this.capabilityManager.refreshAll('automatic');
       })
       .catch((error) => {
         logger.debug('Post-frequency capability refresh failed', error);

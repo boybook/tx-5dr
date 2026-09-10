@@ -103,7 +103,20 @@ for (const [value, name] of required) {
 `);
   run(process.execPath, ['smoke.mjs'], consumerRoot);
   writeFileSync(join(consumerRoot, 'smoke.ts'), `
-import type { StrategyRuntime } from '@tx5dr/plugin-api';
+import type { StrategyRuntime, CapabilityTarget, CapabilityDescriptor, CapabilityValue } from '@tx5dr/plugin-api';
+const capabilityTarget: CapabilityTarget = { scope: 'channel', receiver: 0, channel: 0 };
+const capabilityValue: CapabilityValue = 0.5;
+const capabilityDescriptor: CapabilityDescriptor = {
+  id: 'af_gain', category: 'audio', valueType: 'number', readable: true, writable: true,
+  updateMode: 'event', hasSurfaceControl: false, labelI18nKey: 'radio:capability.af_gain.label',
+  sessionId: 'session', target: capabilityTarget,
+  display: { mode: 'value', unit: 'dB', transform: { scale: 60, offset: -60 } },
+};
+// @ts-expect-error Existing capability consumers continue to receive scalar values.
+const nonScalarCapabilityValue: CapabilityValue = { lowHz: 30, highHz: 2700 };
+void capabilityValue;
+void capabilityDescriptor;
+void nonScalarCapabilityValue;
 import {
   cabrilloSubmission,
   CONTEST_SESSION_PERMISSIONS,

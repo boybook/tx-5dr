@@ -679,7 +679,15 @@
       "rf": "射频",
       "audio": "音频",
       "operation": "操作",
-      "system": "系统"
+      "system": "系统",
+      "applyGroup": "应用整组",
+      "cancelGroup": "取消修改",
+      "groupFailed": "参数未能应用，已恢复电台报告的状态。",
+      "targetGlobal": "全局设置",
+      "targetReceiver": "接收机 {{receiver}}",
+      "targetChannel": "接收机 {{receiver}} · VFO {{channel}}",
+      "unknownState": "尚未收到电台状态。",
+      "sent": "设置已发送"
     },
     "tuner_switch": {
       "label": "自动天调",
@@ -867,7 +875,16 @@
     },
     "agc_mode": {
       "label": "AGC 速度",
-      "description": "设置自动增益控制（AGC）响应速度。较快模式更适合抑制突发强信号，较慢模式更利于维持语音听感稳定；具体可用档位取决于电台型号。"
+      "description": "设置自动增益控制（AGC）响应速度。较快模式更适合抑制突发强信号，较慢模式更利于维持语音听感稳定；具体可用档位取决于电台型号。",
+      "options": {
+        "normal": "普通",
+        "med": "中速",
+        "off": "关闭",
+        "fast": "快速",
+        "slow": "慢速",
+        "long": "长时",
+        "custom": "自定义"
+      }
     },
     "preamp": {
       "label": "前置放大",
@@ -981,6 +998,166 @@
         "minus": "负频移",
         "plus": "正频移"
       }
+    },
+    "master_volume": {
+      "label": "总音量",
+      "description": "调整宿主的总输出音量。"
+    },
+    "master_mute": {
+      "label": "总静音",
+      "description": "静音宿主的总音频输出。"
+    },
+    "agc_gain": {
+      "label": "AGC 增益",
+      "description": "调整接收 AGC 控制值，与硬件射频增益分开。"
+    },
+    "sql_enabled": {
+      "label": "静噪开关",
+      "description": "开启或关闭当前接收机的静噪。"
+    },
+    "sql_threshold": {
+      "label": "静噪阈值",
+      "description": "显示宿主报告的静噪阈值。"
+    },
+    "nb_threshold": {
+      "label": "NB 阈值",
+      "description": "与脉冲长度一起应用。"
+    },
+    "nb_pulse_length": {
+      "label": "NB 脉冲长度",
+      "description": "与触发阈值一起应用。"
+    },
+    "anc_enabled": {
+      "label": "自适应噪声抵消",
+      "description": "切换宿主的 ANC 处理。"
+    },
+    "notch_filter_enabled": {
+      "label": "陷波器模块",
+      "description": "切换宿主的陷波器模块。"
+    },
+    "binaural_enabled": {
+      "label": "双耳效果",
+      "description": "控制宿主效果；当前 TX-5DR 监听仍为单声道。"
+    },
+    "surround_enabled": {
+      "label": "空间音效",
+      "description": "控制宿主效果；当前 TX-5DR 监听仍为单声道。"
+    },
+    "rx_filter_low": {
+      "label": "RX 通带下边界",
+      "description": "相对接收频率的偏移，与上边界一起应用。"
+    },
+    "rx_filter_high": {
+      "label": "RX 通带上边界",
+      "description": "保留边带方向，与下边界一起应用。"
+    },
+    "tx_filter_low": {
+      "label": "TX 通带下边界",
+      "description": "电台空闲时与上边界一起应用。"
+    },
+    "tx_filter_high": {
+      "label": "TX 通带上边界",
+      "description": "电台空闲时与下边界一起应用。"
+    },
+    "digl_offset": {
+      "label": "DIGL 频率偏移",
+      "description": "设置宿主的 DIGL 模式偏移。"
+    },
+    "digu_offset": {
+      "label": "DIGU 频率偏移",
+      "description": "设置宿主的 DIGU 模式偏移。"
+    },
+    "cw_macro_speed": {
+      "label": "CW 宏速度",
+      "description": "调整宿主发送 CW 宏的速度。"
+    },
+    "cw_macro_delay": {
+      "label": "CW 宏延迟",
+      "description": "调整开始发送 CW 宏前的延迟。"
+    },
+    "tune_power": {
+      "label": "调谐功率",
+      "description": "设置调谐功率，此控件不会启动发射。"
+    },
+    "receiver_enabled": {
+      "label": "接收机启用",
+      "description": "控制当前接收目标；主接收机可能只读。"
+    },
+    "rx_channel_enabled": {
+      "label": "接收通道启用",
+      "description": "控制当前 VFO 通道；主通道始终开启。"
+    },
+    "vfo_locked": {
+      "label": "VFO 锁定状态",
+      "description": "显示宿主报告的 VFO 锁定状态。"
+    },
+    "tx_permitted": {
+      "label": "宿主允许发射",
+      "description": "显示当前目标的发射许可。"
+    },
+    "actual_tx_frequency": {
+      "label": "实际发射频率",
+      "description": "显示宿主报告的实际发射频率。"
+    },
+    "nr_algorithm": {
+      "label": "NR 算法",
+      "description": "选择宿主支持的降噪算法。",
+      "options": {
+        "0": "关闭",
+        "1": "NR1",
+        "2": "NR2",
+        "3": "NR3",
+        "4": "NR4"
+      }
+    },
+    "nb_algorithm": {
+      "label": "NB 算法",
+      "description": "选择宿主支持的脉冲噪声抑制算法。",
+      "options": {
+        "0": "关闭",
+        "1": "NB1",
+        "2": "NB2"
+      }
+    },
+    "attenuator_enabled": {
+      "label": "步进衰减器",
+      "description": "切换宿主的步进衰减器。"
+    },
+    "attenuator_level": {
+      "label": "衰减值",
+      "description": "显示宿主报告的衰减值。"
+    },
+    "preamp_attenuation": {
+      "label": "前放与衰减档位",
+      "description": "显示当前硬件前端档位。"
+    },
+    "agc_auto": {
+      "label": "自动 AGC",
+      "description": "切换自动 AGC 控制。"
+    },
+    "center_tuning": {
+      "label": "中心调谐 CTUN",
+      "description": "电台空闲时切换宿主中心调谐。"
+    },
+    "vfo_sync": {
+      "label": "VFO 同步",
+      "description": "电台空闲时切换 VFO 同步。"
+    },
+    "vfo_swap": {
+      "label": "交换 VFO",
+      "description": "电台空闲时交换宿主 VFO。"
+    },
+    "fm_deviation": {
+      "label": "FM 频偏",
+      "description": "选择宿主支持的 FM 频偏档位。"
+    },
+    "tx_profile": {
+      "label": "发射配置档",
+      "description": "电台空闲时选择宿主公开的发射配置档。"
+    },
+    "tx_audio_gain": {
+      "label": "TCI 发射音频增益",
+      "description": "调整发送给宿主的 TCI 音频增益，与 RF 功率分开。"
     }
   },
   "cw": {

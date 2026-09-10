@@ -140,7 +140,7 @@ describe('PluginManager event bus lifecycle', () => {
       configs: {
         'qso-udp-broadcast': { enabled: false, settings: {} },
         'failing-subscriber': { enabled: true, settings: {} },
-        'publisher-plugin': { enabled: true, settings: {} },
+        'publisher-plugin': { enabled: false, settings: {} },
       },
       operatorStrategies: {
         [operator.config.id]: 'standard-qso',
@@ -149,17 +149,21 @@ describe('PluginManager event bus lifecycle', () => {
     });
 
     await pluginManager.start();
-    await flushAsyncWork();
-
-    const runtimeLogs = pluginManager.getRuntimeLogHistory().filter((entry) => (
-      'source' in entry
-      && entry.source === 'system'
-      && entry.pluginName === 'failing-subscriber'
-      && entry.message === 'Plugin event bus subscriber failed'
-    ));
-    expect(runtimeLogs.length).toBeGreaterThan(0);
-
-    await pluginManager.shutdown();
+    try {
+      // Publication must happen after the subscriber is active, independent of discovery order.
+      pluginManager.setPluginEnabled('publisher-plugin', true);
+      await vi.waitFor(() => {
+        const runtimeLogs = pluginManager.getRuntimeLogHistory().filter((entry) => (
+          'source' in entry
+          && entry.source === 'system'
+          && entry.pluginName === 'failing-subscriber'
+          && entry.message === 'Plugin event bus subscriber failed'
+        ));
+        expect(runtimeLogs.length).toBeGreaterThan(0);
+      });
+    } finally {
+      await pluginManager.shutdown();
+    }
   });
 
   it('removes subscriptions when a plugin instance is deactivated', async () => {

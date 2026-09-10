@@ -33,10 +33,21 @@ import {
 } from '../../../store/radioStore';
 import type { CapabilityCategory, CapabilityDescriptor } from '@tx5dr/contracts';
 import { PowerControlButton } from '../profile/PowerControlButton';
+import { CapabilityGroupPanel } from '../../../radio-capability/components/CapabilityGroup';
 
 interface RadioControlPanelProps {
   isOpen: boolean;
   onClose: () => void;
+}
+
+function CapabilityTargetLabel({ descriptor }: { descriptor: CapabilityDescriptor }) {
+  const { t } = useTranslation();
+  const target = descriptor.target;
+  if (!target) return null;
+  const label = target.scope === 'global' ? t('radio:capability.panel.targetGlobal')
+    : target.scope === 'channel' ? t('radio:capability.panel.targetChannel', { receiver: target.receiver + 1, channel: String.fromCharCode(65 + target.channel) })
+      : t('radio:capability.panel.targetReceiver', { receiver: ('receiver' in target ? target.receiver : target.trx) + 1 });
+  return <p className="mb-2 text-xs text-default-400">{label}</p>;
 }
 
 const MOBILE_MEDIA_QUERY = '(max-width: 767px)';
@@ -49,11 +60,17 @@ const CompoundCard: React.FC<{
   onWrite: (id: string, value?: boolean | number | string, action?: boolean) => void;
 }> = ({ descriptors, onWrite }) => {
   const capabilityStates = useCapabilityStates();
+  if (descriptors[0]?.writeGroup) {
+    return <div className="space-y-3 p-3 rounded-lg border border-default-200 bg-default-50/40">
+      <CapabilityTargetLabel descriptor={descriptors[0]} />
+      <CapabilityGroupPanel key={descriptors[0].sessionId} descriptors={descriptors} />
+    </div>;
+  }
 
   return (
     <div className="space-y-3 p-3 rounded-lg border border-default-200 bg-default-50/40">
       {descriptors.map((desc) => {
-        const Component = getPanelComponent(desc.id);
+        const Component = getPanelComponent(desc.id, desc);
         const state = capabilityStates.get(desc.id);
         if (!Component) return null;
         return (
@@ -78,14 +95,16 @@ const CapabilityCard: React.FC<{
   onWrite: (id: string, value?: boolean | number | string, action?: boolean) => void;
 }> = ({ descriptor, onWrite }) => {
   const capabilityStates = useCapabilityStates();
-  const Component = getPanelComponent(descriptor.id);
+  const Component = getPanelComponent(descriptor.id, descriptor);
   const state = capabilityStates.get(descriptor.id);
 
   if (!Component) return null;
 
   return (
     <div className="p-3 rounded-lg border border-default-200 bg-default-50/40">
+      <CapabilityTargetLabel descriptor={descriptor} />
       <Component
+        key={descriptor.sessionId}
         capabilityId={descriptor.id}
         state={state}
         descriptor={descriptor}
@@ -157,7 +176,7 @@ export const RadioControlPanel: React.FC<RadioControlPanelProps> = ({ isOpen, on
 
   // 按 category 分组，同一 compoundGroup 合并
   const groupedCapabilities = useMemo(() => {
-    const descriptors = Array.from(capabilityDescriptors.values()).filter((descriptor) => Boolean(getPanelComponent(descriptor.id)));
+    const descriptors = Array.from(capabilityDescriptors.values()).filter((descriptor) => Boolean(getPanelComponent(descriptor.id, descriptor)));
     return groupCapabilityDescriptors(descriptors);
   }, [capabilityDescriptors]);
 

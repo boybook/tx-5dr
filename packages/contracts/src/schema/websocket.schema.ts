@@ -37,7 +37,7 @@ import type { VoicePTTLock } from './voice.schema.js';
 import type { VoiceKeyerStatus } from './voice-keyer.schema.js';
 import type { CWKeyerStatus, CWKeyerConfig } from './cw-keyer.schema.js';
 import { CWDecoderEventSchema, CWDecoderStatusSchema, type CWDecoderEvent, type CWDecoderStatus } from './cw-decoder.schema.js';
-import { CapabilityListSchema, CapabilityStateSchema, WriteCapabilityPayloadSchema } from './radio-capability.schema.js';
+import { CapabilityListSchema, CapabilityStateSchema, WriteCapabilityPayloadSchema, WriteCapabilityGroupPayloadSchema } from './radio-capability.schema.js';
 import { RadioPowerStateEventSchema } from './radio-power.schema.js';
 import { AudioSidecarStatusPayloadSchema } from './audio-sidecar.schema.js';
 import { SpectrumCapabilitiesSchema, SpectrumFrameSchema, SpectrumKindSchema, SpectrumSessionControlActionSchema, SpectrumSessionControlIdSchema, SpectrumSessionStateSchema, SpectrumViewportSchema } from './spectrum.schema.js';
@@ -187,6 +187,7 @@ export enum WSMessageType {
   RADIO_CAPABILITY_CHANGED = 'radioCapabilityChanged',
   /** 客户端写入能力值（client → server） */
   WRITE_RADIO_CAPABILITY = 'writeRadioCapability',
+  WRITE_RADIO_CAPABILITY_GROUP = 'writeRadioCapabilityGroup',
   /** 客户端请求刷新所有能力值（client → server） */
   REFRESH_RADIO_CAPABILITIES = 'refreshRadioCapabilities',
   /** 客户端设置 Split TX 频率（client → server） */
@@ -1716,6 +1717,13 @@ export const WSWriteRadioCapabilityMessageSchema = WSBaseMessageSchema.extend({
 });
 
 export type WSWriteRadioCapabilityMessage = z.infer<typeof WSWriteRadioCapabilityMessageSchema>;
+
+/** Atomically submits one declared capability group for the active radio session. */
+export const WSWriteRadioCapabilityGroupMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.WRITE_RADIO_CAPABILITY_GROUP),
+  data: WriteCapabilityGroupPayloadSchema,
+});
+export type WSWriteRadioCapabilityGroupMessage = z.infer<typeof WSWriteRadioCapabilityGroupMessageSchema>;
 
 export const SetSplitFrequencyPayloadSchema = z.object({
   txFrequency: z.number().finite().int().min(1_000_000).max(1_000_000_000),

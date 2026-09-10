@@ -50,8 +50,8 @@ export class RadioCapabilityManager extends EventEmitter<RadioCapabilityManagerE
     this.runtime.setOperatingStateMutation(active);
   }
 
-  async refreshAll(): Promise<void> {
-    await this.runtime.refreshAll();
+  async refreshAll(reason: 'manual' | 'automatic' = 'manual'): Promise<void> {
+    await this.runtime.refreshAll(reason);
   }
 
   async refreshDescriptor(id: string): Promise<void> {
@@ -62,8 +62,12 @@ export class RadioCapabilityManager extends EventEmitter<RadioCapabilityManagerE
     await this.runtime.reprobeCapability(id);
   }
 
-  async writeCapability(id: string, value?: CapabilityValue, action?: boolean): Promise<void> {
-    await this.runtime.writeCapability(id, value, action);
+  async writeCapability(id: string, value?: CapabilityValue, action?: boolean, sessionId?: string): Promise<void> {
+    await this.runtime.writeCapability(id, value, action, sessionId);
+  }
+
+  async writeCapabilityGroup(groupId: string, values: Record<string, CapabilityValue>, sessionId: string): Promise<void> {
+    await this.runtime.writeCapabilityGroup(groupId, values, sessionId);
   }
 
   markCapabilityUnavailable(id: string, error: unknown): void {

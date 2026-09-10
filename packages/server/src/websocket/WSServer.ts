@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // WebSocket服务器 - 事件处理和消息传递需要使用any类型以保持灵活性
 
-import { ServerMessageKey, WSMessageType, RadioConnectionStatus, UserRole, WriteCapabilityPayloadSchema, SetSplitFrequencyPayloadSchema, TuneToneStartPayloadSchema, SstvTxStartCommandSchema, SstvTxCancelCommandSchema, FaxCalibrationSetCommandSchema, FaxCalibrationResetCommandSchema, SpectrumViewportSchema, SLOT_PACK_HISTORY_LIMIT, type AppAction, type AppSubject } from '@tx5dr/contracts';
+import { ServerMessageKey, WSMessageType, RadioConnectionStatus, UserRole, WriteCapabilityPayloadSchema, WriteCapabilityGroupPayloadSchema, SetSplitFrequencyPayloadSchema, TuneToneStartPayloadSchema, SstvTxStartCommandSchema, SstvTxCancelCommandSchema, FaxCalibrationSetCommandSchema, FaxCalibrationResetCommandSchema, SpectrumViewportSchema, SLOT_PACK_HISTORY_LIMIT, type AppAction, type AppSubject } from '@tx5dr/contracts';
 import type {
   ClockStatusSummary,
   DecodeErrorInfo,
@@ -468,6 +468,7 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.RADIO_STOP_RECONNECT]: () => this.handleRadioStopReconnect(),
       [WSMessageType.AUDIO_RETRY_NOW]: () => this.handleAudioRetryNow(),
       [WSMessageType.WRITE_RADIO_CAPABILITY]: (data, id) => this.handleWriteRadioCapability(id, data),
+      [WSMessageType.WRITE_RADIO_CAPABILITY_GROUP]: (data, id) => this.handleWriteRadioCapabilityGroup(id, data),
       [WSMessageType.REFRESH_RADIO_CAPABILITIES]: () => this.handleRefreshRadioCapabilities(),
       [WSMessageType.SET_SPLIT_FREQUENCY]: (data, id) => this.handleSetSplitFrequency(id, data),
       [WSMessageType.FORCE_STOP_TRANSMISSION]: () => this.handleForceStopTransmission(),
@@ -876,6 +877,7 @@ export class WSServer extends WSMessageHandler {
     [WSMessageType.AUDIO_RETRY_NOW]: { ability: { action: 'execute', subject: 'Engine' } },
     [WSMessageType.FORCE_STOP_TRANSMISSION]: { ability: { action: 'execute', subject: 'Engine' } },
     [WSMessageType.WRITE_RADIO_CAPABILITY]: { ability: { action: 'execute', subject: 'RadioControl' } },
+    [WSMessageType.WRITE_RADIO_CAPABILITY_GROUP]: { ability: { action: 'execute', subject: 'RadioControl' } },
     [WSMessageType.REFRESH_RADIO_CAPABILITIES]: { ability: { action: 'execute', subject: 'RadioControl' } },
     [WSMessageType.SET_SPLIT_FREQUENCY]: { ability: { action: 'execute', subject: 'RadioFrequency' } },
     [WSMessageType.START_TUNE_TONE]: { ability: { action: 'execute', subject: 'RadioControl' } },
@@ -3044,7 +3046,7 @@ export class WSServer extends WSMessageHandler {
       logger.info('writeRadioCapability command', { id: payload.id, value: payload.value, action: payload.action });
 
       const radioManager = this.digitalRadioEngine.getRadioManager();
-      await radioManager.writeCapability(payload.id, payload.value, payload.action);
+      await radioManager.writeCapability(payload.id, payload.value, payload.action, payload.sessionId);
     } catch (error) {
       logger.error('writeRadioCapability failed', error);
       this.sendToConnection(connectionId, WSMessageType.ERROR, {
@@ -3057,6 +3059,16 @@ export class WSServer extends WSMessageHandler {
    * 处理刷新所有电台能力值命令
    * 权限: execute:RadioControl（由 COMMAND_ABILITIES 映射）
    */
+  private async handleWriteRadioCapabilityGroup(connectionId: string, data: unknown): Promise<void> {
+    try {
+      const payload = WriteCapabilityGroupPayloadSchema.parse(data);
+      await this.digitalRadioEngine.getRadioManager().writeCapabilityGroup(payload.groupId, payload.values, payload.sessionId);
+    } catch (error) {
+      logger.warn('writeRadioCapabilityGroup failed', error);
+      this.sendToConnection(connectionId, WSMessageType.ERROR, { message: `Failed to write capability group: ${String(error)}` });
+    }
+  }
+
   private async handleRefreshRadioCapabilities(): Promise<void> {
     try {
       logger.info('refreshRadioCapabilities command');
