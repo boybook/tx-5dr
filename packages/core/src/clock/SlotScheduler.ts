@@ -1,8 +1,17 @@
 import type { SlotInfo, DecodeRequest, ModeDescriptor } from '@tx5dr/contracts';
 import type { SlotClock } from './SlotClock.js';
+import { isDecodeSessionCancelled, type DecodeSessionCancelReason } from './DecodeSessionCancellation.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('SlotScheduler');
+const MAX_RETAINED_SLOTS = 8;
+interface ScheduledDecodeSession {
+  startMs: number;
+  mode: ModeDescriptor;
+  depth: number;
+  cancelled: boolean;
+  completed: boolean;
+}
 
 /**
  * 解码队列接口 - 由 server 包实现
@@ -18,6 +27,9 @@ export interface IDecodeQueue {
    * 获取队列长度
    */
   size(): number;
+
+  /** Cancel remaining work for this slot; already running native calls drain safely. */
+  cancelSession(sessionId: string, reason: DecodeSessionCancelReason): void;
 }
 
 /**
@@ -68,10 +80,10 @@ export class SlotScheduler {
   private shouldDecodeWhileTransmitting?: () => boolean;
   private decodeApContextProvider?: DecodeApContextProvider;
   private getDecodeDepth?: () => number;
-  private readonly decodeDepthBySlot = new Map<string, number>();
-  private lastDiagnosticLogAt = 0;
-  private diagnosticRequests = 0;
-  private diagnosticCompletions = 0;
+  private readonly sessions = new Map<string, ScheduledDecodeSession>();
+  private generation = 0;
+  private retiredThroughMs = -Infinity;
+  private readonly boundHandleReset = () => this.reset();
   private isActive = false;
   private readonly boundHandleSubWindow: (slotInfo: SlotInfo, windowIdx: number) => void;
 
@@ -103,6 +115,7 @@ export class SlotScheduler {
     this.isActive = true;
     // 只监听子窗口事件
     this.slotClock.on('subWindow', this.boundHandleSubWindow);
+    this.slotClock.on('reset', this.boundHandleReset);
   }
   
   /**
@@ -113,7 +126,8 @@ export class SlotScheduler {
     
     this.isActive = false;
     this.slotClock.off('subWindow', this.boundHandleSubWindow);
-    this.decodeDepthBySlot.clear();
+    this.slotClock.off('reset', this.boundHandleReset);
+    this.reset('stopped');
   }
   
   /**
@@ -123,25 +137,55 @@ export class SlotScheduler {
     return this.decodeQueue.size();
   }
 
+  reset(reason: DecodeSessionCancelReason = 'scheduler-reset'): void {
+    this.generation++;
+    for (const [id, session] of this.sessions) this.cancel(id, session, reason);
+    this.sessions.clear();
+    this.retiredThroughMs = -Infinity;
+  }
+
+  private cancel(id: string, session: ScheduledDecodeSession, reason: DecodeSessionCancelReason): void {
+    if (session.cancelled || session.completed) return;
+    session.cancelled = true;
+    this.decodeQueue.cancelSession(id, reason);
+  }
+
+  private shouldSkip(slotInfo: SlotInfo): boolean {
+    return !(this.shouldDecodeWhileTransmitting?.() ?? true)
+      && (this.transmissionChecker?.hasActiveTransmissionsInCurrentCycle(slotInfo) ?? false);
+  }
+
   private async handleSubWindow(slotInfo: SlotInfo, windowIdx: number): Promise<void> {
-    if (!this.isActive) return;
-
-    // 读取配置：是否允许发射时解码（默认true保证向后兼容）
-    const allowDecodeWhileTransmitting = this.shouldDecodeWhileTransmitting?.() ?? true;
-
-    // 只有在配置禁用发射时解码的情况下，才检查发射状态
-    if (!allowDecodeWhileTransmitting) {
-      // 检查slotInfo对应的时隙是否有操作员准备发射
-      // 传递slotInfo以确保周期判断与解码数据的时隙一致
-      if (this.transmissionChecker?.hasActiveTransmissionsInCurrentCycle(slotInfo)) {
-        logger.debug(`Transmit cycle detected and decode-while-transmitting disabled, skipping slot=${slotInfo.id} window=${windowIdx}`);
-        return;
+    if (!this.isActive || slotInfo.startMs <= this.retiredThroughMs) return;
+    const generation = this.generation;
+    let session = this.sessions.get(slotInfo.id);
+    if (!session) {
+      const configuredDepth = this.getDecodeDepth?.() ?? 3;
+      const mode = this.slotClock.getMode();
+      session = {
+        startMs: slotInfo.startMs, mode: { ...mode, windowTiming: [...mode.windowTiming] },
+        depth: Number.isInteger(configuredDepth) && configuredDepth >= 1 && configuredDepth <= 3 ? configuredDepth : 3,
+        cancelled: false, completed: false,
+      };
+      this.sessions.set(slotInfo.id, session);
+      // Keep cancellation tombstones for recent slots, including positive-offset
+      // windows in the previous slot. A watermark rejects evicted old callbacks.
+      if (this.sessions.size > MAX_RETAINED_SLOTS) {
+        const [id, oldest] = [...this.sessions].sort((a, b) => a[1].startMs - b[1].startMs)[0];
+        this.cancel(id, oldest, 'session-expired');
+        this.retiredThroughMs = Math.max(this.retiredThroughMs, oldest.startMs);
+        this.sessions.delete(id);
       }
     }
+    if (session.cancelled || session.completed) return;
+    if (this.shouldSkip(slotInfo)) {
+      this.cancel(slotInfo.id, session, 'transmit-skipped');
+      return;
+    }
 
+    let submitted = false;
     try {
-      const mode = this.slotClock.getMode();
-      
+      const mode = session.mode;
       // 计算窗口的时间偏移（基于时隙结束时间）
       const windowOffsetMs = mode.windowTiming[windowIdx] || 0;
 
@@ -152,14 +196,7 @@ export class SlotScheduler {
       const windowDurationMs = mode.slotMs + windowOffsetMs;
       const windowCount = mode.windowTiming.length;
       const stage = resolveDecodeStage(mode, windowDurationMs, windowIdx, windowCount);
-      if (!this.decodeDepthBySlot.has(slotInfo.id)) {
-        const configuredDepth = this.getDecodeDepth?.() ?? 3;
-        const depth = Number.isInteger(configuredDepth) && configuredDepth >= 1 && configuredDepth <= 3
-          ? configuredDepth
-          : 3;
-        this.decodeDepthBySlot.set(slotInfo.id, depth);
-      }
-      const decodeDepth = this.decodeDepthBySlot.get(slotInfo.id) ?? 3;
+      const decodeDepth = session.depth;
       const decisionDeadlineMs = slotInfo.startMs + mode.slotMs + mode.transmitTiming - mode.encodeAdvance - 500;
       logger.debug(`Window capture: window=${windowIdx}, start=slotStart, duration=${windowDurationMs}ms (offset=${windowOffsetMs >= 0 ? '+' : ''}${windowOffsetMs}ms)`);
 
@@ -169,6 +206,13 @@ export class SlotScheduler {
         windowDurationMs
       );
       
+      if (!this.isActive || generation !== this.generation
+        || this.sessions.get(slotInfo.id) !== session || session.cancelled || session.completed) return;
+      if (this.shouldSkip(slotInfo)) {
+        this.cancel(slotInfo.id, session, 'transmit-skipped');
+        return;
+      }
+
       // 获取音频缓冲区提供者的实际采样率
       const actualSampleRate = this.audioBufferProvider.getSampleRate ? 
         this.audioBufferProvider.getSampleRate() : 48000; // 默认 48kHz
@@ -194,40 +238,18 @@ export class SlotScheduler {
         ...(apContext ? { apContext } : {})
       };
 
-      this.diagnosticRequests++;
-      const now = Date.now();
-      if (now - this.lastDiagnosticLogAt >= 30_000) {
-        this.lastDiagnosticLogAt = now;
-        logger.info('decode pipeline diagnostic snapshot', {
-          slotId: slotInfo.id,
-          windowIdx,
-          mode: decodeRequest.mode,
-          slotStartMs: slotInfo.startMs,
-          slotUtcSeconds: slotInfo.utcSeconds,
-          decodeDepth,
-          decodeStage: stage,
-          decodeSessionId: decodeRequest.decodeSessionId,
-          queueSize: this.decodeQueue.size(),
-          requestsSinceLastSnapshot: this.diagnosticRequests,
-          completionsSinceLastSnapshot: this.diagnosticCompletions,
-          pcmBytes: pcmBuffer.byteLength,
-          sampleRate: actualSampleRate,
-          decisionDeadlineMs,
-        });
-        this.diagnosticRequests = 0;
-        this.diagnosticCompletions = 0;
-      }
-      
       const offsetSign = windowOffsetMs >= 0 ? '+' : '';
       logger.debug(`Decode request: slot=${slotInfo.id}, window=${windowIdx}, offset=${offsetSign}${windowOffsetMs}ms, duration=${windowDurationMs}ms, pcm=${(pcmBuffer.byteLength/1024).toFixed(1)}KB, sampleRate=${actualSampleRate}Hz`);
       
       // 推送到解码队列
+      submitted = true;
       await this.decodeQueue.push(decodeRequest);
-      this.diagnosticCompletions++;
-
-      if (windowIdx >= windowCount - 1) this.decodeDepthBySlot.delete(slotInfo.id);
+      if (windowIdx >= windowCount - 1) session.completed = true;
       
     } catch (error) {
+      if (!this.isActive || generation !== this.generation || session.cancelled) return;
+      if (isDecodeSessionCancelled(error)) { session.cancelled = true; return; }
+      this.cancel(slotInfo.id, session, submitted ? 'worker-failed' : 'capture-failed');
       logger.error(`Failed to handle sub-window: slot=${slotInfo.id}, window=${windowIdx}, error=${error instanceof Error ? error.message : String(error)}`);
     }
   }

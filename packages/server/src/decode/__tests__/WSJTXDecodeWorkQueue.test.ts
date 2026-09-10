@@ -5,6 +5,7 @@ import type { DecodeRequest, DecodeResult } from '@tx5dr/contracts';
 const decodeCalls = vi.hoisted((): Array<{ mode: number; samples: number; options: Record<string, unknown> }> => []);
 const constructorCalls = vi.hoisted((): Array<{ maxThreads?: number }> => []);
 const conversionCalls = vi.hoisted((): number[] => []);
+const sessionEndCalls = vi.hoisted((): string[] => []);
 const pendingMessages = vi.hoisted((): Array<{
   text: string;
   snr: number;
@@ -51,7 +52,7 @@ vi.mock('wsjtx-lib', () => {
           const message = { text: 'CQ DX STAGED OM88', snr: 3, deltaTime: 0.1, deltaFrequency: 1000 };
           return { success: true, messages: [message], newMessages: [message], allMessages: [message] };
         },
-        endDecodeSession: () => undefined,
+        endDecodeSession: () => { sessionEndCalls.push(options.sessionId); },
       };
     }
 
@@ -81,6 +82,21 @@ async function decodeOnce(request: DecodeRequest): Promise<DecodeResult> {
 }
 
 describe('WSJTXDecodeWorkerCore mode selection', () => {
+  it('serializes explicit cleanup with native work and ignores cleanup for an older session', async () => {
+    sessionEndCalls.length = 0;
+    const decoder = new WSJTXDecodeWorkerCore();
+    const work = decoder.decode({ ...createPoolRequest(), decodeSessionId: 'session-A', decodeStage: 41, decodeFinalWindow: false });
+    expect(() => decoder.endSession('session-A')).toThrow('during native decode');
+    await work;
+    decoder.endSession('session-old');
+    expect(sessionEndCalls).toEqual([]);
+    decoder.endSession('session-A'); decoder.endSession('session-A');
+    expect(sessionEndCalls).toEqual(['session-A']);
+    await decoder.decode({ ...createPoolRequest(), decodeSessionId: 'session-B', decodeStage: 41, decodeFinalWindow: false });
+    decoder.endSession('session-A');
+    expect(sessionEndCalls).toEqual(['session-A']);
+    decoder.endSession('session-B');
+  });
   it('uses the FT4 native decoder for FT4 decode requests', async () => {
     decodeCalls.length = 0;
     constructorCalls.length = 0;

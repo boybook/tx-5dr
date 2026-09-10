@@ -113,8 +113,8 @@
       "suggestions": ["检查网络连接", "刷新页面重试"]
     },
     "DECODE_WORKER_UNAVAILABLE": {
-      "userMessage": "FT8/FT4 解码暂时不可用，因为解码 Worker 启动失败。其他电台功能仍可继续运行。",
-      "suggestions": ["打开 Server Health 查看 Decode Workers 状态。", "检查 server 日志中的原生模块或 worker 启动错误。"]
+      "userMessage": "FT8/FT4 解码暂时不可用，解码进程异常或任务队列已停止推进。",
+      "suggestions": ["打开 Server Health 查看 Decode Workers 状态。", "如果解码未自行恢复，请重启引擎，并上报故障时段的日志。"]
     },
     "UNKNOWN_ERROR": {
       "userMessage": "发生未知错误",

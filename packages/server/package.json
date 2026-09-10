@@ -23,7 +23,7 @@
     "lint": "eslint src/**/*.ts",
     "test": "yarn test:unit && yarn test:virtual-radio-integration && yarn test:logbook-performance",
     "test:unit": "vitest run --maxWorkers=2 --minWorkers=1 --exclude 'src/**/*.performance.test.ts'",
-    "test:virtual-radio-integration": "vitest run src/virtual-radio/VirtualRadioSession.performance.test.ts --maxWorkers=1 --minWorkers=1",
+    "test:virtual-radio-integration": "vitest run src/virtual-radio/VirtualRadioSession.performance.test.ts src/decode/__tests__/WSJTXDecodeSession.performance.test.ts --maxWorkers=1 --minWorkers=1",
     "test:logbook-performance": "vitest run src/log/__tests__/ADIFLogProvider.performance.test.ts --maxWorkers=1 --minWorkers=1"
   },
   "dependencies": {

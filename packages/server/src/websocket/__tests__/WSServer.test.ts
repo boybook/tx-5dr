@@ -70,6 +70,39 @@ describe('WSServer meter projection', () => {
   });
 });
 
+describe('WSServer decode availability warnings', () => {
+  it('routes a queue stall through the existing administrator warning', () => {
+    const engine = Object.assign(new EventEmitter(), { getNtpCalibrationService: () => new EventEmitter() });
+    const server = Object.create(WSServer.prototype) as any;
+    server.digitalRadioEngine = engine;
+    server.spectrumCoordinator = new EventEmitter();
+    server.spectrumSessionCoordinator = new EventEmitter();
+    server.broadcastToMinRole = vi.fn();
+    server.setupEngineEventListeners();
+    const status = { status: 'unavailable', unavailableReason: 'queue-stalled', pendingJobs: 2, readyWorkers: 2 };
+    engine.emit('decodeWorkerUnavailable', status);
+    expect(server.broadcastToMinRole).toHaveBeenCalledWith(UserRole.ADMIN, WSMessageType.ERROR, expect.objectContaining({
+      code: 'DECODE_WORKER_UNAVAILABLE', severity: 'warning', context: status,
+      userMessageKey: 'errors:code.DECODE_WORKER_UNAVAILABLE.userMessage',
+    }));
+  });
+
+  it('sends the current stalled state to a newly connected administrator', () => {
+    const server = Object.create(WSServer.prototype) as any;
+    server.digitalRadioEngine = { getDecodeWorkerTelemetrySnapshot: () => ({ summary: {
+      status: 'unavailable', unavailableReason: 'queue-stalled', lastError: 'Decode queue stopped making progress',
+    } }) };
+    const connection = { send: vi.fn() };
+    server.sendDecodeWorkerUnavailableHint(connection);
+    expect(connection.send).toHaveBeenCalledWith(WSMessageType.ERROR, expect.objectContaining({
+      code: 'DECODE_WORKER_UNAVAILABLE', context: expect.objectContaining({ unavailableReason: 'queue-stalled' }),
+    }));
+    server.digitalRadioEngine.getDecodeWorkerTelemetrySnapshot = () => ({ summary: { status: 'ready' } });
+    server.sendDecodeWorkerUnavailableHint(connection);
+    expect(connection.send).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('WSServer initial frequency snapshot', () => {
   afterEach(() => {
     vi.restoreAllMocks();

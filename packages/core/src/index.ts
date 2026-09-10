@@ -11,6 +11,7 @@ export * from './clock/ClockSourceSystem.js';
 export * from './clock/ClockSourceMock.js';
 export * from './clock/SlotClock.js';
 export * from './clock/SlotScheduler.js';
+export * from './clock/DecodeSessionCancellation.js';
 
 // WebSocket通讯系统导出（仅客户端相关）
 export * from './websocket/WSEventEmitter.js';

@@ -193,11 +193,8 @@
       ]
     },
     "DECODE_WORKER_UNAVAILABLE": {
-      "userMessage": "デコード ワーカーの起動に失敗したため、FT8/FT4 デコードは一時的に利用できません。他の無線機能は引き続き動作します。",
-      "suggestions": [
-        "打开 Server Health 查看 Decode Workers 状态。",
-        "检查 server 日志中的原生模块或 worker 启动错误。"
-      ]
+      "userMessage": "デコードプロセスの異常またはキューの停止により、FT8/FT4 デコードを一時的に利用できません。",
+      "suggestions": ["Server Health で Decode Workers の状態を確認してください。", "デコードが自動で復旧しない場合は、エンジンを再起動し、障害発生時のログを送信してください。"]
     },
     "UNKNOWN_ERROR": {
       "userMessage": "不明なエラーが発生しました",

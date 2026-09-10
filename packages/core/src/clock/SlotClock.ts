@@ -11,6 +11,7 @@ export interface SlotClockEvents {
   'encodeStart': (slotInfo: SlotInfo) => void;  // 提前触发编码准备
   'transmitStart': (slotInfo: SlotInfo) => void; // 目标播放时间
   'subWindow': (slotInfo: SlotInfo, windowIdx: number) => void;
+  'reset': () => void;
   'error': (error: Error) => void;
 }
 
@@ -58,6 +59,7 @@ export class SlotClock extends EventEmitter<SlotClockEvents> {
     this._isRunning = false;
     this.lastSlotStartMs = null;
     this.clearPendingTimers();
+    this.emit('reset');
   }
   
   /**

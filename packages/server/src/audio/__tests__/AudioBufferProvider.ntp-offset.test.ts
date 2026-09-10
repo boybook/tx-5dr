@@ -42,6 +42,7 @@ describe('SlotScheduler with a calibrated audio provider', () => {
       push(request) {
         queued.push(request);
       },
+      cancelSession() {},
       size() {
         return queued.length;
       },

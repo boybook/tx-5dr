@@ -3,7 +3,8 @@ import { EventEmitter } from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { DecodeRequest, DecodeResult } from '@tx5dr/core';
+import { DecodeSessionCancelledError, type DecodeSessionCancelReason, type DecodeRequest, type DecodeResult } from '@tx5dr/core';
+import { DecodeSessionEndedSchema } from './decode-worker-protocol.js';
 import type { DecodeWorkerTelemetrySnapshot, DecodeWorkerTelemetryWorker } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
 
@@ -20,6 +21,12 @@ const RESPAWN_BACKOFF_MS = [1_000, 2_000, 5_000] as const;
 const SLOW_NON_AP_DECODE_THRESHOLD_MS = 1_000;
 const AP_DECODE_SUPPRESSION_CYCLES = 3;
 const NATIVE_TIMING_SAMPLE_LIMIT = 512;
+const MAINTENANCE_INTERVAL_MS = 1_000;
+const SESSION_IDLE_TIMEOUT_MS = 20_000;
+const QUEUE_WAIT_TIMEOUT_MS = 20_000;
+const STALL_TIMEOUT_MS = 20_000;
+const DIAGNOSTIC_INTERVAL_MS = 30_000;
+const CLOSED_SESSION_LIMIT = 256;
 const MODE_SLOT_MS: Record<DecodeRequest['mode'], number> = {
   FT8: 15_000,
   FT4: 7_500,
@@ -87,6 +94,9 @@ export interface WorkerEntryResolution {
 }
 
 export interface DecodeWorkerPoolHealthSnapshot {
+  unavailableReason?: 'worker-unavailable' | 'queue-stalled';
+  oldestPendingMs?: number;
+  noProgressMs?: number;
   status: DecodeWorkerPoolStatus;
   desiredWorkers: number;
   readyWorkers: number;
@@ -101,10 +111,19 @@ export interface DecodeWorkerPoolHealthSnapshot {
   workerMode: WorkerEntryResolution['mode'];
 }
 
+interface DecodeSessionState {
+  id: string;
+  workerId?: number;
+  lastActivityAt: number;
+  cancelled?: DecodeSessionCancelReason;
+}
+
 interface PendingJob {
   id: number;
   request: DecodeRequest;
   enqueuedAt: number;
+  session?: DecodeSessionState;
+  settled?: boolean;
   resolve: (result: DecodeResult) => void;
   reject: (error: Error) => void;
 }
@@ -119,6 +138,8 @@ interface WorkerState {
   process: DecodeWorkerProcess;
   ready: boolean;
   activeJob: ActiveJob | null;
+  session: DecodeSessionState | null;
+  ending: { id: number; sessionId: string; startedAt: number; timer: NodeJS.Timeout } | null;
   startTimer: NodeJS.Timeout;
   stopping: boolean;
   failureRecorded: boolean;
@@ -304,8 +325,15 @@ function roundMs(value: number): number {
 export class WSJTXDecodeProcessPool extends EventEmitter {
   private readonly pending: PendingJob[] = [];
   private readonly workers = new Map<number, WorkerState>();
-  private readonly sessionWorkers = new Map<string, number>();
-  private readonly workerSessions = new Map<number, string>();
+  private readonly sessions = new Map<string, DecodeSessionState>();
+  private readonly closedSessions = new Map<string, DecodeSessionCancelReason>();
+  private readonly maintenanceTimer: NodeJS.Timeout;
+  private nextControlId = 1;
+  private waitingSince: number | null = null;
+  private lastProgressAt: number | null = null;
+  private stalledSince: number | null = null;
+  private readonly counters = { submitted: 0, dispatched: 0, completed: 0, cancelled: 0, expired: 0, failed: 0 };
+  private readonly cancellationReasons: Partial<Record<DecodeSessionCancelReason, number>> = {};
   private readonly readyTimeoutMs: number;
   private readonly jobTimeoutMs: number;
   private readonly workerFactory: (workerId: number, entry: WorkerEntryResolution, env: NodeJS.ProcessEnv) => DecodeWorkerProcess;
@@ -376,6 +404,9 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
 
     this.ensureWorkerCount();
     this.refreshHealthStatus();
+    this.lastDiagnosticLogAt = this.performanceNow();
+    this.maintenanceTimer = setInterval(() => this.maintain(), MAINTENANCE_INTERVAL_MS);
+    this.maintenanceTimer.unref();
   }
 
   decode(request: DecodeRequest): Promise<DecodeResult> {
@@ -383,47 +414,48 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
       return Promise.reject(new Error('decode worker pool has been destroyed'));
     }
     this.refreshHealthStatus();
-    const now = Date.now();
-    if (now - this.lastDiagnosticLogAt >= 30_000) {
-      this.lastDiagnosticLogAt = now;
-      logger.info('decode worker pool diagnostic snapshot', {
-        trigger: 'decode-request',
-        status: this.healthStatus,
-        request: {
-          slotId: request.slotId,
-          windowIdx: request.windowIdx,
-          mode: request.mode,
-          decodeSessionId: request.decodeSessionId,
-          decodeStage: request.decodeStage,
-          decodeDepth: request.decodeDepth,
-          decodeFinalWindow: request.decodeFinalWindow,
-          lateRetry: request.lateRetry,
-        },
-        queue: {
-          pendingJobs: this.pending.length,
-          activeJobs: this.getActiveJobCount(),
-          readyWorkers: this.getReadyWorkerCount(),
-          workerProcesses: this.workers.size,
-          desiredWorkers: this.desiredWorkers,
-        },
-        lastFailure: this.lastFailure,
-        restartAttempts: this.restartAttempts,
-      });
-    }
     if (this.healthStatus === 'unavailable' && this.getReadyWorkerCount() === 0) {
       return Promise.reject(new Error(`decode worker unavailable: ${this.lastFailure ?? 'no worker is ready'}`));
     }
 
+    const now = this.performanceNow();
+    let session: DecodeSessionState | undefined;
+    if (request.decodeSessionId && request.decodeStage !== undefined && !request.lateRetry) {
+      const reason = this.closedSessions.get(request.decodeSessionId);
+      if (reason) return Promise.reject(new DecodeSessionCancelledError(reason));
+      session = this.sessions.get(request.decodeSessionId);
+      if (!session) {
+        session = { id: request.decodeSessionId, lastActivityAt: now };
+        this.sessions.set(session.id, session);
+      }
+      if (session.cancelled) return Promise.reject(new DecodeSessionCancelledError(session.cancelled));
+      session.lastActivityAt = now;
+    }
+    this.counters.submitted++;
+    if (this.size() === 0) this.waitingSince = now;
     return new Promise<DecodeResult>((resolve, reject) => {
-      this.pending.push({
-        id: this.nextJobId++,
-        request,
-        enqueuedAt: this.performanceNow(),
-        resolve,
-        reject,
-      });
+      this.pending.push({ id: this.nextJobId++, request, session, enqueuedAt: now, resolve, reject });
       this.dispatch();
     });
+  }
+
+  cancelSession(sessionId: string, reason: DecodeSessionCancelReason): void {
+    if (this.destroyed || this.closedSessions.has(sessionId)) return;
+    this.rememberClosed(sessionId, reason);
+    this.cancellationReasons[reason] = (this.cancellationReasons[reason] ?? 0) + 1;
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.cancelled = reason;
+    const error = new DecodeSessionCancelledError(reason);
+    for (let i = this.pending.length - 1; i >= 0; i--) {
+      if (this.pending[i].session !== session) continue;
+      this.rejectJob(this.pending.splice(i, 1)[0], error);
+    }
+    const worker = session.workerId === undefined ? undefined : this.workers.get(session.workerId);
+    if (worker?.activeJob) this.rejectJob(worker.activeJob, error);
+    if (worker) this.endIdleSession(worker);
+    else this.releaseSession(session);
+    this.dispatch();
   }
 
   size(): number {
@@ -444,6 +476,9 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
     return {
       status: this.healthStatus,
       queueSize: this.size(),
+      unavailableReason: this.getUnavailableReason(),
+      oldestPendingMs: this.getOldestPendingMs(),
+      noProgressMs: this.getNoProgressMs(),
       maxConcurrency: this.desiredWorkers,
       activeThreads: active,
       readyWorkers: ready,
@@ -451,7 +486,7 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
       nativeThreadsPerWorker: this.nativeThreads,
       totalNativeDecodeThreads: this.nativeThreads * this.desiredWorkers,
       utilization: this.desiredWorkers > 0 ? active / this.desiredWorkers : 0,
-      lastFailure: this.lastFailure,
+      lastFailure: this.stalledSince === null ? this.lastFailure : 'Decode queue stopped making progress',
       lastFailureAt: this.lastFailureAt,
       restartAttempts: this.restartAttempts,
     };
@@ -486,7 +521,10 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
         nativeThreadsPerWorker: this.nativeThreads,
         pendingJobs: this.pending.length,
         activeJobs: this.getActiveJobCount(),
-        lastError: this.lastFailure,
+        lastError: this.stalledSince === null ? this.lastFailure : 'Decode queue stopped making progress',
+        unavailableReason: this.getUnavailableReason(),
+        oldestPendingMs: this.getOldestPendingMs(),
+        noProgressMs: this.getNoProgressMs(),
         lastFailureAt: this.lastFailureAt,
         restartAttempts: this.restartAttempts,
         workerEntry: this.entry.entryPath,
@@ -499,18 +537,19 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
 
   async destroy(): Promise<void> {
     this.destroyed = true;
+    clearInterval(this.maintenanceTimer);
     if (this.respawnTimer) {
       clearTimeout(this.respawnTimer);
       this.respawnTimer = null;
     }
     while (this.pending.length > 0) {
-      this.pending.shift()!.reject(new Error('decode worker pool destroyed before job started'));
+      this.rejectJob(this.pending.shift()!, new DecodeSessionCancelledError('stopped'));
     }
 
     await Promise.all([...this.workers.values()].map((worker) => this.stopWorker(worker)));
     this.workers.clear();
-    this.sessionWorkers.clear();
-    this.workerSessions.clear();
+    this.sessions.clear();
+    this.closedSessions.clear();
     logger.info('decode worker pool destroyed');
   }
 
@@ -529,8 +568,7 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
   private purgeKilledIdleWorkers(): void {
     for (const worker of this.workers.values()) {
       if (worker.process.killed && !worker.activeJob) {
-        clearTimeout(worker.startTimer);
-        this.workers.delete(worker.id);
+        this.detachWorker(worker, new Error('Decode worker was killed'));
       }
     }
   }
@@ -562,14 +600,14 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
       process: child,
       ready: false,
       activeJob: null,
+      session: null,
+      ending: null,
       stopping: false,
       failureRecorded: false,
       lastTelemetry: null,
       startTimer: setTimeout(() => {
         logger.warn('decode worker startup timed out', { workerId, timeoutMs: this.readyTimeoutMs });
         this.handleWorkerFailure(state, new Error('decode worker startup timed out'));
-        this.killWorker(state);
-        this.scheduleRespawn();
       }, this.readyTimeoutMs),
     };
 
@@ -581,8 +619,6 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
     child.once('error', (error) => {
       logger.warn('decode worker process error', { workerId, error: error.message, code: (error as Error & { code?: string }).code });
       this.handleWorkerFailure(state, error);
-      this.killWorker(state);
-      this.scheduleRespawn();
     });
     child.once('exit', (code, signal) => {
       if (state.stopping || this.destroyed) {
@@ -597,6 +633,7 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
   }
 
   private handleWorkerMessage(state: WorkerState, message: unknown): void {
+    if (this.destroyed || state.stopping || this.workers.get(state.id) !== state) return;
     if (!message || typeof message !== 'object') return;
     if (!('type' in message)) {
       if (isToolingWatchMessage(message as Record<string, unknown>)) {
@@ -604,6 +641,25 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
         return;
       }
       logger.warn('decode worker returned unknown message', { workerId: state.id, message });
+      return;
+    }
+
+    if (message.type === 'session-ended') {
+      const parsed = DecodeSessionEndedSchema.safeParse(message);
+      if (!parsed.success) {
+        this.handleWorkerFailure(state, new Error('Invalid decode session cleanup response'));
+        return;
+      }
+      const ack = parsed.data;
+      if (!state.ending || state.ending.id !== ack.id || state.ending.sessionId !== ack.sessionId) return;
+      if (ack.error) {
+        this.handleWorkerFailure(state, createError(ack.error));
+        return;
+      }
+      clearTimeout(state.ending.timer);
+      state.ending = null;
+      if (state.session) this.releaseSession(state.session);
+      this.dispatch();
       return;
     }
 
@@ -649,6 +705,14 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
     clearTimeout(activeJob.timer);
     state.activeJob = null;
     this.consecutiveFailures = 0;
+    if (activeJob.session) activeJob.session.lastActivityAt = this.performanceNow();
+    if (activeJob.settled) {
+      // Cancellation settles callers immediately but retains native exclusivity
+      // until the original response (or its execution timeout) arrives.
+      this.endIdleSession(state);
+      this.dispatch();
+      return;
+    }
 
     if (workerMessage.type === 'result') {
       const completedAt = this.performanceNow();
@@ -657,7 +721,7 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
       const totalElapsedMs = completedAt - activeJob.enqueuedAt;
       const nativeProcessingTimeMs = workerMessage.result.nativeProcessingTimeMs ?? workerMessage.result.processingTimeMs;
       this.maybeSuppressApDecode(activeJob.request, workerElapsedMs, completedAt);
-      logger.info('decode worker job completed', {
+      logger.debug('decode worker job completed', {
         workerId: state.id,
         workerPid: state.process.pid,
         jobId: activeJob.id,
@@ -690,12 +754,23 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
         nativeThreadsPerWorker: this.nativeThreads,
       });
       this.recordNativeDecodeDuration(nativeProcessingTimeMs);
+      activeJob.settled = true;
+      this.counters.completed++;
+      this.lastProgressAt = completedAt;
+      this.stalledSince = null;
+      this.refreshHealthStatus();
       activeJob.resolve({
         ...workerMessage.result,
         queueWaitMs: roundMs(queueWaitMs),
       });
-      if (activeJob.request.decodeFinalWindow && activeJob.request.decodeSessionId) {
-        this.releaseSession(activeJob.request.decodeSessionId);
+      if (activeJob.request.decodeFinalWindow && activeJob.session) {
+        this.rememberClosed(activeJob.session.id, 'completed');
+        for (let i = this.pending.length - 1; i >= 0; i--) {
+          if (this.pending[i].session === activeJob.session) {
+            this.rejectJob(this.pending.splice(i, 1)[0], new DecodeSessionCancelledError('completed'));
+          }
+        }
+        this.releaseSession(activeJob.session);
       }
     } else {
       const failedAt = this.performanceNow();
@@ -712,81 +787,171 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
         requestAudioDurationMs: getDecodeRequestAudioDurationMs(activeJob.request),
         error: workerMessage.error,
       });
-      activeJob.reject(createError(workerMessage.error));
-      if (activeJob.request.decodeSessionId) this.releaseSession(activeJob.request.decodeSessionId);
+      this.rejectJob(activeJob, createError(workerMessage.error));
+      if (activeJob.session) this.cancelSession(activeJob.session.id, 'worker-failed');
     }
 
     this.dispatch();
   }
 
-  private releaseSession(sessionId: string): void {
-    const workerId = this.sessionWorkers.get(sessionId);
-    this.sessionWorkers.delete(sessionId);
-    if (workerId !== undefined && this.workerSessions.get(workerId) === sessionId) {
-      this.workerSessions.delete(workerId);
+  private rememberClosed(id: string, reason: DecodeSessionCancelReason): void {
+    this.closedSessions.set(id, reason);
+    if (this.closedSessions.size > CLOSED_SESSION_LIMIT) {
+      this.closedSessions.delete(this.closedSessions.keys().next().value!);
+    }
+  }
+
+  private releaseSession(session: DecodeSessionState): void {
+    if (this.sessions.get(session.id) !== session) return;
+    this.sessions.delete(session.id);
+    const worker = session.workerId === undefined ? undefined : this.workers.get(session.workerId);
+    if (worker?.session === session) worker.session = null;
+  }
+
+  private rejectJob(job: PendingJob, error: Error): void {
+    if (job.settled) return;
+    job.settled = true;
+    if (error instanceof DecodeSessionCancelledError) {
+      this.counters.cancelled++;
+      if (error.reason === 'queue-expired' || error.reason === 'session-expired') this.counters.expired++;
+    } else this.counters.failed++;
+    job.reject(error);
+  }
+
+  private endIdleSession(worker: WorkerState): void {
+    const session = worker.session;
+    if (!session?.cancelled || worker.activeJob || worker.ending || worker.stopping) return;
+    const id = this.nextControlId++;
+    const timer = setTimeout(() => {
+      this.handleWorkerFailure(worker, new Error('Decode session cleanup timed out'));
+    }, this.readyTimeoutMs);
+    worker.ending = { id, sessionId: session.id, startedAt: this.performanceNow(), timer };
+    try {
+      if (!worker.process.send) throw new Error('Decode worker IPC is unavailable');
+      worker.process.send({ type: 'end-session', id, sessionId: session.id }, error => {
+        if (error) this.handleWorkerFailure(worker, error);
+      });
+    } catch (error) {
+      this.handleWorkerFailure(worker, error instanceof Error ? error : new Error(String(error)));
     }
   }
 
   private dispatch(): void {
     if (this.destroyed) return;
     this.ensureWorkerCount();
-
+    if (this.workers.size > this.desiredWorkers) this.stopExtraIdleWorkers();
+    const now = this.performanceNow();
+    const expiredSessions = new Set(this.pending
+      .filter(job => job.session && now - job.enqueuedAt >= QUEUE_WAIT_TIMEOUT_MS)
+      .map(job => job.session));
     for (const worker of this.workers.values()) {
-      if (this.pending.length === 0) return;
-      if (!worker.ready || worker.activeJob) continue;
-      const jobIndex = this.pending.findIndex((pending) => {
-        const sessionId = pending.request.decodeSessionId;
-        if (!sessionId) return !this.workerSessions.has(worker.id);
-        const assignedWorker = this.sessionWorkers.get(sessionId);
-        return assignedWorker === worker.id || (assignedWorker === undefined && !this.workerSessions.has(worker.id));
-      });
+      if (this.pending.length === 0) break;
+      if (!worker.ready || worker.activeJob || worker.ending || worker.stopping) continue;
+      const jobIndex = this.pending.findIndex(job => !job.session?.cancelled
+        && !expiredSessions.has(job.session)
+        && this.performanceNow() - job.enqueuedAt < QUEUE_WAIT_TIMEOUT_MS && (
+        job.session ? worker.session === job.session || (job.session.workerId === undefined && !worker.session) : !worker.session
+      ));
       if (jobIndex < 0) continue;
       const [job] = this.pending.splice(jobIndex, 1);
-      if (!job) continue;
-      if (job.request.decodeSessionId && !this.sessionWorkers.has(job.request.decodeSessionId)) {
-        this.sessionWorkers.set(job.request.decodeSessionId, worker.id);
-        this.workerSessions.set(worker.id, job.request.decodeSessionId);
+      if (job.session) {
+        job.session.workerId = worker.id;
+        worker.session = job.session;
       }
       const dispatchedAt = this.performanceNow();
+      this.lastProgressAt = dispatchedAt;
+      this.counters.dispatched++;
       const dispatchRequest = this.applyApDecodeSuppression(job.request, dispatchedAt);
       const timer = setTimeout(() => {
+        if (worker.activeJob?.id !== job.id) return;
         logger.warn('decode job timed out', { workerId: worker.id, jobId: job.id, timeoutMs: this.jobTimeoutMs });
-        job.reject(new Error('decode job timed out'));
-        worker.activeJob = null;
-        if (job.request.decodeSessionId) this.releaseSession(job.request.decodeSessionId);
         this.handleWorkerFailure(worker, new Error('decode job timed out'));
-        this.killWorker(worker);
-        this.scheduleRespawn();
       }, this.jobTimeoutMs);
       worker.activeJob = { ...job, request: dispatchRequest, timer, dispatchedAt };
-
-      const ok = worker.process.send?.({
-        type: 'decode',
-        id: job.id,
-        request: dispatchRequest,
-      }, (error) => {
-        if (!error) return;
-        clearTimeout(timer);
-        if (worker.activeJob?.id === job.id) worker.activeJob = null;
-        if (job.request.decodeSessionId) this.releaseSession(job.request.decodeSessionId);
-        job.reject(error);
-        this.handleWorkerFailure(worker, error);
-        this.killWorker(worker);
-        this.scheduleRespawn();
-      });
-
-      if (ok === false) {
-        logger.warn(
-          `decode worker IPC backpressure workerId=${worker.id} workerPid=${worker.process.pid ?? 'unknown'} `
-          + `jobId=${job.id} slotId=${dispatchRequest.slotId} windowIdx=${dispatchRequest.windowIdx} mode=${dispatchRequest.mode} `
-          + `requestAudioDurationMs=${getDecodeRequestAudioDurationMs(dispatchRequest) ?? 'unknown'} `
-          + `queueWaitMs=${roundMs(dispatchedAt - job.enqueuedAt)} dispatchElapsedMs=${roundMs(this.performanceNow() - dispatchedAt)} `
-          + `pcmBytes=${dispatchRequest.pcm.byteLength} sampleRate=${dispatchRequest.sampleRate} `
-          + `pendingJobs=${this.pending.length} activeJobs=${this.getActiveJobCount()} readyWorkers=${this.getReadyWorkerCount()} `
-          + `workerProcesses=${this.workers.size} desiredWorkers=${this.desiredWorkers} nativeThreadsPerWorker=${this.nativeThreads} `
-          + `jobTimeoutMs=${this.jobTimeoutMs} readyTimeoutMs=${this.readyTimeoutMs} ipcSendReturned=false`,
-        );
+      try {
+        if (!worker.process.send) throw new Error('Decode worker IPC is unavailable');
+        const ok = worker.process.send({ type: 'decode', id: job.id, request: dispatchRequest }, error => {
+          if (error && worker.activeJob?.id === job.id) this.handleWorkerFailure(worker, error);
+        });
+        if (!ok) logger.debug('decode worker IPC backpressure', { workerId: worker.id, jobId: job.id });
+      } catch (error) {
+        this.handleWorkerFailure(worker, error instanceof Error ? error : new Error(String(error)));
       }
+    }
+    if (this.size() === 0) this.waitingSince = null;
+    this.refreshHealthStatus();
+  }
+
+  private getOldestPendingMs(): number {
+    return this.pending.length ? Math.max(0, this.performanceNow() - this.pending[0].enqueuedAt) : 0;
+  }
+
+  private getNoProgressMs(): number {
+    if (this.waitingSince === null) return 0;
+    return Math.max(0, this.performanceNow() - Math.max(this.waitingSince, this.lastProgressAt ?? this.waitingSince));
+  }
+
+  private getUnavailableReason(): DecodeWorkerPoolHealthSnapshot['unavailableReason'] {
+    if (this.stalledSince !== null) return 'queue-stalled';
+    return this.healthStatus === 'unavailable' ? 'worker-unavailable' : undefined;
+  }
+
+  private maintain(): void {
+    if (this.destroyed) return;
+    const now = this.performanceNow();
+    for (const worker of this.workers.values()) {
+      if (worker.session && !worker.activeJob && !worker.ending
+        && now - worker.session.lastActivityAt >= SESSION_IDLE_TIMEOUT_MS) {
+        this.cancelSession(worker.session.id, 'session-expired');
+      }
+    }
+    this.dispatch();
+    // A prompt cleanup acknowledgement can restore dispatch on the next IPC
+    // turn. Let its separate bounded timeout handle failure before alarming.
+    const cleanupInProgress = [...this.workers.values()].some(worker => worker.ending
+      && now - worker.ending.startedAt < this.readyTimeoutMs);
+    if (this.pending.length && this.getNoProgressMs() >= STALL_TIMEOUT_MS
+      && !cleanupInProgress && this.stalledSince === null) {
+      this.stalledSince = now;
+      this.refreshHealthStatus();
+      logger.warn('decode queue stopped making progress', this.buildHealthSnapshot());
+    }
+    // Check before expiring jobs so trimming a stalled queue cannot hide its
+    // unavailable state. Only an actual completed decode clears that state.
+    for (const job of [...this.pending]) {
+      if (job.settled || !this.pending.includes(job) || now - job.enqueuedAt < QUEUE_WAIT_TIMEOUT_MS) continue;
+      if (job.session) this.cancelSession(job.session.id, 'queue-expired');
+      else {
+        const index = this.pending.indexOf(job);
+        if (index >= 0) {
+          this.pending.splice(index, 1);
+          this.rejectJob(job, new DecodeSessionCancelledError('queue-expired'));
+        }
+      }
+    }
+    this.dispatch();
+    if (now - this.lastDiagnosticLogAt >= DIAGNOSTIC_INTERVAL_MS) {
+      logger.info('decode worker pool diagnostic snapshot', {
+        ...this.buildHealthSnapshot(),
+        intervalMs: roundMs(now - this.lastDiagnosticLogAt),
+        counts: { ...this.counters },
+        cancellations: { ...this.cancellationReasons },
+        lastProgressAgeMs: this.lastProgressAt === null ? null : roundMs(now - this.lastProgressAt),
+        workers: [...this.workers.values()].map(worker => ({
+          workerId: worker.id, ready: worker.ready,
+          sessionId: worker.session?.id,
+          sessionIdleMs: worker.session ? roundMs(now - worker.session.lastActivityAt) : undefined,
+          cleanupPending: Boolean(worker.ending),
+          activeJob: worker.activeJob ? {
+            jobId: worker.activeJob.id, slotId: worker.activeJob.request.slotId,
+            windowIdx: worker.activeJob.request.windowIdx, decodeStage: worker.activeJob.request.decodeStage,
+            elapsedMs: roundMs(now - worker.activeJob.dispatchedAt), cancelled: Boolean(worker.activeJob.settled),
+          } : null,
+        })),
+      });
+      this.lastDiagnosticLogAt = now;
+      for (const key of Object.keys(this.counters) as Array<keyof typeof this.counters>) this.counters[key] = 0;
+      for (const key of Object.keys(this.cancellationReasons) as DecodeSessionCancelReason[]) delete this.cancellationReasons[key];
     }
   }
 
@@ -872,6 +1037,7 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
   }
 
   private resolveHealthStatus(): DecodeWorkerPoolStatus {
+    if (this.stalledSince !== null) return 'unavailable';
     const readyWorkers = this.getReadyWorkerCount();
     if (readyWorkers > 0) {
       return this.desiredWorkers < this.initialDesiredWorkers || readyWorkers < this.desiredWorkers
@@ -887,13 +1053,16 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
   private buildHealthSnapshot(): DecodeWorkerPoolHealthSnapshot {
     return {
       status: this.healthStatus,
+      unavailableReason: this.getUnavailableReason(),
+      oldestPendingMs: this.getOldestPendingMs(),
+      noProgressMs: this.getNoProgressMs(),
       desiredWorkers: this.desiredWorkers,
       readyWorkers: this.getReadyWorkerCount(),
       workerProcesses: this.workers.size,
       pendingJobs: this.pending.length,
       activeJobs: this.getActiveJobCount(),
       nativeThreadsPerWorker: this.nativeThreads,
-      lastFailure: this.lastFailure,
+      lastFailure: this.stalledSince === null ? this.lastFailure : 'Decode queue stopped making progress',
       lastFailureAt: this.lastFailureAt,
       restartAttempts: this.restartAttempts,
       workerEntry: this.entry.entryPath,
@@ -906,7 +1075,7 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
     if (nextStatus === this.healthStatus) return;
     const previousStatus = this.healthStatus;
     this.healthStatus = nextStatus;
-    if (nextStatus === 'unavailable') {
+    if (nextStatus === 'unavailable' && this.getReadyWorkerCount() === 0) {
       this.rejectPendingForUnavailable();
     }
     this.emit('healthStatusChanged', this.buildHealthSnapshot(), previousStatus);
@@ -916,7 +1085,9 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
     if (this.pending.length === 0) return;
     const error = new Error(`decode worker unavailable: ${this.lastFailure ?? 'no worker is ready'}`);
     while (this.pending.length > 0) {
-      this.pending.shift()!.reject(error);
+      const job = this.pending.shift()!;
+      this.rejectJob(job, error);
+      if (job.session && job.session.workerId === undefined) this.releaseSession(job.session);
     }
   }
 
@@ -932,6 +1103,8 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
       pid: worker.process.pid ?? worker.lastTelemetry.pid,
       ready: worker.ready,
       busy: Boolean(activeJob),
+      ...(worker.session ? { reservedSessionId: worker.session.id } : {}),
+      ...(worker.ending ? { sessionCleanupPending: true } : {}),
       nativeThreads: this.nativeThreads,
       currentJob: activeJob
         ? {
@@ -950,31 +1123,45 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
     };
   }
 
-  private handleWorkerExit(state: WorkerState, code: number | null, signal: NodeJS.Signals | null): void {
+  private detachWorker(state: WorkerState, error: Error): void {
     clearTimeout(state.startTimer);
+    if (state.ending) clearTimeout(state.ending.timer);
+    state.ending = null;
+    state.ready = false;
+    state.stopping = true;
     if (state.activeJob) {
       clearTimeout(state.activeJob.timer);
-      state.activeJob.reject(new Error(`decode worker exited before job completed (code=${code}, signal=${signal})`));
+      this.rejectJob(state.activeJob, error);
       state.activeJob = null;
     }
+    const session = state.session;
+    if (session) {
+      this.rememberClosed(session.id, 'worker-failed');
+      for (let i = this.pending.length - 1; i >= 0; i--) {
+        if (this.pending[i].session === session) {
+          this.rejectJob(this.pending.splice(i, 1)[0], new DecodeSessionCancelledError('worker-failed'));
+        }
+      }
+      this.releaseSession(session);
+    }
     this.workers.delete(state.id);
-    const sessionId = this.workerSessions.get(state.id);
-    if (sessionId) this.releaseSession(sessionId);
+  }
 
+  private handleWorkerExit(state: WorkerState, code: number | null, signal: NodeJS.Signals | null): void {
+    if (this.workers.get(state.id) !== state) return;
     if (!this.destroyed && !state.stopping) {
       this.handleWorkerFailure(state, new Error(`decode worker exited (code=${code}, signal=${signal})`));
-      this.scheduleRespawn();
-      this.dispatch();
-    }
-    this.refreshHealthStatus();
+    } else this.detachWorker(state, new DecodeSessionCancelledError('stopped'));
   }
 
   private handleWorkerFailure(state: WorkerState, error: Error): void {
-    if (state.failureRecorded) {
-      return;
-    }
+    if (state.failureRecorded || this.workers.get(state.id) !== state) return;
     state.failureRecorded = true;
+    this.detachWorker(state, error);
     this.recordWorkerFailure(state.id, error);
+    this.scheduleRespawn();
+    this.killWorker(state);
+    this.dispatch();
   }
 
   private recordWorkerFailure(workerId: number, error: Error): void {
@@ -1003,7 +1190,7 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
       delayMs,
       consecutiveFailures: this.consecutiveFailures,
       desiredWorkers: this.desiredWorkers,
-      lastFailure: this.lastFailure,
+      lastFailure: this.stalledSince === null ? this.lastFailure : 'Decode queue stopped making progress',
     });
     this.respawnTimer = setTimeout(() => {
       this.respawnTimer = null;
@@ -1021,18 +1208,11 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
     for (const worker of idleWorkers) {
       if (this.workers.size <= this.desiredWorkers) return;
       void this.stopWorker(worker);
-      this.workers.delete(worker.id);
     }
   }
 
   private async stopWorker(worker: WorkerState): Promise<void> {
-    worker.stopping = true;
-    clearTimeout(worker.startTimer);
-    if (worker.activeJob) {
-      clearTimeout(worker.activeJob.timer);
-      worker.activeJob.reject(new Error('decode worker stopped before job completed'));
-      worker.activeJob = null;
-    }
+    this.detachWorker(worker, new DecodeSessionCancelledError('stopped'));
 
     if (worker.process.killed) return;
 
@@ -1045,14 +1225,15 @@ export class WSJTXDecodeProcessPool extends EventEmitter {
         clearTimeout(timer);
         resolve();
       });
-      const sent = worker.process.send?.({ type: 'shutdown' }, (error) => {
-        if (error) {
+      try {
+        const sent = worker.process.send?.({ type: 'shutdown' }, (error) => {
+          if (!error) return;
           clearTimeout(timer);
           this.killWorker(worker);
           resolve();
-        }
-      });
-      if (sent === undefined) {
+        });
+        if (sent === undefined) throw new Error('Decode worker IPC is unavailable');
+      } catch {
         clearTimeout(timer);
         this.killWorker(worker);
         resolve();

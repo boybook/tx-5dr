@@ -3,6 +3,9 @@ import {
   type IDecodeQueue,
   type DecodeRequest,
   type DecodeResult,
+  type DecodeSessionCancelReason,
+  DecodeSessionCancelledError,
+  isDecodeSessionCancelled,
 } from '@tx5dr/core';
 import type { DecodeWorkerTelemetrySnapshot } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
@@ -32,6 +35,7 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
   private lifecycleState: DecodeWorkQueueLifecycleState = 'stopped';
   private startPromise: Promise<void> | null = null;
   private stopPromise: Promise<void> | null = null;
+  private readonly deliveries = new Map<string, { cancelReason?: DecodeSessionCancelReason; count: number }>();
   private readonly healthStatusListener = (status: DecodeWorkerPoolHealthSnapshot, previousStatus: string) => {
     this.handlePoolHealthStatusChanged(status, previousStatus);
   };
@@ -147,15 +151,29 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
       throw error;
     }
 
+    const pool = this.pool;
+    const sessionId = request.decodeSessionId;
+    const delivery = sessionId ? this.deliveries.get(sessionId) ?? { count: 0, cancelReason: undefined } : undefined;
+    if (sessionId && delivery) {
+      delivery.count++;
+      this.deliveries.set(sessionId, delivery);
+    }
     try {
-      const result = await this.pool.decode(request);
+      const result = await pool.decode(request);
+      if (this.pool !== pool || this.lifecycleState !== 'running' || delivery?.cancelReason) {
+        throw new DecodeSessionCancelledError(delivery?.cancelReason ?? 'stopped');
+      }
       this.emit('decodeComplete', result);
     } catch (error) {
+      if (isDecodeSessionCancelled(error)) throw error;
       const err = error instanceof Error ? error : new Error(String(error));
       logger.error('decode failed', { slotId: request.slotId, windowIdx: request.windowIdx, error: err.message });
       this.emit('decodeError', err, request);
       throw err;
     } finally {
+      if (sessionId && delivery && --delivery.count === 0 && this.deliveries.get(sessionId) === delivery) {
+        this.deliveries.delete(sessionId);
+      }
       if (this.size() === 0) {
         this.emit('queueEmpty');
       }
@@ -164,6 +182,12 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
 
   size(): number {
     return this.pool?.size() ?? 0;
+  }
+
+  cancelSession(sessionId: string, reason: DecodeSessionCancelReason): void {
+    const delivery = this.deliveries.get(sessionId);
+    if (delivery) delivery.cancelReason = reason;
+    this.pool?.cancelSession(sessionId, reason);
   }
 
   getStatus() {

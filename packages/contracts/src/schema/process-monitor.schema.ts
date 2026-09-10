@@ -55,6 +55,8 @@ export const DecodeWorkerTelemetryWorkerSchema = z.object({
   cpu: ProcessCpuSchema,
   currentJob: DecodeWorkerCurrentJobSchema.optional(),
   lastSeenAt: z.number(),
+  reservedSessionId: z.string().optional(),
+  sessionCleanupPending: z.boolean().optional(),
 });
 
 export const DecodeWorkerTelemetrySummarySchema = z.object({
@@ -69,6 +71,9 @@ export const DecodeWorkerTelemetrySummarySchema = z.object({
   pendingJobs: z.number().int().nonnegative(),
   activeJobs: z.number().int().nonnegative(),
   lastError: z.string().optional(),
+  unavailableReason: z.enum(['worker-unavailable', 'queue-stalled']).optional(),
+  oldestPendingMs: z.number().nonnegative().optional(),
+  noProgressMs: z.number().nonnegative().optional(),
   lastFailureAt: z.number().optional(),
   restartAttempts: z.number().int().nonnegative().optional(),
   workerEntry: z.string().optional(),

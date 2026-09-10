@@ -113,8 +113,8 @@
       "suggestions": ["Check network connection", "Refresh page and retry"]
     },
     "DECODE_WORKER_UNAVAILABLE": {
-      "userMessage": "FT8/FT4 decoding is temporarily unavailable because the decode worker failed to start. Other radio functions can continue running.",
-      "suggestions": ["Open Server Health to inspect Decode Workers status.", "Check server logs for the native module or worker startup error."]
+      "userMessage": "FT8/FT4 decoding is temporarily unavailable because a worker failed or the decode queue stopped making progress.",
+      "suggestions": ["Open Server Health to inspect Decode Workers.", "If decoding does not recover, restart the engine and submit logs covering the incident."]
     },
     "UNKNOWN_ERROR": {
       "userMessage": "An unknown error occurred",

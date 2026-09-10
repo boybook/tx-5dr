@@ -19,6 +19,7 @@ function parseNativeThreads(value: string | undefined): number {
 export class WSJTXDecodeWorkerCore {
   private readonly lib: WSJTXLib;
   private readonly nativeThreads: number;
+  private decoding = false;
   private activeSession: { id: string; mode: WSJTXMode; depth: number; session: WSJTXDecodeSession } | null = null;
   private activeAudioContext: {
     sessionId: string;
@@ -35,6 +36,25 @@ export class WSJTXDecodeWorkerCore {
   }
 
   async decode(request: DecodeRequest): Promise<DecodeResult> {
+    if (this.decoding) throw new Error('Concurrent native decode is not allowed');
+    this.decoding = true;
+    try {
+      return await this.decodeRequest(request);
+    } finally {
+      this.decoding = false;
+    }
+  }
+
+  /** Called only after the active native operation has drained. */
+  endSession(sessionId: string): void {
+    if (this.decoding) throw new Error('Cannot end a session during native decode');
+    if (this.activeSession?.id !== sessionId) return;
+    this.activeSession.session.endDecodeSession();
+    this.activeSession = null;
+    this.activeAudioContext = null;
+  }
+
+  private async decodeRequest(request: DecodeRequest): Promise<DecodeResult> {
     const startTime = performance.now();
     const apContext = request.apContext;
     const baseFrequency = apContext ? apContext.frequencyHz : 0;

@@ -2,6 +2,7 @@ import type { DecodeRequest, DecodeResult } from '@tx5dr/core';
 import type { DecodeWorkerCurrentJob, ProcessCpu, ProcessMemory } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
 import { WSJTXDecodeWorkerCore } from './WSJTXDecodeWorkerCore.js';
+import { DecodeWorkerCommandSchema } from './decode-worker-protocol.js';
 
 const logger = createLogger('DecodeWorker');
 const workerId = process.env.TX5DR_DECODE_WORKER_ID || String(process.pid ?? 'unknown');
@@ -25,12 +26,6 @@ interface DecodeCommand {
   id: number;
   request: DecodeRequest;
 }
-
-interface ShutdownCommand {
-  type: 'shutdown';
-}
-
-type ParentCommand = DecodeCommand | ShutdownCommand;
 
 function send(message: unknown): void {
   if (process.send) {
@@ -162,8 +157,24 @@ async function handleDecode(command: DecodeCommand): Promise<void> {
 const telemetryTimer = setInterval(sendTelemetry, telemetryIntervalMs);
 telemetryTimer.unref();
 
-process.on('message', (message: ParentCommand) => {
-  if (!message || typeof message !== 'object') return;
+process.on('message', (input: unknown) => {
+  const parsed = DecodeWorkerCommandSchema.safeParse(input);
+  if (!parsed.success) {
+    logger.error('Invalid decode worker command');
+    process.exit(1);
+    return;
+  }
+  const message = parsed.data;
+
+  if (message.type === 'end-session') {
+    try {
+      decoder.endSession(message.sessionId);
+      send({ type: 'session-ended', id: message.id, sessionId: message.sessionId });
+    } catch (error) {
+      send({ type: 'session-ended', id: message.id, sessionId: message.sessionId, error: serializeError(error) });
+    }
+    return;
+  }
 
   if (message.type === 'shutdown') {
     shuttingDown = true;

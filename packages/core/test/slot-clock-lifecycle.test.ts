@@ -39,6 +39,7 @@ test('SlotScheduler removes the old subWindow listener on stop/start', async () 
         decodeRequests.push({ slotId: request.slotId, mode: request.mode, windowIdx: request.windowIdx });
       },
       size: () => 0,
+      cancelSession: () => {},
     },
     {
       getBuffer: async () => new ArrayBuffer(32),
@@ -89,7 +90,7 @@ test('SlotScheduler snapshots depth and emits session stage metadata per slot', 
   const requests: any[] = [];
   const scheduler = new SlotScheduler(
     slotClock as unknown as any,
-    { push: async (request) => { requests.push(request); }, size: () => 0 },
+    { push: async (request) => { requests.push(request); }, size: () => 0, cancelSession: () => {} },
     { getBuffer: async () => new ArrayBuffer(32), getSampleRate: () => 12000 },
     undefined, undefined, undefined, () => 2,
   );
@@ -130,6 +131,7 @@ test('SlotScheduler tags FT4 decode requests with FT4 mode', async () => {
         decodeModes.push(request.mode);
       },
       size: () => 0,
+      cancelSession: () => {},
     },
     {
       getBuffer: async () => new ArrayBuffer(32),
@@ -176,6 +178,7 @@ test('SlotScheduler attaches AP context only when provider returns one', async (
         decodeRequests.push(request);
       },
       size: () => 0,
+      cancelSession: () => {},
     },
     {
       getBuffer: async () => new ArrayBuffer(32),
