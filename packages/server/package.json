@@ -57,7 +57,7 @@
     "rasterwave-node": "0.5.0",
     "rubato-fft-node": "^0.2.0",
     "serialport": "^13.0.0",
-    "tci-client-node": "portal:../../../tci-client-node",
+    "tci-client-node": "https://github.com/boybook/tci-client-node.git#commit=7359e718e4b0efe97ef7e2172754b397c36a6b16",
     "wav": "^1.0.2",
     "wsjtx-lib": "2.2.0",
     "xstate": "^5.23.0",

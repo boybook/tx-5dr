@@ -112,23 +112,9 @@ jobs:
 
       - name: Install dependencies
         shell: bash
-        run: |
-          echo "=== Installing dependencies with Yarn 4 (node-modules mode) ==="
-          echo "Note: Using node-modules linker instead of PnP for better compatibility"
-          yarn install || {
-            echo "First install attempt failed, applying naudiodon2 fixes..."
-            node scripts/fix-naudiodon.js || true
-            echo "Clearing yarn cache and retrying..."
-            yarn cache clean || true
-            yarn install || {
-              echo "Second install failed, trying with network concurrency limit..."
-              yarn install --network-concurrency 1 || {
-                echo "Final fallback: installing with inline builds..."
-                yarn install --inline-builds
-              }
-            }
-          }
+        run: yarn install --immutable --inline-builds
         env:
+          YARN_HTTP_TIMEOUT: '300000'
           npm_config_cache: .npm
           ELECTRON_CACHE: .electron-cache
           ELECTRON_BUILDER_CACHE: .electron-builder-cache

@@ -73,10 +73,7 @@ COPY packages/web/package.json ./packages/web/
 
 # 安装依赖（多架构优化）
 RUN echo "Installing dependencies for $(uname -m)..." && \
-    yarn install --immutable --network-timeout 300000 || { \
-        echo "Immutable install failed, trying fallback..." && \
-        yarn install --network-timeout 300000; \
-    }
+    YARN_HTTP_TIMEOUT=300000 yarn install --immutable
 
 # 复制源代码
 COPY . .

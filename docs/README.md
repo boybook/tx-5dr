@@ -37,6 +37,7 @@ not track implementation progress or branch-by-branch task history.
 
 ## Development
 
+- [Runtime dependency sources and clean-install checks](development/runtime-dependencies.md)
 - [Virtual FT8/FT4 radio](development/virtual-radio.md)
 
 Development documents describe supported test tools that are not normal product
