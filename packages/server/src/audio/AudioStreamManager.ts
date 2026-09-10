@@ -140,6 +140,7 @@ interface RtAudioPlaybackStartWaiter {
   finishedSubmitting: boolean;
   started: boolean;
   onStarted: () => void;
+  onConsumed?: () => void;
 }
 
 interface RtAudioOutputDrainWaiter {
@@ -373,6 +374,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    * lets an old stop cancel a newer frame after the coordinator has advanced.
    */
   private readonly stopRequestedPlaybackIds = new Set<number>();
+  private deterministicPlaybackWake: { playbackId: number; wake: () => void } | null = null;
   private voiceOutputObserver: VoiceTxOutputObserver | null = null;
   private voiceTxOutputPipeline: VoiceTxOutputPipeline;
   private nativeAudioInputSequence = 0;
@@ -1635,7 +1637,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       this.outputBufferSize,
       'TX5DR-Output',
       null,
-      () => this.recordOutputFrameConsumed(),
+      () => {
+        if (streamGeneration === this.outputStreamGeneration) this.recordOutputFrameConsumed();
+      },
       RTAUDIO_STREAM_FLAGS_NONE,
       (type: number, message: string) => this.recordOutputRtAudioIssue(type, message, streamGeneration)
     );
@@ -1762,6 +1766,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       }
     }
     this.pruneRtAudioPlaybackStartWaiters();
+    waiter.onConsumed?.();
   }
 
   private beginRtAudioPlaybackStartWaiter(
@@ -2279,6 +2284,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     }
     // 设置停止标志,让播放循环自动退出
     this.stopRequestedPlaybackIds.add(playbackId);
+    if (this.deterministicPlaybackWake?.playbackId === playbackId) this.deterministicPlaybackWake.wake();
 
     // 等待当前播放完全停止
     if (playbackPromise) {
@@ -2478,6 +2484,10 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         : Math.max(64, this.outputBufferSize || 1024);
     const highWaterSamples = sampleRate;
     const lowWaterSamples = Math.round(sampleRate * 0.3);
+    // This bounds native FIFO occupancy, not wall-clock lead. Each hardware
+    // consumption notification makes room for an immediate replacement frame.
+    const rtAudioCapacityChunks = Math.max(2, Math.ceil(sampleRate * 0.1 / frameSamples));
+    const outputGeneration = this.outputStreamGeneration;
     const playbackId = ++this.playbackSequence;
     const queue: Float32Array[] = [];
     let queuedSamples = 0;
@@ -2487,6 +2497,8 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     let wakeConsumer: (() => void) | null = null;
     let completion: Promise<void> | null = null;
     const backpressureWaiters: Array<() => void> = [];
+    const observedRtAudioChunks: Float32Array[] = [];
+    let observedRtAudioSamples = 0;
     let resolveFirstStart!: () => void;
     let rejectFirstStart!: (error: unknown) => void;
     const firstStart = new Promise<void>((resolve, reject) => {
@@ -2512,6 +2524,18 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         logger.warn('Deterministic playback chunk observer failed', error);
       }
     };
+    const flushRtAudioObservation = () => {
+      if (observedRtAudioSamples === 0) return;
+      const samples = new Float32Array(observedRtAudioSamples);
+      let offset = 0;
+      for (const chunk of observedRtAudioChunks) {
+        samples.set(chunk, offset);
+        offset += chunk.length;
+      }
+      observedRtAudioChunks.length = 0;
+      observedRtAudioSamples = 0;
+      observePlaybackChunk(samples);
+    };
 
     const pump = async () => {
       this.playing = true;
@@ -2522,6 +2546,20 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       let playbackStarted = false;
       let tciStarted = false;
       let rtWaiter: RtAudioPlaybackStartWaiter | null = null;
+      let outputWatchdog: ReturnType<typeof setInterval> | null = null;
+      let lastRtAudioActivityAt = performance.now();
+      const assertOutputActive = () => {
+        if (aborted) throw aborted;
+        if (this.isPlaybackStopRequested(playbackId)) throw new Error('playback interrupted');
+        if (rtWaiter) {
+          if (outputGeneration !== this.outputStreamGeneration) throw new Error('audio output generation changed during playback');
+          if (this.outputRuntimeIssueError) throw this.outputRuntimeIssueError;
+        }
+      };
+      const handleOutputError = () => {
+        if (this.outputRuntimeIssueError || outputGeneration !== this.outputStreamGeneration) wake();
+      };
+      this.deterministicPlaybackWake = { playbackId, wake };
       const signalStarted = () => {
         if (playbackStarted) return;
         playbackStarted = true;
@@ -2535,11 +2573,26 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         }
         if (!radioAdapter && !this.usingAndroidOutput) {
           rtWaiter = this.beginRtAudioPlaybackStartWaiter(playbackId, signalStarted);
+          rtWaiter.onConsumed = () => {
+            lastRtAudioActivityAt = performance.now();
+            wake();
+          };
+          logger.info('SSTV RtAudio consumption-driven output started', {
+            playbackId, sampleRate, frameSamples, fifoCapacityChunks: rtAudioCapacityChunks,
+          });
+          this.on('error', handleOutputError);
+          // Watchdog only: never schedule audio frames from this timer.
+          outputWatchdog = setInterval(() => {
+            if (rtWaiter && rtWaiter.submittedChunks > rtWaiter.consumedChunks
+              && performance.now() - lastRtAudioActivityAt >= RTAUDIO_TX_START_ACK_TIMEOUT_MS) {
+              aborted = new Error('RtAudio SSTV audio consumption stalled');
+              wake();
+            }
+          }, 250);
         }
 
         for (;;) {
-          if (aborted) throw aborted;
-          if (this.isPlaybackStopRequested(playbackId)) throw new Error('playback interrupted');
+          assertOutputActive();
           const chunk = queue.shift();
           if (!chunk) {
             if (ended) break;
@@ -2549,24 +2602,31 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           queuedSamples -= chunk.length;
           releaseBackpressure();
 
-          // A bounded sleep is only a polling slice, not permission to send
-          // another frame. TCI can queue PCM much faster than CHRONO consumes it.
-          const pacingStartedAt = performance.now();
-          for (;;) {
-            if (aborted) throw aborted;
-            if (this.isPlaybackStopRequested(playbackId)) throw new Error('playback interrupted');
-            const leadMs = submittedSamples / sampleRate * 1000 - (performance.now() - hrStart);
-            const txSync = radioAdapter?.kind === 'tci' ? radioAdapter.adapter.getTxAudioSyncSnapshot() : null;
-            const queueExcessMs = txSync ? txSync.queuedAudioMs - txSync.targetLeadMs : 0;
-            // CHRONO owns the TCI clock. Refill its reserve after late timer
-            // wakeups instead of pacing each frame with a relative timeout.
-            const waitMs = txSync ? queueExcessMs : leadMs - 100;
-            if (waitMs <= 0) break;
-            if (queueExcessMs > 0 && performance.now() - pacingStartedAt >= 5_000) {
-              throw new Error('TCI SSTV audio consumption stalled');
+          if (rtWaiter) {
+            while (rtWaiter.submittedChunks - rtWaiter.consumedChunks >= rtAudioCapacityChunks) {
+              await waitForData();
+              assertOutputActive();
             }
-            const waitSliceMs = Math.max(1, Math.min(25, txSync?.recommendedPumpIntervalMs ?? 25));
-            await new Promise<void>((resolve) => setTimeout(resolve, Math.min(waitMs, waitSliceMs)));
+          } else {
+            // A bounded sleep is only a polling slice, not permission to send
+            // another frame. TCI can queue PCM much faster than CHRONO consumes it.
+            const pacingStartedAt = performance.now();
+            for (;;) {
+              if (aborted) throw aborted;
+              if (this.isPlaybackStopRequested(playbackId)) throw new Error('playback interrupted');
+              const leadMs = submittedSamples / sampleRate * 1000 - (performance.now() - hrStart);
+              const txSync = radioAdapter?.kind === 'tci' ? radioAdapter.adapter.getTxAudioSyncSnapshot() : null;
+              const queueExcessMs = txSync ? txSync.queuedAudioMs - txSync.targetLeadMs : 0;
+              // CHRONO owns the TCI clock. Refill its reserve after late timer
+              // wakeups instead of pacing each frame with a relative timeout.
+              const waitMs = txSync ? queueExcessMs : leadMs - 100;
+              if (waitMs <= 0) break;
+              if (queueExcessMs > 0 && performance.now() - pacingStartedAt >= 5_000) {
+                throw new Error('TCI SSTV audio consumption stalled');
+              }
+              const waitSliceMs = Math.max(1, Math.min(25, txSync?.recommendedPumpIntervalMs ?? 25));
+              await new Promise<void>((resolve) => setTimeout(resolve, Math.min(waitMs, waitSliceMs)));
+            }
           }
 
           let observedChunk = chunk;
@@ -2592,6 +2652,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             if (options.injectIntoMonitor) this.emit('txMonitorAudioData', { samples: chunk, sampleRate });
           } else if (this.rtAudioOutput && rtWaiter) {
             const encoded = this.encodeRtAudioOutputChunk(chunk, frameSamples, this.volumeGain, Boolean(options.injectIntoMonitor || options.onPlaybackChunk));
+            if (rtWaiter.submittedChunks === rtWaiter.consumedChunks) lastRtAudioActivityAt = performance.now();
             this.noteRtAudioChunkPending(rtWaiter);
             try {
               this.rtAudioOutput.write(encoded.buffer);
@@ -2604,11 +2665,20 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           } else {
             throw new Error('audio output became unavailable');
           }
-          observePlaybackChunk(observedChunk);
+          if (rtWaiter && options.onPlaybackChunk) {
+            // Keep preview decoding and status broadcasting off the per-frame
+            // cadence (up to 750 callbacks/s with 64-frame USB buffers).
+            observedRtAudioChunks.push(observedChunk);
+            observedRtAudioSamples += observedChunk.length;
+            if (observedRtAudioSamples >= sampleRate * 0.1) flushRtAudioObservation();
+          } else {
+            observePlaybackChunk(observedChunk);
+          }
           submittedSamples += chunk.length;
         }
 
         if (!playbackStarted) throw new Error('deterministic playback ended before hardware start');
+        flushRtAudioObservation();
         const remainingLeadMs = submittedSamples / sampleRate * 1000 - (performance.now() - hrStart);
         if (radioAdapter?.kind === 'tci') {
           await radioAdapter.adapter.drainTransmission(Math.max(1000, Math.ceil(remainingLeadMs) + 1000));
@@ -2616,6 +2686,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           await new Promise<void>((resolve) => setTimeout(resolve, Math.ceil(remainingLeadMs)));
         }
         if (rtWaiter) {
+          rtWaiter.onConsumed = undefined;
           this.finishRtAudioPlaybackStartWaiter(rtWaiter);
           rtWaiter = null;
           await this.waitForOutputDrain({ timeoutMs: Math.max(2000, Math.ceil(remainingLeadMs) + 2000) });
@@ -2625,6 +2696,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         rejectFirstStart(error);
         throw error;
       } finally {
+        if (outputWatchdog) clearInterval(outputWatchdog);
+        observedRtAudioChunks.length = 0;
+        this.off('error', handleOutputError);
+        if (rtWaiter) rtWaiter.onConsumed = undefined;
+        if (this.deterministicPlaybackWake?.playbackId === playbackId) this.deterministicPlaybackWake = null;
         if (rtWaiter) this.finishRtAudioPlaybackStartWaiter(rtWaiter);
         if (tciStarted && radioAdapter?.kind === 'tci') await radioAdapter.adapter.endTransmission().catch(() => undefined);
         this.stopRequestedPlaybackIds.delete(playbackId);

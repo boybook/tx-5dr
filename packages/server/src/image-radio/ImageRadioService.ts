@@ -1101,6 +1101,9 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
       while (!encoder.isFinished) {
         await playback.write(await encoder.readSamples(playback.frameSamples));
         const progress = encoder.progress;
+        if (progress.currentRow === this.txStatus.currentRow
+          && progress.stage === this.txStatus.encoderStage
+          && progress.estimatedTotalSamples === this.txStatus.estimatedTotalSamples) continue;
         if (this.activeTx) this.activeTx.revision += 1;
         this.updateTx({
           ...this.txStatus, revision: this.activeTx?.revision ?? this.txStatus.revision + 1,

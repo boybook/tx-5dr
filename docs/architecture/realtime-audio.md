@@ -114,8 +114,23 @@ backpressure. Its producer queue is bounded independently of the output sink.
 For TCI, the CHRONO-consumed queue snapshot is the pacing clock: refill to the
 negotiated target lead, with at most one submitted frame beyond that target.
 Short timer waits only poll for room; late wakeups refill the reserve without
-accumulating per-frame timing drift. Other sinks use cumulative sample duration
-against a monotonic clock and recheck the lead after every wait.
+accumulating per-frame timing drift. ICOM WLAN and Android use cumulative sample
+duration against a monotonic clock and recheck the lead after every wait.
+
+USB/soundcard SSTV output uses RtAudio frame-consumption notifications to refill
+the native FIFO. Each consumed frame wakes the producer immediately; a burst of
+notifications frees several slots that are filled in the same pump turn. There
+is no per-frame timer or wall-clock catch-up calculation in this path. The FIFO
+holds at most `max(2, ceil(sampleRate * 0.1 / frameSamples))` frames. This is an
+occupancy bound; it does not determine when a frame is played. RtAudio's native
+audio thread consumes the FIFO on the device clock, independently of JS timers.
+
+Cancellation and output errors also wake a waiting pump. A watchdog fails output
+after two seconds without consumption while native frames are pending; it never
+schedules PCM writes. Output callbacks are scoped to the stream generation, and
+the per-playback refill callback is detached when submission ends. This removes
+timer-driven refill jitter but does not isolate the JS producer from long
+event-loop stalls: a stall longer than the native FIFO can still cause underrun.
 
 The TCI reserve absorbs scheduling jitter within its buffered duration. It cannot
 guarantee uninterrupted output through an event-loop or transport stall longer
@@ -125,6 +140,9 @@ on every pacing iteration, and output failures reject blocked producers.
 
 `ImageRadioService` advances `samplesEmitted` and feeds the local decoder from
 the same paced output-submission callback, independently of encoder read-ahead.
+For RtAudio, preview PCM notifications are batched into approximately 100 ms and
+encoder diagnostics are broadcast only when changed, so small native frames do
+not force WebSocket status updates at the device callback frequency.
 `encoderStage` and `currentRow` remain encoder diagnostics. Submission can lead
 physical playback by the bounded sink reserve; it is not a hardware playhead.
 The local preview ends at the raster boundary, before any station ID or guard.

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { performance } from 'node:perf_hooks';
 
 const { mockConfigManager, mockLogger, mockResampleAudioProfessional, mockRtAudioState, MockRtAudio } = vi.hoisted(() => {
   const logger = {
@@ -227,6 +228,122 @@ describe('AudioStreamManager RtAudio output diagnostics', () => {
       process.env.TX5DR_RUNTIME_FLAVOR = originalRuntimeFlavor;
     }
     vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  async function flushPlaybackWork(): Promise<void> {
+    for (let index = 0; index < 300; index++) await Promise.resolve();
+  }
+
+  async function startSstvWithNativeFifo() {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+    vi.spyOn(performance, 'now').mockImplementation(() => Date.now());
+    mockRtAudioState.consumeOnWrite = false;
+    const manager = new AudioStreamManager();
+    await manager.startOutput();
+    const output = (manager as unknown as { rtAudioOutput: InstanceType<typeof MockRtAudio> }).rtAudioOutput;
+    manager.setVolumeGain(1);
+    const observed: Float32Array[] = [];
+    const session = manager.openDeterministicPlayback({
+      playbackKind: 'sstv', onPlaybackChunk: (samples) => observed.push(samples),
+    });
+    const first = new Float32Array(session.frameSamples).fill(0.25);
+    await session.write(first);
+    const started = session.start();
+    await flushPlaybackWork();
+    output.consumeNextFrame();
+    await started;
+    return { manager, output, session, observed };
+  }
+
+  it('refills SSTV native output on every consumed frame without advancing JS timers', async () => {
+    const { manager, output, session, observed } = await startSstvWithNativeFifo();
+    let producerFinished = false;
+    const producer = (async () => {
+      for (let index = 1; index < 1000; index++) {
+        await session.write(new Float32Array(session.frameSamples).fill(index / 1000));
+      }
+      producerFinished = true;
+      await session.end();
+    })();
+    await flushPlaybackWork();
+    const fifoCapacity = Math.ceil(4800 / session.frameSamples);
+    expect(mockRtAudioState.writes.length).toBe(fifoCapacity + 1);
+    expect(producerFinished).toBe(false);
+    // Hardware callbacks are independent of JS timers, including batched
+    // delivery after a delayed event-loop turn. No fake timers are advanced.
+    let consumed = 1;
+    while (consumed < 1000) {
+      const available = mockRtAudioState.writes.length - consumed;
+      expect(available).toBeGreaterThan(0);
+      for (let i = 0; i < Math.min(available, 10); i++) {
+        output.consumeNextFrame();
+        consumed++;
+      }
+      await flushPlaybackWork();
+      expect(mockRtAudioState.writes.length - consumed).toBeLessThanOrEqual(fifoCapacity);
+      if (consumed < 900) expect(mockRtAudioState.writes.length - consumed).toBe(fifoCapacity);
+    }
+    await producer;
+    expect(observed.reduce((sum, chunk) => sum + chunk.length, 0)).toBe(1000 * session.frameSamples);
+    expect(observed.length).toBeLessThanOrEqual(14);
+    for (let index = 0; index < 1000; index++) {
+      const expected = index === 0 ? 0.25 : index / 1000;
+      expect(mockRtAudioState.writes[index].readFloatLE(0)).toBeCloseTo(expected);
+      expect(mockRtAudioState.writes[index].readFloatLE(session.frameSamples * 4 - 4)).toBeCloseTo(expected);
+    }
+    expect(manager.isPlaying()).toBe(false);
+    await manager.stopOutput();
+  });
+
+  it.each(['cancel', 'stop', 'device-loss', 'write-failure', 'stall'] as const)(
+    'settles a blocked SSTV producer on %s without leaving a refill callback active', async (failure) => {
+      const { manager, output, session } = await startSstvWithNativeFifo();
+      manager.on('error', () => undefined);
+      const producer = (async () => {
+        for (let index = 0; index < 1500; index++) await session.write(new Float32Array(session.frameSamples));
+        await session.end();
+      })().catch((error: unknown) => error);
+      await flushPlaybackWork();
+      let stop: Promise<unknown> | undefined;
+      if (failure === 'cancel') stop = session.abort('cancel SSTV');
+      if (failure === 'stop') stop = manager.stopCurrentPlayback({ kind: 'sstv' });
+      if (failure === 'device-loss') output.emitRtAudioError(8, 'USB audio device disconnected');
+      if (failure === 'write-failure') {
+        mockRtAudioState.throwOnWrite = true;
+        output.consumeNextFrame();
+      }
+      if (failure === 'stall') await vi.advanceTimersByTimeAsync(5100);
+      await flushPlaybackWork();
+      await stop;
+      expect(await producer).toBeInstanceOf(Error);
+      const written = mockRtAudioState.writes.length;
+      output.consumeNextFrame();
+      await flushPlaybackWork();
+      expect(mockRtAudioState.writes.length).toBe(written);
+      expect(manager.isPlaying()).toBe(false);
+      await manager.stopOutput();
+    },
+  );
+
+  it('ignores consumption notifications from a replaced USB output stream', async () => {
+    const { manager, output: oldOutput, session } = await startSstvWithNativeFifo();
+    await session.abort();
+    await manager.stopOutput();
+    await manager.startOutput();
+    const newOutput = (manager as unknown as { rtAudioOutput: InstanceType<typeof MockRtAudio> }).rtAudioOutput;
+    const next = manager.openDeterministicPlayback({ playbackKind: 'sstv' });
+    await next.write(new Float32Array(next.frameSamples));
+    let started = false;
+    const starting = next.start().then(() => { started = true; });
+    await flushPlaybackWork();
+    oldOutput.consumeNextFrame();
+    await flushPlaybackWork();
+    expect(started).toBe(false);
+    newOutput.consumeNextFrame();
+    await starting;
+    await next.end();
+    await manager.stopOutput();
   });
 
   it('resamples audio device input once into the configured RX processing rate', async () => {
