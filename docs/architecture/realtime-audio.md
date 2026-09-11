@@ -109,42 +109,59 @@ The public UDP setting is deliberately append-only. A bad FRP endpoint should no
 
 ## SSTV Transmit Timing
 
-`AudioStreamManager.openDeterministicPlayback` owns SSTV output pacing and
-backpressure. Its producer queue is bounded independently of the output sink.
-For TCI, the CHRONO-consumed queue snapshot is the pacing clock: refill to the
-negotiated target lead, with at most one submitted frame beyond that target.
-Short timer waits only poll for room; late wakeups refill the reserve without
-accumulating per-frame timing drift. ICOM WLAN and Android use cumulative sample
-duration against a monotonic clock and recheck the lead after every wait.
+`AudioStreamManager.openDeterministicPlayback` owns SSTV preparation and playback.
+TCI sessions declare complete preparation: `ImageRadioService` encodes the entire
+waveform before acquiring a physical TX lease, leaving progress at zero. At
+playback start the audio manager snapshots output gain and hands the full PCM
+to `TciConnection` in one operation. The connection uses `TciTxAudioSync` from
+the public protocol library to serve CHRONO requests, including bursts, without
+waiting for a producer timer. Its prepared queue is bounded by the waveform
+(maximum 128 MiB of mono Float32 PCM), not by the negotiated live-stream lead.
+PCM preparation and consumption never represent the same progress axis.
 
-USB/soundcard SSTV output uses RtAudio frame-consumption notifications to refill
-the native FIFO. Each consumed frame wakes the producer immediately; a burst of
-notifications frees several slots that are filled in the same pump turn. There
-is no per-frame timer or wall-clock catch-up calculation in this path. The FIFO
+Prepared TCI audio is immutable after start. A session-scoped drain/end handle
+prevents stale cancellation from clearing a later transmission. Disconnect,
+format changes, or five seconds without consumption interrupt playback; the
+physical TX coordinator still owns PTT release. The watchdog only detects
+failure and does not pace samples. CHRONO requests and network transport still
+run on Node's event loop, so this removes producer starvation, not transport
+outages. ICOM WLAN and Android retain their streaming queues and cumulative
+sample-duration pacing against a monotonic clock.
+
+USB/soundcard SSTV output uses one synchronous event pump inside the owning
+audio manager. A producer write, native consumption callback, end request, or
+stop request invokes that pump directly. Consumption replenishes the FIFO before
+the callback returns, without a Promise wakeup or a per-frame timer. A reentrancy
+guard handles backends that report consumption synchronously during write. The FIFO
 holds at most `max(2, ceil(sampleRate * 0.1 / frameSamples))` frames. This is an
 occupancy bound; it does not determine when a frame is played. RtAudio's native
 audio thread consumes the FIFO on the device clock, independently of JS timers.
 
-Cancellation and output errors also wake a waiting pump. A watchdog fails output
+Cancellation, output errors, and final consumption settle the same session
+completion promise; final drain has no separate wait/cleanup lifecycle. A watchdog fails output
 after two seconds without consumption while native frames are pending; it never
 schedules PCM writes. Output callbacks are scoped to the stream generation, and
-the per-playback refill callback is detached when submission ends. This removes
+the per-playback callback is detached when the session settles. Aborted native
+frames retain FIFO accounting so the next lease must drain them before starting.
+This removes
 timer-driven refill jitter but does not isolate the JS producer from long
 event-loop stalls: a stall longer than the native FIFO can still cause underrun.
 
-The TCI reserve absorbs scheduling jitter within its buffered duration. It cannot
-guarantee uninterrupted output through an event-loop or transport stall longer
-than the reserve. A TCI queue that blocks a write for five seconds fails the
-session so the physical TX coordinator can release PTT. Cancellation is checked
-on every pacing iteration, and output failures reject blocked producers.
-
 `ImageRadioService` advances `samplesEmitted` and feeds the local decoder from
-the same paced output-submission callback, independently of encoder read-ahead.
-For RtAudio, preview PCM notifications are batched into approximately 100 ms and
-encoder diagnostics are broadcast only when changed, so small native frames do
-not force WebSocket status updates at the device callback frequency.
-`encoderStage` and `currentRow` remain encoder diagnostics. Submission can lead
-physical playback by the bounded sink reserve; it is not a hardware playhead.
+the same PCM observation callback, independently of encoder read-ahead. RtAudio
+observations contain consumed frames only, with gain captured at submission;
+approximately 100 ms batches run via `setImmediate` after FIFO replenishment.
+The final partial batch is flushed on successful completion; cancellation drops
+pending observations. TCI also reports consumed samples only, excluding any
+protocol tail padding. Its progress and preview read the consumed prefix of the
+prepared waveform via deferred callbacks, after CHRONO responses have been sent.
+ICOM WLAN and Android retain paced submission observations.
+Encoder diagnostics are broadcast only when changed. `encoderStage` and
+`currentRow` remain encoder diagnostics. Native consumption notifications are
+delivered to JS asynchronously, so they are not a sample-exact hardware playhead.
+The completion diagnostic includes submitted/consumed chunks, consumed samples,
+and the maximum JS consumption-notification gap; that gap is not a native
+underrun counter.
 The local preview ends at the raster boundary, before any station ID or guard.
 The UI reserves 100 percent for `completed`, which requires output drain and
 successful physical lease release.

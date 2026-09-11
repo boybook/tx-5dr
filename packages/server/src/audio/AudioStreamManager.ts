@@ -9,6 +9,7 @@ import { performance } from 'node:perf_hooks';
 import { randomUUID } from 'node:crypto';
 import type { IcomWlanAudioAdapter } from './IcomWlanAudioAdapter.js';
 import type { TciAudioAdapter } from './TciAudioAdapter.js';
+import type { PreparedTciAudioTransmission } from '../radio/connections/TciConnection.js';
 import type { AudioFrameMeta } from '../radio/connections/IRadioConnection.js';
 import type { OpenWebRXAudioAdapter } from '../openwebrx/OpenWebRXAudioAdapter.js';
 import { createLogger } from '../utils/logger.js';
@@ -278,7 +279,7 @@ export interface PlayAudioOptions {
   diagnosticContext?: Record<string, unknown>;
   /** Called once the first output frame has been consumed by the active sink. */
   onPlaybackStarted?: () => void;
-  /** Best-effort tap of PCM submitted by this playback session. Observer failures never fail physical output. */
+  /** Best-effort PCM tap: consumed frames on RtAudio, paced submissions on other sinks. */
   onPlaybackChunk?: (samples: Float32Array, sampleRate: number) => void;
   /** Explicit opt-in envelope profile for a digital TX waveform. */
   txEnvelopeProfile?: TxAudioEnvelopeProfile;
@@ -287,6 +288,8 @@ export interface PlayAudioOptions {
 export type PlaybackKind = 'digital' | 'voice-keyer' | 'sstv' | 'tune-tone';
 
 export interface DeterministicPlaybackSession {
+  /** Complete preparation must finish before start; omitted means streaming. */
+  readonly preparation?: 'complete';
   readonly sampleRate: number;
   readonly frameSamples: number;
   readonly queuedAudioMs: number;
@@ -2465,6 +2468,318 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     await writer?.(tail);
   }
 
+  private openRtAudioDeterministicPlayback(options: PlayAudioOptions): DeterministicPlaybackSession {
+    const output = this.rtAudioOutput!;
+    const generation = this.outputStreamGeneration;
+    const playbackId = ++this.playbackSequence;
+    const sampleRate = this.outputSampleRate;
+    const frameSamples = Math.max(64, this.outputBufferSize || 1024);
+    const capacity = Math.max(2, Math.ceil(sampleRate * 0.1 / frameSamples));
+    const queue: Float32Array[] = [];
+    const pendingPcm: Array<{ pcm: Float32Array | null; samples: number }> = [];
+    let queuedSamples = 0;
+    let started = false;
+    let ended = false;
+    let settled = false;
+    let pumping = false;
+    let failure: Error | null = null;
+    let waiter: RtAudioPlaybackStartWaiter | null = null;
+    let lastActivityAt = performance.now();
+    let firstConsumeAt: number | null = null;
+    let maxConsumeNotificationGapMs = 0;
+    let consumedSamples = 0;
+    let watchdog: ReturnType<typeof setInterval> | undefined;
+    let observation: ReturnType<typeof setImmediate> | undefined;
+    let observedSamples = 0;
+    const observed: Float32Array[] = [];
+    const writers: Array<() => void> = [];
+    let resolveStart!: () => void;
+    let rejectStart!: (error: Error) => void;
+    let resolveEnd!: () => void;
+    let rejectEnd!: (error: Error) => void;
+    const firstStart = new Promise<void>((resolve, reject) => { resolveStart = resolve; rejectStart = reject; });
+    const completion = new Promise<void>((resolve, reject) => { resolveEnd = resolve; rejectEnd = reject; });
+    void firstStart.catch(() => undefined);
+    void completion.catch(() => undefined);
+
+    const flushObservation = () => {
+      if (observation) clearImmediate(observation);
+      observation = undefined;
+      if (observedSamples === 0) return;
+      const samples = new Float32Array(observedSamples);
+      let offset = 0;
+      for (const chunk of observed) { samples.set(chunk, offset); offset += chunk.length; }
+      observed.length = 0;
+      observedSamples = 0;
+      try {
+        options.onPlaybackChunk?.(samples, sampleRate);
+      } catch (error) {
+        logger.warn('Deterministic playback chunk observer failed', error);
+      }
+      // Preserve the native SSTV monitor tap alongside its preview tap.
+      if (options.injectIntoMonitor || options.onPlaybackChunk) {
+        try { this.emit('txMonitorAudioData', { samples, sampleRate }); }
+        catch (error) { logger.warn('Deterministic playback monitor observer failed', error); }
+      }
+    };
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      failure = error ?? null;
+      if (watchdog) clearInterval(watchdog);
+      if (observation) clearImmediate(observation);
+      this.off('error', handleOutputError);
+      if (waiter) {
+        waiter.onConsumed = undefined;
+        waiter.onStarted = () => undefined;
+        this.finishRtAudioPlaybackStartWaiter(waiter);
+      }
+      // Pending native frames retain their existing FIFO accounting; a later
+      // lease must still drain them before it can start.
+      queue.length = 0;
+      pendingPcm.length = 0;
+      queuedSamples = 0;
+      for (const resolve of writers.splice(0)) resolve();
+      if (this.deterministicPlaybackWake?.playbackId === playbackId) this.deterministicPlaybackWake = null;
+      if (this.playbackSequence === playbackId) {
+        this.playing = false;
+        this.currentPlaybackPromise = null;
+        this.currentPlaybackKind = null;
+        this.currentPlaybackEnvelopeProfile = null;
+      }
+      if (waiter) logger.info('SSTV RtAudio output finished', {
+        playbackId, outcome: error ? 'interrupted' : 'completed',
+        submittedChunks: waiter.submittedChunks, consumedChunks: waiter.consumedChunks,
+        sampleRate, frameSamples, consumedSamples,
+        maxConsumeNotificationGapMs: Math.round(maxConsumeNotificationGapMs),
+        elapsedMs: firstConsumeAt === null ? 0 : Math.round(performance.now() - firstConsumeAt),
+      });
+      if (error) {
+        observed.length = 0;
+        observedSamples = 0;
+        rejectStart(error);
+        rejectEnd(error);
+      } else {
+        flushObservation();
+        resolveEnd();
+      }
+    };
+    // Single owner for submission and terminal state. All events call the same
+    // synchronous pump; no condition-check / Promise-wakeup protocol is needed.
+    const pump = () => {
+      if (!started || settled || pumping) return;
+      pumping = true;
+      try {
+        if (this.isPlaybackStopRequested(playbackId)) throw new Error('playback interrupted');
+        if (generation !== this.outputStreamGeneration || output !== this.rtAudioOutput) throw new Error('audio output generation changed during playback');
+        if (this.outputRuntimeIssueError) throw this.outputRuntimeIssueError;
+        while (queue.length && waiter!.submittedChunks - waiter!.consumedChunks < capacity) {
+          const chunk = queue.shift()!;
+          queuedSamples -= chunk.length;
+          const encoded = this.encodeRtAudioOutputChunk(chunk, frameSamples, this.volumeGain, Boolean(options.onPlaybackChunk || options.injectIntoMonitor));
+          if (waiter!.submittedChunks === waiter!.consumedChunks) lastActivityAt = performance.now();
+          pendingPcm.push({ pcm: encoded.monitorChunk, samples: chunk.length });
+          this.noteRtAudioChunkPending(waiter!);
+          try { output.write(encoded.buffer); }
+          catch (error) {
+            pendingPcm.pop();
+            this.rollbackRtAudioChunkPending(waiter!);
+            throw error;
+          }
+          if (settled) return;
+        }
+        if (queuedSamples <= sampleRate * 0.3) for (const resolve of writers.splice(0)) resolve();
+        if (ended && queue.length === 0 && waiter!.submittedChunks === waiter!.consumedChunks) {
+          finish(waiter!.started ? undefined : new Error('deterministic playback ended before hardware start'));
+        }
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(String(error)));
+      } finally {
+        pumping = false;
+      }
+    };
+    const handleOutputError = () => pump();
+    return {
+      sampleRate, frameSamples,
+      get queuedAudioMs() { return queuedSamples / sampleRate * 1000; },
+      write: async (samples) => {
+        if (failure || settled || ended) throw failure ?? new Error('deterministic playback already ended');
+        if (samples.length === 0) return;
+        if (samples.length > frameSamples) throw new Error('RtAudio playback chunk exceeds device frame size');
+        queue.push(new Float32Array(samples));
+        queuedSamples += samples.length;
+        pump();
+        if (queuedSamples > sampleRate) await new Promise<void>((resolve) => writers.push(resolve));
+        if (failure) throw failure;
+      },
+      start: async () => {
+        if (failure || settled) throw failure ?? new Error('deterministic playback already ended');
+        if (!started) {
+          started = true;
+          this.playing = true;
+          this.playbackStartTime = Date.now();
+          this.currentPlaybackKind = 'sstv';
+          this.currentPlaybackEnvelopeProfile = null;
+          this.currentPlaybackPromise = completion;
+          this.deterministicPlaybackWake = { playbackId, wake: pump };
+          waiter = this.beginRtAudioPlaybackStartWaiter(playbackId, () => {
+            resolveStart();
+            options.onPlaybackStarted?.();
+          });
+          waiter.onConsumed = () => {
+            const now = performance.now();
+            if (firstConsumeAt !== null) maxConsumeNotificationGapMs = Math.max(maxConsumeNotificationGapMs, now - lastActivityAt);
+            firstConsumeAt ??= now;
+            lastActivityAt = now;
+            const frame = pendingPcm.shift();
+            const pcm = frame?.pcm;
+            consumedSamples += frame?.samples ?? 0;
+            if (pcm) { observed.push(pcm); observedSamples += pcm.length; }
+            pump();
+            // Progress and preview run after refill, never inside native write.
+            if (!settled && observedSamples >= sampleRate * 0.1 && !observation) observation = setImmediate(flushObservation);
+          };
+          this.on('error', handleOutputError);
+          watchdog = setInterval(() => {
+            if (waiter!.submittedChunks > waiter!.consumedChunks
+              && performance.now() - lastActivityAt >= RTAUDIO_TX_START_ACK_TIMEOUT_MS) {
+              finish(new Error('RtAudio SSTV audio consumption stalled'));
+            }
+          }, 250);
+          logger.info('SSTV RtAudio event-driven output started', { playbackId, sampleRate, frameSamples, fifoCapacityChunks: capacity });
+          pump();
+        }
+        await firstStart;
+      },
+      end: async () => {
+        if (!started) throw new Error('deterministic playback was not started');
+        ended = true;
+        pump();
+        await completion;
+      },
+      abort: async (reason = 'deterministic playback aborted') => { finish(new Error(reason)); },
+    };
+  }
+
+  private openPreparedTciPlayback(adapter: TciAudioAdapter, options: PlayAudioOptions): DeterministicPlaybackSession {
+    const sampleRate = adapter.getSampleRate();
+    const playbackId = ++this.playbackSequence;
+    const chunks: Float32Array[] = [];
+    let totalSamples = 0;
+    let waveform: Float32Array | null = null;
+    let consumedSamples = 0;
+    let observedSamples = 0;
+    let failure: Error | null = null;
+    let completion: Promise<void> | null = null;
+    let transmission: PreparedTciAudioTransmission | null = null;
+    let observation: ReturnType<typeof setImmediate> | undefined;
+    let lastConsumptionAt = performance.now();
+    let resolveStart!: () => void;
+    let rejectStart!: (error: unknown) => void;
+    const firstStart = new Promise<void>((resolve, reject) => { resolveStart = resolve; rejectStart = reject; });
+    void firstStart.catch(() => undefined);
+    const observe = () => {
+      if (observation) clearImmediate(observation);
+      observation = undefined;
+      // Keep decoder submissions small even when CHRONO requests arrive in a burst.
+      while (waveform && !failure && observedSamples < consumedSamples) {
+        const end = Math.min(consumedSamples, observedSamples + Math.round(sampleRate * 0.1));
+        const samples = waveform.slice(observedSamples, end);
+        observedSamples = end;
+        try {
+          options.onPlaybackChunk?.(samples, sampleRate);
+          if (options.injectIntoMonitor) this.emit('txMonitorAudioData', { samples, sampleRate });
+        } catch (error) { logger.warn('Prepared TCI audio observer failed', error); }
+      }
+    };
+    const interrupt = (reason: string) => {
+      failure ??= new Error(reason);
+      rejectStart(failure);
+      transmission?.end();
+    };
+    return {
+      preparation: 'complete', sampleRate, frameSamples: Math.round(sampleRate * 0.1),
+      get queuedAudioMs() { return (totalSamples - consumedSamples) / sampleRate * 1000; },
+      write: async (samples) => {
+        if (failure || completion) throw failure ?? new Error('Prepared TCI audio cannot change after start');
+        if (totalSamples + samples.length > 32 * 1024 * 1024) throw new Error('Prepared TCI audio exceeds 128 MiB');
+        if (samples.length) chunks.push(new Float32Array(samples));
+        totalSamples += samples.length;
+      },
+      start: async () => {
+        if (failure) throw failure;
+        if (!completion) {
+          if (totalSamples === 0) throw new Error('Prepared TCI audio is empty');
+          this.playing = true;
+          this.playbackStartTime = Date.now();
+          this.currentPlaybackKind = 'sstv';
+          this.deterministicPlaybackWake = { playbackId, wake: () => interrupt('playback interrupted') };
+          completion = (async () => {
+            const watchdog = setInterval(() => {
+              if (performance.now() - lastConsumptionAt >= 5_000) interrupt('TCI SSTV audio consumption stalled');
+            }, 250);
+            try {
+              waveform = new Float32Array(totalSamples);
+              let offset = 0;
+              const gain = this.volumeGain;
+              for (const chunk of chunks) {
+                for (const sample of chunk) waveform[offset++] = this.clampAudioSample(sample * gain);
+              }
+              chunks.length = 0;
+              lastConsumptionAt = performance.now();
+              transmission = await adapter.beginPreparedTransmission(waveform, sampleRate, (count) => {
+                if (failure) return;
+                const first = consumedSamples === 0;
+                consumedSamples = Math.min(totalSamples, count);
+                lastConsumptionAt = performance.now();
+                if (first && consumedSamples > 0) {
+                  resolveStart();
+                  try { options.onPlaybackStarted?.(); }
+                  catch (error) { logger.warn('Prepared TCI playback start observer failed', error); }
+                }
+                if (!observation) observation = setImmediate(observe);
+              });
+              if (failure) throw failure;
+              logger.info('SSTV TCI prepared audio started', { playbackId, sampleRate, totalSamples });
+              await transmission.drain(Math.ceil(totalSamples / sampleRate * 1000) + 5_000);
+              if (failure) throw failure;
+              if (consumedSamples !== totalSamples) throw new Error('Prepared TCI audio drained without complete consumption');
+              observe();
+            } catch (error) {
+              failure ??= error instanceof Error ? error : new Error(String(error));
+              rejectStart(failure);
+              throw failure;
+            } finally {
+              clearInterval(watchdog);
+              if (observation) clearImmediate(observation);
+              transmission?.end();
+              waveform = null;
+              chunks.length = 0;
+              if (this.deterministicPlaybackWake?.playbackId === playbackId) this.deterministicPlaybackWake = null;
+              if (this.playbackSequence === playbackId) {
+                this.playing = false;
+                this.currentPlaybackPromise = null;
+                this.currentPlaybackKind = null;
+              }
+            }
+          })();
+          this.currentPlaybackPromise = completion;
+          void completion.catch(() => undefined);
+        }
+        await firstStart;
+      },
+      end: async () => {
+        if (!completion) throw failure ?? new Error('Prepared TCI audio was not started');
+        await completion;
+      },
+      abort: async (reason = 'prepared TCI playback aborted') => {
+        interrupt(reason);
+        chunks.length = 0;
+        await completion?.catch(() => undefined);
+      },
+    };
+  }
+
   public openDeterministicPlayback(options: PlayAudioOptions & { playbackKind: 'sstv' }): DeterministicPlaybackSession {
     if (this.playing || this.hasPendingRtAudioPlayback()) throw new Error('audio output is busy');
     const radioAdapter = this.usingIcomWlanOutput && this.icomWlanAudioAdapter
@@ -2475,19 +2790,13 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     if (!radioAdapter && !this.usingAndroidOutput && (!this.isOutputting || !this.rtAudioOutput)) {
       throw new Error('audio output stream not started');
     }
+    if (!radioAdapter && !this.usingAndroidOutput) return this.openRtAudioDeterministicPlayback(options);
+    if (radioAdapter?.kind === 'tci') return this.openPreparedTciPlayback(radioAdapter.adapter, options);
 
     const sampleRate = radioAdapter ? this.getInternalSampleRate() : this.outputSampleRate;
-    const frameSamples = radioAdapter?.kind === 'tci'
-      ? Math.max(1, radioAdapter.adapter.getTxAudioSyncSnapshot()?.samplesPerFrame ?? 512)
-      : radioAdapter
-        ? ICOM_WLAN_TX_CHUNK_SIZE
-        : Math.max(64, this.outputBufferSize || 1024);
+    const frameSamples = radioAdapter ? ICOM_WLAN_TX_CHUNK_SIZE : Math.max(64, this.outputBufferSize || 1024);
     const highWaterSamples = sampleRate;
     const lowWaterSamples = Math.round(sampleRate * 0.3);
-    // This bounds native FIFO occupancy, not wall-clock lead. Each hardware
-    // consumption notification makes room for an immediate replacement frame.
-    const rtAudioCapacityChunks = Math.max(2, Math.ceil(sampleRate * 0.1 / frameSamples));
-    const outputGeneration = this.outputStreamGeneration;
     const playbackId = ++this.playbackSequence;
     const queue: Float32Array[] = [];
     let queuedSamples = 0;
@@ -2497,8 +2806,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     let wakeConsumer: (() => void) | null = null;
     let completion: Promise<void> | null = null;
     const backpressureWaiters: Array<() => void> = [];
-    const observedRtAudioChunks: Float32Array[] = [];
-    let observedRtAudioSamples = 0;
     let resolveFirstStart!: () => void;
     let rejectFirstStart!: (error: unknown) => void;
     const firstStart = new Promise<void>((resolve, reject) => {
@@ -2524,19 +2831,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         logger.warn('Deterministic playback chunk observer failed', error);
       }
     };
-    const flushRtAudioObservation = () => {
-      if (observedRtAudioSamples === 0) return;
-      const samples = new Float32Array(observedRtAudioSamples);
-      let offset = 0;
-      for (const chunk of observedRtAudioChunks) {
-        samples.set(chunk, offset);
-        offset += chunk.length;
-      }
-      observedRtAudioChunks.length = 0;
-      observedRtAudioSamples = 0;
-      observePlaybackChunk(samples);
-    };
-
     const pump = async () => {
       this.playing = true;
       this.playbackStartTime = Date.now();
@@ -2544,21 +2838,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       const hrStart = performance.now();
       let submittedSamples = 0;
       let playbackStarted = false;
-      let tciStarted = false;
-      let rtWaiter: RtAudioPlaybackStartWaiter | null = null;
-      let outputWatchdog: ReturnType<typeof setInterval> | null = null;
-      let lastRtAudioActivityAt = performance.now();
-      const assertOutputActive = () => {
-        if (aborted) throw aborted;
-        if (this.isPlaybackStopRequested(playbackId)) throw new Error('playback interrupted');
-        if (rtWaiter) {
-          if (outputGeneration !== this.outputStreamGeneration) throw new Error('audio output generation changed during playback');
-          if (this.outputRuntimeIssueError) throw this.outputRuntimeIssueError;
-        }
-      };
-      const handleOutputError = () => {
-        if (this.outputRuntimeIssueError || outputGeneration !== this.outputStreamGeneration) wake();
-      };
       this.deterministicPlaybackWake = { playbackId, wake };
       const signalStarted = () => {
         if (playbackStarted) return;
@@ -2567,32 +2846,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         resolveFirstStart();
       };
       try {
-        if (radioAdapter?.kind === 'tci') {
-          await radioAdapter.adapter.beginTransmission();
-          tciStarted = true;
-        }
-        if (!radioAdapter && !this.usingAndroidOutput) {
-          rtWaiter = this.beginRtAudioPlaybackStartWaiter(playbackId, signalStarted);
-          rtWaiter.onConsumed = () => {
-            lastRtAudioActivityAt = performance.now();
-            wake();
-          };
-          logger.info('SSTV RtAudio consumption-driven output started', {
-            playbackId, sampleRate, frameSamples, fifoCapacityChunks: rtAudioCapacityChunks,
-          });
-          this.on('error', handleOutputError);
-          // Watchdog only: never schedule audio frames from this timer.
-          outputWatchdog = setInterval(() => {
-            if (rtWaiter && rtWaiter.submittedChunks > rtWaiter.consumedChunks
-              && performance.now() - lastRtAudioActivityAt >= RTAUDIO_TX_START_ACK_TIMEOUT_MS) {
-              aborted = new Error('RtAudio SSTV audio consumption stalled');
-              wake();
-            }
-          }, 250);
-        }
-
         for (;;) {
-          assertOutputActive();
+          if (aborted) throw aborted;
+          if (this.isPlaybackStopRequested(playbackId)) throw new Error('playback interrupted');
           const chunk = queue.shift();
           if (!chunk) {
             if (ended) break;
@@ -2602,31 +2858,14 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           queuedSamples -= chunk.length;
           releaseBackpressure();
 
-          if (rtWaiter) {
-            while (rtWaiter.submittedChunks - rtWaiter.consumedChunks >= rtAudioCapacityChunks) {
-              await waitForData();
-              assertOutputActive();
-            }
-          } else {
-            // A bounded sleep is only a polling slice, not permission to send
-            // another frame. TCI can queue PCM much faster than CHRONO consumes it.
-            const pacingStartedAt = performance.now();
-            for (;;) {
-              if (aborted) throw aborted;
-              if (this.isPlaybackStopRequested(playbackId)) throw new Error('playback interrupted');
-              const leadMs = submittedSamples / sampleRate * 1000 - (performance.now() - hrStart);
-              const txSync = radioAdapter?.kind === 'tci' ? radioAdapter.adapter.getTxAudioSyncSnapshot() : null;
-              const queueExcessMs = txSync ? txSync.queuedAudioMs - txSync.targetLeadMs : 0;
-              // CHRONO owns the TCI clock. Refill its reserve after late timer
-              // wakeups instead of pacing each frame with a relative timeout.
-              const waitMs = txSync ? queueExcessMs : leadMs - 100;
-              if (waitMs <= 0) break;
-              if (queueExcessMs > 0 && performance.now() - pacingStartedAt >= 5_000) {
-                throw new Error('TCI SSTV audio consumption stalled');
-              }
-              const waitSliceMs = Math.max(1, Math.min(25, txSync?.recommendedPumpIntervalMs ?? 25));
-              await new Promise<void>((resolve) => setTimeout(resolve, Math.min(waitMs, waitSliceMs)));
-            }
+          // ICOM WLAN and Android retain cumulative wall-clock pacing.
+          for (;;) {
+            if (aborted) throw aborted;
+            if (this.isPlaybackStopRequested(playbackId)) throw new Error('playback interrupted');
+            const leadMs = submittedSamples / sampleRate * 1000 - (performance.now() - hrStart);
+            const waitMs = leadMs - 100;
+            if (waitMs <= 0) break;
+            await new Promise<void>((resolve) => setTimeout(resolve, Math.min(waitMs, 25)));
           }
 
           let observedChunk = chunk;
@@ -2650,59 +2889,24 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             }
             signalStarted();
             if (options.injectIntoMonitor) this.emit('txMonitorAudioData', { samples: chunk, sampleRate });
-          } else if (this.rtAudioOutput && rtWaiter) {
-            const encoded = this.encodeRtAudioOutputChunk(chunk, frameSamples, this.volumeGain, Boolean(options.injectIntoMonitor || options.onPlaybackChunk));
-            if (rtWaiter.submittedChunks === rtWaiter.consumedChunks) lastRtAudioActivityAt = performance.now();
-            this.noteRtAudioChunkPending(rtWaiter);
-            try {
-              this.rtAudioOutput.write(encoded.buffer);
-            } catch (error) {
-              this.rollbackRtAudioChunkPending(rtWaiter);
-              throw error;
-            }
-            if (encoded.monitorChunk) this.emit('txMonitorAudioData', { samples: encoded.monitorChunk, sampleRate });
-            observedChunk = encoded.monitorChunk ?? chunk;
           } else {
             throw new Error('audio output became unavailable');
           }
-          if (rtWaiter && options.onPlaybackChunk) {
-            // Keep preview decoding and status broadcasting off the per-frame
-            // cadence (up to 750 callbacks/s with 64-frame USB buffers).
-            observedRtAudioChunks.push(observedChunk);
-            observedRtAudioSamples += observedChunk.length;
-            if (observedRtAudioSamples >= sampleRate * 0.1) flushRtAudioObservation();
-          } else {
-            observePlaybackChunk(observedChunk);
-          }
+          observePlaybackChunk(observedChunk);
           submittedSamples += chunk.length;
         }
 
         if (!playbackStarted) throw new Error('deterministic playback ended before hardware start');
-        flushRtAudioObservation();
         const remainingLeadMs = submittedSamples / sampleRate * 1000 - (performance.now() - hrStart);
-        if (radioAdapter?.kind === 'tci') {
-          await radioAdapter.adapter.drainTransmission(Math.max(1000, Math.ceil(remainingLeadMs) + 1000));
-        } else if (remainingLeadMs > 0 && (radioAdapter || this.usingAndroidOutput)) {
+        if (remainingLeadMs > 0) {
           await new Promise<void>((resolve) => setTimeout(resolve, Math.ceil(remainingLeadMs)));
-        }
-        if (rtWaiter) {
-          rtWaiter.onConsumed = undefined;
-          this.finishRtAudioPlaybackStartWaiter(rtWaiter);
-          rtWaiter = null;
-          await this.waitForOutputDrain({ timeoutMs: Math.max(2000, Math.ceil(remainingLeadMs) + 2000) });
         }
       } catch (error) {
         aborted = error instanceof Error ? error : new Error(String(error));
         rejectFirstStart(error);
         throw error;
       } finally {
-        if (outputWatchdog) clearInterval(outputWatchdog);
-        observedRtAudioChunks.length = 0;
-        this.off('error', handleOutputError);
-        if (rtWaiter) rtWaiter.onConsumed = undefined;
         if (this.deterministicPlaybackWake?.playbackId === playbackId) this.deterministicPlaybackWake = null;
-        if (rtWaiter) this.finishRtAudioPlaybackStartWaiter(rtWaiter);
-        if (tciStarted && radioAdapter?.kind === 'tci') await radioAdapter.adapter.endTransmission().catch(() => undefined);
         this.stopRequestedPlaybackIds.delete(playbackId);
         for (const resolve of backpressureWaiters.splice(0)) resolve();
         if (this.playbackSequence === playbackId) {

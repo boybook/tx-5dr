@@ -1045,15 +1045,17 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     let previewOutcome: 'completed' | 'interrupted' = 'interrupted';
     try {
       const primeSamples = Math.ceil(playback.sampleRate * 0.3);
-      while (!encoder.isFinished && playback.queuedAudioMs * playback.sampleRate / 1000 < primeSamples) {
+      while (!encoder.isFinished && (playback.preparation === 'complete' || playback.queuedAudioMs * playback.sampleRate / 1000 < primeSamples)) {
         await playback.write(await encoder.readSamples(playback.frameSamples));
       }
+      if (this.txStatus.phase === 'cancelled') throw new Error('SSTV transmission cancelled');
       this.updateTx({ ...this.txStatus, phase: 'waiting_for_lease', revision: this.txStatus.revision + 1 });
       leaseId = await this.physicalTx.acquireLease({
         source: 'sstv', operatorIds: [command.operatorId], reason: `SSTV ${command.mode}`,
         playbackKind: 'sstv', deferActiveUntilAudio: true,
         interrupt: () => playback.abort('physical SSTV lease interrupted'),
         validateStart: () => {
+          if (this.txStatus.phase === 'cancelled') throw new Error('SSTV transmission cancelled');
           if (Math.round(this.getFrequency()) !== Math.round(this.artifacts.get(command.artifactId)?.frequency ?? -1)) {
             throw new Error('IMAGE_FREQUENCY_CHANGED');
           }

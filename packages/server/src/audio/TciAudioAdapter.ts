@@ -1,5 +1,5 @@
 import { EventEmitter } from 'eventemitter3';
-import { TciConnection } from '../radio/connections/TciConnection.js';
+import { TciConnection, type PreparedTciAudioTransmission } from '../radio/connections/TciConnection.js';
 import type { AudioFrameMeta } from '../radio/connections/IRadioConnection.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -72,6 +72,11 @@ export class TciAudioAdapter extends EventEmitter<TciAudioAdapterEvents> {
   async beginTransmission(): Promise<void> {
     await this.startOutput();
     this.tciConnection.beginTxAudio();
+  }
+
+  async beginPreparedTransmission(samples: Float32Array, sampleRate: number, onConsumed: (samples: number) => void): Promise<PreparedTciAudioTransmission> {
+    await this.startOutput();
+    return this.tciConnection.beginPreparedTxAudio(samples, sampleRate, onConsumed);
   }
 
   async drainTransmission(timeoutMs: number): Promise<void> {

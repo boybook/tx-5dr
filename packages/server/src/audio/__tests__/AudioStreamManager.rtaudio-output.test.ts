@@ -296,6 +296,117 @@ describe('AudioStreamManager RtAudio output diagnostics', () => {
     await manager.stopOutput();
   });
 
+  it('refills inside the native consumption callback before yielding to other JS work', async () => {
+    const { manager, output, session } = await startSstvWithNativeFifo();
+    for (let index = 0; index < 100; index++) await session.write(new Float32Array(session.frameSamples));
+    await flushPlaybackWork();
+    const before = mockRtAudioState.writes.length;
+    output.consumeNextFrame();
+    expect(mockRtAudioState.writes.length).toBe(before + 1);
+    output.consumeNextFrame();
+    expect(mockRtAudioState.writes.length).toBe(before + 2);
+    await session.abort();
+    await manager.stopOutput();
+  });
+
+  it('observes consumed SSTV audio only, after replenishing the native FIFO', async () => {
+    const { manager, output, session, observed } = await startSstvWithNativeFifo();
+    for (let index = 0; index < 200; index++) await session.write(new Float32Array(session.frameSamples));
+    await flushPlaybackWork();
+    expect(observed).toHaveLength(0);
+    const before = mockRtAudioState.writes.length;
+    for (let index = 0; index < 74; index++) output.consumeNextFrame();
+    expect(mockRtAudioState.writes.length).toBe(before + 74);
+    expect(observed).toHaveLength(0);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(observed.reduce((sum, chunk) => sum + chunk.length, 0)).toBe(75 * session.frameSamples);
+    await session.abort();
+    await manager.stopOutput();
+  });
+
+  it.each(['cancel', 'device-loss', 'stall'] as const)('settles SSTV during final drain on %s', async (failure) => {
+    const { manager, output, session } = await startSstvWithNativeFifo();
+    manager.on('error', () => undefined);
+    await session.write(new Float32Array(session.frameSamples));
+    const draining = session.end().catch((error: unknown) => error);
+    await flushPlaybackWork();
+    if (failure === 'cancel') await session.abort('cancel final drain');
+    if (failure === 'device-loss') output.emitRtAudioError(8, 'USB audio device disconnected');
+    if (failure === 'stall') await vi.advanceTimersByTimeAsync(2250);
+    expect(await draining).toBeInstanceOf(Error);
+    expect(manager.isPlaying()).toBe(false);
+    await manager.stopOutput();
+  });
+
+  it('does not recurse into native write when consumption is synchronous, and preserves a short final frame', async () => {
+    mockRtAudioState.consumeOnWrite = true;
+    const manager = new AudioStreamManager();
+    manager.setVolumeGain(1);
+    await manager.startOutput();
+    const observed: number[] = [];
+    const monitored: number[] = [];
+    manager.on('txMonitorAudioData', ({ samples }) => monitored.push(...samples));
+    const session = manager.openDeterministicPlayback({ playbackKind: 'sstv', onPlaybackChunk: (samples) => observed.push(...samples) });
+    await session.write(new Float32Array(session.frameSamples).fill(0.25));
+    await session.start();
+    await session.write(new Float32Array(7).fill(0.5));
+    await session.end();
+    expect(observed).toEqual([...new Float32Array(session.frameSamples).fill(0.25), ...new Float32Array(7).fill(0.5)]);
+    expect(monitored).toEqual(observed);
+    expect(mockRtAudioState.writes).toHaveLength(2);
+    expect(mockRtAudioState.writes[1].readFloatLE(6 * 4)).toBe(0.5);
+    expect(mockRtAudioState.writes[1].readFloatLE(7 * 4)).toBe(0);
+    await manager.stopOutput();
+  });
+
+  it('rejects an aborted-before-start session and an empty ended session', async () => {
+    const manager = new AudioStreamManager();
+    await manager.startOutput();
+    const cancelled = manager.openDeterministicPlayback({ playbackKind: 'sstv' });
+    await cancelled.abort('cancel before keying');
+    await expect(cancelled.start()).rejects.toThrow('cancel before keying');
+    await expect(cancelled.write(new Float32Array(64))).rejects.toThrow('cancel before keying');
+    expect(mockRtAudioState.writes).toHaveLength(0);
+    const empty = manager.openDeterministicPlayback({ playbackKind: 'sstv' });
+    const started = empty.start().catch((error: unknown) => error);
+    await expect(empty.end()).rejects.toThrow('before hardware start');
+    expect(await started).toBeInstanceOf(Error);
+    await manager.stopOutput();
+  });
+
+  it('does not acknowledge an aborted start from late native consumption', async () => {
+    const { manager, output, session } = await startSstvWithNativeFifo();
+    await session.end();
+    const onPlaybackStarted = vi.fn();
+    const next = manager.openDeterministicPlayback({ playbackKind: 'sstv', onPlaybackStarted });
+    await next.write(new Float32Array(next.frameSamples));
+    const starting = next.start().catch((error: unknown) => error);
+    await next.abort('cancel pending start');
+    output.consumeNextFrame();
+    expect(await starting).toBeInstanceOf(Error);
+    expect(onPlaybackStarted).not.toHaveBeenCalled();
+    await manager.stopOutput();
+  });
+
+  it('keeps observer failures isolated and cancels scheduled observations when aborted', async () => {
+    const { manager, output, session } = await startSstvWithNativeFifo();
+    await session.end();
+    const observer = vi.fn(() => { throw new Error('preview failed'); });
+    const next = manager.openDeterministicPlayback({ playbackKind: 'sstv', onPlaybackChunk: observer });
+    for (let index = 0; index < 150; index++) await next.write(new Float32Array(next.frameSamples));
+    const started = next.start();
+    for (let index = 0; index < 75; index++) output.consumeNextFrame();
+    await started;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(observer).toHaveBeenCalledOnce();
+    expect(manager.isPlaying()).toBe(true);
+    for (let index = 0; index < 75; index++) output.consumeNextFrame();
+    await next.abort();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(observer).toHaveBeenCalledOnce();
+    await manager.stopOutput();
+  });
+
   it.each(['cancel', 'stop', 'device-loss', 'write-failure', 'stall'] as const)(
     'settles a blocked SSTV producer on %s without leaving a refill callback active', async (failure) => {
       const { manager, output, session } = await startSstvWithNativeFifo();

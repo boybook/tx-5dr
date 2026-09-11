@@ -58,6 +58,7 @@ type MockTciAdapter = MockIcomAdapter & {
   startOutput?: ReturnType<typeof vi.fn>;
   stopOutput?: ReturnType<typeof vi.fn>;
   beginTransmission?: ReturnType<typeof vi.fn>;
+  beginPreparedTransmission?: ReturnType<typeof vi.fn>;
   drainTransmission?: ReturnType<typeof vi.fn>;
   endTransmission?: ReturnType<typeof vi.fn>;
   getTxAudioSyncSnapshot?: ReturnType<typeof vi.fn>;
@@ -96,7 +97,6 @@ function createTciManager(adapter: MockTciAdapter): AudioStreamManager {
 }
 
 describe('AudioStreamManager ICOM WLAN output pacing', () => {
-  let restoreTimeout: (() => void) | undefined;
   beforeEach(() => {
     mockResampleAudioProfessional.mockImplementation(async (samples: Float32Array) => samples);
     mockConfigManager.getAudioConfig.mockReturnValue({
@@ -110,8 +110,6 @@ describe('AudioStreamManager ICOM WLAN output pacing', () => {
   });
 
   afterEach(() => {
-    restoreTimeout?.();
-    restoreTimeout = undefined;
     vi.clearAllMocks();
     vi.restoreAllMocks();
     vi.useRealTimers();
@@ -247,98 +245,130 @@ describe('AudioStreamManager ICOM WLAN output pacing', () => {
     expect(manager.isPlaying()).toBe(false);
   });
 
-  it.each([false, true])('keeps TCI SSTV output bounded and continuous with timer jitter (pause CHRONO: %s)', async (pauseChrono) => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
-    vi.setSystemTime(0);
-    vi.spyOn(performance, 'now').mockImplementation(() => Date.now());
-    const schedule = globalThis.setTimeout;
-    let wakeup = 0;
-    // Do not register a spy on a fake timer: later restoreAllMocks calls can
-    // otherwise reinstall a timer belonging to an already disposed clock.
-    restoreTimeout = () => { globalThis.setTimeout = schedule; };
-    globalThis.setTimeout = ((callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => {
-      const jitter = ms && ms <= 25 ? [0, 15, 40, 100][wakeup++ % 4] : 0;
-      return schedule(callback, (ms ?? 0) + jitter, ...args);
-    }) as typeof setTimeout;
+  function preparedTciHarness() {
     const sync = new TciTxAudioSync({
       sampleRate: 12000, channels: 1, sampleType: TciSampleType.FLOAT32,
-      samplesPerFrame: 512, targetLeadMs: 150, minLeadMs: 120, maxLeadMs: 180,
+      samplesPerFrame: 512, targetLeadMs: 150,
     });
-    const totalSamples = 456_120;
-    let observedSamples = 0;
-    let completedAt = 0;
-    const chrono = setInterval(() => {
-      if (!sync.snapshot().active || sync.snapshot().copiedSamples >= totalSamples) return;
-      if (pauseChrono && Date.now() >= 5_000 && Date.now() < 7_000) return;
-      sync.serviceChrono({
-        receiver: 0, sampleRate: 12000, channels: 1, sampleType: TciSampleType.FLOAT32,
-        sampleCount: 120, frameCount: 120, frame: {} as never,
-      });
-    }, 10);
+    let observe: ((count: number) => void) | undefined;
+    const end = vi.fn(() => sync.end('session ended'));
     const adapter: MockTciAdapter = {
       getSampleRate: vi.fn().mockReturnValue(12000),
-      beginTransmission: vi.fn().mockImplementation(async () => { sync.begin(); }),
-      sendAudio: vi.fn().mockImplementation(async (samples: Float32Array) => { sync.push(samples); }),
-      getTxAudioSyncSnapshot: vi.fn().mockImplementation(() => sync.snapshot()),
-      drainTransmission: vi.fn().mockImplementation((timeoutMs: number) => sync.drain(timeoutMs)),
-      endTransmission: vi.fn().mockImplementation(async () => { clearInterval(chrono); }),
+      beginPreparedTransmission: vi.fn().mockImplementation(async (waveform: Float32Array, _rate: number, onConsumed: (count: number) => void) => {
+        sync.begin();
+        sync.push(waveform);
+        observe = onConsumed;
+        return { drain: (ms: number) => sync.drain(ms), end };
+      }),
+      sendAudio: vi.fn().mockRejectedValue(new Error('Prepared output must not use paced writes')),
     };
-    const manager = createTciManager(adapter);
-    const session = manager.openDeterministicPlayback({
-      playbackKind: 'sstv',
-      onPlaybackChunk: (samples) => { observedSamples += samples.length; },
-    });
-    const initialSamples = Math.ceil(3600 / session.frameSamples) * session.frameSamples;
-    for (let offset = 0; offset < initialSamples; offset += session.frameSamples) {
-      await session.write(new Float32Array(session.frameSamples));
-    }
-    await session.start();
-    const producer = (async () => {
-      for (let offset = initialSamples; offset < totalSamples; offset += session.frameSamples) {
-        await session.write(new Float32Array(Math.min(session.frameSamples, totalSamples - offset)));
-      }
-      await session.end();
-      completedAt = Date.now();
-    })();
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(observedSamples / totalSamples).toBeLessThan(0.28);
-    expect(sync.snapshot().maxQueuedSamples).toBeLessThanOrEqual(1800 + session.frameSamples);
-    expect(completedAt).toBe(0);
-    await vi.advanceTimersByTimeAsync(32_000);
-    await producer;
-    expect(observedSamples).toBe(totalSamples);
-    expect(sync.snapshot()).toMatchObject({
-      copiedSamples: totalSamples, queuedSamples: 0, underflowSamples: 0,
-    });
-    expect(sync.snapshot().maxQueuedSamples).toBeLessThanOrEqual(1800 + session.frameSamples);
-    expect(completedAt).toBeCloseTo(38_010 + (pauseChrono ? 2000 : 0), -1);
-    expect(adapter.drainTransmission).toHaveBeenCalledOnce();
-    expect(adapter.endTransmission).toHaveBeenCalledOnce();
-  });
+    return {
+      manager: createTciManager(adapter), sync, adapter, end,
+      chrono: (sampleCount = 512) => {
+        const result = sync.serviceChrono({ receiver: 0, sampleRate: 12000, channels: 1, sampleType: TciSampleType.FLOAT32, sampleCount, frameCount: sampleCount, frame: {} as never });
+        if (result.copiedSamples) observe?.(sync.snapshot().copiedSamples);
+        return result;
+      },
+    };
+  }
 
-  it('fails a stalled TCI SSTV consumer and rejects the blocked producer', async () => {
+  it('prepares the full Robot36 duration before playback and tolerates 1.2-second CHRONO bursts without inserted silence', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
     vi.setSystemTime(0);
     vi.spyOn(performance, 'now').mockImplementation(() => Date.now());
-    let queuedAudioMs = 0;
-    const adapter: MockTciAdapter = {
-      getSampleRate: vi.fn().mockReturnValue(12000),
-      beginTransmission: vi.fn().mockResolvedValue(undefined),
-      sendAudio: vi.fn().mockImplementation(async (samples: Float32Array) => { queuedAudioMs += samples.length / 12; }),
-      getTxAudioSyncSnapshot: vi.fn().mockImplementation(() => ({ queuedAudioMs, targetLeadMs: 150, samplesPerFrame: 512 })),
-      endTransmission: vi.fn().mockResolvedValue(undefined),
-    };
-    const manager = createTciManager(adapter);
+    const { manager, sync, adapter, chrono } = preparedTciHarness();
+    manager.setVolumeGain(1);
+    const totalSamples = 456_120;
+    const source = Float32Array.from({ length: totalSamples }, (_, i) => (i % 101) / 200);
+    let observedSamples = 0;
+    const session = manager.openDeterministicPlayback({ playbackKind: 'sstv', onPlaybackChunk: (samples) => { observedSamples += samples.length; } });
+    expect(session.preparation).toBe('complete');
+    for (let offset = 0; offset < source.length; offset += session.frameSamples) {
+      await session.write(source.subarray(offset, offset + session.frameSamples));
+    }
+    expect(adapter.beginPreparedTransmission).not.toHaveBeenCalled();
+    expect(observedSamples).toBe(0);
+    const started = session.start();
+    await Promise.resolve();
+    expect(sync.snapshot().enqueuedSamples).toBe(totalSamples);
+    expect(observedSamples).toBe(0);
+    const received: number[] = [];
+    received.push(...chrono().samples);
+    await started;
+    const ending = session.end();
+    let checkedMidpoint = false;
+    while (sync.snapshot().queuedSamples > 0) {
+      await vi.advanceTimersByTimeAsync(1200);
+      for (let i = 0; i < 28 && sync.snapshot().queuedSamples > 0; i++) received.push(...chrono().samples);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (!checkedMidpoint && Date.now() >= 10_000) {
+        checkedMidpoint = true;
+        expect(observedSamples).toBe(sync.snapshot().copiedSamples);
+        expect(observedSamples / totalSamples).toBeLessThan(0.3);
+        expect(manager.isPlaying()).toBe(true);
+        expect(sync.snapshot().underflowSamples).toBe(0);
+      }
+    }
+    await ending;
+    expect(observedSamples).toBe(totalSamples);
+    expect(received.slice(0, totalSamples)).toEqual(Array.from(source));
+    expect(sync.snapshot().underflowSamples).toBe(72); // final protocol frame only
+    expect(received.slice(totalSamples)).toEqual(new Array(72).fill(0));
+    expect(adapter.sendAudio).not.toHaveBeenCalled();
+    expect(manager.isPlaying()).toBe(false);
+  });
+
+  it.each(['cancel', 'stall'] as const)('settles prepared TCI playback on %s while waiting for consumption', async (reason) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+    vi.setSystemTime(0);
+    vi.spyOn(performance, 'now').mockImplementation(() => Date.now());
+    const { manager, adapter, end, sync } = preparedTciHarness();
     const session = manager.openDeterministicPlayback({ playbackKind: 'sstv' });
-    await session.write(new Float32Array(session.frameSamples));
-    await session.start();
-    const producer = (async () => {
-      for (let index = 0; index < 100; index++) await session.write(new Float32Array(session.frameSamples));
-    })().catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(5100);
-    expect(await producer).toEqual(new Error('TCI SSTV audio consumption stalled'));
-    expect(queuedAudioMs).toBeLessThan(200);
-    expect(adapter.endTransmission).toHaveBeenCalledOnce();
+    await session.write(new Float32Array(12000));
+    const starting = session.start().catch((error: unknown) => error);
+    await Promise.resolve();
+    const ending = session.end().catch((error: unknown) => error);
+    if (reason === 'cancel') await session.abort('cancel prepared transmission');
+    else await vi.advanceTimersByTimeAsync(5100);
+    expect(await starting).toBeInstanceOf(Error);
+    expect(await ending).toBeInstanceOf(Error);
+    expect(end).toHaveBeenCalled();
+    expect(sync.snapshot().queuedSamples).toBe(0);
+    expect(adapter.sendAudio).not.toHaveBeenCalled();
+    expect(manager.isPlaying()).toBe(false);
+  });
+
+  it('does not start cancelled preparation or accept writes after TCI playback starts', async () => {
+    const { manager, adapter, chrono } = preparedTciHarness();
+    const cancelled = manager.openDeterministicPlayback({ playbackKind: 'sstv' });
+    await cancelled.write(new Float32Array(1200));
+    await cancelled.abort();
+    await expect(cancelled.start()).rejects.toThrow('aborted');
+    expect(adapter.beginPreparedTransmission).not.toHaveBeenCalled();
+    const session = manager.openDeterministicPlayback({ playbackKind: 'sstv' });
+    await session.write(new Float32Array(1200));
+    const started = session.start();
+    await Promise.resolve();
+    chrono();
+    await started;
+    await expect(session.write(new Float32Array(1200))).rejects.toThrow('cannot change');
+    await session.abort();
+  });
+
+  it('closes a TCI handle returned after playback was cancelled during output startup', async () => {
+    const pending = deferred<{ drain: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> }>();
+    const { manager, adapter } = preparedTciHarness();
+    adapter.beginPreparedTransmission!.mockImplementation(() => pending.promise);
+    const session = manager.openDeterministicPlayback({ playbackKind: 'sstv' });
+    await session.write(new Float32Array(1200));
+    const starting = session.start().catch((error: unknown) => error);
+    const aborting = session.abort('cancel output startup');
+    const handle = { drain: vi.fn().mockResolvedValue(undefined), end: vi.fn() };
+    pending.resolve(handle);
+    await aborting;
+    expect(await starting).toEqual(new Error('cancel output startup'));
+    expect(handle.end).toHaveBeenCalledOnce();
+    expect(handle.drain).not.toHaveBeenCalled();
     expect(manager.isPlaying()).toBe(false);
   });
 

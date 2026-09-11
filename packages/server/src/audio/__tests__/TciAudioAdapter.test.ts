@@ -6,6 +6,7 @@ class MockTciConnection extends EventEmitter {
   startAudioStream = vi.fn().mockResolvedValue(undefined);
   stopAudioStream = vi.fn().mockResolvedValue(undefined);
   beginTxAudio = vi.fn();
+  beginPreparedTxAudio = vi.fn();
   waitForTxAudioDrain = vi.fn().mockResolvedValue(undefined);
   endTxAudio = vi.fn();
   sendAudio = vi.fn().mockResolvedValue(undefined);
@@ -17,6 +18,18 @@ class MockTciConnection extends EventEmitter {
 }
 
 describe('TciAudioAdapter', () => {
+  it('opens output before binding a prepared transmission to its connection', async () => {
+    const connection = new MockTciConnection();
+    const handle = { drain: vi.fn(), end: vi.fn() };
+    connection.beginPreparedTxAudio.mockReturnValue(handle);
+    const adapter = new TciAudioAdapter(connection as never);
+    const samples = new Float32Array(12000);
+    const consumed = vi.fn();
+    expect(await adapter.beginPreparedTransmission(samples, 12000, consumed)).toBe(handle);
+    expect(connection.startAudioStream).toHaveBeenCalledWith('tx-output');
+    expect(connection.beginPreparedTxAudio).toHaveBeenCalledWith(samples, 12000, consumed);
+    expect(connection.startAudioStream.mock.invocationCallOrder[0]).toBeLessThan(connection.beginPreparedTxAudio.mock.invocationCallOrder[0]);
+  });
   it('converts RX PCM16 frames to Float32 samples and controls stream lifecycle', async () => {
     const connection = new MockTciConnection();
     const adapter = new TciAudioAdapter(connection as never);

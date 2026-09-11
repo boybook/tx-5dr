@@ -51,6 +51,12 @@ const TCI_FREQUENCY_WRITE_SETTLE_MS = 250;
 const TCI_TX_STREAM_BUFFERING_MS = 150;
 const TCI_METER_INTERVAL_MS = 300;
 const TCI_METER_MIN_FRESHNESS_MS = 1_000;
+
+/** A handle is scoped to one audio session, never to a later replacement. */
+export interface PreparedTciAudioTransmission {
+  drain(timeoutMs: number): Promise<void>;
+  end(): void;
+}
 const TCI_AUDIO_NEGOTIATION_COMMANDS = new Set([
   'audio_samplerate',
   'audio_stream_sample_type',
@@ -101,6 +107,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
   private lineOutRunning = false;
   private readonly audioStreamOwners = new Set<string>();
   private txAudioSync: TciTxAudioSync | null = null;
+  private preparedTxAudio: { sync: TciTxAudioSync; onConsumed: (samples: number) => void } | null = null;
   private txChronoTraceLogged = false;
   private txFallbackChronoCount = 0;
   private txFallbackRequestedSamples = 0;
@@ -816,7 +823,32 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
 
   async sendAudio(samples: Float32Array): Promise<void> {
     this.checkConnected();
+    if (this.preparedTxAudio) throw new Error('Cannot append to a prepared TCI audio transmission');
     this.ensureTxAudioSync().push(samples);
+  }
+
+  beginPreparedTxAudio(samples: Float32Array, sampleRate: number, onConsumed: (samples: number) => void): PreparedTciAudioTransmission {
+    this.checkConnected();
+    if (samples.length === 0) throw new Error('Prepared TCI audio is empty');
+    const sync = this.createTxAudioSync();
+    const format = sync.snapshot();
+    if (format.sampleRate !== sampleRate || format.channels !== 1) throw new Error('Prepared TCI audio format no longer matches the connection');
+    this.resetTxAudioSync('superseded-by-prepared-transmission');
+    sync.begin();
+    // Atomic on the JS thread: CHRONO can only see this session after all PCM
+    // is available. Serialization and zero-padding remain in tci-client-node.
+    sync.push(samples);
+    this.txAudioSync = sync;
+    this.preparedTxAudio = { sync, onConsumed };
+    return {
+      drain: async (timeoutMs) => {
+        if (this.txAudioSync !== sync) throw new Error('Prepared TCI audio session is no longer active');
+        await sync.drain(timeoutMs);
+      },
+      end: () => {
+        if (this.txAudioSync === sync) this.resetTxAudioSync('tx-end');
+      },
+    };
   }
 
   beginTxAudio(): void {
@@ -854,6 +886,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     client.on('disconnected', (reason) => {
       if (this.client !== client) return;
       this.backgroundTasksStarted = false;
+      this.resetTxAudioSync('disconnected');
       this.resetMeterState();
       this.setState(RadioConnectionState.DISCONNECTED);
       this.emit('disconnected', reason instanceof Error ? reason.message : String(reason ?? 'TCI disconnected'));
@@ -907,12 +940,12 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
   }
 
   private resetTxAudioSync(reason: string): void {
+    this.preparedTxAudio = null;
     const sync = this.txAudioSync;
-    if (!sync) {
-      return;
+    if (sync) {
+      this.logTxAudioDiagnostics(reason, sync.snapshot());
+      sync.end(reason);
     }
-    this.logTxAudioDiagnostics(reason, sync.snapshot());
-    sync.end(reason);
     this.txAudioSync = null;
     this.txChronoTraceLogged = false;
     this.txFallbackChronoCount = 0;
@@ -1236,6 +1269,12 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
         this.client?.sendTxAudioForChrono(request, result.samples);
         return;
       }
+      if (this.preparedTxAudio?.sync === sync) {
+        const format = sync.snapshot();
+        if (request.sampleRate !== format.sampleRate || request.channels !== format.channels) {
+          throw new Error('TCI audio format changed during prepared transmission');
+        }
+      }
       const result = sync.serviceChrono(request);
       if (!this.txChronoTraceLogged) {
         this.txChronoTraceLogged = true;
@@ -1245,7 +1284,12 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
         );
       }
       this.client?.sendTxAudioForChrono(request, result.samples);
+      if (result.copiedSamples > 0 && this.preparedTxAudio?.sync === sync) {
+        try { this.preparedTxAudio.onConsumed(sync.snapshot().copiedSamples); }
+        catch (error) { logger.warn('Prepared TCI audio consumption observer failed', error); }
+      }
     } catch (error) {
+      if (this.preparedTxAudio) this.resetTxAudioSync('tx-chrono-failed');
       this.emit('error', this.convertError(error, 'txChrono'));
     }
   }

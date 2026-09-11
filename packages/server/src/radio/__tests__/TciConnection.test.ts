@@ -13,6 +13,97 @@ afterEach(async () => {
 });
 
 describe('TciConnection', () => {
+  async function connectPreparedAudio() {
+    server = new MockTciServer();
+    await server.start();
+    const endpoint = new URL(server.url());
+    const connection = new TciConnection();
+    await connection.connect({ type: 'tci', tci: {
+      host: endpoint.hostname, port: Number(endpoint.port), dialect: 'auto', autoDiscoverPorts: true, receiver: 0, trx: 0, vfo: 0,
+      audioEnabled: true, audioSampleRate: 12000,
+    } });
+    await connection.startAudioStream('tx-output');
+    return connection;
+  }
+
+  it('serves a dense CHRONO burst entirely from prepared audio and reports consumption, not preparation', async () => {
+    const connection = await connectPreparedAudio();
+    const samples = Float32Array.from({ length: 512 * 30 + 7 }, (_, i) => (i % 101) / 200);
+    const consumed: number[] = [];
+    const session = connection.beginPreparedTxAudio(samples, 12000, (count) => consumed.push(count));
+    expect(consumed).toEqual([]);
+    await expect(connection.sendAudio(new Float32Array(512))).rejects.toThrow('Cannot append');
+    for (let index = 0; index < 30; index++) server!.sendTxChrono({ sampleCount: 512 });
+    await waitFor(() => server!.receivedTxAudioFrames.length === 30);
+    expect(connection.getTxAudioSyncSnapshot()).toMatchObject({ copiedSamples: 512 * 30, underflowSamples: 0, queuedSamples: 7 });
+    const received = server!.receivedTxAudioFrames.flatMap((frame) => Array.from(payloadToFloat32(frame)));
+    expect(received).toEqual(Array.from(samples.subarray(0, 512 * 30)));
+    expect(consumed.at(-1)).toBe(512 * 30);
+    const drained = session.drain(1000);
+    server!.sendTxChrono({ sampleCount: 512 });
+    await drained;
+    await waitFor(() => server!.receivedTxAudioFrames.length === 31);
+    expect(consumed.at(-1)).toBe(samples.length);
+    expect(connection.getTxAudioSyncSnapshot()).toMatchObject({ copiedSamples: samples.length, underflowSamples: 505, queuedSamples: 0 });
+    session.end();
+    await connection.disconnect();
+  });
+
+  it.each(['cancel', 'disconnect', 'remote-disconnect', 'replace'] as const)('invalidates the prepared session on %s without stale cleanup affecting a new transmission', async (reason) => {
+    const connection = await connectPreparedAudio();
+    const session = connection.beginPreparedTxAudio(new Float32Array(12000), 12000, () => undefined);
+    const drained = session.drain(1000).catch((error: unknown) => error);
+    if (reason === 'cancel') session.end();
+    if (reason === 'disconnect') await connection.disconnect();
+    if (reason === 'remote-disconnect') server!.closeClients();
+    if (reason === 'replace') connection.beginTxAudio();
+    expect(await drained).toBeInstanceOf(Error);
+    if (reason !== 'disconnect' && reason !== 'remote-disconnect') {
+      connection.beginTxAudio();
+      await connection.sendAudio(new Float32Array(512));
+      session.end();
+      expect(connection.getTxAudioSyncSnapshot()?.queuedSamples).toBe(512);
+      await expect(session.drain(1000)).rejects.toThrow('no longer active');
+      await connection.disconnect();
+    }
+    if (reason === 'remote-disconnect') await connection.disconnect();
+  });
+
+  it('fails prepared playback if a CHRONO request changes the audio format', async () => {
+    const connection = await connectPreparedAudio();
+    const errors: unknown[] = [];
+    connection.on('error', (error) => errors.push(error));
+    const session = connection.beginPreparedTxAudio(new Float32Array(12000), 12000, () => undefined);
+    const drained = session.drain(1000).catch((error: unknown) => error);
+    server!.sendTxChrono({ sampleRate: 48000, sampleCount: 512 });
+    expect(await drained).toBeInstanceOf(Error);
+    expect(errors).toHaveLength(1);
+    expect(connection.getTxAudioSyncSnapshot()).toBeNull();
+    await connection.disconnect();
+  });
+
+  it('keeps prepared PCM output intact when a consumption observer throws', async () => {
+    const connection = await connectPreparedAudio();
+    const session = connection.beginPreparedTxAudio(new Float32Array(1024).fill(0.5), 12000, () => { throw new Error('preview unavailable'); });
+    const drained = session.drain(1000);
+    server!.sendTxChrono({ sampleCount: 512 });
+    server!.sendTxChrono({ sampleCount: 512 });
+    await drained;
+    await waitFor(() => server!.receivedTxAudioFrames.length === 2);
+    expect(connection.getTxAudioSyncSnapshot()).toMatchObject({ copiedSamples: 1024, underflowSamples: 0 });
+    session.end();
+    await connection.disconnect();
+  });
+
+  it('rejects prepared audio at a different sample rate before replacing the active session', async () => {
+    const connection = await connectPreparedAudio();
+    connection.beginTxAudio();
+    await connection.sendAudio(new Float32Array(512));
+    expect(() => connection.beginPreparedTxAudio(new Float32Array(512), 48000, () => undefined)).toThrow('format');
+    expect(connection.getTxAudioSyncSnapshot()?.queuedSamples).toBe(512);
+    await connection.disconnect();
+  });
+
   it('maps IRadioConnection calls to TCI CAT commands and state', async () => {
     server = new MockTciServer();
     let drive = 30;

@@ -25,6 +25,7 @@ class FakeAudioStream extends EventEmitter<{ audioData: (samples: Float32Array, 
 }
 
 class FakePlayback {
+  preparation?: 'complete';
   readonly sampleRate = 12_000;
   readonly frameSamples = 1_200;
   queuedAudioMs = 0;
@@ -68,16 +69,23 @@ class FakePhysicalTx {
 }
 
 describe('ImageRadioService native streaming integration', () => {
-  it('advances transmit progress only when output is submitted and completes after drain', async () => {
+  it.each([false, true])('advances transmit progress only on output and completes after drain (complete preparation: %s)', async (completePreparation) => {
     const dir = await mkdtemp(path.join(tmpdir(), 'tx5dr-image-progress-'));
     dirs.push(dir);
     const audio = new FakeAudioStream();
     audio.playback.holdOutput = true;
+    audio.playback.preparation = completePreparation ? 'complete' : undefined;
     let releaseDrain!: () => void;
     audio.playback.endGate = new Promise<void>((resolve) => { releaseDrain = resolve; });
     const store = new ImageArtifactStore(dir);
     const history = new ImageHistoryStore(dir);
     const physicalTx = new FakePhysicalTx();
+    const acquire = physicalTx.acquireLease.bind(physicalTx);
+    vi.spyOn(physicalTx, 'acquireLease').mockImplementation(async () => {
+      if (completePreparation) expect(audio.playback.queuedAudioMs).toBeGreaterThan(8_000);
+      else expect(audio.playback.queuedAudioMs).toBeLessThan(1000);
+      return acquire();
+    });
     const service = new ImageRadioService(audio as never, store, history, physicalTx as never, () => 14_230_000, () => 'USB');
     await service.start('sstv');
     const artifact = await store.save({
@@ -92,7 +100,7 @@ describe('ImageRadioService native streaming integration', () => {
         envelope: { enhancedPreamble: false, stationIdMode: 'none' },
       })).toMatchObject({ accepted: true });
       await vi.waitFor(() => expect(service.getStatus().tx.phase).toBe('draining'));
-      expect(service.getStatus().tx).toMatchObject({ samplesEmitted: 0, encoderStage: 'finished' });
+      expect(service.getStatus().tx.samplesEmitted).toBe(0);
       audio.playback.flush();
       expect(service.getStatus().tx.samplesEmitted).toBe(service.getStatus().tx.estimatedTotalSamples);
       expect(service.getStatus().tx.phase).toBe('draining');
