@@ -61,6 +61,33 @@ describe('TuneToneController', () => {
     expect(statuses[0]).toMatchObject({ active: true, toneHz: 1234 });
   });
 
+  it('generates the tone at full scale so shared volume gain matches FT8 drive', async () => {
+    const { controller, audioStreamManager } = createController();
+
+    await controller.start({ toneHz: 1500 });
+    await vi.waitFor(() => {
+      expect(audioStreamManager.playAudio).toHaveBeenCalled();
+    });
+
+    const [audio, sampleRate] = audioStreamManager.playAudio.mock.calls[0] as unknown as [Float32Array, number];
+    expect(sampleRate).toBe(12000);
+
+    let peak = 0;
+    let sumSquares = 0;
+    for (const sample of audio) {
+      peak = Math.max(peak, Math.abs(sample));
+      sumSquares += sample * sample;
+    }
+    // WSJT-X encodes FT8 at full scale (peak 1.0, RMS ~0.707). A lower tone
+    // source amplitude would sit ~9 dB below the same user volume gain.
+    expect(peak).toBeCloseTo(1, 6);
+    const rms = Math.sqrt(sumSquares / audio.length);
+    // The 20 ms fades trim a few ten-thousandths off the ideal 0.7071; the
+    // lower bound still rejects the previous 0.35-peak (~0.247 RMS) source.
+    expect(rms).toBeCloseTo(Math.SQRT1_2, 2);
+    expect(rms).toBeGreaterThan(0.7);
+  });
+
   it('stops playback and releases PTT idempotently', async () => {
     const { controller, radioManager, audioStreamManager, statuses } = createController();
 

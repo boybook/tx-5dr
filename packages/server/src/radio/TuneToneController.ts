@@ -10,7 +10,10 @@ const DEFAULT_MAX_DURATION_MS = 15000;
 const DEFAULT_TONE_HZ = 1500;
 const MIN_TONE_HZ = 100;
 const MAX_TONE_HZ = 3000;
-const TONE_GAIN = 0.35;
+// WSJT-X encodes FT8/FT4 at full scale (peak 1.0, RMS ~0.707). The tune tone
+// must use the same source amplitude so the shared user volume gain produces
+// the same RF drive as a digital transmission instead of being ~9 dB weaker.
+const TONE_GAIN = 1.0;
 const RAMP_MS = 20;
 
 export interface TuneToneControllerDeps {
