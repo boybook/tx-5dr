@@ -11,6 +11,7 @@ import { AuthLoginForm } from '../components/auth/AuthLoginForm';
 import { RadioControl } from '../components/radio/control/RadioControl';
 import { RadioOperatorList } from '../components/radio/operators/RadioOperatorList';
 import { MyRelatedFramesTable } from '../components/radio/digital/MyRelatedFramesTable';
+import { HorizontalPaneDivider } from '../components/common/HorizontalPaneDivider';
 import { ThemeToggle } from '../components/common/ThemeToggle';
 import { ClientNotificationButton } from '../components/common/ClientNotificationButton';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
@@ -33,44 +34,6 @@ import {
   shouldPersistRightLayoutSplit,
   shouldStartRightLayoutSplitPointerDrag,
 } from './rightLayoutSplitPreferences';
-
-function RightLayoutPaneDivider({
-  isDragging,
-  onPointerDown,
-  onDoubleClick,
-  resetHint,
-}: {
-  isDragging: boolean;
-  onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void;
-  onDoubleClick: () => void;
-  resetHint: string;
-}) {
-  return (
-    <div
-      className={[
-        'group touch-none flex-shrink-0 cursor-row-resize transition-all duration-200',
-        isDragging ? 'bg-primary-400' : 'bg-transparent hover:bg-primary-200',
-      ].join(' ')}
-      style={{ height: `${RIGHT_LAYOUT_SPLIT_DIVIDER_HEIGHT_PX}px` }}
-      onPointerDown={onPointerDown}
-      onDoubleClick={onDoubleClick}
-      title={resetHint}
-    >
-      <div className="relative h-full w-full">
-        <div
-          className={[
-            'absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 transform gap-1 transition-opacity duration-200',
-            isDragging ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
-          ].join(' ')}
-        >
-          <div className="h-0.5 w-6 rounded-full bg-default-600"></div>
-          <div className="h-0.5 w-6 rounded-full bg-default-600"></div>
-          <div className="h-0.5 w-6 rounded-full bg-default-600"></div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 export const RightLayout: React.FC = () => {
   const { t } = useTranslation('common');
@@ -428,7 +391,8 @@ export const RightLayout: React.FC = () => {
                 >
                   <MyRelatedFramesTable className="h-full" />
                 </div>
-                <RightLayoutPaneDivider
+                <HorizontalPaneDivider
+                  heightPx={RIGHT_LAYOUT_SPLIT_DIVIDER_HEIGHT_PX}
                   isDragging={isDraggingSplit}
                   onPointerDown={handleSplitPointerDown}
                   onDoubleClick={handleSplitDividerDoubleClick}
@@ -447,7 +411,8 @@ export const RightLayout: React.FC = () => {
                 <div ref={topPaneRef} className="relative z-0 flex-1 min-h-0 overflow-hidden">
                   <MyRelatedFramesTable className="h-full" />
                 </div>
-                <RightLayoutPaneDivider
+                <HorizontalPaneDivider
+                  heightPx={RIGHT_LAYOUT_SPLIT_DIVIDER_HEIGHT_PX}
                   isDragging={isDraggingSplit}
                   onPointerDown={handleSplitPointerDown}
                   onDoubleClick={handleSplitDividerDoubleClick}
