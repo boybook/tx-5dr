@@ -378,7 +378,8 @@ export const RightLayout: React.FC = () => {
       
       {/* 主内容区域（移动端与桌面端统一：自适应默认 + 可拖拽手动分割 + 双击恢复） */}
       <div className="flex-1 p-2 pt-0 md:p-5 md:pt-0 flex flex-col gap-2 md:gap-4 min-h-0 overflow-hidden">
-        <div ref={splitWorkspaceRef} className="flex-1 min-h-0 overflow-hidden">
+        {/* Reserve space for operator shadows and selection outlines in the shared gutter, keeping card edges aligned. */}
+        <div ref={splitWorkspaceRef} className="-mx-2 md:-mx-4 flex-1 min-h-0 overflow-hidden">
           <div className="flex h-full min-h-0 flex-col overflow-hidden">
             {hasCustomSplit ? (
               <>
@@ -386,7 +387,7 @@ export const RightLayout: React.FC = () => {
                 {/* 拖拽可整体调整底部容器大小，卡片与 RadioControl 间距由拖拽决定，单个操作员时也可消除 */}
                 <div
                   ref={topPaneRef}
-                  className="relative z-0 min-h-0 overflow-hidden"
+                  className="relative z-0 min-h-0 overflow-hidden px-2 md:px-4"
                   style={workspaceHeight > 0 ? { height: `${desktopPaneHeights.topPaneHeightPx}px` } : { height: `${splitPercent}%` }}
                 >
                   <MyRelatedFramesTable className="h-full" />
@@ -398,17 +399,17 @@ export const RightLayout: React.FC = () => {
                   onDoubleClick={handleSplitDividerDoubleClick}
                   resetHint={t('rightLayout.resetSplitToAuto')}
                 />
-                <div className="relative z-10 min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pt-2 pb-4 [scrollbar-gutter:stable]">
+                <div className="relative z-10 min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 md:px-4 pt-2 pb-4 [scrollbar-gutter:stable]">
                   <RadioOperatorList onCreateOperator={handleCreateOperator} />
                 </div>
-                <div className="relative z-10 flex-shrink-0">
+                <div className="relative z-10 flex-shrink-0 px-2 md:px-4">
                   <RadioControl onOpenRadioSettings={handleOpenRadioSettings} />
                 </div>
               </>
             ) : (
               <>
                 {/* 默认自适应布局：表格占据剩余空间，底部容器（操作员区 + RadioControl）跟随内容自然高度（上限 70%），同 main 经典行为 */}
-                <div ref={topPaneRef} className="relative z-0 flex-1 min-h-0 overflow-hidden">
+                <div ref={topPaneRef} className="relative z-0 flex-1 min-h-0 overflow-hidden px-2 md:px-4">
                   <MyRelatedFramesTable className="h-full" />
                 </div>
                 <HorizontalPaneDivider
@@ -420,10 +421,10 @@ export const RightLayout: React.FC = () => {
                 />
                 <div className="relative z-10 flex-shrink-0 min-h-0 max-h-[70%] flex flex-col overflow-hidden">
                   {/* 间距与 main 对齐：分割条 8px + pt-2 8px = 16px（原 gap-4）；pb-4 16px 同理 */}
-                  <div className="min-h-0 overflow-y-auto overscroll-contain px-1 pt-2 pb-4 [scrollbar-gutter:stable]">
+                  <div className="min-h-0 overflow-y-auto overscroll-contain px-2 md:px-4 pt-2 pb-4 [scrollbar-gutter:stable]">
                     <RadioOperatorList onCreateOperator={handleCreateOperator} />
                   </div>
-                  <div className="relative z-10 flex-shrink-0">
+                  <div className="relative z-10 flex-shrink-0 px-2 md:px-4">
                     <RadioControl onOpenRadioSettings={handleOpenRadioSettings} />
                   </div>
                 </div>

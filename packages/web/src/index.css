@@ -216,6 +216,20 @@ textarea.font-mono,
   transition: background-color 0.2s ease-in-out, color 0.2s ease-in-out;
 }
 
+.radio-operator-card {
+  --radio-operator-shadow: 0 4px 28px -6px rgb(0 0 0 / 0.06);
+}
+
+.dark .radio-operator-card {
+  --radio-operator-shadow: 0 0 0 0 transparent;
+  --radio-operator-surface: color-mix(in srgb, hsl(var(--heroui-content1)) 60%, hsl(var(--heroui-background)));
+  background-color: var(--radio-operator-surface);
+}
+
+.dark .radio-operator-card .progress-bar-mask {
+  background-color: var(--radio-operator-surface);
+}
+
 /* 进度条遮罩动画 - 遮罩从右侧缩小，露出下方颜色层 */
 @keyframes progress-bar {
   from {

@@ -1152,10 +1152,10 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
 
   return (
     <div 
-      className="relative border border-divider rounded-lg overflow-hidden transition-all duration-300 ease-in-out cursor-default select-none"
+      className="radio-operator-card relative border border-default-200 dark:border-default-200/60 rounded-large overflow-hidden transition-all duration-300 ease-in-out cursor-default select-none"
       style={{
         transitionTimingFunction: 'cubic-bezier(0.23, 1, 0.32, 1)',
-        boxShadow: operators.length > 1 && currentOperatorId === operatorStatus.id ? '0 0 0 2px rgba(255, 166, 0, 0.5)' : 'none'
+        boxShadow: `0 0 0 2px ${operators.length > 1 && currentOperatorId === operatorStatus.id ? 'rgba(255, 166, 0, 0.5)' : 'transparent'}, var(--radio-operator-shadow)`
       }}
       onClick={() => {
         setCurrentOperatorId(operatorStatus.id);
@@ -1390,7 +1390,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
       
       {/* 分割线 - 随下半部分一起显示/隐藏 */}
       <div
-        className={`border-divider transition-opacity duration-[250ms] ${
+        className={`border-default-200 dark:border-default-200/60 transition-opacity duration-[250ms] ${
           isSelected ? 'border-t opacity-100' : 'border-t-0 opacity-0'
         }`}
         style={{
