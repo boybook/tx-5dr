@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { api } from '@tx5dr/core';
 import { sanitizeGridInput, type StationInfo } from '@tx5dr/contracts';
 import { createLogger } from '../../utils/logger';
-import { useRadioState } from '../../store/radioStore';
+import { useRadioActions } from '../../store/radioStore';
 
 const logger = createLogger('StationInfoSettings');
 
@@ -19,7 +19,7 @@ interface StationInfoSettingsProps {
 
 export const StationInfoSettings = forwardRef<StationInfoSettingsRef, StationInfoSettingsProps>(({ onUnsavedChanges }, ref) => {
   const { t } = useTranslation('settings');
-  const { dispatch } = useRadioState();
+  const { dispatch } = useRadioActions();
   const [localInfo, setLocalInfo] = useState<StationInfo>({});
   const [savedInfo, setSavedInfo] = useState<StationInfo>({});
   const [isSaving, setIsSaving] = useState(false);

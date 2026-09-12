@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { UserRole, type BootstrapPhaseStatus, type BootstrapStatus } from '@tx5dr/contracts';
 import { api } from '@tx5dr/core';
-import { useRadioState } from '../../store/radioStore';
+import { useRadioActions, useBootstrapStatus } from '../../store/radioStore';
 import { useHasMinRole } from '../../store/authStore';
 
 const DISMISS_PREFIX = 'tx5dr_bootstrap_dismissed_';
@@ -101,9 +101,9 @@ function phaseMessage(phase: BootstrapPhaseStatus, t: TFunction): string {
 
 export function BootstrapStatusChip(): JSX.Element | null {
   const { t } = useTranslation();
-  const { state, dispatch } = useRadioState();
+  const { dispatch } = useRadioActions();
   const isAdmin = useHasMinRole(UserRole.ADMIN);
-  const status = state.bootstrapStatus;
+  const status = useBootstrapStatus();
   const [dismissedSession, setDismissedSession] = useState<string | null>(null);
   const [isRetrying, setIsRetrying] = useState(false);
 

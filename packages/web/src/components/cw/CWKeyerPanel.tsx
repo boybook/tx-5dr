@@ -44,7 +44,7 @@ import {
 } from '@tx5dr/contracts';
 import { useTranslation } from 'react-i18next';
 import { useCWKeyer } from '../../hooks/useCWKeyer';
-import { useOperators, useCurrentOperatorId, useRadioState } from '../../store/radioStore';
+import { useOperators, useCurrentOperatorId, useRadioConnectionState } from '../../store/radioStore';
 import { CWSidetone, type CWSidetoneHandle } from './CWSidetone';
 import {
   getCWKeyerShortcutPresetsForCallsign,
@@ -110,7 +110,7 @@ function getWaitProgressStyle(nextRunAt: number, intervalSec: number): React.CSS
   const startPercent = Math.max(0, Math.min(100, (elapsedMs / totalMs) * 100));
 
   return {
-    '--voice-keyer-progress-start': `${startPercent}%`,
+    '--voice-keyer-progress-scale': `${startPercent / 100}`,
     animation: `voice-keyer-wait-progress ${Math.max(1, remainingMs)}ms linear forwards`,
   } as React.CSSProperties;
 }
@@ -139,7 +139,7 @@ const CWWaitProgress = React.memo(function CWWaitProgress({
 export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   const { t } = useTranslation();
   const { cwKeyerStatus, cwConfig, isCWMode, sendText, playMessage, stopMessage } = useCWKeyer();
-  const radioState = useRadioState();
+  const radioState = useRadioConnectionState();
   const { operators } = useOperators();
   const { currentOperatorId, setCurrentOperatorId } = useCurrentOperatorId();
   const { hisCallsign, trst, rrst } = useCWQSODraft();
@@ -192,8 +192,8 @@ export function CWKeyerPanel({ embedded = false }: CWKeyerPanelProps = {}) {
   const isSerialBackend = backend === 'serial';
   const serialKeyPort = effectiveConfig?.keyPort?.trim() ?? '';
   const showSerialPortAlert = isSerialBackend && !serialKeyPort;
-  const radioConnected = radioState.state.radioConnected;
-  const radioConfigType = radioState.state.radioConfig?.type;
+  const radioConnected = radioState.radioConnected;
+  const radioConfigType = radioState.radioConfig?.type;
   const isRadioKeyerCapableConfig = radioConfigType === 'serial'
     || radioConfigType === 'network'
     || radioConfigType === 'icom-wlan'

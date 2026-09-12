@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
-import { useConnection, useCurrentOperatorId, useRadioState } from '../store/radioStore';
-import type { CWKeyerStatus, CWKeyerConfig, CWPlaceholderValues } from '@tx5dr/contracts';
+import { useConnection, useCurrentOperatorId, useCWState, useRadioModeState } from '../store/radioStore';
+import type { CWPlaceholderValues } from '@tx5dr/contracts';
 import { WSMessageType } from '@tx5dr/contracts';
 
 /**
@@ -8,13 +8,11 @@ import { WSMessageType } from '@tx5dr/contracts';
  */
 export function useCWKeyer() {
   const connection = useConnection();
-  const radioState = useRadioState();
+  const { cwKeyerStatus, cwConfig } = useCWState();
+  const { engineMode } = useRadioModeState();
   const { currentOperatorId } = useCurrentOperatorId();
   const radioService = connection.state.radioService;
 
-  const cwKeyerStatus: CWKeyerStatus | null = radioState.state.cwKeyerStatus;
-  const cwConfig: CWKeyerConfig | null = radioState.state.cwConfig;
-  const engineMode = radioState.state.engineMode;
   const isCWMode = engineMode === 'cw';
 
   const sendKeyAction = useCallback((action: 'key-down' | 'key-up') => {

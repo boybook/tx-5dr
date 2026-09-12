@@ -55,7 +55,7 @@ import {
   leaveAndroidVoiceAudio,
   probeAndroidAudioEnvironment,
 } from '../utils/androidAudioBridge';
-import { useAndroidOperatorAudioState, useRadioState } from '../store/radio';
+import { useAndroidOperatorAudioState, useRadioActions } from '../store/radio';
 
 const logger = createLogger('useAudioMonitorPlayback');
 const STATS_POLL_INTERVAL_MS = 1000;
@@ -216,7 +216,7 @@ export function useAudioMonitorPlayback(
 ): UseAudioMonitorPlaybackReturn {
   const { scope, previewSessionId } = options;
   const nativeStatus = useAndroidOperatorAudioState();
-  const { dispatch: radioDispatch } = useRadioState();
+  const { dispatch: radioDispatch } = useRadioActions();
   const nativeOperatorAudioEnabled = scope === 'radio' && hasAndroidNativeOperatorAudio();
 
   const [isPlaying, setIsPlaying] = useState(false);

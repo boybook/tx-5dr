@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import type { AudioInputSignalType, EngineMode, SpectrumCustomSettings, SpectrumFrame, SpectrumKind, SpectrumLevelDescriptor, SpectrumLevelDomain, SpectrumPreset, SpectrumSessionFrequencyOverlay, SpectrumSessionViewMode, SpectrumViewport, SystemStatus, TciSpectrumSettings } from '@tx5dr/contracts';
 import { UserRole } from '@tx5dr/contracts';
 import { api, getBandFromFrequency } from '@tx5dr/core';
-import { useConnection, useCurrentOperatorId, useOperators, useProfiles, usePTTState, useRadioConnectionState, useRadioModeState, useRadioState, useCapabilityState, useCapabilityDescriptor, useSpectrum, useSplitState } from '../../../store/radioStore';
+import { useConnection, useCurrentOperatorId, useOperators, useProfiles, usePTTState, useRadioConnectionState, useRadioModeState, useRadioMeters, useCapabilityState, useCapabilityDescriptor, useSpectrum, useSplitState } from '../../../store/radioStore';
 import { useAbility, useCan, useHasMinRole } from '../../../store/authStore';
 import { createLogger } from '../../../utils/logger';
 import { setPreferredSpectrumKind } from '../../../utils/spectrumPreferences';
@@ -999,7 +999,7 @@ const FakeFreqLowPowerWatcher: React.FC<{
   active: boolean;
   onChange: (ids: string[]) => void;
 }> = ({ active, onChange }) => {
-  const { state: radioState } = useRadioState();
+  const { meterData } = useRadioMeters();
   const { pttStatus } = usePTTState();
   const txFrequencies = useTxFrequencies();
   const rfPowerState = useCapabilityState('rf_power');
@@ -1011,7 +1011,7 @@ const FakeFreqLowPowerWatcher: React.FC<{
     if (!pttStatus.isTransmitting || pttStatus.operatorIds.length === 0) return [];
 
     // 实测输出功率是否偏低
-    const power = radioState.meterData?.power;
+    const power = meterData?.power;
     if (!power) return [];
     let outputLow = false;
     if (power.watts != null && power.maxWatts != null && power.maxWatts > 0) {
@@ -1032,7 +1032,7 @@ const FakeFreqLowPowerWatcher: React.FC<{
       .filter((tx) => pttStatus.operatorIds.includes(tx.operatorId)
         && (tx.frequency < FAKE_FREQ_COMFORT_MIN_HZ || tx.frequency > FAKE_FREQ_COMFORT_MAX_HZ))
       .map((tx) => tx.operatorId);
-  }, [active, pttStatus.isTransmitting, pttStatus.operatorIds, radioState.meterData,
+  }, [active, pttStatus.isTransmitting, pttStatus.operatorIds, meterData,
     rfPowerState?.value, rfPowerDescriptor?.range, txFrequencies]);
 
   useEffect(() => {

@@ -8,16 +8,15 @@ import { useTranslation } from 'react-i18next';
 import { VoiceFrequencyControl } from '../components/voice/VoiceFrequencyControl';
 import { ImageReceiveCanvas } from '../components/image-radio/ImageReceiveCanvas';
 import { HorizontalPaneDivider } from '../components/common/HorizontalPaneDivider';
-import { RadioMetersDisplay } from '../components/radio/control/RadioMetersDisplay';
+import { RadioMetersPanel } from '../components/radio/control/RadioMetersPanel';
 import { SpectrumDisplay } from '../components/radio/spectrum/SpectrumDisplay';
 import { AppBrandAboutLink } from '../components/common/AppBrandAboutLink';
 import { ClockDisplay } from '../components/system/ClockDisplay';
 import { RemoteAccessPopover } from '../components/system/RemoteAccessPopover';
 import { StationInfoPopover } from '../components/station/StationInfoPopover';
-import { useConnection, useRadioModeState, useRadioState, useStationInfo } from '../store/radioStore';
+import { useConnection, useRadioModeState, useStationInfo } from '../store/radioStore';
 import { useHasMinRole } from '../store/authStore';
 import { isElectron, isMacOS } from '../utils/config';
-import { EMPTY_METER_DATA, shouldShowRadioMetersPanel } from '../utils/radioMeters';
 import { useVerticalPaneSplit } from '../hooks/useVerticalPaneSplit';
 import { PANE_SPLIT_DIVIDER_HEIGHT_PX } from './paneSplitPreferences';
 
@@ -29,7 +28,6 @@ export function ImageLeftLayout() {
   const { t } = useTranslation('common');
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   const connection = useConnection();
-  const radio = useRadioState();
   const stationInfo = useStationInfo();
   const radioMode = useRadioModeState();
   const [isMobile, setIsMobile] = useState(false);
@@ -51,12 +49,7 @@ export function ImageLeftLayout() {
     minPaneHeightPx: IMAGE_LEFT_MIN_PANE_HEIGHT_PX,
   });
   const presetMode = radioMode.currentMode?.name === 'FAX' ? 'FAX' : 'SSTV';
-  const showRadioMeters = shouldShowRadioMetersPanel({
-    radioConnected: radio.state.radioConnected,
-    radioConfigType: radio.state.radioConfig?.type,
-    meterCapabilities: radio.state.meterCapabilities,
-    hasReceivedMeterData: radio.state.hasReceivedMeterData,
-  });
+
   const hasStationContent = !!(stationInfo?.callsign || stationInfo?.name || stationInfo?.qth?.grid || stationInfo?.description);
   const stationInfoOffsetClassName = isElectron() && isMacOS()
     ? 'pl-16'
@@ -147,15 +140,7 @@ export function ImageLeftLayout() {
         </div>
         <Card shadow="sm" className={`${isSpectrumCollapsed ? 'h-8' : 'h-24'} flex-shrink-0 overflow-hidden motion-safe:transition-[height] motion-safe:duration-150`}><CardBody className="p-0"><SpectrumDisplay height={96} showMarkers={false} onCollapsedChange={setIsSpectrumCollapsed} /></CardBody></Card>
         {/* 电台数值表（无电台模式下隐藏，不支持时由组件内部返回 null） */}
-        {showRadioMeters && (
-          <div className="flex-shrink-0">
-            <RadioMetersDisplay
-              meterData={radio.state.meterData || EMPTY_METER_DATA}
-              isPttActive={radio.state.pttStatus.isTransmitting}
-              meterCapabilities={radio.state.meterCapabilities}
-            />
-          </div>
-        )}
+        <RadioMetersPanel className="flex-shrink-0" enableAlcOverLimitPrompt={false} />
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useConnection, useOperators, useRadioState, useSlotPacks } from '../../store/radioStore';
+import { useConnection, useOperators, useRadioModeState, useSlotPacks } from '../../store/radioStore';
 import { buildQsoNotificationSummary, getNotificationPermissionState, isDocumentInBackground, showSystemNotification } from '../../notifications/notificationDriver';
 import { useClientNotifications } from '../../notifications/ClientNotificationProvider';
 import { getClientNotificationPreferences } from '../../notifications/clientNotificationPreferences';
@@ -11,7 +11,7 @@ export function ClientNotificationBridge() {
   const { t } = useTranslation('toast');
   const { state: connection } = useConnection();
   const { operators } = useOperators();
-  const { state: radio } = useRadioState();
+  const radio = useRadioModeState();
   const { state: slots } = useSlotPacks();
   const { player } = useClientNotifications();
   const current = useRef({ operators, radio, slots, t });

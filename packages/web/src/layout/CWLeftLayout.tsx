@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Button, Card, CardBody } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faGithub } from '@fortawesome/free-brands-svg-icons';
-import { RadioMetersDisplay } from '../components/radio/control/RadioMetersDisplay';
+import { RadioMetersPanel } from '../components/radio/control/RadioMetersPanel';
 import { CWKeyerPanel } from '../components/cw/CWKeyerPanel';
 import { CWDecoderPanel } from '../components/cw/CWDecoderPanel';
 import { CWFrequencyControl } from '../components/cw/CWFrequencyControl';
@@ -13,11 +13,10 @@ import { RemoteAccessPopover } from '../components/system/RemoteAccessPopover';
 import { ClockDisplay } from '../components/system/ClockDisplay';
 import { StationInfoPopover } from '../components/station/StationInfoPopover';
 import { AppBrandAboutLink } from '../components/common/AppBrandAboutLink';
-import { useRadioState, useConnection, useStationInfo, useCurrentOperatorId, useOperators } from '../store/radioStore';
+import { useConnection, useStationInfo, useCurrentOperatorId } from '../store/radioStore';
 import { useHasMinRole } from '../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
 import { isElectron, isMacOS } from '../utils/config';
-import { EMPTY_METER_DATA, shouldShowRadioMetersPanel } from '../utils/radioMeters';
 
 /**
  * CWLeftLayout
@@ -27,23 +26,16 @@ import { EMPTY_METER_DATA, shouldShowRadioMetersPanel } from '../utils/radioMete
  * - SpectrumDisplay (without frequency markers, same as voice mode)
  * - RadioMetersDisplay
  */
-export const CWLeftLayout: React.FC = () => {
+export const CWLeftLayout: React.FC = React.memo(() => {
   const isAdmin = useHasMinRole(UserRole.ADMIN);
-  const radio = useRadioState();
   const connection = useConnection();
   const stationInfo = useStationInfo();
   const { currentOperatorId } = useCurrentOperatorId();
-  const { operators } = useOperators();
-  const activeOperatorId = currentOperatorId || operators[0]?.id || null;
+  const activeOperatorId = currentOperatorId || null;
   const hasStationContent = !!(stationInfo?.callsign || stationInfo?.name || stationInfo?.qth?.grid || stationInfo?.description);
   const [isMobile, setIsMobile] = useState(false);
   const [clientCount, setClientCount] = useState(0);
-  const showRadioMeters = shouldShowRadioMetersPanel({
-    radioConnected: radio.state.radioConnected,
-    radioConfigType: radio.state.radioConfig?.type,
-    meterCapabilities: radio.state.meterCapabilities,
-    hasReceivedMeterData: radio.state.hasReceivedMeterData,
-  });
+
   const stationInfoOffsetClassName = isElectron() && isMacOS()
     ? 'pl-16'
     : (isMobile && hasStationContent ? 'pl-0' : 'pl-2');
@@ -122,16 +114,7 @@ export const CWLeftLayout: React.FC = () => {
           </Card>
 
           {/* Radio Meters */}
-          {showRadioMeters && (
-            <div className="flex-shrink-0">
-              <RadioMetersDisplay
-                meterData={radio.state.meterData || EMPTY_METER_DATA}
-                isPttActive={radio.state.pttStatus.isTransmitting}
-                meterCapabilities={radio.state.meterCapabilities}
-                enableAlcOverLimitPrompt={false}
-              />
-            </div>
-          )}
+          <RadioMetersPanel className="flex-shrink-0" enableAlcOverLimitPrompt={false} />
 
           <CWDecoderPanel />
 
@@ -142,4 +125,4 @@ export const CWLeftLayout: React.FC = () => {
       </CWDecoderProvider>
     </div>
   );
-};
+});

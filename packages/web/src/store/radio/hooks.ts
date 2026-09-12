@@ -14,12 +14,21 @@ import {
   LogbookContext,
   MyRelatedTimelineContext,
   OperatorsContext,
+  OperatorSelectionContext,
   ProfilesContext,
   PTTContext,
   RadioConnectionContext,
   RadioErrorsContext,
   RadioModeContext,
   RadioStateContext,
+  RadioActionsContext,
+  RadioMetersContext,
+  CWStateContext,
+  ClockStatusContext,
+  BootstrapStatusContext,
+  SquelchContext,
+  SplitContext,
+  SpectrumContext,
   SlotPacksContext,
   StationInfoContext,
 } from './contexts';
@@ -60,6 +69,32 @@ export const useRadioState = () => {
   return context;
 };
 
+export const useRadioActions = () => {
+  const context = useContext(RadioActionsContext);
+  if (!context) throw new Error('useRadioActions must be used within RadioProvider');
+  return context;
+};
+
+export const useRadioMeters = () => {
+  const context = useContext(RadioMetersContext);
+  if (!context) throw new Error('useRadioMeters must be used within RadioProvider');
+  return context;
+};
+
+export const useCWState = () => {
+  const context = useContext(CWStateContext);
+  if (!context) throw new Error('useCWState must be used within RadioProvider');
+  return context;
+};
+
+export const useClockStatus = () => useContext(ClockStatusContext);
+export const useBootstrapStatus = () => useContext(BootstrapStatusContext);
+export const useSquelchState = () => {
+  const context = useContext(SquelchContext);
+  if (!context) throw new Error('useSquelchState must be used within RadioProvider');
+  return context;
+};
+
 export const useSlotPacks = () => {
   const context = useContext(SlotPacksContext);
   if (!context) throw new Error('useSlotPacks must be used within RadioProvider');
@@ -75,12 +110,9 @@ export const useOperators = () => {
 };
 
 export const useCurrentOperatorId = () => {
-  const context = useContext(OperatorsContext);
+  const context = useContext(OperatorSelectionContext);
   if (!context) throw new Error('useCurrentOperatorId must be used within RadioProvider');
-  return {
-    currentOperatorId: context.currentOperatorId || context.operators?.[0]?.id,
-    setCurrentOperatorId: context.setCurrentOperatorId,
-  };
+  return context;
 };
 
 export const useLogbook = () => {
@@ -112,6 +144,7 @@ export const useProfiles = () => {
     activeProfileId: context.activeProfileId,
     activeProfile,
     profilesLoaded: context.profilesLoaded,
+    hasConfiguredProfiles: context.hasConfiguredProfiles,
   };
 };
 
@@ -141,7 +174,9 @@ export const usePTTState = () => {
 };
 
 export const useSpectrum = () => {
-  const { state, dispatch, markSpectrumSelectionManual } = useRadioState();
+  const context = useContext(SpectrumContext);
+  const { dispatch, markSpectrumSelectionManual } = useRadioActions();
+  if (!context) throw new Error('useSpectrum must be used within RadioProvider');
   const setSelectedKind = useCallback((kind: SpectrumKind | null) => {
     markSpectrumSelectionManual?.();
     dispatch({ type: 'setSelectedSpectrumKind', payload: kind });
@@ -153,10 +188,7 @@ export const useSpectrum = () => {
   }, [dispatch]);
 
   return {
-    capabilities: state.spectrumCapabilities,
-    sessionState: state.spectrumSessionState,
-    selectedKind: state.selectedSpectrumKind,
-    subscribedKind: state.subscribedSpectrumKind,
+    ...context,
     setSelectedKind,
     setSubscribedKind,
   };
@@ -193,13 +225,9 @@ export const useCapabilityStates = (): Map<string, CapabilityState> => {
 };
 
 export const useSplitState = () => {
-  const radio = useContext(RadioStateContext);
-  if (!radio) throw new Error('useSplitState must be used within RadioProvider');
-  return {
-    splitEnabled: radio.state.splitEnabled,
-    splitTxFrequency: radio.state.splitTxFrequency,
-    splitTxFrequencyWritable: radio.state.splitTxFrequencyWritable,
-  };
+  const context = useContext(SplitContext);
+  if (!context) throw new Error('useSplitState must be used within RadioProvider');
+  return context;
 };
 
 export const useMyRelatedTimeline = () => {

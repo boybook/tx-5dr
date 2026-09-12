@@ -47,63 +47,50 @@ export function useBufferedMeterData(meterData: MeterData, isPttActive: boolean)
   const txEpochGuard = useRef(new TxMeterEpochGuard());
 
   useEffect(() => {
+    let next = buffered;
+    const update = (key: keyof BufferedMeterData, value: MeterData[typeof key], isTimeout: boolean) => {
+      if (next[key].value === value && next[key].isTimeout === isTimeout) return;
+      next = { ...next, [key]: { value, isTimeout } };
+    };
+    const clearTimer = (key: keyof BufferedMeterData) => {
+      if (timers.current[key] !== null) clearTimeout(timers.current[key]!);
+      timers.current[key] = null;
+    };
     (['swr', 'alc', 'level', 'power'] as const).forEach((key) => {
       const isTxKey = key === 'swr' || key === 'alc' || key === 'power';
       if (isTxKey && !isPttActive) {
         txEpochGuard.current.resolve(key, meterData[key], false);
-        if (timers.current[key]) {
-          clearTimeout(timers.current[key]!);
-          timers.current[key] = null;
-        }
-        setBuffered((prev) => ({
-          ...prev,
-          [key]: { value: null, isTimeout: true },
-        }));
+        clearTimer(key);
+        update(key, null, true);
         return;
       }
-
-      const sourceValue = meterData[key];
-      const newValue = isTxKey
-        ? txEpochGuard.current.resolve(key, sourceValue, true)
-        : sourceValue;
-      const currentValue = buffered[key].value;
-
-      if (newValue !== null) {
-        if (timers.current[key]) {
-          clearTimeout(timers.current[key]!);
-          timers.current[key] = null;
+      const value = isTxKey ? txEpochGuard.current.resolve(key, meterData[key], true) : meterData[key];
+      if (value !== null) {
+        clearTimer(key);
+        update(key, value, false);
+      } else if (buffered[key].value !== null) {
+        // Another meter can update while this one is missing. Keep its sample
+        // and original deadline instead of clearing it or extending the hold.
+        if (!buffered[key].isTimeout && timers.current[key] === null) {
+          timers.current[key] = setTimeout(() => {
+            timers.current[key] = null;
+            setBuffered(previous => previous[key].isTimeout ? previous : {
+              ...previous, [key]: { ...previous[key], isTimeout: true },
+            });
+          }, TIMEOUT_MS);
         }
-        // 有数据：立即更新
-        setBuffered((prev) => ({
-          ...prev,
-          [key]: { value: newValue, isTimeout: false },
-        }));
-      } else if (currentValue !== null && !timers.current[key]) {
-        // 数据变 null：保持旧值，启动超时
-        timers.current[key] = setTimeout(() => {
-          setBuffered((prev) => ({
-            ...prev,
-            [key]: { ...prev[key], isTimeout: true },
-          }));
-          timers.current[key] = null;
-        }, TIMEOUT_MS);
       } else {
-        // 一直无数据：标记超时
-        setBuffered((prev) => ({
-          ...prev,
-          [key]: { value: null, isTimeout: true },
-        }));
+        update(key, null, true);
       }
     });
-
+    if (next !== buffered) setBuffered(next);
   }, [isPttActive, meterData.swr, meterData.alc, meterData.level, meterData.power]);
 
-  useEffect(() => {
-    return () => {
-      Object.values(timers.current).forEach((timer) => {
-        if (timer) clearTimeout(timer);
-      });
-    };
+  useEffect(() => () => {
+    (['swr', 'alc', 'level', 'power'] as const).forEach(key => {
+      if (timers.current[key] !== null) clearTimeout(timers.current[key]!);
+      timers.current[key] = null;
+    });
   }, []);
 
   return buffered;

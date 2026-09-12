@@ -145,7 +145,7 @@ function getWaitProgressStyle(nextRunAt: number, intervalSec: number): React.CSS
   const startPercent = Math.max(0, Math.min(100, (elapsedMs / totalMs) * 100));
 
   return {
-    '--voice-keyer-progress-start': `${startPercent}%`,
+    '--voice-keyer-progress-scale': `${startPercent / 100}`,
     animation: `voice-keyer-wait-progress ${Math.max(1, remainingMs)}ms linear forwards`,
   } as React.CSSProperties;
 }
@@ -249,7 +249,7 @@ export const VoiceKeyerCard: React.FC<VoiceKeyerCardProps> = ({
   const [status, setStatus] = useState<VoiceKeyerStatus>(idleStatus);
   const [loading, setLoading] = useState(false);
   const [, setCountdownTick] = useState(0);
-  const [selectedOperatorId, setSelectedOperatorId] = useState<string | null>(currentOperatorId);
+  const [selectedOperatorId, setSelectedOperatorId] = useState<string | null>(currentOperatorId ?? null);
   const [recordingSlotId, setRecordingSlotId] = useState<string | null>(null);
   const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
   const [recordingInputLevel, setRecordingInputLevel] = useState(0);
@@ -284,7 +284,7 @@ export const VoiceKeyerCard: React.FC<VoiceKeyerCardProps> = ({
   const activeSlot = activeForCallsign ? status.slotId : null;
 
   useEffect(() => {
-    setSelectedOperatorId(currentOperatorId);
+    setSelectedOperatorId(currentOperatorId ?? null);
   }, [currentOperatorId]);
 
   useWSEvent(radioService, 'voiceKeyerStatusChanged', (nextStatus: VoiceKeyerStatus) => {

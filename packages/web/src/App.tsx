@@ -1,17 +1,13 @@
+import { lazy } from 'react';
 import './App.css';
 import { LeftLayout } from './layout/LeftLayout';
 import { RightLayout } from './layout/RightLayout';
-import { VoiceLeftLayout } from './layout/VoiceLeftLayout';
-import { VoiceRightLayout } from './layout/VoiceRightLayout';
-import { CWLeftLayout } from './layout/CWLeftLayout';
-import { CWRightLayout } from './layout/CWRightLayout';
-import { ImageLeftLayout } from './layout/ImageLeftLayout';
-import { ImageRightLayout } from './layout/ImageRightLayout';
+import { ModePane } from './layout/ModePane';
 import { ImageRadioProvider } from './hooks/useImageRadio';
 import { SplitLayout } from './components/common/SplitLayout';
 import { MainRightPluginPane } from './components/plugins/MainRightPluginPane';
 import { useVisiblePluginPanelsForSlot } from './components/plugins/pluginPanelSlots';
-import { RadioProvider, useRadioState, useProfiles, useConnection, useCurrentOperatorId, useOperators } from './store/radioStore';
+import { RadioProvider, useRadioModeState, usePTTState, useProfiles, useConnection, useCurrentOperatorId } from './store/radioStore';
 import { AuthProvider, useAuth, useHasMinRole } from './store/authStore';
 import { UserRole } from '@tx5dr/contracts';
 import { useTheme } from './hooks/useTheme';
@@ -35,16 +31,22 @@ import { shouldShowServerStatusPage } from './store/radio/connectionView';
 import { useTranslation } from 'react-i18next';
 import { faImages, faPaperPlane, faSatelliteDish } from '@fortawesome/free-solid-svg-icons';
 
+const VoiceLeftLayout = lazy(() => import('./layout/VoiceLeftLayout').then(module => ({ default: module.VoiceLeftLayout })));
+const VoiceRightLayout = lazy(() => import('./layout/VoiceRightLayout').then(module => ({ default: module.VoiceRightLayout })));
+const CWLeftLayout = lazy(() => import('./layout/CWLeftLayout').then(module => ({ default: module.CWLeftLayout })));
+const CWRightLayout = lazy(() => import('./layout/CWRightLayout').then(module => ({ default: module.CWRightLayout })));
+const ImageLeftLayout = lazy(() => import('./layout/ImageLeftLayout').then(module => ({ default: module.ImageLeftLayout })));
+const ImageRightLayout = lazy(() => import('./layout/ImageRightLayout').then(module => ({ default: module.ImageRightLayout })));
+
 function AppContent() {
   const { t } = useTranslation('image');
-  const { state } = useRadioState();
-  const { pttStatus, engineMode, currentMode } = state;
+  const { engineMode, currentMode } = useRadioModeState();
+  const { pttStatus } = usePTTState();
   const { profiles, profilesLoaded, hasConfiguredProfiles } = useProfiles();
   const { state: connectionState } = useConnection();
   const { currentOperatorId } = useCurrentOperatorId();
-  const { operators } = useOperators();
   const isAdmin = useHasMinRole(UserRole.ADMIN);
-  const activeOperatorId = currentOperatorId || operators[0]?.id || null;
+  const activeOperatorId = currentOperatorId || null;
   const mainRightPanels = useVisiblePluginPanelsForSlot(activeOperatorId, 'main-right');
   // 容量拒绝始终使用稳定的状态页，避免已连接过的客户端退回到通用断线蒙层。
   // 首次业务握手完成前也不渲染主界面，避免组件抢先发受保护命令。
@@ -84,8 +86,8 @@ function AppContent() {
       )}
 
       <SplitLayout
-        leftContent={isVoiceMode ? <VoiceLeftLayout /> : isCWMode ? <CWLeftLayout /> : isImageMode ? <ImageLeftLayout /> : <LeftLayout />}
-        rightContent={isVoiceMode ? <VoiceRightLayout /> : isCWMode ? <CWRightLayout /> : isImageMode ? <ImageRightLayout /> : <RightLayout />}
+        leftContent={<ModePane mode={engineMode}>{isVoiceMode ? <VoiceLeftLayout /> : isCWMode ? <CWLeftLayout /> : isImageMode ? <ImageLeftLayout /> : <LeftLayout />}</ModePane>}
+        rightContent={<ModePane mode={engineMode}>{isVoiceMode ? <VoiceRightLayout /> : isCWMode ? <CWRightLayout /> : isImageMode ? <ImageRightLayout /> : <RightLayout />}</ModePane>}
         extraContent={activeOperatorId ? (
           <MainRightPluginPane
             operatorId={activeOperatorId}

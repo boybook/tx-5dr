@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SpectrumDisplay } from '../radio/spectrum/SpectrumDisplay';
 import type { FrequencyBandOverlayChange } from '../radio/spectrum/WebGLWaterfall';
-import { useCWDecoder } from '../../hooks/useCWDecoder';
+import { useCWDecoderTuning } from '../../hooks/useCWDecoder';
 import { useCan } from '../../store/authStore';
 import {
   CW_DECODER_FILTER_MAX_WIDTH_HZ,
@@ -40,14 +40,13 @@ export const CWSpectrumFilterOverlay: React.FC<CWSpectrumFilterOverlayProps> = (
   showMarkers = true,
 }) => {
   const { t } = useTranslation('radio');
-  const { config, status, tuneRuntime, updateConfig } = useCWDecoder();
+  const { targetFreqHz: configuredTarget, filterWidthHz: configuredWidth, decoderVisible, tuneRuntime, updateConfig } = useCWDecoderTuning();
   const canConfigureDecoder = useCan('update', 'CWDecoderConfig');
   const pendingRuntimePatchRef = useRef<TuningPatch | null>(null);
   const runtimeTuningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const targetFreqHz = clampCWDecoderTargetFreq(typeof config?.targetFreqHz === 'number' ? config.targetFreqHz : 800);
-  const filterWidthHz = clampCWDecoderFilterWidth(typeof config?.filterWidthHz === 'number' ? config.filterWidthHz : 800);
-  const decoderVisible = status.state === 'starting' || status.state === 'running' || status.running;
+  const targetFreqHz = clampCWDecoderTargetFreq(typeof configuredTarget === 'number' ? configuredTarget : 800);
+  const filterWidthHz = clampCWDecoderFilterWidth(typeof configuredWidth === 'number' ? configuredWidth : 800);
 
   useEffect(() => () => {
     if (runtimeTuningTimerRef.current) {

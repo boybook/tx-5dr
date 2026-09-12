@@ -12,6 +12,7 @@ installation and operation manuals are maintained in
 - [Realtime audio ownership and transport](architecture/realtime-audio.md)
 - [Spectrum amplitude semantics](architecture/spectrum.md)
 - [Persistence durability](architecture/persistence-durability.md)
+- [Frontend state and rendering](architecture/frontend-rendering.md)
 
 These files describe invariants that implementation and guard tests are expected
 to preserve. Update them when an owning boundary changes.

@@ -20,7 +20,7 @@ import {
   saveRealtimeAudioCodecPreference,
 } from '../audio/realtimeAudioCodec';
 import { hasAndroidNativeOperatorAudio } from '../utils/androidAudioBridge';
-import { useAndroidOperatorAudioState, useRadioState } from '../store/radio';
+import { useAndroidOperatorAudioState, useRadioActions } from '../store/radio';
 
 const logger = createLogger('useVoiceCaptureController');
 const VOICE_TX_BUFFER_PREFERENCE_STORAGE_KEY = 'tx5dr.voiceTx.bufferPreference';
@@ -86,7 +86,7 @@ export function useVoiceCaptureController(
   engineMode: EngineMode,
 ): VoiceCaptureController {
   const nativeStatus = useAndroidOperatorAudioState();
-  const { dispatch: radioDispatch } = useRadioState();
+  const { dispatch: radioDispatch } = useRadioActions();
   const captureRef = useRef<VoiceCapture | null>(null);
   const nativeStatusRef = useRef(nativeStatus);
   const preferredTransportRef = useRef<RealtimeTransportKind>('rtc-data-audio');

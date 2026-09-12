@@ -450,10 +450,31 @@ function useCWDecoderController() {
 export type CWDecoderContextValue = ReturnType<typeof useCWDecoderController>;
 
 const CWDecoderContext = createContext<CWDecoderContextValue | null>(null);
+type CWDecoderTuning = Pick<CWDecoderContextValue, 'tuneRuntime' | 'updateConfig'> & {
+  targetFreqHz: CWDecoderConfig['targetFreqHz'];
+  filterWidthHz: CWDecoderConfig['filterWidthHz'];
+  decoderVisible: boolean;
+};
+const CWDecoderTuningContext = createContext<CWDecoderTuning | null>(null);
 
 export function CWDecoderProvider({ children }: { children: ReactNode }) {
   const value = useCWDecoderController();
-  return createElement(CWDecoderContext.Provider, { value }, children);
+  const decoderVisible = value.status.state === 'starting' || value.status.state === 'running' || value.status.running;
+  const tuning = useMemo(() => ({
+    targetFreqHz: value.config?.targetFreqHz,
+    filterWidthHz: value.config?.filterWidthHz,
+    decoderVisible,
+    tuneRuntime: value.tuneRuntime,
+    updateConfig: value.updateConfig,
+  }), [value.config?.targetFreqHz, value.config?.filterWidthHz, decoderVisible, value.tuneRuntime, value.updateConfig]);
+  return createElement(CWDecoderTuningContext.Provider, { value: tuning },
+    createElement(CWDecoderContext.Provider, { value }, children));
+}
+
+export function useCWDecoderTuning(): CWDecoderTuning {
+  const context = useContext(CWDecoderTuningContext);
+  if (!context) throw new Error('useCWDecoderTuning must be used within CWDecoderProvider');
+  return context;
 }
 
 export function useCWDecoder(): CWDecoderContextValue {

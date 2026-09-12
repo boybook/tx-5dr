@@ -3,7 +3,7 @@ import { Card, CardBody } from '@heroui/react';
 import { api, ApiError, getBandFromFrequency } from '@tx5dr/core';
 import { useTranslation } from 'react-i18next';
 import { useAbility, useAuth, useCan } from '../../store/authStore';
-import { useConnection, useOperators, useProfiles, useRadioConnectionState, useRadioState, useSplitState } from '../../store/radioStore';
+import { useConnection, useOperators, useProfiles, useRadioConnectionState, useRadioModeState, useSplitState } from '../../store/radioStore';
 import { createLogger } from '../../utils/logger';
 import { canExecuteRadioFrequency, canWriteRadioFrequency } from '../../utils/radioControl';
 import { resetOperatorsForOperatingStateChange } from '../../utils/operatorReset';
@@ -64,7 +64,7 @@ export const CWFrequencyControl: React.FC = () => {
   const { operators } = useOperators();
   const { activeProfileId } = useProfiles();
   const radioConnection = useRadioConnectionState();
-  const radio = useRadioState();
+  const radio = useRadioModeState();
   const { state: authState } = useAuth();
   const canUseAuthenticatedRest = !authState.authEnabled || Boolean(authState.jwt);
   const canSetFrequency = useCan('execute', 'RadioFrequency');
@@ -73,8 +73,8 @@ export const CWFrequencyControl: React.FC = () => {
   const canWriteTargetFrequency = useCallback((frequency: number) => (
     canWriteFrequency && canExecuteRadioFrequency(ability, frequency)
   ), [ability, canWriteFrequency]);
-  const liveFrequency = radio.state.currentRadioFrequency && radio.state.currentRadioFrequency > 0
-    ? radio.state.currentRadioFrequency
+  const liveFrequency = radio.currentRadioFrequency && radio.currentRadioFrequency > 0
+    ? radio.currentRadioFrequency
     : null;
 
   const [currentFrequency, setCurrentFrequency] = React.useState<number>(liveFrequency ?? DEFAULT_CW_FREQUENCY);

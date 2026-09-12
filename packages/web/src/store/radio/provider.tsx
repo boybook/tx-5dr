@@ -7,6 +7,7 @@ import { getWebSocketClientInstanceId } from '../../utils/wsClientInstance';
 import { type RadioService, getOrCreateRadioService } from '../../services/radioService';
 import { useAuth } from '../authStore';
 import { CapabilityEnvironmentProvider } from '../../radio-capability/CapabilityEnvironment';
+import { PluginSnapshotProvider } from '../../hooks/usePluginSnapshot';
 import {
   AudioSidecarContext,
   AndroidOperatorAudioContext,
@@ -16,12 +17,21 @@ import {
   LogbookContext,
   MyRelatedTimelineContext,
   OperatorsContext,
+  OperatorSelectionContext,
   ProfilesContext,
   PTTContext,
   RadioConnectionContext,
   RadioErrorsContext,
   RadioModeContext,
   RadioStateContext,
+  RadioActionsContext,
+  RadioMetersContext,
+  CWStateContext,
+  ClockStatusContext,
+  BootstrapStatusContext,
+  SquelchContext,
+  SplitContext,
+  SpectrumContext,
   SlotPacksContext,
   StationInfoContext,
 } from './contexts';
@@ -322,6 +332,31 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
     [radioState, markSpectrumSelectionManual],
   );
 
+  const radioActionsContextValue = useMemo(
+    () => ({ dispatch: radioDispatch, slotPacksDispatch, clearMyRelatedTimeline, seedSelectedRx, markSpectrumSelectionManual }),
+    [clearMyRelatedTimeline, seedSelectedRx, markSpectrumSelectionManual],
+  );
+  const radioMetersContextValue = useMemo(() => ({
+    meterData: radioState.meterData,
+    meterCapabilities: radioState.meterCapabilities,
+    hasReceivedMeterData: radioState.hasReceivedMeterData,
+  }), [radioState.meterData, radioState.meterCapabilities, radioState.hasReceivedMeterData]);
+  const cwContextValue = useMemo(() => ({
+    cwKeyerStatus: radioState.cwKeyerStatus,
+    cwConfig: radioState.cwConfig,
+  }), [radioState.cwKeyerStatus, radioState.cwConfig]);
+  const spectrumContextValue = useMemo(() => ({
+    capabilities: radioState.spectrumCapabilities,
+    sessionState: radioState.spectrumSessionState,
+    selectedKind: radioState.selectedSpectrumKind,
+    subscribedKind: radioState.subscribedSpectrumKind,
+  }), [radioState.spectrumCapabilities, radioState.spectrumSessionState, radioState.selectedSpectrumKind, radioState.subscribedSpectrumKind]);
+  const splitContextValue = useMemo(() => ({
+    splitEnabled: radioState.splitEnabled,
+    splitTxFrequency: radioState.splitTxFrequency,
+    splitTxFrequencyWritable: radioState.splitTxFrequencyWritable,
+  }), [radioState.splitEnabled, radioState.splitTxFrequency, radioState.splitTxFrequencyWritable]);
+
   const slotPacksContextValue = useMemo(
     () => ({ state: slotPacksState, dispatch: slotPacksDispatch }),
     [slotPacksState],
@@ -339,6 +374,12 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
       setCurrentOperatorId,
     }),
     [radioState.operators, radioState.currentOperatorId, setCurrentOperatorId],
+  );
+
+  const effectiveOperatorId = radioState.currentOperatorId || radioState.operators[0]?.id;
+  const operatorSelectionContextValue = useMemo(
+    () => ({ currentOperatorId: effectiveOperatorId, setCurrentOperatorId }),
+    [effectiveOperatorId, setCurrentOperatorId],
   );
 
   const profilesContextValue = useMemo(
@@ -382,6 +423,7 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
       isEngineRunning: radioState.systemStatus?.isRunning ?? null,
       engineState: radioState.systemStatus?.engineState ?? null,
       currentMode: radioState.currentMode,
+      currentSlotInfo: radioState.currentSlotInfo,
       engineMode: radioState.engineMode,
       currentRadioMode: radioState.currentRadioMode,
       currentRadioFrequency: radioState.currentRadioFrequency,
@@ -393,6 +435,7 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
       radioState.systemStatus?.isRunning,
       radioState.systemStatus?.engineState,
       radioState.currentMode,
+      radioState.currentSlotInfo,
       radioState.engineMode,
       radioState.currentRadioMode,
       radioState.currentRadioFrequency,
@@ -430,8 +473,11 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
   );
 
   const myRelatedTimelineGroups = useMemo(
-    () => buildMyRelatedTimelineGroups(myRelatedTimelineState),
-    [myRelatedTimelineState],
+    () => buildMyRelatedTimelineGroups({
+      frozenGroups: myRelatedTimelineState.frozenGroups,
+      liveGroups: myRelatedTimelineState.liveGroups,
+    }),
+    [myRelatedTimelineState.frozenGroups, myRelatedTimelineState.liveGroups],
   );
 
   const myRelatedTimelineContextValue = useMemo(
@@ -594,7 +640,27 @@ export const RadioProvider = ({ children }: { children: ReactNode }) => {
                               <MyRelatedTimelineContext.Provider value={myRelatedTimelineContextValue}>
                                 <AudioSidecarContext.Provider value={radioState.audioSidecar}>
                                   <AndroidOperatorAudioContext.Provider value={radioState.androidOperatorAudio}>
-                                    <CapabilityEnvironmentProvider>{children}</CapabilityEnvironmentProvider>
+                                    <RadioActionsContext.Provider value={radioActionsContextValue}>
+                                      <RadioMetersContext.Provider value={radioMetersContextValue}>
+                                        <CWStateContext.Provider value={cwContextValue}>
+                                          <ClockStatusContext.Provider value={radioState.clockStatus}>
+                                            <BootstrapStatusContext.Provider value={radioState.bootstrapStatus}>
+                                              <SquelchContext.Provider value={radioState.squelchStatus}>
+                                                <SpectrumContext.Provider value={spectrumContextValue}>
+                                                  <SplitContext.Provider value={splitContextValue}>
+                                                    <CapabilityEnvironmentProvider>
+                                                      <OperatorSelectionContext.Provider value={operatorSelectionContextValue}>
+                                                        <PluginSnapshotProvider>{children}</PluginSnapshotProvider>
+                                                      </OperatorSelectionContext.Provider>
+                                                    </CapabilityEnvironmentProvider>
+                                                  </SplitContext.Provider>
+                                                </SpectrumContext.Provider>
+                                              </SquelchContext.Provider>
+                                            </BootstrapStatusContext.Provider>
+                                          </ClockStatusContext.Provider>
+                                        </CWStateContext.Provider>
+                                      </RadioMetersContext.Provider>
+                                    </RadioActionsContext.Provider>
                                   </AndroidOperatorAudioContext.Provider>
                                 </AudioSidecarContext.Provider>
                               </MyRelatedTimelineContext.Provider>

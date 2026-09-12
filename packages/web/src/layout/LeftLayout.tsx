@@ -18,37 +18,29 @@ import {
 import { faGithub } from '@fortawesome/free-brands-svg-icons';
 import { SpectrumDisplay } from '../components/radio/spectrum/SpectrumDisplay';
 import { SlotPacksMessageDisplay } from '../components/radio/digital/SlotPacksMessageDisplay';
-import { RadioMetersDisplay } from '../components/radio/control/RadioMetersDisplay';
+import { RadioMetersPanel } from '../components/radio/control/RadioMetersPanel';
 import { RemoteAccessPopover } from '../components/system/RemoteAccessPopover';
 import { ClockDisplay } from '../components/system/ClockDisplay';
 import { StationInfoPopover } from '../components/station/StationInfoPopover';
 import { AppBrandAboutLink } from '../components/common/AppBrandAboutLink';
-import { useSlotPacks, useRadioState, useConnection, useStationInfo, useMyRelatedTimeline } from '../store/radioStore';
+import { useRadioActions, useConnection, useStationInfo } from '../store/radioStore';
 import { useHasMinRole } from '../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
 import { isElectron, isMacOS } from '../utils/config';
-import { EMPTY_METER_DATA, shouldShowRadioMetersPanel } from '../utils/radioMeters';
 import { useTranslation } from 'react-i18next';
 
-export const LeftLayout: React.FC = () => {
+export const LeftLayout: React.FC = React.memo(() => {
   const { t } = useTranslation('common');
   const isAdmin = useHasMinRole(UserRole.ADMIN);
-  const slotPacks = useSlotPacks();
-  const radio = useRadioState();
+  const { slotPacksDispatch, clearMyRelatedTimeline } = useRadioActions();
   const connection = useConnection();
-  const myRelatedTimeline = useMyRelatedTimeline();
   const stationInfo = useStationInfo();
   const hasStationContent = !!(stationInfo?.callsign || stationInfo?.name || stationInfo?.qth?.grid || stationInfo?.description);
   const [isMobile, setIsMobile] = useState(false);
   const [hoveredMessageFreq, setHoveredMessageFreq] = useState<number | null>(null);
   const [clientCount, setClientCount] = useState(0);
   const [isSpectrumPopedOut, setIsSpectrumPopedOut] = useState(false);
-  const showRadioMeters = shouldShowRadioMetersPanel({
-    radioConnected: radio.state.radioConnected,
-    radioConfigType: radio.state.radioConfig?.type,
-    meterCapabilities: radio.state.meterCapabilities,
-    hasReceivedMeterData: radio.state.hasReceivedMeterData,
-  });
+
   const stationInfoOffsetClassName = isElectron() && isMacOS()
     ? 'pl-16'
     : (isMobile && hasStationContent ? 'pl-0' : 'pl-2');
@@ -102,11 +94,11 @@ export const LeftLayout: React.FC = () => {
   }, [connection.state.radioService]);
 
   const handleClearLeft = () => {
-    slotPacks.dispatch({ type: 'CLEAR_DATA' });
+    slotPacksDispatch({ type: 'CLEAR_DATA' });
   };
 
   const handleClearRight = () => {
-    myRelatedTimeline.clearTimeline();
+    clearMyRelatedTimeline();
   };
 
   const handleClearAll = () => {
@@ -232,14 +224,8 @@ export const LeftLayout: React.FC = () => {
         )}
 
         {/* 电台数值表（无电台模式下隐藏，不支持时由组件内部返回 null） */}
-        {showRadioMeters && (
-          <RadioMetersDisplay
-            meterData={radio.state.meterData || EMPTY_METER_DATA}
-            isPttActive={radio.state.pttStatus.isTransmitting}
-            meterCapabilities={radio.state.meterCapabilities}
-          />
-        )}
+        <RadioMetersPanel />
       </div>
     </div>
   );
-};
+});

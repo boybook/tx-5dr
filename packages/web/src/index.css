@@ -219,10 +219,10 @@ textarea.font-mono,
 /* 进度条遮罩动画 - 遮罩从右侧缩小，露出下方颜色层 */
 @keyframes progress-bar {
   from {
-    width: var(--progress-start, 100%);
+    transform: scaleX(var(--progress-mask-scale, 1));
   }
   to {
-    width: 0%;
+    transform: scaleX(0);
   }
 }
 
@@ -231,32 +231,40 @@ textarea.font-mono,
   width: 100%;
   left: auto;
   right: 0;
+  transform-origin: right;
+  will-change: transform;
 }
 
 @keyframes voice-keyer-tx-progress {
   from {
-    width: 0%;
+    transform: scaleX(0);
   }
   to {
-    width: 100%;
+    transform: scaleX(1);
   }
 }
 
 .voice-keyer-tx-progress {
-  width: 0%;
+  width: 100%;
+  transform: scaleX(0);
+  transform-origin: left;
+  will-change: transform;
 }
 
 @keyframes voice-keyer-wait-progress {
   from {
-    width: var(--voice-keyer-progress-start, 0%);
+    transform: scaleX(var(--voice-keyer-progress-scale, 0));
   }
   to {
-    width: 100%;
+    transform: scaleX(1);
   }
 }
 
 .voice-keyer-wait-progress {
-  width: var(--voice-keyer-progress-start, 0%);
+  width: 100%;
+  transform: scaleX(var(--voice-keyer-progress-scale, 0));
+  transform-origin: left;
+  will-change: transform;
 }
 
 @keyframes tx-slot-shortcut-select-glow {

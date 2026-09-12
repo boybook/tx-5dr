@@ -22,7 +22,7 @@ import { api } from '@tx5dr/core';
 import type { RadioProfile, HamlibConfig, AudioDeviceSettings as AudioDeviceSettingsType, SupportedRig } from '@tx5dr/contracts';
 import { RadioConnectionStatus, UserRole } from '@tx5dr/contracts';
 import { useHasMinRole } from '../../../store/authStore';
-import { useProfiles, useRadioConnectionState, useRadioState } from '../../../store/radioStore';
+import { useProfiles, useRadioConnectionState, useRadioActions } from '../../../store/radioStore';
 import { RadioDeviceSettings, type RadioDeviceSettingsRef } from './RadioDeviceSettings';
 import { AudioDeviceSettings, type AudioDeviceSettingsRef } from './AudioDeviceSettings';
 import { PowerControlButton } from './PowerControlButton';
@@ -54,7 +54,7 @@ function isRedactedProfile(profile: RadioProfile): boolean {
 export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
   const { t } = useTranslation('radio');
   const { profiles, activeProfileId } = useProfiles();
-  const { dispatch: radioDispatch } = useRadioState();
+  const { dispatch: radioDispatch } = useRadioActions();
   const radioConnection = useRadioConnectionState();
   const canManageProfiles = useHasMinRole(UserRole.ADMIN);
   const [mode, setMode] = useState<ModalMode>('list');

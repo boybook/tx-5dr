@@ -46,6 +46,31 @@ export const RadioStateContext = createContext<{
   markSpectrumSelectionManual?: () => void;
 } | undefined>(undefined);
 
+export const RadioActionsContext = createContext<{
+  dispatch: React.Dispatch<RadioAction>;
+  slotPacksDispatch: React.Dispatch<SlotPacksAction>;
+  clearMyRelatedTimeline: () => void;
+  seedSelectedRx: (payload: { message: FrameDisplayMessage; group: FrameGroup }) => void;
+  markSpectrumSelectionManual: () => void;
+} | undefined>(undefined);
+
+export const OperatorSelectionContext = createContext<{
+  currentOperatorId: string | undefined;
+  setCurrentOperatorId: (operatorId: string) => void;
+} | undefined>(undefined);
+
+export const RadioMetersContext = createContext<Pick<RadioState,
+  'meterData' | 'meterCapabilities' | 'hasReceivedMeterData'
+> | undefined>(undefined);
+
+export const CWStateContext = createContext<Pick<RadioState, 'cwKeyerStatus' | 'cwConfig'> | undefined>(undefined);
+export const ClockStatusContext = createContext<RadioState['clockStatus']>(null);
+export const BootstrapStatusContext = createContext<RadioState['bootstrapStatus']>(null);
+export const SquelchContext = createContext<RadioState['squelchStatus'] | undefined>(undefined);
+export const SplitContext = createContext<Pick<RadioState,
+  'splitEnabled' | 'splitTxFrequency' | 'splitTxFrequencyWritable'
+> | undefined>(undefined);
+
 export const SlotPacksContext = createContext<{
   state: SlotPacksState;
   dispatch: React.Dispatch<SlotPacksAction>;
@@ -86,6 +111,7 @@ export const RadioModeContext = createContext<{
   isEngineRunning: boolean | null;
   engineState: SystemStatus['engineState'] | null;
   currentMode: ModeDescriptor | null;
+  currentSlotInfo: RadioState['currentSlotInfo'];
   engineMode: EngineMode;
   currentRadioMode: string | null;
   currentRadioFrequency: number | null;
@@ -114,6 +140,8 @@ export const AudioSidecarContext = createContext<AudioSidecarStatusPayload | nul
 export const AndroidOperatorAudioContext = createContext<AndroidOperatorAudioStatus | null>(null);
 
 export const SpectrumContext = createContext<{
+  capabilities: RadioState['spectrumCapabilities'];
+  sessionState: SpectrumSessionState | null;
   selectedKind: SpectrumKind | null;
   subscribedKind: SpectrumKind | null;
 } | undefined>(undefined);

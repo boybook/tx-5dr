@@ -88,18 +88,32 @@ describe('RadioOperator progress animation helpers', () => {
     const style = getRadioOperatorProgressAnimation(createSlotInfo({ phaseMs: 9000 }), 15000);
 
     expect(style.animation).toBe('progress-bar 6000ms linear forwards');
-    expect((style as Record<string, string>)['--progress-start']).toBe('40%');
+    expect((style as Record<string, string>)['--progress-mask-scale']).toBe('0.4');
   });
 
   it('restores an in-progress slot animation from the latest global phase after remount', () => {
     const style = getRadioOperatorProgressAnimation(createSlotInfo({ phaseMs: 7500 }), 15000);
 
     expect(style.animation).toBe('progress-bar 7500ms linear forwards');
-    expect((style as Record<string, string>)['--progress-start']).toBe('50%');
+    expect((style as Record<string, string>)['--progress-mask-scale']).toBe('0.5');
   });
 
   it('returns a disabled animation when global slot info is missing', () => {
     expect(getRadioOperatorProgressAnimation(undefined, 15000)).toEqual({ animation: 'none' });
+  });
+
+  it('keeps an already-completed phase at the terminal pose', () => {
+    for (const phaseMs of [15000, 17000]) {
+      const style = getRadioOperatorProgressAnimation(createSlotInfo({ phaseMs }), 15000);
+      expect(style.animation).toBe('progress-bar 1ms linear forwards');
+      expect((style as Record<string, string>)['--progress-mask-scale']).toBe('0');
+    }
+  });
+
+  it('clamps an early phase without changing the full slot duration', () => {
+    const style = getRadioOperatorProgressAnimation(createSlotInfo({ phaseMs: -1 }), 15000);
+    expect(style.animation).toBe('progress-bar 15000ms linear forwards');
+    expect((style as Record<string, string>)['--progress-mask-scale']).toBe('1');
   });
 });
 

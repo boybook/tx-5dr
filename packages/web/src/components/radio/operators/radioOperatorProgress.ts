@@ -17,7 +17,7 @@ export function getRadioOperatorProgressAnimation(
   return {
     animation: `progress-bar ${remainingMs}ms linear forwards`,
     // @ts-expect-error CSS custom property for animation start position
-    '--progress-start': `${maskStartPercent}%`,
+    '--progress-mask-scale': `${maskStartPercent / 100}`,
   };
 }
 

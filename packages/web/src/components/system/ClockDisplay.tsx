@@ -4,7 +4,7 @@ import type { ClockStatusDetail, ClockStatusSummary } from '@tx5dr/contracts';
 import { UserRole } from '@tx5dr/contracts';
 import { ApiError, api } from '@tx5dr/core';
 import { useTranslation } from 'react-i18next';
-import { useConnection, useRadioState } from '../../store/radioStore';
+import { useConnection, useClockStatus } from '../../store/radioStore';
 import { useHasMinRole } from '../../store/authStore';
 import { getApiBaseUrl } from '../../utils/config';
 
@@ -77,10 +77,10 @@ function getFeedbackMessage(error: unknown, fallback: string): string {
 
 export const ClockDisplay: React.FC = () => {
   const { t } = useTranslation('common');
-  const { state: radioState } = useRadioState();
+  const summary = useClockStatus();
   const { state: connectionState } = useConnection();
   const isAdmin = useHasMinRole(UserRole.ADMIN);
-  const [currentTime, setCurrentTime] = useState(new Date());
+  const [currentTime, setCurrentTime] = useState(() => formatUTCTime(new Date()));
   const [isOpen, setIsOpen] = useState(false);
   const [detail, setDetail] = useState<ClockStatusDetail | null>(null);
   const [manualOffset, setManualOffset] = useState('0');
@@ -91,12 +91,11 @@ export const ClockDisplay: React.FC = () => {
   const [feedback, setFeedback] = useState<FeedbackState>(null);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout>>();
 
-  const summary = radioState.clockStatus;
   const appliedOffset = summary?.appliedOffsetMs ?? 0;
 
   useEffect(() => {
     const timer = setInterval(() => {
-      setCurrentTime(new Date(Date.now() + appliedOffset));
+      setCurrentTime(formatUTCTime(new Date(Date.now() + appliedOffset)));
     }, 200);
     return () => clearInterval(timer);
   }, [appliedOffset]);
@@ -215,7 +214,7 @@ export const ClockDisplay: React.FC = () => {
     return (
       <div className="bg-content1 dark:bg-content2 rounded-md px-2 py-1 md:px-3 cursor-default whitespace-nowrap">
         <div className="text-xs font-mono text-default-500 whitespace-nowrap">
-          <span className="hidden md:inline">UTC </span>{formatUTCTime(currentTime)}
+          <span className="hidden md:inline">UTC </span>{currentTime}
         </div>
       </div>
     );
@@ -224,7 +223,7 @@ export const ClockDisplay: React.FC = () => {
   const clockElement = (
     <div className="bg-content1 dark:bg-content2 rounded-md px-2 py-1 md:px-3 flex items-center gap-1 md:gap-1.5 cursor-pointer whitespace-nowrap">
       <div className="text-xs font-mono text-default-500 whitespace-nowrap">
-        <span className="hidden md:inline">UTC </span>{formatUTCTime(currentTime)}
+        <span className="hidden md:inline">UTC </span>{currentTime}
       </div>
       <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${syncDotColor}`} />
     </div>

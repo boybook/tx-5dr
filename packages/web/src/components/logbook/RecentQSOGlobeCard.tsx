@@ -43,6 +43,7 @@ const POV_SYNC_ALTITUDE_EPSILON = 0.025;
 const POV_SYNC_CENTER_EPSILON_WITH_GRIDS = 1.2;
 const POV_SYNC_CENTER_EPSILON_IDLE = 999;
 const WORKED_GRID_CACHE_LIMIT = 4;
+const EMPTY_OPERATORS: OperatorStatus[] = [];
 
 type GlobeControls = {
   autoRotate: boolean;
@@ -189,6 +190,28 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
   const lastViewportSyncRef = useRef({ lat: 0, lng: 0, altitude: DEFAULT_POV_ALTITUDE });
   const lastViewportSyncAtRef = useRef(0);
   const viewportHeight = useViewportHeightValue();
+
+  useEffect(() => {
+    const globe = globeRef.current;
+    const container = containerRef.current;
+    if (!globe || !container) return;
+    let visible = true;
+    const updateAnimation = () => {
+      if (document.hidden || !visible) globe.pauseAnimation();
+      else globe.resumeAnimation();
+    };
+    const observer = typeof IntersectionObserver === 'undefined' ? null : new IntersectionObserver(entries => {
+      visible = entries.some(entry => entry.isIntersecting);
+      updateAnimation();
+    });
+    observer?.observe(container);
+    document.addEventListener('visibilitychange', updateAnimation);
+    updateAnimation();
+    return () => {
+      observer?.disconnect();
+      document.removeEventListener('visibilitychange', updateAnimation);
+    };
+  }, []);
   const globeMaterial = useMemo(() => {
     const material = new THREE.MeshPhongMaterial({
       color: new THREE.Color('#dbeafe'),
@@ -228,7 +251,7 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
 
   const globeModel = useMemo(() => buildPagedQSOGlobeModel(qsos, stationInfo), [qsos, stationInfo]);
   const operatorsCtx = useContext(OperatorsContext);
-  const operators = operatorsProp ?? operatorsCtx?.operators ?? [];
+  const operators = operatorsProp ?? operatorsCtx?.operators ?? EMPTY_OPERATORS;
   const inProgressModel = useMemo(
     () => buildInProgressQSOGlobeModel(operators, stationInfo),
     [operators, stationInfo],
@@ -503,17 +526,17 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
     : !globeModel.homePoint
       ? t('globe.missingHomeCurrentPage')
       : t('globe.emptyCurrentPage');
-  const visiblePoints: GlobeStationPoint[] = loading || !hasRenderableData
+  const visiblePoints = useMemo<GlobeStationPoint[]>(() => loading || !hasRenderableData
     ? []
     : globeModel.homePoint
       ? [globeModel.homePoint, ...globeModel.remotePoints]
-      : globeModel.remotePoints;
-  const visibleArcs = loading || !hasRenderableData
+      : globeModel.remotePoints, [loading, hasRenderableData, globeModel.homePoint, globeModel.remotePoints]);
+  const visibleArcs = useMemo(() => loading || !hasRenderableData
     ? inProgressModel.arcs
-    : [...globeModel.arcs, ...inProgressModel.arcs];
-  const visibleRings = loading || !hasRenderableData
+    : [...globeModel.arcs, ...inProgressModel.arcs], [loading, hasRenderableData, globeModel.arcs, inProgressModel.arcs]);
+  const visibleRings = useMemo(() => loading || !hasRenderableData
     ? inProgressModel.rings
-    : [...globeModel.rings, ...inProgressModel.rings];
+    : [...globeModel.rings, ...inProgressModel.rings], [loading, hasRenderableData, globeModel.rings, inProgressModel.rings]);
   const useFourCharacterWorkedGrid = globeAltitude <= WORKED_GRID_SWITCH_ALTITUDE;
   const activeWorkedGridPolygons = showWorkedGrids
     ? (useFourCharacterWorkedGrid ? workedGridModel.precision4.polygons : workedGridModel.precision2.polygons)

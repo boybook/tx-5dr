@@ -12,6 +12,24 @@ import {
 
 const mode = MODES.FT8;
 
+it('retains live RX candidates without invalidating an empty related-message view', () => {
+  const live = 15000;
+  const initial = myRelatedTimelineReducer(initialMyRelatedTimelineState, { type: 'syncLiveContext', payload: {
+    currentMode: mode, liveSlotStartMs: live, visibleOperatorCallsigns: ['TEST'], targetCallsigns: [],
+  } });
+  const next = myRelatedTimelineReducer(initial, { type: 'ingestSlotPack', payload: {
+    slotPack: createSlotPack(live, [createRxFrame('CQ JA1AAA PM95', 1200)]),
+    currentMode: mode, liveSlotStartMs: live, visibleOperatorCallsigns: ['TEST'], targetCallsigns: [],
+  } });
+  expect(next.liveRxEntries.size).toBe(1);
+  expect(next.lastProcessedSlotPackSeq.size).toBe(1);
+  expect(next.liveGroups).toBe(initial.liveGroups);
+  const selected = myRelatedTimelineReducer(next, { type: 'syncLiveContext', payload: {
+    currentMode: mode, liveSlotStartMs: live, visibleOperatorCallsigns: ['TEST'], targetCallsigns: ['JA1AAA'],
+  } });
+  expect(buildMyRelatedTimelineGroups(selected)[0].messages[0].message).toBe('CQ JA1AAA PM95');
+});
+
 function reduce(actions: MyRelatedTimelineAction[]) {
   return actions.reduce(myRelatedTimelineReducer, initialMyRelatedTimelineState);
 }

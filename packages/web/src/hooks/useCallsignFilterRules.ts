@@ -11,7 +11,7 @@ import {
 import { pluginApi } from '../utils/pluginApi';
 import { usePluginSnapshot } from './usePluginSnapshot';
 import { createLogger } from '../utils/logger';
-import { useRadioState } from '../store/radioStore';
+import { useRadioModeState } from '../store/radioStore';
 
 const logger = createLogger('useCallsignFilterRules');
 
@@ -44,7 +44,7 @@ export function useCallsignFilterRules(
   operatorId: string | undefined,
 ): CallsignFilterState {
   const pluginSnapshot = usePluginSnapshot();
-  const radio = useRadioState();
+  const radio = useRadioModeState();
   const [settings, setSettings] = useState<Record<string, unknown>>({});
   const [filterMode, setFilterMode] = useState<CallsignFilterMode>('blocklist');
   const [filterScope, setFilterScope] = useState<CallsignFilterScope>('auto-reply');
@@ -62,9 +62,11 @@ export function useCallsignFilterRules(
       return;
     }
 
+    let cancelled = false;
     pluginApi
       .getOperatorState(operatorId)
       .then((res) => {
+        if (cancelled) return;
         const nextSettings = res?.operatorSettings?.[PLUGIN_NAME] ?? {};
         setSettings(nextSettings);
         setFilterMode(normalizeCallsignFilterMode(nextSettings.filterMode));
@@ -77,13 +79,14 @@ export function useCallsignFilterRules(
       .catch((err: unknown) => {
         logger.debug('Failed to load callsign filter settings', err);
       });
+    return () => { cancelled = true; };
   }, [operatorId, isEnabled, pluginSnapshot.generation]);
 
   const currentBand = useMemo(() => (
-    (radio.state.currentRadioFrequency ?? 0) > 0
-      ? getBandFromFrequency(radio.state.currentRadioFrequency ?? 0)
+    (radio.currentRadioFrequency ?? 0) > 0
+      ? getBandFromFrequency(radio.currentRadioFrequency ?? 0)
       : undefined
-  ), [radio.state.currentRadioFrequency]);
+  ), [radio.currentRadioFrequency]);
 
   const rawRules = useMemo(() => selectCallsignFilterRuleEntries({
     perBandEnabled: settings.perBandEnabled,

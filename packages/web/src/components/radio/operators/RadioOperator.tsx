@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Input, Button, Switch, Selection, Tooltip, Popover, PopoverTrigger, PopoverContent } from "@heroui/react";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faChevronRight, faWandMagicSparkles, faRepeat, faBook, faRotateLeft, faPause, faPlay } from '@fortawesome/free-solid-svg-icons';
-import { useConnection, useCurrentOperatorId, useOperators, useRadioState, useSlotPacks } from '../../../store/radioStore';
+import { useConnection, useCurrentOperatorId, useOperators, useRadioModeState, useSlotPacks } from '../../../store/radioStore';
 import type { OperatorRuntimeSlot, OperatorStatus, PluginStatus, WSSetOperatorContextMessage } from '@tx5dr/contracts';
 import { CycleUtils } from '@tx5dr/core';
 import { openLogbookWindow, openPluginPageWindow } from '../../../utils/windowManager';
@@ -90,13 +90,13 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
 }) => {
   const { t } = useTranslation('radio');
   const connection = useConnection();
-  const radio = useRadioState();
+  const radio = useRadioModeState();
   const slotPacks = useSlotPacks();
   const { operators } = useOperators();
   const { currentOperatorId, setCurrentOperatorId } = useCurrentOperatorId();
   const operatorCallsign = operatorStatus.context.myCall || 'N0CALL';
-  const currentSlotInfo = radio.state.currentSlotInfo;
-  const currentSlotMs = radio.state.currentMode?.slotMs ?? null;
+  const currentSlotInfo = radio.currentSlotInfo;
+  const currentSlotMs = radio.currentMode?.slotMs ?? null;
   const isCurrentTransmitCycle = React.useMemo(() => {
     if (!currentSlotInfo || !currentSlotMs) {
       return false;
@@ -968,7 +968,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
 
   // 选择空闲频率
   const pickIdleFrequency = () => {
-    const mode = radio.state.currentMode;
+    const mode = radio.currentMode;
     if (!mode) {
       addToast({
         title: t('operator.cannotPickFreq'),
@@ -1169,14 +1169,14 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
           : undefined}
       >
         {/* 进度条颜色层 - 仅在解码时显示 */}
-        {radio.state.isDecoding && (
+        {radio.isDecoding && (
           <div
             className="absolute inset-0 transition-colors duration-200"
             style={{ backgroundColor: cyclePresentation.progressColor }}
           />
         )}
         {/* 进度条遮罩层 - 仅在解码时显示 */}
-        {radio.state.isDecoding && (
+        {radio.isDecoding && (
           <div
             key={currentSlotInfo?.id ?? 'idle'}
             className="absolute inset-0 progress-bar-mask"
@@ -1188,7 +1188,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
           <div className="min-w-0 flex-1">
             {(() => {
               // 未在解码时，显示操作员呼号
-              if (!radio.state.isDecoding) {
+              if (!radio.isDecoding) {
                 return (
                   <div className="text-foreground opacity-65 font-bold text-lg">
                     {operatorCallsign}
@@ -1446,7 +1446,7 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
                 {(() => {
                   // 使用本地发射周期状态
                   const transmitCycles = localTransmitCycles;
-                  const mode = radio.state.currentMode;
+                  const mode = radio.currentMode;
                   let displayText = "";
                   let dotColor = "#9CA3AF";
                   

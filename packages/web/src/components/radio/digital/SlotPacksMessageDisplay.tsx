@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { FramesTable, FrameGroup, FrameDisplayMessage } from './FramesTable';
 import { resolveFrameCallsign } from './frameCallsign';
-import { parseFT8LocationInfo, FT8MessageParser, evaluateCallsignFilter, evaluateDxccBlocklist, getBandFromFrequency, CycleUtils, resolveGridLocation } from '@tx5dr/core';
-import { useConnection, useCurrentOperatorId, useMyRelatedTimeline, useRadioState, useSlotPacks } from '../../../store/radioStore';
-import type { FrameMessage, WSSelectedFrame } from '@tx5dr/contracts';
+import { createSlotPackFrameProjector } from './slotPackFrameProjection';
+import { getBandFromFrequency } from '@tx5dr/core';
+import { useConnection, useCurrentOperatorId, useRadioActions, useRadioModeState, useOperators, useStationInfo, useSlotPacks } from '../../../store/radioStore';
+import type { WSSelectedFrame } from '@tx5dr/contracts';
 import { useSplitLayoutActions } from '../../common/SplitLayout';
 import { useTranslation } from 'react-i18next';
 import { useCallsignFilterRules } from '../../../hooks/useCallsignFilterRules';
@@ -21,25 +22,26 @@ interface SlotPacksMessageDisplayProps {
   onMessageHover?: (freq: number | null) => void;
 }
 
-export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = ({ className = '', onMessageHover }) => {
+export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = React.memo(({ className = '', onMessageHover }) => {
   const { t } = useTranslation('common');
   const connection = useConnection();
-  const radio = useRadioState();
+  const radio = useRadioModeState();
+  const { operators } = useOperators();
+  const stationInfo = useStationInfo();
   const slotPacks = useSlotPacks();
-  const myRelatedTimeline = useMyRelatedTimeline();
-  const [frameGroups, setFrameGroups] = useState<FrameGroup[]>([]);
+  const { seedSelectedRx } = useRadioActions();
   const {currentOperatorId} = useCurrentOperatorId();
   const splitLayoutActions = useSplitLayoutActions();
   const [scrollToBottomTrigger, setScrollToBottomTrigger] = useState(0);
   const callsignFilter = useCallsignFilterRules(currentOperatorId ?? undefined);
   const pluginSnapshot = usePluginSnapshot();
   const selectedOperator = useMemo(
-    () => radio.state.operators.find((operator) => operator.id === currentOperatorId),
-    [currentOperatorId, radio.state.operators],
+    () => operators.find((operator) => operator.id === currentOperatorId),
+    [currentOperatorId, operators],
   );
   const distanceOriginGrid = useMemo(
-    () => selectedOperator?.context?.myGrid?.trim() || radio.state.stationInfo?.qth?.grid?.trim() || undefined,
-    [radio.state.stationInfo?.qth?.grid, selectedOperator?.context?.myGrid],
+    () => selectedOperator?.context?.myGrid?.trim() || stationInfo?.qth?.grid?.trim() || undefined,
+    [stationInfo?.qth?.grid, selectedOperator?.context?.myGrid],
   );
   const targetAction = useMemo(
     () => resolveOperatorTargetAction(selectedOperator, pluginSnapshot.plugins),
@@ -58,14 +60,14 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
   const displayDxccBlockEnabled = callsignFilter.filterScope === 'auto-reply-and-display'
     && callsignFilter.dxccBlockEnabled;
   const groupHeaderBand = useMemo(() => {
-    const frequency = radio.state.currentRadioFrequency;
+    const frequency = radio.currentRadioFrequency;
     if (!frequency || frequency <= 0) {
       return null;
     }
 
     const band = getBandFromFrequency(frequency);
     return band && band !== 'Unknown' ? band : null;
-  }, [radio.state.currentRadioFrequency]);
+  }, [radio.currentRadioFrequency]);
 
   // 切换回"解码" tab 时触发滚动到底部
   useEffect(() => {
@@ -74,138 +76,23 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
     }
   }, [splitLayoutActions?.selectedTab]);
 
-  // 获取所有启用操作员的呼号列表
-  const getMyCallsigns = (): string[] => {
-    return radio.state.operators
-      .filter(op => op.isActive) // 只获取启用的操作员
-      .map(op => op.context?.myCall || '') // 提取每个操作员的呼号
-      .filter(call => call.trim() !== ''); // 过滤掉空呼号
-  };
+  const myCallsigns = useMemo(() => operators
+    .filter(operator => operator.isActive)
+    .map(operator => operator.context?.myCall || '')
+    .filter(callsign => callsign.trim() !== ''), [operators]);
 
   const targetCallsigns = useMemo(
     () => resolveOperatorTargetCallsigns(selectedOperator),
     [selectedOperator],
   );
 
-  // 处理SlotPack数据转换为FT8Group格式
-  useEffect(() => {
-    const groupsMap = new Map<string, {
-      messages: FrameDisplayMessage[];
-      cycle: 'even' | 'odd';
-      hasTransmission: boolean;
-      alignedMs: number;
-      frequencyContext?: FrameGroup['frequencyContext'];
-    }>();
-    const currentMode = radio.state.currentMode;
-    
-    if (!currentMode) {
-      return;
-    }
-    
-    slotPacks.state.slotPacks.forEach(slotPack => {
-      slotPack.frames.forEach((frame: FrameMessage) => {
-        // 跳过自己发射的TX信号
-        if (frame.snr === -999) {
-          return;
-        }
-
-        // Apply display filter when enabled
-        if (displayFilterRules.length > 0 || displayDxccBlockEnabled) {
-          const parsedMessage = FT8MessageParser.parseMessage(frame.message);
-          const parsedSenderCallsign = parsedMessage && 'senderCallsign' in parsedMessage
-            ? parsedMessage.senderCallsign
-            : undefined;
-          const sender = frame.logbookAnalysis?.callsign
-            ?? parsedSenderCallsign
-            ?? '';
-          if (displayFilterRules.length > 0 && sender && !evaluateCallsignFilter(sender, displayFilterRules)) {
-            return;
-          }
-          if (!evaluateDxccBlocklist({
-            dxccBlockEnabled: displayDxccBlockEnabled,
-            blockedDxccEntityCodes: callsignFilter.blockedDxccEntityCodes,
-            dxccId: frame.logbookAnalysis?.dxccId,
-            callsign: sender,
-          })) {
-            return;
-          }
-        }
-
-        const slotStartTime = new Date(slotPack.startMs);
-        const utcSeconds = slotStartTime.toISOString().slice(11, 19);
-        
-        // 用 ms 直接算，避免 FT4 亚秒级时隙被截断到上一秒
-        const cycleNumber = CycleUtils.calculateCycleNumberFromMs(slotPack.startMs, currentMode.slotMs);
-        const isEvenCycle = CycleUtils.isEvenCycle(cycleNumber);
-        
-        // 生成组键：使用统一的组键生成方法
-        const alignedMs = Math.floor(slotPack.startMs / currentMode.slotMs) * currentMode.slotMs;
-        const groupKey = CycleUtils.generateSlotGroupKey(slotPack.startMs, currentMode.slotMs);
-
-        if (!groupsMap.has(groupKey)) {
-          groupsMap.set(groupKey, {
-            messages: [],
-            cycle: isEvenCycle ? 'even' : 'odd',
-            hasTransmission: false,
-            alignedMs,
-            frequencyContext: slotPack.frequencyContext,
-          });
-        }
-        
-        // 使用统一位置解析函数
-        const locationInfo = parseFT8LocationInfo(frame.message);
-        
-        const message: FrameDisplayMessage = {
-          utc: utcSeconds,
-          db: frame.snr === -999 ? 'TX' : frame.snr, // 将发射帧的SNR=-999转换为TX标记
-          dt: frame.snr === -999 ? '-' : frame.dt, // 发射帧的dt显示为'-'
-          freq: Math.round(frame.freq),
-          message: frame.message,
-          ...(locationInfo.callsign && { locationCallsign: locationInfo.callsign }),
-          ...(locationInfo.country && { country: locationInfo.country }),
-          ...(locationInfo.countryZh && { countryZh: locationInfo.countryZh }),
-          ...(locationInfo.countryEn && { countryEn: locationInfo.countryEn }),
-          ...(locationInfo.countryCode && { countryCode: locationInfo.countryCode }),
-          ...(locationInfo.flag && { flag: locationInfo.flag }),
-          ...(locationInfo.grid && {
-            locationGrid: locationInfo.grid,
-            gridLocation: resolveGridLocation(locationInfo.grid, locationInfo),
-          }),
-          ...(locationInfo.state && { state: locationInfo.state }),
-          ...(locationInfo.stateConfidence && { stateConfidence: locationInfo.stateConfidence }),
-          ...(frame.logbookAnalysis && { logbookAnalysis: frame.logbookAnalysis })
-        };
-        
-        const group = groupsMap.get(groupKey)!;
-        group.messages.push(message);
-        
-        // 如果是发射帧，标记这个组有发射
-        if (frame.snr === -999) {
-          group.hasTransmission = true;
-        }
-      });
-    });
-
-    // 转换为FT8Group数组并按时间排序
-    const groups: FrameGroup[] = Array.from(groupsMap.entries())
-      .map(([time, { messages, cycle, hasTransmission: _hasTransmission, alignedMs, frequencyContext }]) => ({
-        time,
-        startMs: alignedMs,
-        messages: messages.sort((a, b) => a.utc.localeCompare(b.utc)),
-        type: 'receive' as const,
-        cycle,
-        frequencyContext,
-      }))
-      .sort((a, b) => a.startMs - b.startMs);
-
-    setFrameGroups(groups);
-  }, [
-    slotPacks.state.slotPacks,
-    radio.state.currentMode,
-    displayFilterRules,
-    displayDxccBlockEnabled,
-    callsignFilter.blockedDxccEntityCodes,
-  ]);
+  const projectFrames = useMemo(() => createSlotPackFrameProjector({
+    slotMs: radio.currentMode?.slotMs ?? 0,
+    filterRules: displayFilterRules,
+    dxccBlockEnabled: displayDxccBlockEnabled,
+    blockedDxccEntityCodes: callsignFilter.blockedDxccEntityCodes,
+  }), [radio.currentMode?.slotMs, displayFilterRules, displayDxccBlockEnabled, callsignFilter.blockedDxccEntityCodes]);
+  const frameGroups = useMemo(() => projectFrames(slotPacks.state.slotPacks), [projectFrames, slotPacks.state.slotPacks]);
 
   const buildSelectedFrame = (message: FrameDisplayMessage, group: FrameGroup): WSSelectedFrame | undefined => {
     if (typeof message.db !== 'number' || typeof message.dt !== 'number') {
@@ -220,11 +107,11 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
     };
   };
 
-  const handleRowDoubleClick = (message: FrameDisplayMessage, _group: FrameGroup) => {
+  const handleRowDoubleClick = useCallback((message: FrameDisplayMessage, _group: FrameGroup) => {
     const callsign = resolveFrameCallsign(message);
-    const ownCallsigns = new Set(getMyCallsigns().map((call) => call.toUpperCase()));
+    const ownCallsigns = new Set(myCallsigns.map((call) => call.toUpperCase()));
     if (currentOperatorId && callsign && !ownCallsigns.has(callsign.toUpperCase())) {
-      myRelatedTimeline.seedSelectedRx({
+      seedSelectedRx({
         message,
         group: _group,
       });
@@ -240,7 +127,7 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
         splitLayoutActions?.switchToRight();
       }
     }
-  };
+  }, [connection.state.radioService, currentOperatorId, myCallsigns, seedSelectedRx, splitLayoutActions, targetAction]);
 
   if (frameGroups.length === 0) {
     return (
@@ -250,7 +137,7 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
         <p className="text-default-400 text-sm">
           {!connection.state.isConnected
             ? t('slotPacks.connectFirst')
-            : !radio.state.isDecoding
+            : !radio.isDecoding
               ? t('slotPacks.startEngine')
               : t('slotPacks.waitingSignal')}
         </p>
@@ -262,7 +149,7 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
     <FramesTable
       groups={frameGroups}
       className={className}
-      myCallsigns={getMyCallsigns()}
+      myCallsigns={myCallsigns}
       targetCallsigns={targetCallsigns}
       queueCallsignOrder={queueCallsignOrder}
       strategyName={selectedOperator?.strategy.name}
@@ -273,9 +160,9 @@ export const SlotPacksMessageDisplay: React.FC<SlotPacksMessageDisplayProps> = (
       scrollToBottomTrigger={scrollToBottomTrigger}
       showGroupHeader
       groupHeaderBand={groupHeaderBand}
-      groupHeaderMode={radio.state.currentMode?.name ?? null}
+      groupHeaderMode={radio.currentMode?.name ?? null}
       enableSorting
       distanceOriginGrid={distanceOriginGrid}
     />
   );
-}; 
+});

@@ -325,6 +325,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       setOperators(prev => {
         const exists = prev.findIndex(item => item.id === op.id);
         if (exists >= 0) {
+          if (prev[exists] === op || JSON.stringify(prev[exists]) === JSON.stringify(op)) return prev;
           const next = [...prev];
           next[exists] = op;
           return next;
@@ -475,8 +476,13 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   // 初始加载与筛选/分页变化时加载
   useEffect(() => {
     loadQSOs();
-    loadStatistics();
   }, [effectiveLogBookId, filters, currentPage, itemsPerPage]);
+
+  // Logbook-wide statistics are independent of the current page and filters.
+  // Mutation/change-notice refreshes still reload records and statistics together.
+  useEffect(() => {
+    loadStatistics();
+  }, [effectiveLogBookId]);
 
   // 加载呼号的同步配置���要
   useEffect(() => {

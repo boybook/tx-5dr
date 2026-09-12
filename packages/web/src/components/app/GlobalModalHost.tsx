@@ -1,13 +1,18 @@
-import React, { memo, useEffect, useState } from 'react';
+import React, { lazy, memo, Suspense, useEffect, useState } from 'react';
 import { useHasMinRole } from '../../store/authStore';
 import { UserRole, type RemoteAccessPreset } from '@tx5dr/contracts';
-import { SettingsModal, type SettingsTab } from '../settings/SettingsModal';
-import { ProfileModal } from '../radio/profile/ProfileModal';
+import type { SettingsTab } from '../settings/SettingsModal';
+import { Spinner } from '@heroui/react';
+import { useTranslation } from 'react-i18next';
 import { AccountSecurityModal } from '../auth/AccountSecurityModal';
+
+const SettingsModal = lazy(() => import('../settings/SettingsModal').then(module => ({ default: module.SettingsModal })));
+const ProfileModal = lazy(() => import('../radio/profile/ProfileModal').then(module => ({ default: module.ProfileModal })));
 
 export const OPEN_ACCOUNT_SECURITY_MODAL_EVENT = 'openAccountSecurityModal';
 
 function GlobalModalHostInner() {
+  const { t } = useTranslation('common');
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>('radio');
@@ -57,9 +62,13 @@ function GlobalModalHostInner() {
     };
   }, [isAdmin]);
 
+  const pending = <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20" role="status">
+    <Spinner aria-label={t('status.loading')} />
+  </div>;
+
   return (
     <>
-      {isSettingsOpen && (
+      <Suspense fallback={pending}>{isSettingsOpen && (
         <SettingsModal
           isOpen={isSettingsOpen}
           onClose={() => setIsSettingsOpen(false)}
@@ -67,14 +76,14 @@ function GlobalModalHostInner() {
           initialFrequencyPresetMode={settingsInitialFrequencyPresetMode}
           initialRemoteAccessPreset={settingsInitialRemoteAccessPreset}
         />
-      )}
+      )}</Suspense>
 
-      {isAdmin && isProfileModalOpen && (
+      <Suspense fallback={pending}>{isAdmin && isProfileModalOpen && (
         <ProfileModal
           isOpen={isProfileModalOpen}
           onClose={() => setIsProfileModalOpen(false)}
         />
-      )}
+      )}</Suspense>
 
       <AccountSecurityModal
         isOpen={isAccountSecurityOpen}

@@ -205,6 +205,7 @@ export const initialRadioState: RadioState = {
 export function radioReducer(state: RadioState, action: RadioAction): RadioState {
   switch (action.type) {
     case 'modeChanged':
+      if (state.currentMode === action.payload || JSON.stringify(state.currentMode) === JSON.stringify(action.payload)) return state;
       return {
         ...state,
         currentMode: action.payload
@@ -215,7 +216,9 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
         ...state,
         systemStatus: action.payload,
         isDecoding: action.payload?.isDecoding || false,
-        currentMode: action.payload?.currentMode || state.currentMode,
+        currentMode: action.payload?.currentMode
+          ? (JSON.stringify(action.payload.currentMode) === JSON.stringify(state.currentMode) ? state.currentMode : action.payload.currentMode)
+          : state.currentMode,
         // Extract engineMode from systemStatus (defaults to 'digital')
         engineMode: (action.payload as SystemStatus & { engineMode?: EngineMode })?.engineMode || state.engineMode,
         currentRadioMode: (action.payload as SystemStatus & { currentRadioMode?: string })?.currentRadioMode ?? state.currentRadioMode
@@ -274,6 +277,7 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
       return state;
     
     case 'operatorsList':
+      if (state.operators === action.payload || JSON.stringify(state.operators) === JSON.stringify(action.payload || [])) return state;
       return {
         ...state,
         operators: action.payload || []
@@ -285,39 +289,17 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
         currentSlotInfo: action.payload,
       };
     
-    case 'operatorStatusUpdate':
-      return {
-        ...state,
-        operators: state.operators.map(op => {
-          if (op.id === action.payload.id) {
-            // 深度比较，只有实际变化时才更新
-            const hasContextChanged =
-              JSON.stringify(op.context) !== JSON.stringify(action.payload.context);
-            const hasSlotChanged = op.currentSlot !== action.payload.currentSlot;
-            const hasTransmittingChanged = op.isTransmitting !== action.payload.isTransmitting;
-            const hasActivePTTChanged = op.isInActivePTT !== action.payload.isInActivePTT;
-            const hasTransmitIntentChanged = op.hasTransmitIntent !== action.payload.hasTransmitIntent;
-            const hasSlotsChanged =
-              JSON.stringify(op.slots) !== JSON.stringify(action.payload.slots);
-            const hasTransmitCyclesChanged =
-              JSON.stringify(op.transmitCycles) !== JSON.stringify(action.payload.transmitCycles);
-            const hasStrategyChanged =
-              JSON.stringify(op.strategy) !== JSON.stringify(action.payload.strategy);
-            const hasRuntimeChanged =
-              JSON.stringify(op.runtime) !== JSON.stringify(action.payload.runtime);
-
-            // 如果没有实质性变化，返回原对象（避免重新渲染）
-            if (!hasContextChanged && !hasSlotChanged && !hasTransmittingChanged &&
-                !hasActivePTTChanged && !hasTransmitIntentChanged && !hasSlotsChanged && !hasTransmitCyclesChanged &&
-                !hasStrategyChanged && !hasRuntimeChanged) {
-              return op;
-            }
-
-            return action.payload;
-          }
-          return op;
-        })
-      };
+    case 'operatorStatusUpdate': {
+      const index = state.operators.findIndex(operator => operator.id === action.payload.id);
+      if (index < 0) return state;
+      const previous = state.operators[index];
+      // Compare the complete transport snapshot, including activation and stream
+      // projections. Repeated broadcasts must preserve both object and array identity.
+      if (previous === action.payload || JSON.stringify(previous) === JSON.stringify(action.payload)) return state;
+      const operators = [...state.operators];
+      operators[index] = action.payload;
+      return { ...state, operators };
+    }
 
     case 'setCurrentOperator':
       return {

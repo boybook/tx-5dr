@@ -11,7 +11,7 @@ import {
 } from '@heroui/react';
 import { addToast } from '@heroui/toast';
 import { api, ApiError } from '@tx5dr/core';
-import { useCapabilityDescriptor, useCapabilityState, useConnection, useOperators, useProfiles, useRadioConnectionState, useRadioState, useSplitState } from '../../store/radioStore';
+import { useCapabilityDescriptor, useCapabilityState, useConnection, useOperators, useProfiles, useRadioConnectionState, useRadioModeState, useSplitState } from '../../store/radioStore';
 import { useAuth, useHasMinRole, useCan, useAbility } from '../../store/authStore';
 import { UserRole, type PresetFrequency } from '@tx5dr/contracts';
 import { showErrorToast } from '../../utils/errorToast';
@@ -70,7 +70,7 @@ export const VoiceFrequencyControl: React.FC<VoiceFrequencyControlProps> = ({ pr
   const { operators } = useOperators();
   const { activeProfileId } = useProfiles();
   const radioConnection = useRadioConnectionState();
-  const radio = useRadioState();
+  const radio = useRadioModeState();
   const radioModeDescriptor = useCapabilityDescriptor('radio_mode');
   const radioModeCapabilityState = useCapabilityState('radio_mode');
   const { state: authState } = useAuth();
@@ -348,14 +348,14 @@ export const VoiceFrequencyControl: React.FC<VoiceFrequencyControlProps> = ({ pr
   // Sync current frequency from radio state (via global store). Goes through
   // acceptServerFrequency to honor pending local intent and avoid echo-triggered flicker.
   useEffect(() => {
-    acceptServerFrequency(radio.state.currentRadioFrequency);
-  }, [radio.state.currentRadioFrequency, acceptServerFrequency]);
+    acceptServerFrequency(radio.currentRadioFrequency);
+  }, [radio.currentRadioFrequency, acceptServerFrequency]);
 
   useEffect(() => {
-    if (radio.state.currentRadioMode) {
-      setCurrentRadioMode(radio.state.currentRadioMode);
+    if (radio.currentRadioMode) {
+      setCurrentRadioMode(radio.currentRadioMode);
     }
-  }, [radio.state.currentRadioMode]);
+  }, [radio.currentRadioMode]);
 
   // Group presets by band (with CASL frequency condition filtering)
   const groupedPresets = useMemo(() => {

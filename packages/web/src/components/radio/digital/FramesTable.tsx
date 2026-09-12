@@ -13,6 +13,7 @@ import { getBadgeColors, hexToRgba } from '../../../utils/colorUtils';
 import { FlagDisplay } from '../../common/FlagDisplay';
 import { ScrollToBottomButton } from '../../common/ScrollToBottomButton';
 import { CallsignInfoPopover } from './CallsignInfoPopover';
+import { getFrameGroupRenderRange } from './frameVirtualRange';
 import { BOTTOM_TOLERANCE_PX, TOP_TOLERANCE_PX, getBottomGroupSignature, shouldShowScrollToBottomButton } from './framesTableAutoScroll';
 import { calculateGridDistance, extractBaseCallsign, FT8MessageParser, type GridLocation } from '@tx5dr/core';
 import { FT8MessageType, type StrategyMessagePresentationProjection } from '@tx5dr/contracts';
@@ -309,8 +310,8 @@ interface MessageRowProps {
   highlightTypeLabels: Record<string, string>;
   getHighestPriorityHighlight: (analysis: NonNullable<FrameDisplayMessage['logbookAnalysis']>) => HighlightType | null;
   getHighlightColor: (type: HighlightType) => string;
-  onDoubleClick?: () => void;
-  onMouseEnter?: () => void;
+  onDoubleClick?: (message: FrameDisplayMessage, group: FrameGroup) => void;
+  onMouseEnter?: (frequency: number) => void;
   onMouseLeave?: () => void;
 }
 
@@ -466,8 +467,8 @@ const MessageRow = React.memo<MessageRowProps>(({
         ...hoverStyle,
         ...presentationStyle,
       }}
-      onDoubleClick={onDoubleClick}
-      onMouseEnter={onMouseEnter}
+      onDoubleClick={onDoubleClick ? () => onDoubleClick(message, group) : undefined}
+      onMouseEnter={onMouseEnter ? () => onMouseEnter(message.freq) : undefined}
       onMouseLeave={onMouseLeave}
     >
       {queuedOrder !== undefined && (
@@ -531,9 +532,11 @@ const MessageRow = React.memo<MessageRowProps>(({
 });
 MessageRow.displayName = 'MessageRow';
 
+const EMPTY_CALLSIGNS: string[] = [];
+
 // ─── 主组件 ─────────────────────────────────
 
-export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = '', onRowDoubleClick, myCallsigns = [], targetCallsigns = [], targetCallsign = '', onMessageHover, showLogbookAnalysisVisuals = true, enableCallsignPopover = false, scrollToBottomTrigger, showGroupHeader = false, shouldShowGroupHeader: shouldShowGroupHeaderPredicate, groupHeaderBand = null, groupHeaderMode = null, queueCallsignOrder = EMPTY_QUEUE_CALLSIGN_ORDER, strategyName, strategyMessagePresentation, enableSorting = false, distanceOriginGrid }) => {
+export const FramesTable: React.FC<FramesTableProps> = React.memo(({ groups, className = '', onRowDoubleClick, myCallsigns = EMPTY_CALLSIGNS, targetCallsigns = EMPTY_CALLSIGNS, targetCallsign = '', onMessageHover, showLogbookAnalysisVisuals = true, enableCallsignPopover = false, scrollToBottomTrigger, showGroupHeader = false, shouldShowGroupHeader: shouldShowGroupHeaderPredicate, groupHeaderBand = null, groupHeaderMode = null, queueCallsignOrder = EMPTY_QUEUE_CALLSIGN_ORDER, strategyName, strategyMessagePresentation, enableSorting = false, distanceOriginGrid }) => {
   const { t, i18n } = useTranslation();
   const isZh = i18n.language === 'zh';
   const highlightTypeLabels = useMemo(() => getHighlightTypeLabels(t), [t]);
@@ -608,6 +611,9 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
 
 
   // ─── 组级别虚拟化 ────────────────────────
+  const rangeExtractor = useCallback((range: Parameters<typeof getFrameGroupRenderRange>[0]) => (
+    getFrameGroupRenderRange(range, sortedGroups)
+  ), [sortedGroups]);
   const virtualizer = useVirtualizer({
     count: sortedGroups.length,
     getScrollElement: () => scrollRef.current,
@@ -617,6 +623,7 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
       return sortedGroups[index].messages.length * 24 + headerHeight + 8 + 4;
     },
     overscan: 5,
+    rangeExtractor,
   });
 
   useLayoutEffect(() => {
@@ -883,8 +890,8 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
                           highlightTypeLabels={highlightTypeLabels}
                           getHighestPriorityHighlight={getHighestPriorityHighlight}
                           getHighlightColor={getHighlightColor}
-                          onDoubleClick={onRowDoubleClick ? () => onRowDoubleClick(message, group) : undefined}
-                          onMouseEnter={message.db !== 'TX' ? () => handleMessageEnter(message.freq) : undefined}
+                          onDoubleClick={onRowDoubleClick}
+                          onMouseEnter={message.db !== 'TX' ? handleMessageEnter : undefined}
                           onMouseLeave={message.db !== 'TX' ? handleMessageLeave : undefined}
                         />
                       ))}
@@ -904,4 +911,4 @@ export const FramesTable: React.FC<FramesTableProps> = ({ groups, className = ''
       </div>
     </>
   );
-};
+});

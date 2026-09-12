@@ -218,12 +218,12 @@ export function myRelatedTimelineReducer(
         }
 
         const messageKey = buildFrameMessageKey(frame, slotPack.startMs);
-        const message = frameToDisplayMessage(frame, slotPack.startMs);
-
         if (nextState.currentLiveSlotStartMs !== null && slotPack.startMs < nextState.currentLiveSlotStartMs) {
           if (!matchesVisibleOperators(frame.message, visibleOperatorCallsigns) && !containsAnyCallsign(frame.message, targetCallsigns)) {
             continue;
           }
+
+          const message = frameToDisplayMessage(frame, slotPack.startMs);
 
           nextState = appendFrozenDisplayMessage(
             nextState,
@@ -241,7 +241,7 @@ export function myRelatedTimelineReducer(
         liveRxEntries.set(messageKey, {
           slotStartMs: slotPack.startMs,
           messageKey,
-          message,
+          message: frameToDisplayMessage(frame, slotPack.startMs),
           headerContextKey: buildHeaderContextKey(slotPack.frequencyContext),
           frequencyContext: slotPack.frequencyContext ?? existing?.frequencyContext,
           manualSeed: existing?.manualSeed ?? false,
@@ -409,7 +409,7 @@ export function myRelatedTimelineReducer(
   }
 }
 
-export function buildMyRelatedTimelineGroups(state: MyRelatedTimelineState): FrameGroup[] {
+export function buildMyRelatedTimelineGroups(state: Pick<MyRelatedTimelineState, 'frozenGroups' | 'liveGroups'>): FrameGroup[] {
   return mergeGroups([
     ...state.frozenGroups,
     ...state.liveGroups,
@@ -479,7 +479,7 @@ function reprojectLiveGroups(
 
   return {
     ...state,
-    liveGroups: trimGroups(liveGroups),
+    liveGroups: liveGroups.length === 0 && state.liveGroups.length === 0 ? state.liveGroups : trimGroups(liveGroups),
     liveVisibleOperatorCallsigns: [...visibleOperatorCallsigns],
     liveTargetCallsigns: [...targetCallsigns],
   };

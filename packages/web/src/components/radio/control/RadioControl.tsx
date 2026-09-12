@@ -3,7 +3,7 @@ import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, Pop
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCog, faChevronDown, faVolumeUp, faHeadphones, faMicrophone, faRadio, faSlidersH, faTowerBroadcast, faPowerOff, faCircleInfo, faTriangleExclamation, faRightLeft } from '@fortawesome/free-solid-svg-icons';
-import { useConnection, useProfiles, useRadioErrors, useCapabilityState, useRadioConnectionState, useRadioModeState, usePTTState, useAudioSidecarState, useRadioState, useOperators } from '../../../store/radioStore';
+import { useConnection, useProfiles, useRadioErrors, useCapabilityState, useRadioConnectionState, useRadioModeState, usePTTState, useAudioSidecarState, useRadioActions, useAndroidOperatorAudioState, useSquelchState, useOperators } from '../../../store/radioStore';
 import type { AudioSidecarStatusPayload } from '@tx5dr/contracts';
 import { AudioSidecarStatus } from '@tx5dr/contracts';
 import { RadioErrorHistoryModal } from './RadioErrorHistoryModal';
@@ -609,7 +609,8 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const radioConnection = useRadioConnectionState();
   const radioMode = useRadioModeState();
   const { pttStatus, tuneToneStatus, voicePttLock } = usePTTState();
-  const { state: radioState, dispatch: radioDispatch } = useRadioState();
+  const { dispatch: radioDispatch } = useRadioActions();
+  const squelchStatus = useSquelchState();
   const { activeProfile } = useProfiles();
   const { latestError } = useRadioErrors();
   const { state: authState } = useAuth();
@@ -677,22 +678,22 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const [availableFrequencies, setAvailableFrequencies] = useState<FrequencyOption[]>([]);
   const [isLoadingFrequencies, setIsLoadingFrequencies] = useState(false);
   const [currentFrequency, setCurrentFrequency] = useState<string>(() => (
-    radioState.currentRadioFrequency && radioState.currentRadioFrequency > 0
-      ? String(radioState.currentRadioFrequency)
+    radioMode.currentRadioFrequency && radioMode.currentRadioFrequency > 0
+      ? String(radioMode.currentRadioFrequency)
       : ''
   ));
 
   React.useEffect(() => {
     const frequency = resolveOperatingStateDisplayFrequency(
-      radioState.operatingState,
-      radioState.currentRadioFrequency,
+      radioMode.operatingState,
+      radioMode.currentRadioFrequency,
     );
     if (frequency !== null) {
       setCurrentFrequency(String(frequency));
     } else {
       setCurrentFrequency('');
     }
-  }, [radioState.currentRadioFrequency, radioState.operatingState]);
+  }, [radioMode.currentRadioFrequency, radioMode.operatingState]);
 
   // 简化的UI状态管理
   const [isTogglingListen, setIsTogglingListen] = useState(false);
@@ -1014,7 +1015,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const isVoiceTxBufferControlDisabled = Boolean(
     voiceCaptureController?.isPTTActive || voiceCaptureController?.captureState === 'starting',
   );
-  const androidOperatorAudio = radioState.androidOperatorAudio;
+  const androidOperatorAudio = useAndroidOperatorAudioState();
   const isAndroidNativeVoiceTransport = effectiveVoiceTransport === 'android-native';
 
   React.useEffect(() => {
@@ -1672,7 +1673,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
 
   const frequencySelectLabel = selectedFrequencyOption?.label
     || (radioMode.currentMode ? `${radioMode.currentMode.name} ${t('control.frequency')}` : t('control.frequency'));
-  const frequencyConfirmation = radioState.operatingState?.confirmation;
+  const frequencyConfirmation = radioMode.operatingState?.confirmation;
   const frequencyConfirmationWarning = frequencyConfirmation === 'mismatch'
     ? t('frequency.confirmationMismatch')
     : frequencyConfirmation === 'pending' || frequencyConfirmation === 'offline'
@@ -1822,7 +1823,6 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
 
   // Voice monitor mute: TX has priority, then software squelch gates output gain.
   useEffect(() => {
-    const squelchStatus = radioState.squelchStatus;
     const localVoiceTxActive = voiceCaptureController?.isPTTActive ?? false;
     const voiceKeyerTxActive = voicePttLock?.locked && isVoiceKeyerLockHolder(voicePttLock.lockedBy);
     const isTransmitting = pttStatus.isTransmitting || localVoiceTxActive;
@@ -1831,14 +1831,14 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
       && (isTransmitting || (squelchStatus.supported && squelchStatus.open === false));
     const targetDb = shouldMute ? -60 : gainToDb(monitorVolume);
     audioMonitor.setVolume(targetDb);
-  }, [audioMonitor, pttStatus.isTransmitting, voiceCaptureController?.isPTTActive, voicePttLock?.locked, voicePttLock?.lockedBy, radioMode.engineMode, monitorVolume, radioState.squelchStatus]);
+  }, [audioMonitor, pttStatus.isTransmitting, voiceCaptureController?.isPTTActive, voicePttLock?.locked, voicePttLock?.lockedBy, radioMode.engineMode, monitorVolume, squelchStatus]);
 
   // The provider owns the WebSocket subscription. Derive the custom option
   // from the canonical operating-state snapshot so layout remounts cannot
   // lose the current physical frequency.
   useEffect(() => {
-    const snapshot = radioState.operatingState;
-    const frequency = resolveOperatingStateDisplayFrequency(snapshot, radioState.currentRadioFrequency);
+    const snapshot = radioMode.operatingState;
+    const frequency = resolveOperatingStateDisplayFrequency(snapshot, radioMode.currentRadioFrequency);
     if (frequency === null) {
       return;
     }
@@ -1856,7 +1856,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     }
 
     setCustomFrequencyOption(null);
-  }, [availableFrequencies, buildCurrentCustomFrequencyOption, radioMode.currentMode?.name, radioState.currentRadioFrequency, radioState.operatingState]);
+  }, [availableFrequencies, buildCurrentCustomFrequencyOption, radioMode.currentMode?.name, radioMode.currentRadioFrequency, radioMode.operatingState]);
 
   return (
     <>
