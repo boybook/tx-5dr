@@ -8,6 +8,7 @@ installation and operation manuals are maintained in
 ## Architecture Contracts
 
 - [Server startup and radio lifecycle](architecture/server-startup.md)
+- [Desktop startup readiness](architecture/desktop-startup.md)
 - [Radio parameter capabilities](architecture/radio-capabilities.md)
 - [Realtime audio ownership and transport](architecture/realtime-audio.md)
 - [Spectrum amplitude semantics](architecture/spectrum.md)

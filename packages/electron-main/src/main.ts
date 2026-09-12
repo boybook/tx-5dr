@@ -4,7 +4,6 @@ import { homedir, hostname as getHostname, networkInterfaces } from 'node:os';
 import net from 'node:net';
 import { join } from 'path';
 import http from 'http';
-import https from 'https';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
@@ -31,6 +30,7 @@ import {
 } from './desktopHttps.js';
 import { isPrepareShutdownSuccess } from './prepareShutdown.js';
 import { awaitServerReadyWithCleanup } from './serverStartupCleanup.js';
+import { waitForUrl } from './httpReadiness.js';
 import {
   buildChildRuntimeEnv,
   buildNativeModuleCheckExitResult,
@@ -2140,47 +2140,6 @@ function runNativeModuleCheck(
         exitCode: null, signal: null, timeout: true,
       });
     }, CHECK_TIMEOUT_MS);
-  });
-}
-
-// 简单 HTTP 等待
-async function waitForUrl(url: string, timeoutMs = 15000, intervalMs = 300): Promise<boolean> {
-  const started = Date.now();
-  return new Promise((resolve) => {
-    function once() {
-      try {
-        const u = new URL(url);
-        const client = u.protocol === 'https:' ? https : http;
-        const req = client.request(
-          {
-            hostname: u.hostname,
-            port: Number(u.port || (u.protocol === 'https:' ? 443 : 80)),
-            path: `${u.pathname}${u.search}`,
-            method: 'GET',
-            timeout: 2000,
-            ...(u.protocol === 'https:' ? { rejectUnauthorized: false } : {}),
-          },
-          (res) => {
-            if (res.statusCode && res.statusCode >= 200 && res.statusCode < 500) return resolve(true);
-            res.resume();
-            res.on('end', () => setTimeout(next, intervalMs));
-          }
-        );
-        req.on('error', () => setTimeout(next, intervalMs));
-        req.on('timeout', () => {
-          req.destroy();
-          setTimeout(next, intervalMs);
-        });
-        req.end();
-      } catch {
-        setTimeout(next, intervalMs);
-      }
-    }
-    function next() {
-      if (Date.now() - started > timeoutMs) return resolve(false);
-      once();
-    }
-    once();
   });
 }
 
