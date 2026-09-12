@@ -1,7 +1,6 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import type { CapabilityDescriptor, CapabilityState } from '@tx5dr/contracts';
-import { controlEditingKey, parseControlNumber } from './control-values';
-import { formatCapabilityNumber } from './display-utils';
+import { controlEditingKey, formatControlInput, parseControlNumber } from './control-values';
 
 export const CAPABILITY_WRITE_DEBOUNCE_MS = 150;
 
@@ -71,6 +70,6 @@ export function useNumberControl({ descriptor, state, enabled, scope, discrete, 
   const displayValue = dragValue ?? actual;
   return {
     actual, displayValue, edit, commit, cancel, slide, endSlide,
-    input: text ?? (displayValue === null ? '' : formatCapabilityNumber(displayValue, descriptor, false)),
+    input: text ?? (displayValue === null ? '' : formatControlInput(displayValue, descriptor)),
   };
 }

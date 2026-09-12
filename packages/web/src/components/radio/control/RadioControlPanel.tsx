@@ -1,66 +1,25 @@
-import { memo, useEffect, useMemo, useState } from 'react';
-import { Button, Modal, ModalContent, ModalHeader, ModalBody, Tooltip, Popover, PopoverTrigger, PopoverContent } from '@heroui/react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Button, Modal, ModalContent, ModalHeader, ModalBody, Tooltip, Popover, PopoverTrigger, PopoverContent, Input, Tabs, Tab } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faRotateRight, faThumbtack, faArrowUp, faArrowDown, faXmark, faEllipsis } from '@fortawesome/free-solid-svg-icons';
+import { faRotateRight, faArrowUp, faArrowDown, faXmark, faEllipsis, faMagnifyingGlass } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
-import type { CapabilityDescriptor, CapabilityState } from '@tx5dr/contracts';
+import type { CapabilityCategory } from '@tx5dr/contracts';
 import { getVisibleCapabilitySections, groupCapabilityDescriptors, splitCapabilitySectionsForColumns, type CapabilityCategorySection } from '../../../radio-capability/capability-descriptors';
-import { CapabilityControl, useCapabilityRefresher } from '../../../radio-capability/CapabilityRegistry';
-import { CapabilityGroupControl } from '../../../radio-capability/components/CapabilityGroup';
+import { useCapabilityRefresher } from '../../../radio-capability/CapabilityRegistry';
+import { CapabilityCard } from '../../../radio-capability/components/CapabilityCard';
 import { useCapabilityEnvironment } from '../../../radio-capability/CapabilityEnvironment';
-import { capabilityTargetLabel, pinnedLabel } from '../../../radio-capability/control-presentation';
-import { capabilityPin, pinnedKey, useQuickControlPreferences, type PinnedCapabilityRef } from '../../../radio-capability/quick-control-preferences';
+import { capabilityShortLabel, capabilityTargetLabel, pinnedLabel } from '../../../radio-capability/control-presentation';
+import { pinnedKey, useQuickControlPreferences } from '../../../radio-capability/quick-control-preferences';
 import { useCapabilityDescriptors, useCapabilityStates, useProfiles, useRadioConnectionState } from '../../../store/radioStore';
 import { PowerControlButton } from '../profile/PowerControlButton';
+import '../../../radio-capability/panel.css';
 
 interface RadioControlPanelProps { isOpen: boolean; onClose: () => void }
 
-function PinButton({ descriptor, items, toggle }: {
-  descriptor: CapabilityDescriptor; items: PinnedCapabilityRef[]; toggle: (ref: PinnedCapabilityRef) => void;
-}) {
-  const { t } = useTranslation();
-  const ref = capabilityPin(descriptor);
-  if (!ref) return null;
-  const selected = items.some(item => pinnedKey(item) === pinnedKey(ref));
-  const label = t(selected ? 'radio:capability.quick.unpin' : ref.kind === 'group' ? 'radio:capability.quick.pinGroup' : 'radio:capability.quick.pin');
-  return <Tooltip content={label}><Button isIconOnly size="sm" variant="light" color="default"
-    className="cap-button" aria-label={`${label} · ${t(descriptor.labelI18nKey)}`} aria-pressed={selected} onPress={() => toggle(ref)}>
-    <FontAwesomeIcon icon={faThumbtack} className={selected ? 'text-foreground' : 'rotate-45 text-default-400'} />
-  </Button></Tooltip>;
-}
-
-const CapabilityCard = memo(function CapabilityCard({ descriptors, states, items, toggle }: {
-  descriptors: CapabilityDescriptor[]; states: Map<string, CapabilityState>; items: PinnedCapabilityRef[]; toggle: (ref: PinnedCapabilityRef) => void;
-}) {
-  const { t } = useTranslation();
-  const first = descriptors[0];
-  const atomic = Boolean(first.writeGroup);
-  const describe = (descriptor: CapabilityDescriptor) => [capabilityTargetLabel(descriptor, t), descriptor.descriptionI18nKey ? t(descriptor.descriptionI18nKey) : null].filter(Boolean).join(' · ');
-  if (atomic) return <div className="p-2 rounded-lg border border-default-200 bg-default-50/40 space-y-1">
-    <div className="flex items-center justify-between gap-2">
-      <span className="text-xs font-medium">{t(`radio:capability.quick.groups.${first.writeGroup!.id}`, { defaultValue: t(first.labelI18nKey) })}</span>
-      <PinButton descriptor={first} items={items} toggle={toggle} />
-    </div>
-    <CapabilityGroupControl descriptors={descriptors} states={states} />
-    {descriptors.map(descriptor => <p key={descriptor.id} className="text-[11px] leading-snug text-default-500">{describe(descriptor)}</p>)}
-  </div>;
-  return <div className="p-2 rounded-lg border border-default-200 bg-default-50/40 space-y-2">
-    {descriptors.map(descriptor => {
-      return <div key={descriptor.id} className="space-y-1">
-        <div className="flex flex-wrap items-center gap-1">
-          <span className="text-xs font-medium mr-auto">{t(descriptor.labelI18nKey)}</span>
-          <CapabilityControl descriptor={descriptor} state={states.get(descriptor.id)} />
-          <PinButton descriptor={descriptor} items={items} toggle={toggle} />
-        </div>
-        <p className="text-[11px] leading-snug text-default-500">{describe(descriptor)}</p>
-      </div>;
-    })}
-  </div>;
-});
-
 /** Modal contents mount only while open, so closing always discards edits. */
 export function RadioControlPanel(props: RadioControlPanelProps) {
-  return props.isOpen ? <OpenRadioControlPanel {...props} /> : null;
+  const { scope } = useCapabilityEnvironment();
+  return props.isOpen ? <OpenRadioControlPanel key={scope} {...props} /> : null;
 }
 
 function OpenRadioControlPanel({ isOpen, onClose }: RadioControlPanelProps) {
@@ -72,6 +31,11 @@ function OpenRadioControlPanel({ isOpen, onClose }: RadioControlPanelProps) {
   const states = useCapabilityStates();
   const preferences = useQuickControlPreferences(environment.profileId);
   const { refresh, isRefreshing } = useCapabilityRefresher();
+  const [selectedCategory, setSelectedCategory] = useState<CapabilityCategory | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const [navigationRevision, setNavigationRevision] = useState(0);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const [isMobile, setIsMobile] = useState(() => window.matchMedia('(max-width: 767px)').matches);
   useEffect(() => {
     const query = window.matchMedia('(max-width: 767px)');
@@ -84,16 +48,40 @@ function OpenRadioControlPanel({ isOpen, onClose }: RadioControlPanelProps) {
     entries.filter(entry => entry.type === 'single' ? states.get(entry.item.id)?.supported : entry.items.some(item => states.get(item.id)?.supported)),
   ])) as typeof groups), [groups, states]);
   const columns = useMemo(() => splitCapabilitySectionsForColumns(sections), [sections]);
+  const category = sections.find(section => section.category === selectedCategory)?.category ?? sections[0]?.category;
+  const query = isMobile ? search.trim().toLocaleLowerCase() : '';
+  const shownSections = useMemo(() => sections.flatMap(section => {
+    if (!query) return section.category === category ? [section] : [];
+    const items = section.items.filter(entry => (entry.type === 'single' ? [entry.item] : entry.items).some(descriptor =>
+      [descriptor.id, t(descriptor.labelI18nKey), capabilityShortLabel(descriptor, t),
+        descriptor.descriptionI18nKey ? t(descriptor.descriptionI18nKey) : ''].join(' ').toLocaleLowerCase().includes(query)));
+    return items.length ? [{ ...section, items }] : [];
+  }), [sections, category, query, t]);
+  const contextTarget = useMemo(() => {
+    const all = [...descriptors.values()];
+    const selected = all.find(descriptor => descriptor.target?.scope === 'channel')
+      ?? all.find(descriptor => descriptor.target && descriptor.target.scope !== 'global');
+    return selected ? capabilityTargetLabel(selected, t) : null;
+  }, [descriptors, t]);
+  // Replacing a view unmounts its editors and cancels their pending debounce/drafts.
+  const viewKey = `${isMobile}:${isMobile ? `${category}:${query}:${navigationRevision}` : ''}`;
+  useEffect(() => { if (bodyRef.current?.parentElement) bodyRef.current.parentElement.scrollTop = 0; }, [viewKey]);
   const renderSections = (list: CapabilityCategorySection[]) => list.map(section => <section key={section.category} className="space-y-2">
-    <h3 className="text-xs font-medium text-default-500">{t(`radio:capability.panel.${section.category}`)}</h3>
+    {(!isMobile || query) && <h3 className="text-xs font-medium text-default-500">{t(`radio:capability.panel.${section.category}`)}</h3>}
     {section.items.map(entry => <CapabilityCard key={entry.type === 'single' ? entry.item.id : entry.groupId}
-      descriptors={entry.type === 'single' ? [entry.item] : entry.items} states={states} items={preferences.items} toggle={preferences.toggle} />)}
+      descriptors={entry.type === 'single' ? [entry.item] : entry.items} states={states} items={preferences.items} toggle={preferences.toggle} mobile={isMobile} />)}
   </section>);
-  return <Modal isOpen={isOpen} onClose={onClose} size={isMobile ? 'sm' : '3xl'} scrollBehavior="inside" placement="center">
-    <ModalContent className="radio-capability-controls">
-      <ModalHeader className="flex flex-col gap-0.5 pb-2">
-        <div className="flex items-center gap-2"><span className="text-base">{t('radio:capability.panel.title')}</span>
+  return <Modal isOpen={isOpen} onClose={onClose} size={isMobile ? 'full' : '3xl'} scrollBehavior="inside" placement="center"
+    hideCloseButton={isMobile} classNames={{ wrapper: isMobile ? 'cap-panel-viewport' : undefined }}>
+    <ModalContent className={`radio-capability-controls radio-capability-panel${isMobile ? ' cap-panel-mobile' : ''}`}>
+      <ModalHeader className="cap-panel-header flex flex-col gap-0.5 pb-2" data-capability-navigation={isMobile || undefined}
+        onPointerDownCapture={isMobile ? () => setNavigationRevision(value => value + 1) : undefined}>
+        <div className="cap-panel-toolbar flex items-center gap-2"><span className="cap-panel-title text-base">{t('radio:capability.panel.title')}</span>
           {activeProfile && <PowerControlButton profileId={activeProfile.id} compact />}
+          {isMobile && <Tooltip content={t('radio:capability.panel.search')}><Button isIconOnly size="sm" variant="light" className="cap-button"
+            aria-label={t('radio:capability.panel.search')} aria-expanded={searchOpen} onPress={() => { setSearchOpen(value => !value); setSearch(''); }}>
+            <FontAwesomeIcon icon={faMagnifyingGlass} />
+          </Button></Tooltip>}
           <Tooltip content={t('radio:capability.panel.refresh')}><Button isIconOnly size="sm" variant="light" className="cap-button"
             aria-label={t('radio:capability.panel.refresh')} onPress={refresh} isLoading={isRefreshing} isDisabled={!environment.connected || isRefreshing}>
             <FontAwesomeIcon icon={faRotateRight} />
@@ -106,8 +94,8 @@ function OpenRadioControlPanel({ isOpen, onClose }: RadioControlPanelProps) {
           <div className="flex flex-col gap-1.5">
             {preferences.items.map((ref, index) => {
               const label = pinnedLabel(ref, descriptors, t);
-              return <div className="cap-item rounded-md bg-default-100 pl-2" key={pinnedKey(ref)}>
-                <span className="text-xs mr-auto">{label}</span>
+              return <div className="cap-pinned-row rounded-md bg-default-100 pl-2" key={pinnedKey(ref)}>
+                <span className="text-xs min-w-0 break-words">{label}</span>
                 <Button isIconOnly className="cap-button" variant="light" size="sm" aria-label={t('radio:capability.quick.moveBefore', { name: label })}
                   isDisabled={index === 0} onPress={() => preferences.move(ref, -1)}><FontAwesomeIcon icon={faArrowUp} /></Button>
                 <Button isIconOnly className="cap-button" variant="light" size="sm" aria-label={t('radio:capability.quick.moveAfter', { name: label })}
@@ -120,15 +108,32 @@ function OpenRadioControlPanel({ isOpen, onClose }: RadioControlPanelProps) {
         </section>
             </PopoverContent>
           </Popover>}
+          {isMobile && <Button isIconOnly size="sm" variant="light" className="cap-button" aria-label={t('radio:capability.panel.close')} onPress={onClose}>
+            <FontAwesomeIcon icon={faXmark} />
+          </Button>}
         </div>
-        <span className="text-xs text-default-400 font-normal">{activeProfile?.name ?? t('radio:connection.none')}</span>
+        <span className="cap-panel-context text-xs text-default-400 font-normal">{activeProfile?.name ?? t('radio:connection.none')}{isMobile && contextTarget ? ` · ${contextTarget}` : ''}</span>
+        {isMobile && searchOpen && <Input size="sm" type="search" autoFocus aria-label={t('radio:capability.panel.search')}
+          placeholder={t('radio:capability.panel.searchPlaceholder')} value={search} onValueChange={setSearch} isClearable onClear={() => setSearch('')}
+          classNames={{ input: 'text-base' }} />}
+        {isMobile && query && <div className="cap-panel-search-results text-sm text-default-500">{t('radio:capability.panel.searchResults')}</div>}
+        {isMobile && !query && sections.length > 0 && <Tabs aria-label={t('radio:capability.panel.categories')} selectedKey={category}
+          onSelectionChange={key => { setSelectedCategory(key as CapabilityCategory); setSearch(''); }} variant="underlined"
+          classNames={{ base: 'cap-panel-tabs', tabList: 'w-full gap-0', tab: 'min-w-0 h-11 px-1', tabContent: 'text-sm', cursor: 'bg-primary' }}>
+          {sections.map(section => <Tab key={section.category} title={t(`radio:capability.panel.${section.category}`)} />)}
+        </Tabs>}
       </ModalHeader>
-      <ModalBody className="pb-4 gap-3">
+      <ModalBody className="cap-panel-body pb-4 gap-3">
+        <div ref={bodyRef}>
         {radioConfig.type === 'none' ? <p className="text-xs text-default-400">{t('radio:capability.panel.noRadioMode')}</p>
           : !environment.connected ? <p className="text-xs text-default-400">{t('radio:capability.panel.notConnected')}</p>
             : !sections.length ? <p className="text-xs text-default-400">{t('radio:capability.panel.noSupported')}</p>
-              : !isMobile && columns.right.length ? <div className="grid grid-cols-2 gap-3"><div className="space-y-3">{renderSections(columns.left)}</div><div className="space-y-3">{renderSections(columns.right)}</div></div>
-                : <div className="space-y-3">{renderSections(sections)}</div>}
+              : <div key={viewKey}>
+                {isMobile ? <div className="space-y-3">{shownSections.length ? renderSections(shownSections) : <p className="text-sm text-default-500" role="status">{t('radio:capability.panel.noResults')}</p>}</div>
+                  : columns.right.length ? <div className="grid grid-cols-2 gap-3"><div className="space-y-3">{renderSections(columns.left)}</div><div className="space-y-3">{renderSections(columns.right)}</div></div>
+                    : <div className="space-y-3">{renderSections(sections)}</div>}
+              </div>}
+        </div>
       </ModalBody>
     </ModalContent>
   </Modal>;

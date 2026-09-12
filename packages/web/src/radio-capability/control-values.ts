@@ -68,3 +68,8 @@ export function numberInputWidth(descriptor: CapabilityDescriptor, value: number
   const length = Math.max(3, ...examples.map(v => formatCapabilityNumber(v, descriptor, false).length));
   return `${Math.min(22, length) + 1}ch`;
 }
+
+/** HTML number inputs reject a leading plus; signs in read-only display stay intact. */
+export function formatControlInput(value: number, descriptor: CapabilityDescriptor): string {
+  return formatCapabilityNumber(value, descriptor, false).replace(/^\+/, '');
+}

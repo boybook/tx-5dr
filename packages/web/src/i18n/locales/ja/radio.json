@@ -675,7 +675,16 @@
       "targetReceiver": "受信機 {{receiver}}",
       "targetChannel": "受信機 {{receiver}} · VFO {{channel}}",
       "unknownState": "無線機の状態を待っています。",
-      "sent": "設定を送信しました"
+      "sent": "設定を送信しました",
+      "describe": "{{name}}の説明を表示",
+      "descriptionOf": "{{name}}の説明",
+      "targetGlobalShort": "全体",
+      "search": "パラメーターを検索",
+      "searchPlaceholder": "名前・略称・説明を検索",
+      "categories": "機能の分類",
+      "noResults": "一致するパラメーターはありません",
+      "close": "無線機制御を閉じる",
+      "searchResults": "検索結果"
     },
     "tuner_switch": {
       "label": "オートチューナー",

@@ -54,6 +54,27 @@ current edit. Capability-specific prerequisites, such as the tuner switch before
 tune action, wrap these same controls. Physical power and tune-tone transmission
 keep their dedicated workflows.
 
+On narrow screens the full panel uses the available visual viewport and safe-area
+insets, with a fixed header, category tabs and optional search across categories.
+Cards own the full title, scope badge, pin and a click-to-expand description. Their
+shared controls omit redundant inline captions and expose current access/confirmation
+feedback as visible text. Desktop cards retain their full explanations and columns.
+Card presentation is selected explicitly through frontend props; it does not change
+backend descriptors or introduce another parameter writer.
+
+Mobile number inputs have a 28px surface and 6px corners within a 44px padded focus
+target. Button surfaces are 32px within a 44px tap box. These styles are scoped to
+the full mobile panel, leaving quick controls and other HeroUI consumers independent.
+Numeric input strings omit a leading plus, which HTML number inputs reject; display
+formatting and negative values retain their original sign and unit semantics.
+
+Changing category, search results, responsive layout or connection scope unmounts
+the departing editors and discards drafts and unsent debounces. Pointer navigation
+in the mobile header invalidates editors before focus moves. Header/pin targets
+marked `data-capability-navigation` also cancel numeric blur commits during keyboard
+navigation. Ordinary Enter/blur commits keep their existing semantics. Browsing,
+help disclosure and pin management perform no radio queries or parameter writes.
+
 Quick controls occupy a separate HeroUI card with larger gaps between capabilities
 than within a capability. Shared sliders reserve space for their thumbs at both
 endpoints. Quick sliders show their value on hover, drag or keyboard focus; their

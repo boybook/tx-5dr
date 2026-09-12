@@ -687,7 +687,16 @@
       "targetReceiver": "接收机 {{receiver}}",
       "targetChannel": "接收机 {{receiver}} · VFO {{channel}}",
       "unknownState": "尚未收到电台状态。",
-      "sent": "设置已发送"
+      "sent": "设置已发送",
+      "describe": "查看{{name}}说明",
+      "descriptionOf": "{{name}}说明",
+      "targetGlobalShort": "全局",
+      "search": "搜索参数",
+      "searchPlaceholder": "搜索名称、缩写或说明",
+      "categories": "能力分类",
+      "noResults": "未找到对应参数",
+      "close": "关闭电台控制",
+      "searchResults": "搜索结果"
     },
     "tuner_switch": {
       "label": "自动天调",

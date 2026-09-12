@@ -1,0 +1,131 @@
+/* Panel layout owns labels/help. Capability controls keep their shared behavior. */
+.radio-capability-panel .cap-card {
+  padding: 8px;
+  border: 1px solid hsl(var(--heroui-default-200));
+  border-radius: 8px;
+  background: hsl(var(--heroui-default-50) / .4);
+}
+.radio-capability-panel .cap-card-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.radio-capability-panel .cap-card-field + .cap-card-field { margin-top: 8px; }
+.radio-capability-panel .cap-card-title { grid-column: 1; margin-right: auto; font-size: 12px; font-weight: 500; }
+.radio-capability-panel .cap-card-control { grid-column: 2; min-width: 0; max-width: 100%; }
+.radio-capability-panel .cap-card-pin { grid-column: 3; grid-row: 1; }
+.radio-capability-panel .cap-card-field[data-atomic="true"] > .cap-card-control { grid-column: 1 / -1; grid-row: 2; flex-basis: 100%; order: 3; }
+.radio-capability-panel .cap-card-description {
+  grid-column: 1 / -1;
+  flex-basis: 100%;
+  order: 4;
+  color: hsl(var(--heroui-default-500));
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.radio-capability-panel .cap-card-description p + p { margin-top: 4px; }
+.cap-pinned-row { display: grid; grid-template-columns: minmax(0, 1fr) repeat(3, auto); align-items: center; }
+
+/* Mobile cards use the screen's available visual viewport, including keyboard resizing. */
+.cap-panel-viewport { padding: 0; align-items: flex-start; }
+.radio-capability-panel.cap-panel-mobile {
+  --cap-control-height: 32px;
+  --cap-control-radius: 6px;
+  margin: 0;
+  width: 100%;
+  max-width: none;
+  height: min(var(--app-viewport-height, 100dvh), var(--visual-viewport-height, 100dvh));
+  max-height: min(var(--app-viewport-height, 100dvh), var(--visual-viewport-height, 100dvh));
+  min-height: 0;
+  border-radius: 0;
+  background: hsl(var(--heroui-background));
+}
+.cap-panel-mobile .cap-panel-header {
+  padding: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
+  gap: 0;
+  flex-shrink: 0;
+  border-bottom: 1px solid hsl(var(--heroui-default-200));
+}
+.cap-panel-mobile .cap-panel-toolbar { gap: 0; min-height: 44px; }
+.cap-panel-mobile .cap-panel-title { flex: 1; min-width: 0; font-size: 18px; }
+.cap-panel-mobile .cap-panel-toolbar button,
+.cap-panel-mobile .cap-card-pin { height: 44px; min-height: 44px; min-width: 44px; width: 44px; }
+.cap-panel-mobile .cap-panel-context { padding: 3px 0 9px; overflow-wrap: anywhere; }
+.cap-panel-mobile .cap-panel-tabs { width: 100%; }
+.cap-panel-mobile .cap-panel-tabs [role="tablist"] { max-width: 100%; overflow-x: auto; scrollbar-width: thin; gap: 4px; }
+.cap-panel-mobile .cap-panel-tabs [role="tab"] { flex: 1 0 auto; min-width: max-content; width: auto; padding-inline: 10px; }
+.cap-panel-mobile .cap-panel-search-results { display: flex; align-items: center; min-height: 44px; }
+.cap-panel-mobile .cap-panel-body {
+  min-height: 0;
+  padding: 12px max(12px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  overscroll-behavior-y: contain;
+}
+.cap-panel-mobile .cap-card { padding: 4px 8px; border-radius: 10px; background: hsl(var(--heroui-content1)); }
+.dark .cap-panel-mobile .cap-card { border-color: transparent; }
+.cap-panel-mobile .cap-card-field { display: grid; grid-template-columns: minmax(0, 1fr) auto 44px; gap: 0 4px; }
+.cap-panel-mobile .cap-card-title {
+  min-width: 0;
+  width: 100%;
+  margin-right: 0;
+  min-height: 44px;
+  height: auto;
+  padding: 6px 2px;
+  justify-content: flex-start;
+  text-align: left;
+  white-space: normal;
+  gap: 6px;
+  font-size: 14px;
+  border-radius: 4px;
+}
+.cap-panel-mobile .cap-card-title svg { width: 12px; flex-shrink: 0; }
+.cap-panel-mobile .cap-card-field[data-wide="true"] > .cap-card-title { grid-column: 1 / 3; }
+.cap-panel-mobile .cap-card-field[data-wide="true"] > .cap-card-control {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  padding: 0 2px 2px;
+}
+/* Feedback gets its own row, so a busy/permission message cannot displace the toggle. */
+.cap-panel-mobile .cap-card-field[data-wide="false"] > .cap-card-control,
+.cap-panel-mobile .cap-card-field[data-wide="false"] > .cap-card-control > .cap-item { display: contents; }
+.cap-panel-mobile .cap-card-field[data-wide="false"] > .cap-card-control > .cap-item > :not(.cap-feedback) { grid-column: 2; grid-row: 1; }
+.cap-panel-mobile .cap-card-field[data-wide="false"] .cap-feedback { grid-column: 1 / -1; grid-row: 2; padding-bottom: 6px; }
+.cap-panel-mobile .cap-card-field[data-wide="true"]:not([data-atomic="true"]) > .cap-card-control > .cap-item { width: 100%; }
+.cap-panel-mobile .cap-card-field[data-wide="true"]:not([data-atomic="true"]) > .cap-card-control > .cap-item > .cap-item {
+  display: flex; width: 100%; flex-wrap: nowrap;
+}
+.cap-panel-mobile .cap-card-control .cap-slider { flex: 1 1 80px; width: auto; min-width: 60px; min-height: 44px; }
+.cap-panel-mobile .cap-card-control .cap-select { width: 100% !important; max-width: none; padding-block: 6px; }
+.cap-panel-mobile .cap-card-control .cap-select-value { font-size: 16px; }
+.cap-panel-mobile .cap-card-control .cap-select-trigger { height: 32px; min-height: 32px; border-radius: 6px; }
+.cap-panel-mobile .cap-input-target { min-height: 44px; padding-block: 8px; }
+.cap-panel-mobile .cap-input { min-width: 52px; }
+.cap-panel-mobile .cap-input-wrapper { height: 28px; min-height: 28px; padding-inline: 6px; border: 0; border-radius: 6px; }
+.cap-panel-mobile .cap-input-field { font-size: 16px; line-height: 20px; }
+.cap-panel-mobile .cap-scope-badge {
+  color: hsl(var(--heroui-default-500));
+  font-size: 10px;
+  font-weight: 400;
+  border: 1px solid hsl(var(--heroui-default-200));
+  border-radius: 3px;
+  padding: 0 3px;
+  margin-left: 5px;
+  white-space: nowrap;
+}
+.cap-panel-mobile .cap-card-description { padding: 10px 2px 12px; border-top: 1px solid hsl(var(--heroui-default-200)); font-size: 13px; line-height: 1.6; }
+.cap-panel-mobile .cap-card-description-target { font-size: 11px; margin-top: 6px; }
+
+/* Buttons retain a 44px tap box with a 32px painted surface. Inputs use padding instead. */
+.radio-capability-controls.cap-panel-mobile .cap-value-toggle {
+  height: 44px; min-height: 44px; min-width: 44px;
+  border: 6px solid transparent;
+  background-clip: padding-box;
+  padding: 0 5px;
+}
+.radio-capability-controls.cap-panel-mobile .cap-value-toggle,
+.radio-capability-controls.cap-panel-mobile button.cap-button.cap-segment { border-radius: 10px; }
+.radio-capability-controls.cap-panel-mobile .cap-value-toggle[aria-pressed="true"] { box-shadow: none; }
+.radio-capability-controls.cap-panel-mobile .cap-value-toggle[aria-pressed="true"]::before {
+  content: ""; position: absolute; inset: 0; border-bottom: 2px solid currentColor; border-radius: 4px; pointer-events: none;
+}

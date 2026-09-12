@@ -4,7 +4,7 @@ import type { CapabilityComponentProps } from '../control-types';
 import { capabilityShortLabel } from '../control-presentation';
 import { formatCapabilityOption } from '../display-utils';
 
-export function EnumCapability({ descriptor, capabilityId, state, interactive, onWrite }: CapabilityComponentProps) {
+export function EnumCapability({ descriptor, capabilityId, state, interactive, onWrite, showInlineLabel = true }: CapabilityComponentProps) {
   const { t } = useTranslation();
   const options = descriptor.options ?? [];
   const selected = state?.value == null ? null : String(state.value);
@@ -14,9 +14,9 @@ export function EnumCapability({ descriptor, capabilityId, state, interactive, o
     const option = options.find(item => String(item.value) === key);
     if (interactive && option && selected !== key) onWrite(capabilityId, option.value);
   };
-  if (!descriptor.writable) return <span className="cap-item"><span>{label}</span><span>{current ? formatCapabilityOption(current, descriptor, t) : state?.value ?? '—'}</span></span>;
+  if (!descriptor.writable) return <span className="cap-item">{showInlineLabel && <span>{label}</span>}<span>{current ? formatCapabilityOption(current, descriptor, t) : state?.value ?? '—'}</span></span>;
   return <span className="cap-item">
-    <span className="cap-label text-default-500">{label}</span>
+    {showInlineLabel && <span className="cap-label text-default-500">{label}</span>}
     {options.length > 0 && options.length <= 4 ? <ButtonGroup size="sm" variant="flat" className="flex-wrap gap-px" aria-label={t(descriptor.labelI18nKey)}>
       {options.map(option => <Button key={String(option.value)} className="cap-button cap-segment cap-value-toggle" color={String(option.value) === selected ? 'primary' : 'default'}
         aria-pressed={String(option.value) === selected} isDisabled={!interactive}

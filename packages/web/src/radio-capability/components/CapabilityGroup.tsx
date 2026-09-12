@@ -6,18 +6,19 @@ import { useTranslation } from 'react-i18next';
 import { CapabilityControl } from '../CapabilityRegistry';
 import { useCapabilityEnvironment } from '../CapabilityEnvironment';
 import { buildCapabilityGroupPayload, getCapabilityGroupValues } from '../group-values';
-import { controlEditingKey } from '../control-values';
-import { formatCapabilityNumber, fromDisplayNumber } from '../display-utils';
+import { controlEditingKey, formatControlInput } from '../control-values';
+import { fromDisplayNumber } from '../display-utils';
 import { isCapabilityInteractive } from '../availability';
 import { getApiBaseUrl } from '../../utils/config';
 import { createLogger } from '../../utils/logger';
 
 const logger = createLogger('CapabilityGroup');
 
-export const CapabilityGroupControl = memo(function CapabilityGroupControl({ descriptors, states, active = true }: {
+export const CapabilityGroupControl = memo(function CapabilityGroupControl({ descriptors, states, active = true, descriptionPlacement = 'tooltip' }: {
   descriptors: CapabilityDescriptor[];
   states: Map<string, CapabilityState>;
   active?: boolean;
+  descriptionPlacement?: 'tooltip' | 'card';
 }) {
   const { t } = useTranslation();
   const environment = useCapabilityEnvironment();
@@ -62,9 +63,9 @@ export const CapabilityGroupControl = memo(function CapabilityGroupControl({ des
     }
   };
   return <span className="cap-item" data-capability-group={descriptors[0]?.writeGroup?.id}>
-    {descriptors.map(descriptor => <CapabilityControl key={descriptor.id} descriptor={descriptor} state={states.get(descriptor.id)} active={enabled && !pending}
+    {descriptors.map(descriptor => <CapabilityControl key={descriptor.id} descriptor={descriptor} state={states.get(descriptor.id)} active={enabled && !pending} descriptionPlacement={descriptionPlacement}
       draftEditor={{
-        text: draft[descriptor.id] ?? (typeof actual[descriptor.id] === 'number' ? formatCapabilityNumber(actual[descriptor.id] as number, descriptor, false) : ''),
+        text: draft[descriptor.id] ?? (typeof actual[descriptor.id] === 'number' ? formatControlInput(actual[descriptor.id] as number, descriptor) : ''),
         onChange: text => { if (enabled && !inFlight.current) { setDraft(previous => ({ ...previous, [descriptor.id]: text })); setFailed(false); } },
       }} />)}
     {dirty && <span className="cap-item">
@@ -74,6 +75,6 @@ export const CapabilityGroupControl = memo(function CapabilityGroupControl({ des
     {dirty && !payload && <span className="text-warning-600 text-[11px]" role="status">{t('radio:capability.quick.invalidGroup')}</span>}
     {failed && <span className="text-danger text-[11px]" role="alert">{t('radio:capability.panel.groupFailed')}</span>}
   </span>;
-}, (previous, next) => previous.active === next.active && previous.descriptors.length === next.descriptors.length
+}, (previous, next) => previous.active === next.active && previous.descriptionPlacement === next.descriptionPlacement && previous.descriptors.length === next.descriptors.length
   && previous.descriptors.every((descriptor, index) => descriptor === next.descriptors[index]
     && previous.states.get(descriptor.id) === next.states.get(descriptor.id)));

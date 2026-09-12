@@ -19,6 +19,8 @@ export interface CapabilityComponentProps {
   showSliderInput?: boolean;
   /** Shared capability details for renderers that own tooltip placement. */
   tooltipContent?: string;
+  /** A card can supply the visible title; the control retains its accessible name. */
+  showInlineLabel?: boolean;
   /** Atomic groups own text drafts and never dispatch scalar writes. */
   draftEditor?: { text: string; onChange: (text: string) => void };
 }

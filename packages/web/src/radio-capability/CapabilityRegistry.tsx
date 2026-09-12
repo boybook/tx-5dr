@@ -41,12 +41,16 @@ export function useCapabilityAccess(descriptor: CapabilityDescriptor, state: Cap
 }
 
 /** Cards, pins and popovers share one renderer and edit lifetime, with optional companion inputs. */
-export const CapabilityControl = memo(function CapabilityControl({ descriptor, state, active = true, draftEditor, showSliderInput = true }: {
+export const CapabilityControl = memo(function CapabilityControl({ descriptor, state, active = true, draftEditor, showSliderInput = true,
+  showInlineLabel = true, descriptionPlacement = 'tooltip' }: {
   descriptor: CapabilityDescriptor;
   state: CapabilityState | undefined;
   active?: boolean;
   draftEditor?: CapabilityComponentProps['draftEditor'];
   showSliderInput?: boolean;
+  showInlineLabel?: boolean;
+  /** Mobile cards own descriptions and show control feedback without relying on hover. */
+  descriptionPlacement?: 'tooltip' | 'card';
 }) {
   const { t } = useTranslation();
   const { environment, interactive, reason } = useCapabilityAccess(descriptor, state, active);
@@ -59,15 +63,21 @@ export const CapabilityControl = memo(function CapabilityControl({ descriptor, s
   const writeError = submission.timedOut ? t('radio:capability.quick.confirmationTimeout') : submission.error;
   const summary = [t(descriptor.labelI18nKey), target, descriptor.descriptionI18nKey ? t(descriptor.descriptionI18nKey) : null,
     reason, state?.lastError, writeError, submission.pending ? t('radio:capability.quick.awaitingConfirmation') : null].filter(Boolean).join(' · ');
+  const inCard = descriptionPlacement === 'card';
+  const feedback = [...new Set([reason, state?.lastError, writeError,
+    submission.pending ? t('radio:capability.quick.awaitingConfirmation') : null].filter(Boolean))].join(' · ');
   const control = <span className="cap-item" data-capability-id={descriptor.id} aria-busy={submission.pending}>
       <Component key={`${environment.scope}:${controlEditingKey(descriptor)}`} capabilityId={descriptor.id} descriptor={descriptor}
-        state={environment.connected ? submission.displayState : undefined} interactive={interactive} scope={environment.scope} onWrite={submission.write} draftEditor={draftEditor} showSliderInput={showSliderInput} tooltipContent={summary} />
-      {descriptor.target?.scope === 'global' && <span className="text-[11px] text-default-500">{t('radio:capability.panel.targetGlobal')}</span>}
-      {(state?.availability === 'unavailable' || state?.lastError) && <span className="text-warning-600 text-[11px]" aria-label={reason ?? state.lastError}>{t('radio:capability.quick.unavailable')}</span>}
-      {submission.error && !state?.lastError && <span className="text-warning-600 text-[11px]">{t('radio:capability.quick.unconfirmed')}</span>}
+        state={environment.connected ? submission.displayState : undefined} interactive={interactive} scope={environment.scope} onWrite={submission.write} draftEditor={draftEditor} showSliderInput={showSliderInput}
+        showInlineLabel={showInlineLabel} tooltipContent={inCard ? undefined : summary} />
+      {!inCard && descriptor.target?.scope === 'global' && <span className="text-[11px] text-default-500">{t('radio:capability.panel.targetGlobal')}</span>}
+      {inCard ? feedback && <span className="cap-feedback text-default-500" role="status">{feedback}</span> : <>
+        {(state?.availability === 'unavailable' || state?.lastError) && <span className="text-warning-600 text-[11px]" aria-label={reason ?? state.lastError}>{t('radio:capability.quick.unavailable')}</span>}
+        {submission.error && !state?.lastError && <span className="text-warning-600 text-[11px]">{t('radio:capability.quick.unconfirmed')}</span>}
+      </>}
     </span>;
   // Numeric controls separate the slider value tooltip from capability details.
-  if (Component === NumberLevelCapability) return control;
+  if (inCard || Component === NumberLevelCapability) return control;
   return <Tooltip content={summary} delay={350} closeDelay={0} size="sm" classNames={{ content: 'max-w-[300px] text-xs' }}>
     {control}
   </Tooltip>;

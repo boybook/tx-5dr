@@ -687,7 +687,16 @@
       "targetReceiver": "Receiver {{receiver}}",
       "targetChannel": "Receiver {{receiver}} · VFO {{channel}}",
       "unknownState": "Waiting for radio state.",
-      "sent": "Setting sent"
+      "sent": "Setting sent",
+      "describe": "About {{name}}",
+      "descriptionOf": "{{name}} details",
+      "targetGlobalShort": "Global",
+      "search": "Search controls",
+      "searchPlaceholder": "Search names, abbreviations or descriptions",
+      "categories": "Control categories",
+      "noResults": "No matching controls",
+      "close": "Close radio controls",
+      "searchResults": "Search results"
     },
     "tuner_switch": {
       "label": "Auto Tuner",

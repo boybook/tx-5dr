@@ -38,6 +38,17 @@ function Host({ children, environment, states = new Map() }: { children: ReactNo
 }
 
 describe('shared HeroUI capability controls', () => {
+  it('keeps signed positive values valid in numeric inputs and focuses through the touch padding', () => {
+    const descriptor = { ...base, id: 'agc_gain', range: { min: -20, max: 120 },
+      display: { mode: 'value' as const, unit: 'dB' as const, signed: true, decimals: 2 } };
+    const environment = env();
+    render(<Host environment={environment}><CapabilityControl descriptor={descriptor} state={actual(descriptor.id, 87)} showInlineLabel={false} descriptionPlacement="card" /></Host>);
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+    expect(input.value).toBe('87.00');
+    fireEvent.click(input.closest('.cap-input-target')!);
+    expect(document.activeElement).toBe(input);
+    expect(environment.write).not.toHaveBeenCalled();
+  });
   it('shows the quick slider value only in its hover or keyboard tooltip', async () => {
     const user = userEvent.setup(); const environment = env();
     render(<Host environment={environment}><CapabilityControl descriptor={base} state={actual(base.id, 0)} showSliderInput={false} /></Host>);
