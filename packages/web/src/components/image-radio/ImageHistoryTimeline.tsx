@@ -150,7 +150,7 @@ function HistoryEntry({
           </div>
           <div className="flex min-w-0 items-end justify-between gap-2">
             <span className="truncate font-mono text-[11px] text-default-500">
-              {formatFrequencyMHz(entry.artifact.frequency)} MHz{entry.artifact.radioMode ? ` · ${entry.artifact.radioMode}` : ''}
+              {entry.artifact.frequency === null ? t('noRfFrequency') : `${formatFrequencyMHz(entry.artifact.frequency)} MHz`}{entry.artifact.radioMode ? ` · ${entry.artifact.radioMode}` : ''}
             </span>
             <div className="flex shrink-0 gap-0.5">
               {canReply ? (
@@ -244,12 +244,12 @@ export function ImageHistoryTimeline() {
 
   const resend = (entry: ImageHistoryEntry) => {
     if (!canResendImageHistoryEntry(entry, operatorId) || entry.record.direction !== 'tx' || !operatorId) return;
-    const expectedFrequency = radioMode.currentRadioFrequency;
-    if (!expectedFrequency) {
+    const expectedFrequency = txStart.localPlayback ? null : radioMode.currentRadioFrequency;
+    if (!txStart.localPlayback && !expectedFrequency) {
       addToast({ title: t('txNotReady'), color: 'warning' });
       return;
     }
-    const expectedRadioMode = radioMode.currentRadioMode ?? undefined;
+    const expectedRadioMode = txStart.localPlayback ? undefined : radioMode.currentRadioMode ?? undefined;
     txStart.start(entry.record.id, async () => {
       const fallbackEnvelope = entry.record.direction === 'tx' && entry.record.envelope
         ? { enhancedPreamble: true, stationIdMode: 'fsk' as const }

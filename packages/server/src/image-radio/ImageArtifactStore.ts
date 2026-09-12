@@ -52,7 +52,7 @@ export interface SaveArtifactInput {
   width: number;
   height: number;
   pixels: Uint8Array;
-  frequency: number;
+  frequency: number | null;
   radioMode?: string;
   complete: boolean;
   saveReason?: 'manual' | 'protocolEnd';
@@ -173,7 +173,7 @@ export class ImageArtifactStore {
       width: input.width,
       height: input.height,
       frequency: input.frequency,
-      radioMode: input.radioMode,
+      radioMode: input.frequency === null ? undefined : input.radioMode,
       complete: input.complete,
       saveReason: input.saveReason,
       captureStartedAt: input.captureStartedAt,
@@ -192,7 +192,7 @@ export class ImageArtifactStore {
     return artifact;
   }
 
-  async importNormalizedSstvPng(input: { png: Buffer; mode: string; width: number; height: number; operatorId: string; frequency: number; radioMode?: string }): Promise<{ artifact: ImageArtifact; pixels: Uint8Array }> {
+  async importNormalizedSstvPng(input: { png: Buffer; mode: string; width: number; height: number; operatorId: string; frequency: number | null; radioMode?: string }): Promise<{ artifact: ImageArtifact; pixels: Uint8Array }> {
     if (input.png.length > 2 * 1024 * 1024 || input.png.length < 33
       || !input.png.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)
       || input.png.subarray(12, 16).toString('ascii') !== 'IHDR') {

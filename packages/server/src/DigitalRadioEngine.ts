@@ -1278,11 +1278,13 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       this.imageArtifactStore,
       this.imageHistoryStore,
       this.physicalTxCoordinator,
-      () => this.radioManager.getKnownFrequency() ?? ConfigManager.getInstance().getLastImageFrequency()?.frequency ?? 0,
+      () => this.radioManager.getConfig().type === 'none' && !ConfigManager.getInstance().getActiveVirtualRadioProfile() ? null
+        : this.radioManager.getKnownFrequency() ?? ConfigManager.getInstance().getLastImageFrequency()?.frequency ?? 0,
       () => this.getCurrentRadioMode() ?? undefined,
       (operatorId) => this._operatorManager.getOperatorById(operatorId)?.config.myCallsign,
       undefined,
       new ImagePaperSpool(path.join(cacheDir, 'image-radio-paper')),
+      () => this.radioManager.getConfig().type === 'none' && !ConfigManager.getInstance().getActiveVirtualRadioProfile(),
     );
     this.imageRadioService.on('status', (status) => this.emit('imageRadioStatus', status));
     this.imageRadioService.on('rxEvent', (event) => this.emit('imageRxEvent', event));

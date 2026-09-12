@@ -90,6 +90,7 @@ export type ImageSessionSummary = z.infer<typeof ImageSessionSummarySchema>;
 
 export const SstvTxStatusSchema = z.object({
   phase: SstvTxPhaseSchema,
+  target: z.enum(['radio', 'local']).optional(),
   sessionId: z.string().optional(),
   requestId: z.string().optional(),
   operatorId: z.string().optional(),
@@ -114,6 +115,7 @@ export const ImageRadioStatusSchema = z.object({
   rxState: ImageRxStateSchema,
   rxCaptureActive: z.boolean().default(false),
   capability: ImageRadioCapabilitySchema,
+  sstvTxTarget: z.enum(['radio', 'local']).optional(),
   currentSession: ImageSessionSummarySchema.nullable(),
   tx: SstvTxStatusSchema,
   nativeQueuedSamples: z.number().int().nonnegative().default(0),
@@ -197,7 +199,8 @@ export const ImageArtifactSchema = z.object({
   pixelFormat: ImagePixelFormatSchema,
   width: z.number().int().positive(),
   height: z.number().int().positive(),
-  frequency: z.number().positive(),
+  // null means no RF frequency (local audio), never an invented or zero frequency.
+  frequency: z.number().positive().nullable(),
   radioMode: z.string().optional(),
   complete: z.boolean(),
   saveReason: z.enum(['manual', 'protocolEnd']).optional(),
@@ -353,7 +356,8 @@ export const SstvTxStartCommandSchema = z.object({
   operatorId: z.string().min(1),
   artifactId: z.string().min(1),
   mode: z.string().min(1),
-  expectedFrequency: z.number().positive(),
+  // null explicitly requests local audio playback; the server must authorize it from radio configuration.
+  expectedFrequency: z.number().positive().nullable(),
   interruptActiveCapture: z.boolean().optional(),
   envelope: SstvTxEnvelopeSelectionSchema.default({ enhancedPreamble: true, stationIdMode: 'fsk' }),
 });

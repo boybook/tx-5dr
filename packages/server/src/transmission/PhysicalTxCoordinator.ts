@@ -945,7 +945,8 @@ export class PhysicalTxCoordinator extends EventEmitter<PhysicalTxCoordinatorEve
 
   markStreamingLeaseActive(leaseId: string): void {
     const lease = this.requireCurrentLease(leaseId);
-    if (!lease.assertPtt || !lease.pttConfirmed) {
+    // Audio-only streaming leases own output without claiming physical PTT.
+    if (lease.assertPtt && !lease.pttConfirmed) {
       throw new Error('streaming lease cannot become active before PTT is confirmed');
     }
     if (lease.stopRequested) throw new PhysicalTxInterruptedError();

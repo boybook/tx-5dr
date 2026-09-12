@@ -44,13 +44,13 @@ describe('ImageHistoryStore', () => {
     expect(page.records[0]).toMatchObject({ artifactId: received.id, direction: 'rx', saveReason: 'protocolEnd' });
   });
 
-  it('records actual on-air transmissions and persists their terminal outcome', async () => {
+  it.each([14_230_000, null])('persists playback history and outcome with frequency %s', async (frequency) => {
     const dir = await mkdtemp(path.join(tmpdir(), 'tx5dr-image-history-'));
     dirs.push(dir);
     const artifacts = new ImageArtifactStore(dir);
     const artifact = await artifacts.save({
       family: 'sstv', direction: 'tx', operatorId: 'op', codecMode: 'robot36', pixelFormat: 'rgb8',
-      width: 1, height: 1, pixels: new Uint8Array(3), frequency: 14_230_000, complete: true,
+      width: 1, height: 1, pixels: new Uint8Array(3), frequency, complete: true,
     });
     const history = new ImageHistoryStore(dir);
     const started = await history.recordTransmitStarted({ artifact, operatorId: 'op', sessionId: 'session', startedAt: 100, ...txMetadata });
@@ -58,6 +58,9 @@ describe('ImageHistoryStore', () => {
 
     const restored = new ImageHistoryStore(dir);
     await restored.initialize();
+    const restoredArtifacts = new ImageArtifactStore(dir);
+    await restoredArtifacts.initialize();
+    expect(restoredArtifacts.get(artifact.id)?.frequency).toBe(frequency);
     expect(restored.get(started.id)).toMatchObject({ direction: 'tx', outcome: 'completed', startedAt: 100 });
     expect(restored.list({ direction: 'tx', txOperatorId: 'other' }).records).toHaveLength(0);
     expect(restored.list({ direction: 'tx', txOperatorId: 'op' }).records).toHaveLength(1);

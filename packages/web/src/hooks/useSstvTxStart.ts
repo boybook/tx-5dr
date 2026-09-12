@@ -13,7 +13,7 @@ export type PreparedSstvTx = {
   artifactId: string;
   operatorId: string;
   mode: string;
-  expectedFrequency: number;
+  expectedFrequency: number | null;
   envelope: SstvTxEnvelopeSelection;
 };
 
@@ -31,6 +31,7 @@ export function useSstvTxStart() {
   const [captureConfirmOpen, setCaptureConfirmOpen] = useState(false);
   const pendingPrepareRef = useRef<PrepareSstvTx | null>(null);
   const preparedRef = useRef<PreparedSstvTx | null>(null);
+  const ownedRequestIdRef = useRef<string | null>(null);
 
   const clear = useCallback(() => {
     pendingPrepareRef.current = null;
@@ -45,6 +46,7 @@ export function useSstvTxStart() {
     if (!service || !connection.state.isReady) throw new Error('IMAGE_CONNECTION_UNAVAILABLE');
     const requestId = createClientId();
     preparedRef.current = prepared;
+    ownedRequestIdRef.current = requestId;
     setPendingRequestId(requestId);
     setStarting(true);
     service.startSstvTx({ requestId, ...prepared, interruptActiveCapture });
@@ -122,13 +124,22 @@ export function useSstvTxStart() {
   }, [clear, pendingRequestId, t, txStatus?.phase, txStatus?.requestId]);
 
   useEffect(() => {
-    if (txStatus && TERMINAL_PHASES.has(txStatus.phase) && txStatus.phase !== 'idle') clear();
-  }, [clear, txStatus]);
+    if (!txStatus || !TERMINAL_PHASES.has(txStatus.phase) || txStatus.phase === 'idle') return;
+    if (txStatus.requestId === ownedRequestIdRef.current) {
+      ownedRequestIdRef.current = null;
+      if (txStatus.phase === 'error' || txStatus.phase === 'ptt_unknown') {
+        addToast({ title: t(sstvTxErrorTranslationKey(txStatus.errorCode)), color: 'danger' });
+      }
+    }
+    clear();
+  }, [clear, t, txStatus]);
 
   const txActive = Boolean(txStatus && !TERMINAL_PHASES.has(txStatus.phase));
   return {
+    localPlayback: status?.sstvTxTarget === 'local',
     start,
     starting,
+    txActive,
     activeKey,
     isBusy: starting || captureConfirmOpen || txActive,
     captureConfirmOpen,

@@ -298,11 +298,14 @@ export async function imageRadioRoutes(fastify: FastifyInstance): Promise<void> 
     const file = await request.file({ limits: { fileSize: 2 * 1024 * 1024, files: 1 } });
     if (!file || file.mimetype !== 'image/png') return reply.code(400).send({ success: false, error: { code: 'IMAGE_UPLOAD_INVALID_PNG' } });
     const { artifacts } = requireStores(engine);
-    const frequency = Number(query.frequency);
-    if (!Number.isFinite(frequency) || frequency <= 0) return reply.code(400).send({ success: false, error: { code: 'IMAGE_FREQUENCY_INVALID' } });
+    const frequency = query.frequency === 'null' ? null : Number(query.frequency);
+    if ((frequency === null) !== (engine.getImageRadioService()?.getSstvTxTarget() === 'local')) {
+      return reply.code(409).send({ success: false, error: { code: 'IMAGE_TX_TARGET_CHANGED' } });
+    }
+    if (frequency !== null && (!Number.isFinite(frequency) || frequency <= 0)) return reply.code(400).send({ success: false, error: { code: 'IMAGE_FREQUENCY_INVALID' } });
     const result = await artifacts.importNormalizedSstvPng({
       png: await file.toBuffer(), mode: mode.mode, width: mode.width, height: mode.height,
-      operatorId: query.operatorId, frequency, radioMode: query.radioMode,
+      operatorId: query.operatorId, frequency, radioMode: frequency === null ? undefined : query.radioMode,
     });
     return reply.code(201).send({ success: true, artifact: result.artifact });
   });

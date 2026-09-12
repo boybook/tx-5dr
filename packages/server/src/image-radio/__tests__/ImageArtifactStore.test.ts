@@ -14,14 +14,14 @@ afterEach(async () => {
 });
 
 describe('ImageArtifactStore', () => {
-  it('persists canonical PNG metadata and restores the index', async () => {
+  it.each([14_230_000, null])('persists and restores canonical PNG metadata with frequency %s', async (frequency) => {
     const dir = await mkdtemp(path.join(tmpdir(), 'tx5dr-image-store-'));
     dirs.push(dir);
     const store = new ImageArtifactStore(dir);
     await store.initialize();
     const artifact = await store.save({
       family: 'sstv', direction: 'rx', codecMode: 'robot36', pixelFormat: 'rgb8',
-      width: 2, height: 2, pixels: new Uint8Array(12).fill(127), frequency: 14_230_000,
+      width: 2, height: 2, pixels: new Uint8Array(12).fill(127), frequency,
       radioMode: 'USB', complete: true,
     });
     const decoded = PNG.sync.read(await store.readImage(artifact.id));
@@ -29,6 +29,8 @@ describe('ImageArtifactStore', () => {
     const restored = new ImageArtifactStore(dir);
     await restored.initialize();
     expect(restored.get(artifact.id)?.contentHash).toBe(artifact.contentHash);
+    expect(restored.get(artifact.id)?.frequency).toBe(frequency);
+    expect(restored.get(artifact.id)?.radioMode).toBe(frequency === null ? undefined : 'USB');
   });
 
   it('migrates persisted deadSector fax calibration sources', async () => {

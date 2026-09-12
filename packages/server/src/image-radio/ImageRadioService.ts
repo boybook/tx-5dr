@@ -132,14 +132,27 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     private readonly artifacts: ImageArtifactStore,
     private readonly history: ImageHistoryStore,
     private readonly physicalTx: PhysicalTxCoordinator,
-    private readonly getFrequency: () => number,
+    private readonly getFrequency: () => number | null,
     private readonly getRadioMode: () => string | undefined,
     private readonly getOperatorCallsign: (operatorId: string) => string | undefined = () => undefined,
     private readonly runtime: RasterwaveRuntime = rasterwaveRuntime,
     paperSpool?: ImagePaperSpool,
+    private readonly isLocalPlaybackConfigured: () => boolean = () => false,
   ) {
     super();
     this.paper = paperSpool ?? new ImagePaperSpool(path.join(tmpdir(), `tx5dr-image-paper-${randomUUID()}`));
+  }
+
+  getSstvTxTarget(): 'radio' | 'local' {
+    return this.isLocalPlaybackConfigured() ? 'local' : 'radio';
+  }
+
+  private validateTxFrequency(expectedFrequency: number | null): string | undefined {
+    if ((expectedFrequency === null) !== this.isLocalPlaybackConfigured()) return 'IMAGE_TX_TARGET_CHANGED';
+    if (expectedFrequency === null) return;
+    const frequency = this.getFrequency();
+    if (frequency === null || !Number.isFinite(expectedFrequency) || expectedFrequency <= 0
+      || Math.round(frequency) !== Math.round(expectedFrequency)) return 'IMAGE_FREQUENCY_CHANGED';
   }
 
   getStatus(): ImageRadioStatus {
@@ -147,6 +160,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     return {
       serviceState: availability.available ? this.serviceState : 'unavailable',
       family: this.family,
+      sstvTxTarget: this.getSstvTxTarget(),
       receiveProfile: this.currentReceiveProfile(),
       rxState: this.rxState,
       rxCaptureActive: this.family === 'sstv' && this.sstvCaptureActive,
@@ -338,7 +352,8 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     if (this.family !== 'sstv' || this.serviceState !== 'ready') return reject('IMAGE_NOT_IN_SSTV_MODE');
     if (this.sstvCaptureActive && command.interruptActiveCapture !== true) return reject('IMAGE_RX_CAPTURE_CONFIRM_REQUIRED');
     if (this.activeTx || this.physicalTx.getSnapshot().phase !== 'idle') return reject('PHYSICAL_TX_BUSY');
-    if (Math.round(this.getFrequency()) !== Math.round(command.expectedFrequency)) return reject('IMAGE_FREQUENCY_CHANGED');
+    const frequencyError = this.validateTxFrequency(command.expectedFrequency);
+    if (frequencyError) return reject(frequencyError);
 
     const callsign = sanitizeCallsignInput(this.getOperatorCallsign(command.operatorId));
     if (command.envelope.stationIdMode !== 'none' && !callsign) {
@@ -362,24 +377,31 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     if (!modeInfo) return reject('IMAGE_MODE_INVALID');
     const source = await this.artifacts.readRgbPixels(command.artifactId).catch(() => null);
     if (!source || source.artifact.direction !== 'tx' || source.artifact.operatorId !== command.operatorId
+      || source.artifact.frequency !== command.expectedFrequency
       || source.artifact.width !== modeInfo.width || source.artifact.height !== modeInfo.height) {
       return reject('IMAGE_ARTIFACT_INVALID');
     }
 
     const interruptedReceiveCapture = this.sstvCaptureActive;
     const sessionId = randomUUID();
-    const playback = this.audioStream.openDeterministicPlayback({
-      playbackKind: 'sstv',
-      onPlaybackChunk: (samples, sampleRate) => {
-        if (this.activeTx?.sessionId !== sessionId) return;
-        this.updateTx({
-          ...this.txStatus,
-          revision: this.txStatus.revision + 1,
-          samplesEmitted: Math.min(this.txStatus.estimatedTotalSamples, this.txStatus.samplesEmitted + samples.length),
-        });
-        this.acceptTxPreviewAudio(sessionId, samples, sampleRate);
-      },
-    });
+    let playback: DeterministicPlaybackSession;
+    try {
+      playback = this.audioStream.openDeterministicPlayback({
+        playbackKind: 'sstv',
+        onPlaybackChunk: (samples, sampleRate) => {
+          if (this.activeTx?.sessionId !== sessionId) return;
+          this.updateTx({
+            ...this.txStatus,
+            revision: this.txStatus.revision + 1,
+            samplesEmitted: Math.min(this.txStatus.estimatedTotalSamples, this.txStatus.samplesEmitted + samples.length),
+          });
+          this.acceptTxPreviewAudio(sessionId, samples, sampleRate);
+        },
+      });
+    } catch (error) {
+      logger.warn('Failed to open SSTV audio playback', error);
+      return reject('IMAGE_TX_PLAYBACK_FAILED');
+    }
     const stationId = envelope.stationIdMode === 'none'
       ? { kind: 'none' as const }
       : envelope.stationIdMode === 'fsk'
@@ -398,7 +420,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     };
     if (interruptedReceiveCapture) this.sstvCaptureActive = false;
     this.updateTx({
-      phase: 'preparing', sessionId, requestId: command.requestId, operatorId: command.operatorId,
+      phase: 'preparing', target: command.expectedFrequency === null ? 'local' : 'radio', sessionId, requestId: command.requestId, operatorId: command.operatorId,
       artifactId: command.artifactId, mode: command.mode, revision: 0, samplesEmitted: 0,
       estimatedTotalSamples: encoder.progress.estimatedTotalSamples,
       encoderStage: encoder.progress.stage,
@@ -413,11 +435,11 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
   async cancelSstvTx(command: { operatorId: string; sessionId: string; expectedRevision: number }): Promise<boolean> {
     const active = this.activeTx;
     if (!active || active.sessionId !== command.sessionId || active.operatorId !== command.operatorId || active.revision !== command.expectedRevision) return false;
+    this.updateTx({ ...this.txStatus, phase: 'cancelled', revision: active.revision + 1 });
     await active.playback.abort('SSTV transmission cancelled');
     if (active.leaseId && this.physicalTx.getSnapshot().leaseId === active.leaseId) {
       await this.physicalTx.forceInterrupt('SSTV transmission cancelled');
     }
-    this.updateTx({ ...this.txStatus, phase: 'cancelled', revision: active.revision + 1 });
     return true;
   }
 
@@ -1043,6 +1065,11 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     let historyWrite: Promise<boolean> | undefined;
     let previewFinalized = false;
     let previewOutcome: 'completed' | 'interrupted' = 'interrupted';
+    const validateStart = () => {
+      if (this.txStatus.phase === 'cancelled') throw new Error('SSTV transmission cancelled');
+      const frequencyError = this.validateTxFrequency(command.expectedFrequency);
+      if (frequencyError) throw new Error(frequencyError);
+    };
     try {
       const primeSamples = Math.ceil(playback.sampleRate * 0.3);
       while (!encoder.isFinished && (playback.preparation === 'complete' || playback.queuedAudioMs * playback.sampleRate / 1000 < primeSamples)) {
@@ -1053,13 +1080,9 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
       leaseId = await this.physicalTx.acquireLease({
         source: 'sstv', operatorIds: [command.operatorId], reason: `SSTV ${command.mode}`,
         playbackKind: 'sstv', deferActiveUntilAudio: true,
+        assertPtt: command.expectedFrequency !== null,
         interrupt: () => playback.abort('physical SSTV lease interrupted'),
-        validateStart: () => {
-          if (this.txStatus.phase === 'cancelled') throw new Error('SSTV transmission cancelled');
-          if (Math.round(this.getFrequency()) !== Math.round(this.artifacts.get(command.artifactId)?.frequency ?? -1)) {
-            throw new Error('IMAGE_FREQUENCY_CHANGED');
-          }
-        },
+        validateStart,
       });
       if (this.activeTx?.sessionId !== sessionId) throw new Error('SSTV transmission superseded');
       this.activeTx.leaseId = leaseId;
@@ -1076,6 +1099,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
         );
       }
       await new Promise<void>((resolve) => setTimeout(resolve, 300));
+      validateStart();
       await playback.start();
       this.physicalTx.markStreamingLeaseActive(leaseId);
       const startedAt = Date.now();
@@ -1118,7 +1142,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
       this.updateTx({ ...this.txStatus, phase: 'draining', revision: this.txStatus.revision + 1 });
       await playback.end();
       const result = await this.physicalTx.releaseLease(leaseId, 'SSTV transmission completed');
-      if (!result.success || !result.physicalConfirmed) throw new Error(result.error ?? result.reason);
+      if (!result.success || (command.expectedFrequency !== null && !result.physicalConfirmed)) throw new Error(result.error ?? result.reason);
       if (historyId && await historyWrite) {
         await this.history.finishTransmit(historyId, 'completed').catch((error) => {
           logger.error('Failed to complete SSTV transmit history', { sessionId, error: error instanceof Error ? error.message : String(error) });
@@ -1135,7 +1159,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     } catch (error) {
       await playback.abort(error instanceof Error ? error.message : 'SSTV transmission failed');
       if (leaseId && this.physicalTx.getSnapshot().leaseId === leaseId) await this.physicalTx.forceInterrupt('SSTV transmission failed');
-      const errorCode = this.txStatus.phase === 'cancelled' ? 'IMAGE_TX_CANCELLED' : this.runtime.errorCode(error);
+      const errorCode = this.txStatus.phase === 'cancelled' ? 'IMAGE_TX_CANCELLED' : (error instanceof Error && /^IMAGE_[A-Z_]+$/.test(error.message) ? error.message : 'IMAGE_TX_PLAYBACK_FAILED');
       if (historyId && await historyWrite) {
         await this.history.finishTransmit(historyId, 'interrupted', errorCode).catch((historyError) => {
           logger.error('Failed to interrupt SSTV transmit history', { sessionId, error: historyError instanceof Error ? historyError.message : String(historyError) });

@@ -1107,7 +1107,7 @@ export const api = {
     return apiRequest('/image-radio/paper/save', { method: 'POST', body: JSON.stringify(command) }, apiBase);
   },
 
-  async uploadSstvArtifact(input: { file: Blob; operatorId: string; mode: string; frequency: number; radioMode?: string }, apiBase?: string): Promise<{ success: boolean; artifact: import('@tx5dr/contracts').ImageArtifact }> {
+  async uploadSstvArtifact(input: { file: Blob; operatorId: string; mode: string; frequency: number | null; radioMode?: string }, apiBase?: string): Promise<{ success: boolean; artifact: import('@tx5dr/contracts').ImageArtifact }> {
     const params = new URLSearchParams({ operatorId: input.operatorId, mode: input.mode, frequency: String(input.frequency) });
     if (input.radioMode) params.set('radioMode', input.radioMode);
     const form = new FormData();

@@ -109,6 +109,32 @@ The public UDP setting is deliberately append-only. A bad FRP endpoint should no
 
 ## SSTV Transmit Timing
 
+SSTV has two explicit destinations. `ImageRadioService` advertises
+`sstvTxTarget: local` only when the owning radio configuration is `type: none`
+and no virtual-radio profile is active. A disconnected configured radio remains
+`radio`; connection loss never enables local playback. Clients without the new
+status field conservatively retain radio behavior.
+
+`expectedFrequency: null` requests local playback; a positive frequency requests
+radio transmission. The upload endpoint accepts the literal query value `null`
+for local images. The service checks the destination against configuration before
+accepting a request, after output preparation, and immediately before playback.
+The uploaded artifact must have the same frequency as the command. Local images
+store `frequency: null` and no radio mode; existing positive-frequency records
+remain valid. History displays null as no RF frequency, and resending creates a
+new artifact for the current destination rather than reusing stale RF metadata.
+
+Both destinations use the same encoder, deterministic output, receive suspension,
+progress, cancellation, and history lifecycle. Local playback uses a serialized
+physical coordinator lease with `assertPtt: false`: it reserves output but never
+asserts or releases radio PTT. Advancing that streaming lease does not set
+`pttConfirmed`, and successful local completion does not require physical RF
+confirmation. Radio leases retain both connection and PTT confirmation guards.
+The existing `keying`/`on_air` phases remain shared preparation/playing protocol
+states; the TX status `target` distinguishes local audio from RF transmission.
+History begins only once output starts and completes only after output drain.
+
+
 `AudioStreamManager.openDeterministicPlayback` owns SSTV preparation and playback.
 TCI sessions declare complete preparation: `ImageRadioService` encodes the entire
 waveform before acquiring a physical TX lease, leaving progress at zero. At

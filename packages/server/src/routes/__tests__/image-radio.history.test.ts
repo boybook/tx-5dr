@@ -35,6 +35,8 @@ const mocks = vi.hoisted(() => ({
   saveBackground: vi.fn(),
   getTxPreferences: vi.fn(),
   saveTxPreferences: vi.fn(),
+  importSstv: vi.fn(),
+  txTarget: 'radio' as 'radio' | 'local',
 }));
 
 vi.mock('../../DigitalRadioEngine.js', () => ({
@@ -43,6 +45,7 @@ vi.mock('../../DigitalRadioEngine.js', () => ({
       getImageArtifactStore: () => ({
         get: (id: string) => artifacts.get(id) ?? null,
         linkQso: mocks.linkArtifactQso,
+        importNormalizedSstvPng: mocks.importSstv,
       }),
       getImageComposerBackgroundStore: () => ({ get: mocks.getBackground, save: mocks.saveBackground }),
       getImageHistoryStore: () => ({
@@ -54,15 +57,21 @@ vi.mock('../../DigitalRadioEngine.js', () => ({
       }),
       getImageTemplateStore: () => ({ referencesArtifact: () => false }),
       getSstvTxPreferenceStore: () => ({ get: mocks.getTxPreferences, save: mocks.saveTxPreferences }),
-      getImageRadioService: () => null,
+      getImageRadioService: () => ({ getSstvTxTarget: () => mocks.txTarget }),
     }),
   },
+}));
+
+vi.mock('../../image-radio/RasterwaveRuntime.js', () => ({
+  rasterwaveRuntime: { load: () => ({ sstvModes: () => [{ mode: 'robot36', width: 2, height: 2 }] }) },
 }));
 
 describe('image radio history authorization', () => {
   let app: ReturnType<typeof Fastify>;
 
   beforeEach(async () => {
+    mocks.txTarget = 'radio';
+    mocks.importSstv.mockReset().mockImplementation(async (input) => ({ artifact: { ...artifacts.get('tx-image'), frequency: input.frequency } }));
     mocks.list.mockReset().mockImplementation((options: { direction: string; txOperatorId?: string }) => ({
       records: options.direction === 'rx' ? [rxRecord] : options.txOperatorId === 'op-a' ? [txRecord, rxRecord] : [rxRecord],
     }));
@@ -170,6 +179,32 @@ describe('image radio history authorization', () => {
 
     expect(response.statusCode).toBe(200);
     expect(mocks.saveBackground).toHaveBeenCalledWith('op-a', expect.any(Buffer));
+  });
+
+  it.each([
+    ['local', 'null', 'op-a', 201],
+    ['radio', 'null', 'op-a', 409],
+    ['local', '14230000', 'op-a', 409],
+    ['radio', '14230000', 'op-a', 201],
+    ['local', 'null', 'op-b', 403],
+  ] as const)('validates upload destination and ownership: %s / %s / %s', async (target, frequency, operator, statusCode) => {
+    mocks.txTarget = target;
+    const boundary = 'sstv-unit-test';
+    const payload = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="sstv.png"\r\nContent-Type: image/png\r\n\r\n`),
+      PNG.sync.write(new PNG({ width: 2, height: 2 })),
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    const response = await app.inject({
+      method: 'POST', url: `/api/image-radio/artifacts/sstv?operatorId=${operator}&mode=robot36&frequency=${frequency}&radioMode=USB`,
+      headers: { 'x-role': UserRole.OPERATOR, 'content-type': `multipart/form-data; boundary=${boundary}` }, payload,
+    });
+    expect(response.statusCode).toBe(statusCode);
+    if (statusCode === 201) {
+      expect(mocks.importSstv).toHaveBeenCalledWith(expect.objectContaining({
+        frequency: frequency === 'null' ? null : Number(frequency), radioMode: target === 'local' ? undefined : 'USB',
+      }));
+    } else expect(mocks.importSstv).not.toHaveBeenCalled();
   });
 
   it('keeps SSTV transmit preferences scoped to the authorized operator', async () => {

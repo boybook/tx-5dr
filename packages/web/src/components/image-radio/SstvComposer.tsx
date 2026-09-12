@@ -722,13 +722,17 @@ export function SstvComposer() {
   };
 
   const send = () => {
-    if (!mode || !operatorId || !radio.currentRadioFrequency || !canvasRef.current) return;
+    if (!mode || !operatorId || !canvasRef.current) return;
+    if (!txStart.localPlayback && !radio.currentRadioFrequency) {
+      addToast({ title: t('txNotReady'), color: 'warning' });
+      return;
+    }
     if (stationIdBlocked) {
       addToast({ title: t('txCallsignRequired'), color: 'warning' });
       return;
     }
-    const expectedFrequency = radio.currentRadioFrequency;
-    const expectedRadioMode = radio.currentRadioMode ?? undefined;
+    const expectedFrequency = txStart.localPlayback ? null : radio.currentRadioFrequency;
+    const expectedRadioMode = txStart.localPlayback ? undefined : radio.currentRadioMode ?? undefined;
     txStart.start('composer', async () => {
       if (!connection.state.radioService || !connection.state.isReady) throw new Error('IMAGE_CONNECTION_UNAVAILABLE');
       setSelectedLayerId(null); draw(false);
@@ -839,7 +843,7 @@ export function SstvComposer() {
           <Button size="md" color="danger" className="order-last min-h-11 w-full md:order-none md:min-w-[13rem] md:flex-1" isLoading={txStart.starting && txStatus?.phase !== 'on_air'} isDisabled={!mode || !operatorId || txStart.isBusy || stationIdBlocked} onPress={send} startContent={<FontAwesomeIcon icon={faPaperPlane} />}>
             {t('sendImage')} · {durationSeconds}s
           </Button>
-          {txStatus?.phase === 'on_air' || txStatus?.phase === 'draining' ? <Button isIconOnly className="min-h-11 min-w-11" color="danger" variant="flat" onPress={() => operatorId && txStatus.sessionId && connection.state.radioService?.cancelSstvTx({ requestId: createClientId(), operatorId, sessionId: txStatus.sessionId, expectedRevision: txStatus.revision })} aria-label={t('stop')} title={t('stop')}><FontAwesomeIcon icon={faStop} /></Button> : null}
+          {txStart.txActive && txStatus?.sessionId ? <Button isIconOnly className="min-h-11 min-w-11" color="danger" variant="flat" onPress={() => operatorId && txStatus.sessionId && connection.state.radioService?.cancelSstvTx({ requestId: createClientId(), operatorId, sessionId: txStatus.sessionId, expectedRevision: txStatus.revision })} aria-label={t('stop')} title={t('stop')}><FontAwesomeIcon icon={faStop} /></Button> : null}
         </div>
         {txStart.starting ? <Progress size="sm" value={txProgress} aria-label={t('transmitting')} /> : null}
       </div>
