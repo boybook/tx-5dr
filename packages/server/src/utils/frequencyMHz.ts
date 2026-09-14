@@ -1,0 +1,1 @@
+../../../web/src/utils/frequencyMHz.ts
