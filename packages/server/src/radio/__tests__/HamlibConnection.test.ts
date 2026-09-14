@@ -8,6 +8,10 @@ import { defaultHamlibProfile } from '../connections/meter/profiles/index.js';
 import { RadioErrorCode } from '../../utils/errors/RadioError.js';
 
 type MockRig = {
+  getCtcssTone: ReturnType<typeof vi.fn>;
+  setCtcssTone: ReturnType<typeof vi.fn>;
+  getDcsCode: ReturnType<typeof vi.fn>;
+  setDcsCode: ReturnType<typeof vi.fn>;
   setFrequency: ReturnType<typeof vi.fn>;
   getSplit: ReturnType<typeof vi.fn>;
   setSplit: ReturnType<typeof vi.fn>;
@@ -99,6 +103,10 @@ function createConnectedConnection(rigOverrides: Partial<MockRig> = {}): {
 } {
   const connection = new HamlibConnection();
   const rig: MockRig = {
+    getCtcssTone: vi.fn().mockResolvedValue(885),
+    setCtcssTone: vi.fn().mockResolvedValue(undefined),
+    getDcsCode: vi.fn().mockResolvedValue(23),
+    setDcsCode: vi.fn().mockResolvedValue(undefined),
     setFrequency: vi.fn().mockResolvedValue(0),
     getSplit: vi.fn().mockResolvedValue({ enabled: false }),
     setSplit: vi.fn().mockResolvedValue(0),
@@ -148,6 +156,53 @@ function createConnectedConnection(rigOverrides: Partial<MockRig> = {}): {
 describe('HamlibConnection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  describe.each([
+    { name: 'TONE', read: 'getCtcssTone', write: 'setCtcssTone', value: 885 },
+    { name: 'CSQL', read: 'getDcsCode', write: 'setDcsCode', value: 23 },
+  ] as const)('$name tone control', ({ name, read, write, value }) => {
+    it('disables the function without sending a zero tone or code', async () => {
+      const { connection, rig } = createConnectedConnection();
+      asTestConnection(connection).supportedFunctions = new Set([name]);
+      await connection[write](0);
+      expect(rig.setFunction).toHaveBeenCalledWith(name, false);
+      expect(rig[write]).not.toHaveBeenCalled();
+    });
+
+    it('reports disabled even when the radio retains a configured value', async () => {
+      const { connection, rig } = createConnectedConnection();
+      asTestConnection(connection).supportedFunctions = new Set([name]);
+      await expect(connection[read]()).resolves.toBe(0);
+      expect(rig.getFunction).toHaveBeenCalledWith(name);
+      expect(rig[read]).not.toHaveBeenCalled();
+      rig.getFunction.mockResolvedValue(true);
+      await expect(connection[read]()).resolves.toBe(value);
+    });
+
+    it('finishes setting the value before enabling the function', async () => {
+      const { connection, rig } = createConnectedConnection();
+      asTestConnection(connection).supportedFunctions = new Set([name]);
+      const pending = createDeferred<void>();
+      rig[write].mockReturnValue(pending.promise);
+      const operation = connection[write](value);
+      await vi.waitFor(() => expect(rig[write]).toHaveBeenCalledWith(value));
+      expect(rig.setFunction).not.toHaveBeenCalled();
+      pending.resolve();
+      await operation;
+      expect(rig.setFunction).toHaveBeenCalledWith(name, true);
+    });
+
+    it('uses numeric values directly when the function is unavailable', async () => {
+      const { connection, rig } = createConnectedConnection();
+      await connection[write](0);
+      await connection[write](value);
+      await expect(connection[read]()).resolves.toBe(value);
+      expect(rig[write].mock.calls).toEqual([[0], [value]]);
+      expect(rig.setFunction).not.toHaveBeenCalled();
+      expect(rig.getFunction).not.toHaveBeenCalled();
+    });
+
   });
 
   it('exposes Yaesu FT-710 TX audio routing through model-specific EX CAT', async () => {
