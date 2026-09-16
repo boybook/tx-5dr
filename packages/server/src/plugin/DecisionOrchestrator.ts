@@ -78,7 +78,6 @@ function getScoredCandidateScore(message: ParsedFT8Message | undefined): number 
 export class DecisionOrchestrator {
   private decisionStates = new Map<string, OperatorDecisionState>();
   private silentDirectedCallGates = new Map<string, SilentDirectedCallGate>();
-  private qsoCompletionTails = new Map<string, Promise<void>>();
 
   constructor(private deps: DecisionOrchestratorDeps) {}
 
@@ -1016,20 +1015,17 @@ export class DecisionOrchestrator {
     effects: import('@tx5dr/plugin-api').StrategyQSOCompletionEffect[],
     sourcePluginName?: string,
   ): void {
-    const previous = this.qsoCompletionTails.get(operatorId) ?? Promise.resolve();
-    let tail = previous;
     for (const effect of effects) {
-      tail = tail.then(() => this.commitQSOCompletionEffect(
+      void this.commitQSOCompletionEffect(
         operatorId,
         runtimeGeneration,
         effect,
         sourcePluginName,
-      ));
+      ).catch((error) => {
+        logger.error('Invalid QSO completion effect', { operatorId, error: String(error) });
+        this.deps.requestOperatorStrategyStop?.(operatorId, 'invalid QSO completion effect');
+      });
     }
-    this.qsoCompletionTails.set(operatorId, tail);
-    void tail.finally(() => {
-      if (this.qsoCompletionTails.get(operatorId) === tail) this.qsoCompletionTails.delete(operatorId);
-    });
   }
 
   private async applyStrategyLogbookSessionEffects(
@@ -1057,22 +1053,32 @@ export class DecisionOrchestrator {
       ? `:stream:${encodeURIComponent(effect.streamId)}`
       : '';
     const qsoLifecycleId = `${operatorId}:runtime:${runtimeGeneration}${streamSegment}:qso:${lifecycleEpoch}:${qsoRecord.id}`;
-    await new Promise<import('@tx5dr/contracts').QSORecord>((resolve, reject) => {
-      this.deps.eventEmitter.emit('recordQSO', {
-        operatorId,
-        streamId: effect.streamId,
-        qsoLifecycleId,
-        qsoLifecycleEpoch: lifecycleEpoch,
-        qsoRuntimeGeneration: runtimeGeneration,
-        qsoRecord,
-        persistencePolicy: effect.persistencePolicy,
-        destination: effect.destination,
-        sourcePluginName,
-        metadata: effect.metadata ? snapshotPluginData(effect.metadata, 'structured') : undefined,
-        resolve,
-        reject,
-      });
-    }).then((persistedRecord) => {
+    const request = {
+      operatorId,
+      streamId: effect.streamId,
+      qsoLifecycleId,
+      qsoLifecycleEpoch: lifecycleEpoch,
+      qsoRuntimeGeneration: runtimeGeneration,
+      qsoRecord,
+      persistencePolicy: effect.persistencePolicy,
+      destination: effect.destination,
+      sourcePluginName,
+      metadata: effect.metadata ? snapshotPluginData(effect.metadata, 'structured') : undefined,
+    };
+    let write: Promise<import('@tx5dr/contracts').QSORecord>;
+    try {
+      // Register accepted work before yielding; shutdown must see it even if
+      // preparation has not reached the provider's mutation queue yet.
+      write = this.deps.submitQsoCompletion ? this.deps.submitQsoCompletion(request)
+        : new Promise<import('@tx5dr/contracts').QSORecord>((resolve, reject) => {
+          if (!this.deps.eventEmitter.emit('recordQSO', { ...request, resolve, reject })) {
+            reject(new Error('QSO completion writer is unavailable'));
+          }
+        });
+    } catch (error) {
+      write = Promise.reject(error);
+    }
+    await write.then((persistedRecord) => {
       this.settleStrategyQSOCompletion(
         operatorId,
         runtimeGeneration,
@@ -1083,7 +1089,7 @@ export class DecisionOrchestrator {
         persistedRecord.id,
         effect.metadata,
       );
-    }).catch((error) => {
+    }, (error) => {
       this.settleStrategyQSOCompletion(
         operatorId,
         runtimeGeneration,
@@ -1099,6 +1105,9 @@ export class DecisionOrchestrator {
         qsoLifecycleId,
         error: error instanceof Error ? error.message : String(error),
       });
+    }).catch((error) => {
+      // A delivery error cannot revoke an already durable logbook commit.
+      logger.error('QSO completion result delivery failed', { operatorId, error: String(error) });
     });
   }
 
@@ -1112,6 +1121,13 @@ export class DecisionOrchestrator {
     persistedRecordId?: string,
     metadata?: Record<string, unknown>,
   ): void {
+    if (this.deps.settleQsoCompletion) {
+      this.deps.settleQsoCompletion(operatorId, runtimeGeneration, {
+        lifecycleEpoch, recordId, status, streamId, persistedRecordId,
+        ...(metadata ? { metadata: snapshotPluginData(metadata, 'structured') } : {}),
+      });
+      return;
+    }
     if (this.deps.getStrategyRuntimeGeneration(operatorId) !== runtimeGeneration) {
       logger.debug('Skipped QSO settlement for a replaced strategy runtime', {
         operatorId,
@@ -1478,7 +1494,7 @@ export class DecisionOrchestrator {
     };
     const executionPlan = await this.resolveAutoCallExecutionPlan(operatorId, request);
     await this.applyAutoCallExecutionPlan(operatorId, request, executionPlan, token);
-    this.deps.requestCall(operatorId, request.callsign, request.lastMessage, { commandToken: token });
+    await this.deps.requestCall(operatorId, request.callsign, request.lastMessage, { commandToken: token });
   }
 
   private isAutoCallProposalEligible(

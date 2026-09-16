@@ -954,6 +954,33 @@ describe('RadioOperatorManager automatic QSO logging', () => {
     vi.restoreAllMocks();
   });
 
+  it('does not pause a replacement strategy before it publishes its first lifecycle', async () => {
+    let rejectWrite!: (error: Error) => void;
+    const provider = {
+      addQSO: vi.fn(() => new Promise<QSORecord>((_resolve, reject) => { rejectWrite = reject; })),
+      updateQSO: vi.fn(), getLastQSOWithCallsign: vi.fn(async () => null), getStatistics: vi.fn(),
+    };
+    const { manager, eventEmitter } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider }, callsign: 'W1AAA',
+    });
+    const operator = await addBasicOperator(manager, 'op1', 'W1AAA');
+    attachQSOHookSpy(manager);
+    let selectedGeneration = 10;
+    (manager as any)._pluginManager.getSelectedStrategyGeneration = () => selectedGeneration;
+    eventEmitter.emit('qsoLifecycleChanged', { operatorId: 'op1', lifecycleEpoch: 1, runtimeGeneration: 10 });
+    const writing = invokeRecordQSO(manager, {
+      operatorId: 'op1', qsoLifecycleEpoch: 1, qsoRuntimeGeneration: 10, qsoRecord: automaticQSO('old-instance'),
+    });
+    await vi.waitFor(() => expect(provider.addQSO).toHaveBeenCalledOnce());
+    selectedGeneration = 20;
+    operator.start();
+    rejectWrite(new Error('old writer failed'));
+    await writing;
+    expect(operator.isTransmitting).toBe(true);
+    expect(operator.isLogbookPersistenceBlocked).toBe(false);
+    expect(manager.listUnsavedQsos('log-1')).toHaveLength(1);
+  });
+
   it('writes a plugin-session completion only to its owned session and skips auto-sync', async () => {
     const primaryAdd = vi.fn(async (record: QSORecord) => record);
     const sessionAdd = vi.fn(async (record: QSORecord) => record);
@@ -1034,7 +1061,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
     expect(manager.listUnsavedQsos('missing-session')).toHaveLength(1);
   });
 
-  it('retries an identical failed session effect from its retained QSO candidate', async () => {
+  it('requires explicit retry of a failed session effect and retains its original candidate', async () => {
     const primaryAdd = vi.fn(async (record: QSORecord) => record);
     const sessionAdd = vi.fn()
       .mockRejectedValueOnce(new Error('disk full'))
@@ -1066,6 +1093,9 @@ describe('RadioOperatorManager automatic QSO logging', () => {
     await invokeRecordQSO(manager, payload);
     expect(manager.listUnsavedQsos(sessionLogBook.id)).toHaveLength(1);
     await invokeRecordQSO(manager, payload);
+    expect(sessionAdd).toHaveBeenCalledTimes(1);
+    const attempt = manager.listUnsavedQsos(sessionLogBook.id)[0]!;
+    await manager.retryUnsavedQso(sessionLogBook.id, attempt.attemptId);
 
     expect(sessionAdd).toHaveBeenCalledTimes(2);
     expect(primaryAdd).not.toHaveBeenCalled();
@@ -1367,7 +1397,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
       callsign: 'BG5DRB',
     });
     const operator = await addBasicOperator(manager, 'op1', 'BG5DRB');
-    const recordQSOLog = vi.spyOn(operator, 'recordQSOLog');
+    const writeQso = vi.spyOn(manager as any, 'writeCompletedQso');
     attachQSOHookSpy(manager);
     const metadata = {
       authorizationId: 'auth-1',
@@ -1429,11 +1459,9 @@ describe('RadioOperatorManager automatic QSO logging', () => {
     expect(provider.getLastQSOWithCallsign).not.toHaveBeenCalled();
     expect(provider.addQSO).not.toHaveBeenCalled();
     expect(provider.updateQSO).not.toHaveBeenCalled();
-    expect(recordQSOLog).toHaveBeenCalledWith(
-      expect.objectContaining({
-        contestEntry: expect.objectContaining({ received: { grid: 'FN31' } }),
-      }),
-      expect.objectContaining({
+    expect(writeQso).toHaveBeenLastCalledWith(expect.objectContaining({
+      request: expect.objectContaining({
+        qsoRecord: expect.objectContaining({ contestEntry: expect.objectContaining({ received: { grid: 'FN31' } }) }),
         destination: { kind: 'plugin-session', sessionId: 'plugin-session-test' },
         sourcePluginName: 'ww-digi',
         metadata: {
@@ -1441,7 +1469,7 @@ describe('RadioOperatorManager automatic QSO logging', () => {
           evidence: { finalAcknowledgement: 'RR73', source: 'physical-tx' },
         },
       }),
-    );
+    }));
     expect(applyQsoBatch).toHaveBeenNthCalledWith(
       2,
       [expect.objectContaining({
@@ -1859,15 +1887,17 @@ describe('RadioOperatorManager automatic QSO logging', () => {
 
     eventEmitter.emit('qsoLifecycleChanged' as any, { operatorId: 'op1', lifecycleEpoch: 2 });
     operator.blockForLogbookFailure();
-    const currentAttemptId = (manager as any).rememberUnsavedQso(
-      'op1',
-      'log-1',
-      automaticQSO('current-record', 'JA1AAA'),
-      'op1:qso:2:current-record',
-      2,
-    );
+    provider.addQSO.mockImplementationOnce(async () => {
+      expect(operator.isLogbookPersistenceBlocked).toBe(true);
+      throw new Error('current lifecycle write failed');
+    });
+    const currentWrite = invokeRecordQSO(manager, {
+      operatorId: 'op1', qsoRecord: automaticQSO('current-record', 'JA1AAA'),
+      qsoLifecycleId: 'op1:qso:2:current-record', qsoLifecycleEpoch: 2,
+    });
     resolveWrite({ ...automaticQSO('persisted-old'), id: 'persisted-old' });
-    await oldWrite;
+    await Promise.all([oldWrite, currentWrite]);
+    const currentAttemptId = manager.listUnsavedQsos('log-1')[0]!.attemptId;
 
     expect(operator.isLogbookPersistenceBlocked).toBe(true);
     expect(manager.listUnsavedQsos('log-1')).toEqual([

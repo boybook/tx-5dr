@@ -73,6 +73,17 @@ export class LogManager {
   private legacyMaintenance?: LegacyLogbookMaintenance;
   private initializationPromise?: Promise<void>;
   private isInitialized: boolean = false;
+  private readonly deletionGuards = new Set<(logBookId: string) => void>();
+  private readonly closingLogbooks = new Set<string>();
+
+  assertLogbookAccepting(logBookId: string): void {
+    if (this.closingLogbooks.has(logBookId)) throw new Error('Logbook is being removed');
+  }
+
+  registerDeletionGuard(guard: (logBookId: string) => void): () => void {
+    this.deletionGuards.add(guard);
+    return () => { this.deletionGuards.delete(guard); };
+  }
   // 已移除默认日志本概念，只有基于呼号的日志本
   
   private constructor() {}
@@ -249,6 +260,7 @@ export class LogManager {
    * 删除日志本
    */
   async deleteLogBook(logBookId: string): Promise<void> {
+    for (const guard of this.deletionGuards) guard(logBookId);
     const logBook = this.logBooks.get(logBookId);
     if (!logBook) {
       throw new Error(`logbook ${logBookId} not found`);
@@ -266,19 +278,25 @@ export class LogManager {
     // A book becomes visible while its worker is still opening it. Do not close
     // the provider underneath that initialization and leave an opened store
     // detached from the manager.
-    await Promise.allSettled([
-      this.initializationById.get(logBookId) ?? Promise.resolve(),
-    ]);
+    this.closingLogbooks.add(logBookId);
+    try {
+      await Promise.allSettled([
+        this.initializationById.get(logBookId) ?? Promise.resolve(),
+      ]);
 
-    await logBook.provider.close();
-    for (const unsubscribe of this.providerSubscriptions.get(logBookId) ?? []) {
-      unsubscribe();
+      for (const guard of this.deletionGuards) guard(logBookId);
+
+      await logBook.provider.close();
+      for (const unsubscribe of this.providerSubscriptions.get(logBookId) ?? []) {
+        unsubscribe();
+      }
+      this.providerSubscriptions.delete(logBookId);
+      this.initializationById.delete(logBookId);
+      this.logBooks.delete(logBookId);
+      logger.info(`Logbook deleted: ${logBook.name}`);
+    } finally {
+      this.closingLogbooks.delete(logBookId);
     }
-    this.providerSubscriptions.delete(logBookId);
-    this.initializationById.delete(logBookId);
-    this.logBooks.delete(logBookId);
-    
-    logger.info(`Logbook deleted: ${logBook.name}`);
   }
   
   /**
@@ -458,8 +476,8 @@ export class LogManager {
       logBook.binding.sessionKey,
       'runtime',
     ].join('\0');
-    this.pluginSessionLogBookMap.delete(identity);
     await this.deleteLogBook(logBook.id);
+    this.pluginSessionLogBookMap.delete(identity);
     await rm(logBook.ephemeralRoot, { recursive: true, force: true });
   }
 

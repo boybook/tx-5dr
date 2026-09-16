@@ -304,10 +304,12 @@ function startLogMaintenanceTasks(consoleLogger: ConsoleLogger): void {
       const engineStopStartedAt = Date.now();
       let engineStopMs = 0;
       let fastShutdownFallback = false;
+      let persistenceFailed = false;
 
       logger.info(`received ${signal} signal, shutting down server`);
       markProcessShuttingDown();
       blockNewMutations();
+      DigitalRadioEngine.getInstance().operatorManager.qsoCompletions.stopAccepting();
       PersistenceCoordinator.getInstance().blockNewMutations();
 
       await TelemetryService.getInstance().shutdown().catch((error) => {
@@ -356,11 +358,13 @@ function startLogMaintenanceTasks(consoleLogger: ConsoleLogger): void {
         const engine = DigitalRadioEngine.getInstance();
         await awaitWithShutdownDeadline(
           'logbook close',
-          engine.operatorManager.getLogManager().close(),
+          engine.operatorManager.qsoCompletions.drain(remainingShutdownBudgetMs(shutdownStartedAt))
+            .then(() => engine.operatorManager.getLogManager().close()),
           remainingShutdownBudgetMs(shutdownStartedAt),
         );
         logger.info('logbook providers flushed');
       } catch (error) {
+        persistenceFailed = true;
         logger.warn('logbook flush during shutdown failed', { error });
       }
 
@@ -370,9 +374,11 @@ function startLogMaintenanceTasks(consoleLogger: ConsoleLogger): void {
           reason: `signal:${signal}`,
         });
         if (!result.ok) {
+          persistenceFailed = true;
           logger.warn('persistence flush completed with errors', { errors: result.errors });
         }
       } catch (error) {
+        persistenceFailed = true;
         logger.warn('persistence flush during shutdown failed', { error });
       }
 
@@ -387,9 +393,10 @@ function startLogMaintenanceTasks(consoleLogger: ConsoleLogger): void {
         signal,
         engineStopMs,
         fastShutdownFallback,
+        persistenceFailed,
         totalMs: Date.now() - shutdownStartedAt,
       });
-      process.exit(0);
+      process.exit(persistenceFailed ? 1 : 0);
     })();
 
     return shutdownPromise;

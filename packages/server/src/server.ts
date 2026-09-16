@@ -622,6 +622,7 @@ export async function createServer() {
 
     markProcessShuttingDown();
     blockNewMutations();
+    digitalRadioEngine.operatorManager.qsoCompletions.stopAccepting();
     PersistenceCoordinator.getInstance().blockNewMutations();
 
     try {
@@ -642,6 +643,9 @@ export async function createServer() {
 
     let logbookCloseError: string | undefined;
     try {
+      await digitalRadioEngine.operatorManager.qsoCompletions.drain(
+        remainingDeadlineMs(startedAt, INTERNAL_PREPARE_SHUTDOWN_DEADLINE_MS),
+      );
       await awaitWithShutdownDeadline(
         'logbook close',
         digitalRadioEngine.operatorManager.getLogManager().close(),

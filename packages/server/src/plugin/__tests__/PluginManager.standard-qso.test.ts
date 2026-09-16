@@ -10,6 +10,7 @@ import type { ScoredCandidate } from '@tx5dr/plugin-api';
 import { STANDARD_QSO_TX6_MESSAGE_OVERRIDE_SETTING } from '@tx5dr/builtin-plugins';
 import { PluginManager } from '../PluginManager.js';
 import { LogManager } from '../../log/LogManager.js';
+import { ConfigManager } from '../../config/config-manager.js';
 import { TargetReservationCoordinator } from '../../transmission/TargetReservationCoordinator.js';
 
 type RecordQSORequest = Parameters<DigitalRadioEngineEvents['recordQSO']>[0];
@@ -134,7 +135,8 @@ describe('PluginManager standard-qso late re-decision', () => {
   });
 
   async function createRuntimeHarness(options?: {
-    strategy?: 'standard-qso' | 'assisted-qso-queue';
+    strategy?: string;
+    preparePlugins?: (dataDir: string) => Promise<void>;
     myCallsign?: string;
     myGrid?: string;
     targetCallsign?: string;
@@ -202,6 +204,7 @@ describe('PluginManager standard-qso late re-decision', () => {
 
     const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-test-'));
     tempDirs.push(dataDir);
+    await options?.preparePlugins?.(dataDir);
     const interruptOperatorTransmission = options?.interruptOperatorTransmission
       ?? (async () => undefined);
     const requestOperatorStrategyStop = vi.fn();
@@ -474,6 +477,130 @@ describe('PluginManager standard-qso late re-decision', () => {
   function getCurrentTransmission(pluginManager: PluginManager, operatorId: string): string | null {
     return pluginManager.getCurrentTransmission(operatorId);
   }
+
+  describe('completion fact delivery', () => {
+    async function pendingContact(pausable = false) {
+      let pending: RecordQSORequest | undefined;
+      const harness = await createRuntimeHarness({
+        strategy: pausable ? 'completion-fixture' : 'standard-qso',
+        preparePlugins: pausable ? async dataDir => writeUserPlugin(dataDir, 'completion-fixture', `
+          export default {
+            apiVersion: 2, name: 'completion-fixture', version: '1.0.0', type: 'strategy',
+            permissions: ['operator:transmit-control'], isAutoCallEnabled: () => true,
+            createStrategyRuntime() {
+              let state = { waiting: false, emitted: false, target: 'K1BBB', slot: 'TX4' };
+              const snapshot = () => ({ currentState: state.slot, context: { targetCallsign: state.target }, qsoLifecycleEpoch: 1 });
+              return {
+                checkpoint: () => ({ ...state }), restore: checkpoint => { state = { ...checkpoint }; },
+                async decide() {
+                  const first = !state.emitted;
+                  state.waiting = true; state.emitted = true;
+                  return { snapshot: snapshot(), transmission: 'K1BBB W1AAA RR73',
+                    qsoCompletion: first ? { lifecycleEpoch: 1, record: {
+                      id: 'fixture-qso', callsign: 'K1BBB', myCallsign: 'W1AAA',
+                      frequency: 14074000, mode: 'FT8', startTime: 1000, messageHistory: [],
+                    } } : undefined };
+                },
+                getSnapshot: snapshot, getTransmitText: () => 'K1BBB W1AAA RR73',
+                requestCall: target => { if (state.waiting) return false; state.target = target; return true; },
+                patchContext: patch => { if (patch.targetCallsign) state.target = patch.targetCallsign; },
+                setState: slot => { state.slot = slot; }, setSlotContent() {}, reset() {},
+                settleQSOCompletion: () => { state.waiting = false; },
+                hasUnsettledQSOCompletion: () => state.waiting,
+              };
+            },
+          };
+        `) : undefined,
+        myCallsign: 'W1AAA', targetCallsign: 'K1BBB',
+        recordQSOHandler: request => { pending = request; },
+      });
+      setRuntimeState(harness.pluginManager, harness.operator.config.id, 'TX2');
+      await (harness.pluginManager as any).handleSlotStart(createSlotInfo(60_000), createSlotPack(createSlotInfo(45_000), [{
+        message: 'W1AAA K1BBB R-08', snr: -10, freq: 1500,
+      }]));
+      expect(pending).toBeDefined();
+      const read = () => (harness.pluginManager as any).invokeStrategyRuntimeSync(
+        harness.operator.config.id, 'test:unsettled', (runtime: any) => runtime.hasUnsettledQSOCompletion(),
+      );
+      return { ...harness, pending: pending!, read };
+    }
+
+    it('delivers persistence after a cancelled transaction restores its checkpoint without restarting TX', async () => {
+      const { pluginManager, operator, pending, read } = await pendingContact();
+      const intents = (pluginManager as any).intentCoordinator;
+      let finish!: () => void;
+      const gate = new Promise<void>(resolve => { finish = resolve; });
+      const transaction = intents.submit(operator.config.id, 'slot-auto', async () => {
+        const checkpoint = (pluginManager as any).invokeStrategyRuntimeSync(operator.config.id, 'test:checkpoint', (runtime: any) => runtime.checkpoint());
+        await gate;
+        (pluginManager as any).invokeStrategyRuntimeSync(operator.config.id, 'test:restore', (runtime: any) => runtime.restore(checkpoint));
+      });
+      pending.resolve?.(pending.qsoRecord);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(read()).toBe(true);
+      operator.stop();
+      intents.abortOperator(operator.config.id, 'manual stop');
+      finish();
+      await transaction;
+      expect(read()).toBe(false);
+      expect(operator.isTransmitting).toBe(false);
+      await expect(pluginManager.requestCall(operator.config.id, 'K2CCC')).resolves.toEqual({ outcome: 'accepted' });
+    });
+
+    it('retains a result through a real plugin pause and applies it before resumed commands', async () => {
+      const { pluginManager, operator, pending, read } = await pendingContact(true);
+      vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({ setOperatorPluginPauses: vi.fn(async () => {}) } as any);
+      await pluginManager.setOperatorPluginPaused(operator.config.id, 'completion-fixture', true);
+      operator.stop();
+      pending.resolve?.(pending.qsoRecord);
+      await Promise.resolve();
+      await Promise.resolve();
+      await pluginManager.setOperatorPluginPaused(operator.config.id, 'completion-fixture', false);
+      expect(read()).toBe(false);
+      expect(operator.isTransmitting).toBe(false);
+      await expect(pluginManager.requestCall(operator.config.id, 'K2CCC')).resolves.toEqual({ outcome: 'accepted' });
+    });
+
+    it('does not apply an old physical receipt to another lifecycle with the same stream', async () => {
+      const { pluginManager, operator, pending } = await pendingContact();
+      const origin = pluginManager.getStrategyFactOrigin(operator.config.id)!;
+      pending.resolve?.(pending.qsoRecord);
+      await vi.waitFor(async () => {
+        expect(await pluginManager.requestCall(operator.config.id, 'K2CCC')).toEqual({ outcome: 'accepted' });
+      });
+      const runtime = (pluginManager as any).getStrategyRuntime(operator.config.id);
+      const notify = vi.spyOn(runtime, 'onTransmissionQueued');
+      pluginManager.notifyTransmissionsCompleted(operator.config.id, [{
+        streamId: 'default', text: 'K1BBB W1AAA 73', audioFrequencyHz: 1500,
+        frameId: 'old-frame', revision: 1, physicalConfirmed: true,
+      }], new Map([['default', origin]]));
+      expect(notify).not.toHaveBeenCalled();
+    });
+
+    it('reports a rejected call without starting the operator or hiding it as completed', async () => {
+      const { pluginManager, operator } = await pendingContact();
+      operator.stop();
+      await expect(pluginManager.requestCall(operator.config.id, 'K2CCC')).resolves.toMatchObject({ outcome: 'rejected' });
+      expect(operator.isTransmitting).toBe(false);
+    });
+
+    it('preserves the atomic receipt batch for multiple streams in one physical frame', async () => {
+      const { pluginManager, operator } = await createRuntimeHarness();
+      const origin = pluginManager.getStrategyFactOrigin(operator.config.id)!;
+      const runtime = (pluginManager as any).getStrategyRuntime(operator.config.id);
+      runtime.onTransmissionsCompleted = vi.fn();
+      const receipts = ['one', 'two'].map(streamId => ({
+        streamId, text: 'K1BBB W1AAA 73', audioFrequencyHz: 1500,
+        frameId: 'mixed-frame', revision: 1, physicalConfirmed: true as const,
+      }));
+      pluginManager.notifyTransmissionsCompleted(operator.config.id, receipts, new Map(
+        receipts.map(receipt => [receipt.streamId, { ...origin, streamId: receipt.streamId }]),
+      ));
+      expect(runtime.onTransmissionsCompleted).toHaveBeenCalledTimes(1);
+      expect(runtime.onTransmissionsCompleted).toHaveBeenCalledWith(receipts);
+    });
+  });
 
   describe('assisted QSO queue integration', () => {
     it('observes the slot that produced decoded messages at the next slot boundary', async () => {

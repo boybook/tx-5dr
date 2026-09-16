@@ -421,6 +421,20 @@
     }
   },
   "operator": {
+    "qsoPersistence": {
+      "saving": "Saving contact records ({{count}})",
+      "slow": "Saving contact records is taking longer than usual",
+      "failed": "Contact not saved. Retry from the logbook.",
+      "uncertain": "Contact write status is uncertain. Open logbook recovery."
+    },
+    "callRejection": {
+      "saving": "The previous contact is still being saved. Try the call again shortly.",
+      "failed": "Resolve the unsaved contacts in the logbook before calling.",
+      "uncertain": "The contact write status is uncertain. Check logbook recovery first.",
+      "invalid_target": "Choose a valid callsign to call.",
+      "unavailable": "The current contact strategy is unavailable. Check the operator status.",
+      "strategy_rejected": "The current contact state cannot accept a new call."
+    },
     "viewLog": "View Log",
     "log": "Log",
     "toggleTx": "Toggle transmit",

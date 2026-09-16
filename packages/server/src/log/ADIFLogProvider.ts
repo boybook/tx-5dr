@@ -300,7 +300,7 @@ export class ADIFLogProvider implements ILogProvider {
     let attemptedRecord = cloneRecord(record);
     return this.executeWrite('append', () => attemptedRecord, operatorId, async () => {
       this.assertWritable();
-      PersistenceCoordinator.getInstance().assertMutationsAllowed('logbook:add');
+      PersistenceCoordinator.getInstance().assertMutationsAllowed('logbook:add', this.options.logBookId);
       return this.enqueue(async () => {
         this.assertWritable();
         const requestedId = record.id?.trim();
@@ -324,7 +324,7 @@ export class ADIFLogProvider implements ILogProvider {
     let attemptedRecord: QSORecord | undefined;
     return this.executeWrite('rewrite', () => attemptedRecord, operatorId, async () => {
       this.assertWritable();
-      PersistenceCoordinator.getInstance().assertMutationsAllowed('logbook:update');
+      PersistenceCoordinator.getInstance().assertMutationsAllowed('logbook:update', this.options.logBookId);
       return this.enqueue(async () => {
         this.assertWritable();
         const existing = this.records.get(id);
@@ -491,7 +491,7 @@ export class ADIFLogProvider implements ILogProvider {
         ];
 
         if (operations.length > 0) {
-          PersistenceCoordinator.getInstance().assertMutationsAllowed('logbook:batch');
+          PersistenceCoordinator.getInstance().assertMutationsAllowed('logbook:batch', this.options.logBookId);
           const mutation = changedExistingIds.length > 0
             ? this.document!.prepareRewrite(operations)
             : this.document!.prepareImport(operations);

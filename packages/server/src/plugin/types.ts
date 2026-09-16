@@ -103,10 +103,16 @@ export interface TransmissionRefreshOptions {
   decisionEpoch?: number;
 }
 
+export type OperatorCallResult =
+  | { outcome: 'accepted' | 'superseded' }
+  | { outcome: 'rejected'; reason: 'saving' | 'failed' | 'uncertain' | 'invalid_target' | 'unavailable' | 'strategy_rejected' };
+
 /**
  * DecisionOrchestrator 所需依赖
  */
 export interface DecisionOrchestratorDeps {
+  submitQsoCompletion?: (request: Omit<import('../log/QsoCompletionService.js').QsoCompletionRequest, 'logBookId'>) => Promise<import('@tx5dr/contracts').QSORecord>;
+  settleQsoCompletion?: (operatorId: string, generation: number, settlement: import('@tx5dr/plugin-api').StrategyQSOCompletionSettlement) => void;
   getOperators: () => import('@tx5dr/core').RadioOperator[];
   getOperatorById: (id: string) => import('@tx5dr/core').RadioOperator | undefined;
   /**
@@ -174,7 +180,7 @@ export interface DecisionOrchestratorDeps {
     callsign: string,
     lastMessage?: { message: import('@tx5dr/contracts').FrameMessage; slotInfo: import('@tx5dr/contracts').SlotInfo },
     options?: { commandToken?: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken },
-  ) => void;
+  ) => void | Promise<OperatorCallResult>;
   notifyQSOFail: (
     operatorId: string,
     info: import('@tx5dr/plugin-api').QSOFailureInfo,
@@ -188,6 +194,9 @@ export interface DecisionOrchestratorDeps {
  * PluginManager 所需依赖
  */
 export interface PluginManagerDeps {
+  getQsoPersistenceStatus?: (operatorId: string) => import('@tx5dr/contracts').QsoPersistenceStatus;
+  submitQsoCompletion?: DecisionOrchestratorDeps['submitQsoCompletion'];
+  retireQsoCompletions?: (operatorId: string, generation?: number) => void;
   eventEmitter: import('eventemitter3').EventEmitter<import('@tx5dr/contracts').DigitalRadioEngineEvents>;
   getOperators: () => import('@tx5dr/core').RadioOperator[];
   getOperatorById: (id: string) => import('@tx5dr/core').RadioOperator | undefined;

@@ -9,6 +9,13 @@ export type TransmissionIntentSource =
 
 export const DEFAULT_STREAM_ID = 'default';
 
+/** Host-only recipient captured with a transmission, never inferred at completion. */
+export interface StrategyFactOrigin {
+  generation: number;
+  streamId: string;
+  lifecycleEpoch?: number;
+}
+
 export function normalizeStreamId(streamId?: string): string {
   const normalized = streamId?.trim();
   return normalized || DEFAULT_STREAM_ID;
@@ -19,6 +26,7 @@ export function buildTrackId(operatorId: string, streamId?: string): string {
 }
 
 export interface TransmissionIntent {
+  strategyOrigin?: StrategyFactOrigin;
   operatorId?: string;
   streamId: string;
   trackId: string;

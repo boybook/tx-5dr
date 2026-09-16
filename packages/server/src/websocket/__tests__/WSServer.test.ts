@@ -45,6 +45,28 @@ function createSlotPack(index: number, frames = true): SlotPack {
 }
 
 describe('WSServer meter projection', () => {
+  it('awaits a rejected call and sends its localized reason only to its originating connection', async () => {
+    let finish!: (result: { outcome: 'rejected'; reason: 'saving' }) => void;
+    const server = Object.create(WSServer.prototype) as any;
+    server.digitalRadioEngine = {
+      operatorManager: { getOperator: () => ({}), emitOperatorStatusUpdate: vi.fn() },
+      pluginManager: { requestCall: vi.fn(() => new Promise(resolve => { finish = resolve; })) },
+      getStatus: () => ({ currentMode: { name: 'FT8', slotMs: 15000 } }),
+      getSlotPackManager: () => ({ getLastMessageFromCallsign: () => undefined }),
+    };
+    server.logOperatorCommand = vi.fn();
+    server.sendToConnection = vi.fn();
+    server.broadcast = vi.fn();
+    const command = server.handleOperatorRequestCall({ operatorId: 'operator-1', callsign: 'K1BBB' }, 'connection-1');
+    expect(server.sendToConnection).not.toHaveBeenCalled();
+    finish({ outcome: 'rejected', reason: 'saving' });
+    await command;
+    expect(server.sendToConnection).toHaveBeenCalledWith('connection-1', WSMessageType.ERROR, expect.objectContaining({
+      code: 'OPERATOR_CALL_REJECTED', userMessageKey: 'radio:operator.callRejection.saving',
+    }));
+    expect(server.broadcast).not.toHaveBeenCalled();
+  });
+
   it('broadcasts one WebSocket meter message for one engine event', () => {
     const engine = Object.assign(new EventEmitter(), {
       getNtpCalibrationService: () => new EventEmitter(),

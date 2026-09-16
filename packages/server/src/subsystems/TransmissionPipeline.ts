@@ -871,7 +871,11 @@ export class TransmissionPipeline {
           notifyPhysicalTransmissionsComplete?: RadioOperatorManager['notifyPhysicalTransmissionsComplete'];
         };
         if (typeof manager.notifyPhysicalTransmissionsComplete === 'function') {
-          manager.notifyPhysicalTransmissionsComplete(operatorId, receipts);
+          const origins = new Map(intents.flatMap(intent => (
+            intent.operatorId === operatorId && intent.strategyOrigin
+              ? [[intent.streamId ?? 'default', intent.strategyOrigin] as const] : []
+          )));
+          manager.notifyPhysicalTransmissionsComplete(operatorId, receipts, origins);
         } else {
           for (const receipt of receipts) manager.notifyPhysicalTransmissionComplete(operatorId, receipt.text);
         }

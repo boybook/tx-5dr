@@ -9,6 +9,7 @@ import type {
 import { buildTrackId, normalizeStreamId } from './TransmissionIntent.js';
 
 export interface TransmissionIntentRequest {
+  strategyOrigin?: import('./TransmissionIntent.js').StrategyFactOrigin;
   operatorId: string;
   streamId?: string;
   source: TransmissionIntentSource;
@@ -331,6 +332,7 @@ export class DigitalFrameCoordinator extends EventEmitter<DigitalFrameCoordinato
         text: intent.text,
         audioFrequencyHz: intent.audioFrequencyHz,
         decisionEpoch: intent.decisionEpoch,
+        strategyOrigin: intent.strategyOrigin,
       }, source.slotId, source.frameId));
     if (intents.length !== remainingTrackIds.length) {
       return {
@@ -434,6 +436,7 @@ export class DigitalFrameCoordinator extends EventEmitter<DigitalFrameCoordinato
       text: intent.text,
       audioFrequencyHz: intent.audioFrequencyHz,
       decisionEpoch: intent.decisionEpoch,
+      strategyOrigin: intent.strategyOrigin,
     }));
   }
 
@@ -518,6 +521,7 @@ export class DigitalFrameCoordinator extends EventEmitter<DigitalFrameCoordinato
       text: request.text,
       audioFrequencyHz: request.audioFrequencyHz,
       decisionEpoch: request.decisionEpoch,
+      strategyOrigin: request.strategyOrigin ? { ...request.strategyOrigin } : undefined,
       replacesFrameId,
     };
   }

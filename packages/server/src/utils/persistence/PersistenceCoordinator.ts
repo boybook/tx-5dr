@@ -1,4 +1,5 @@
 import { createLogger } from '../logger.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 const logger = createLogger('PersistenceCoordinator');
 
@@ -18,6 +19,8 @@ export class PersistenceCoordinator {
   private static instance: PersistenceCoordinator | null = null;
   private readonly targets = new Map<string, FlushablePersistenceTarget>();
   private mutationsBlocked = false;
+  private readonly acceptedLogbookWrites = new Set<object>();
+  private readonly logbookWriteScope = new AsyncLocalStorage<{ token: object; logBookId: string }>();
 
   static getInstance(): PersistenceCoordinator {
     if (!this.instance) {
@@ -43,8 +46,29 @@ export class PersistenceCoordinator {
     return this.mutationsBlocked;
   }
 
-  assertMutationsAllowed(target: string): void {
+  /** Host-only admission: one already accepted logbook task may drain at shutdown. */
+  acceptLogbookWrite(logBookId: string): {
+    run<T>(write: () => Promise<T>): Promise<T>;
+    release(): void;
+  } {
+    this.assertMutationsAllowed('logbook:accept');
+    const token = {};
+    this.acceptedLogbookWrites.add(token);
+    return {
+      run: <T>(write: () => Promise<T>) => {
+        if (!this.acceptedLogbookWrites.has(token)) throw new MutationBlockedError('logbook:expired-admission');
+        return this.logbookWriteScope.run({ token, logBookId }, write);
+      },
+      release: () => { this.acceptedLogbookWrites.delete(token); },
+    };
+  }
+
+  assertMutationsAllowed(target: string, logBookId?: string): void {
     if (this.mutationsBlocked) {
+      const scope = this.logbookWriteScope.getStore();
+      if (scope && logBookId === scope.logBookId
+          && this.acceptedLogbookWrites.has(scope.token)
+          && ['logbook:add', 'logbook:update', 'logbook:batch'].includes(target)) return;
       throw new MutationBlockedError(target);
     }
   }

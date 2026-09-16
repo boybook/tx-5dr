@@ -609,6 +609,21 @@ qsoCompletion: {
 Host 完成持久化后，可通过可选的 `settleQSOCompletion({ lifecycleEpoch, recordId,
 status })` 通知 runtime。旧 lifecycle 的结果不会成为新 QSO 的 RF 决策依据。
 
+同一完成记录重投时应保留原始 record ID、lifecycle 和内容，不能为重发最终 73
+创建新记录。Host 冻结已接受任务的日志本与记录，重复提交复用原任务；明确失败
+后通过日志本恢复界面显式重试。保存缓慢不是失败，不会自动重试或启动下一笔。
+
+保存确认与物理完成回执在操作员事务边界交付，不能与 checkpoint/restore 并发
+修改 runtime。暂停时暂存结果，恢复同一实例后交付；新实例不继承旧实例的结果。
+这些通知不授予发射权限，不得用于恢复已经被用户关闭的 TX。共享标准 QSO
+runtime 将稳定记录身份、保存确认和最终回复确认分开，协议快照回滚不撤销事实。
+辅助队列沿用同一交付边界；只有日志确认成功且协议已经释放目标，才能移除完成
+条目。多路物理完成仍以一帧的回执批次交付，不拆成会改变插件观察顺序的独立调用。
+
+操作员状态中的可选 `qsoPersistence` 来自 Host，可显示保存中、保存缓慢和恢复
+需求。它不属于插件私有 context，也不代替 `transmitGate`。手动起呼被拒绝时，
+Host 向该连接返回原因；插件命令端口则拒绝对应 Promise。
+
 ## 7. Settings、存储与 UI
 
 ### 7.1 Settings

@@ -992,9 +992,18 @@ export const WSGetStatusMessageSchema = WSBaseMessageSchema.extend({
 /**
  * 电台操作员状态信息
  */
+export const QsoPersistenceStatusSchema = z.object({
+  state: z.enum(['idle', 'saving', 'slow', 'failed', 'uncertain']),
+  pendingCount: z.number().int().nonnegative(),
+  unsavedCount: z.number().int().nonnegative(),
+  oldestStartedAt: z.number().nonnegative().optional(),
+});
+export type QsoPersistenceStatus = z.infer<typeof QsoPersistenceStatusSchema>;
+
 export const OperatorStatusSchema = z.object({
   id: z.string(),
   isActive: z.boolean(),
+  qsoPersistence: QsoPersistenceStatusSchema.optional(),
   isTransmitting: z.boolean(), // 是否已授予策略自动发射许可（发射开关状态）
   isInActivePTT: z.boolean().optional(), // 该操作员的音频是否正在被实际播放
   hasTransmitIntent: z.boolean().optional(), // 当前策略是否有可在合法周期发射的有效内容

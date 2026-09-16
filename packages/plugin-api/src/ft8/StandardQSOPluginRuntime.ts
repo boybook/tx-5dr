@@ -1023,6 +1023,9 @@ interface Post73RetryContext {
     reportSent?: number;
     reportReceived?: number;
     actualFrequency?: number;
+    lifecycleEpoch?: number;
+    recordId?: string;
+    // Compatibility input for older helper consumers; never restores save state.
     completedQSO?: QSORecord;
     expiresAt: number;
 }
@@ -1036,7 +1039,7 @@ interface StandardQSOCheckpoint {
     timeoutCycles: number;
     callAttempts: number;
     qsoStartTime?: number;
-    tx5TransmissionQueued: boolean;
+    tx5ReceiptBaseline: number;
     completedQSORecord?: QSORecord;
     pendingQSOCompletion?: {
         record: QSORecord;
@@ -1065,7 +1068,13 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
     private timeoutCycles: number = 0;
     public callAttempts: number = 0; // 呼叫尝试次数计数器（TX1状态专用）
     public qsoStartTime?: number; // QSO开始时间
-    public tx5TransmissionQueued = false;
+    private tx5ReceiptBaseline = 0;
+    private physicalReceiptSequence = 0;
+    private lastTx5Receipt?: { sequence: number; lifecycleEpoch: number; recordId?: string };
+    // Host facts are deliberately outside speculative checkpoints. Keeping the
+    // latest settlement is sufficient: the Host never restores an accepted,
+    // retired lifecycle after a later contact has durably completed.
+    private completionSettlement?: import('../runtime.js').StrategyQSOCompletionSettlement;
     private completedQSORecord?: QSORecord;
     private pendingQSOCompletion?: {
         record: QSORecord;
@@ -1083,6 +1092,27 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
     public foxHash?: string;
 
     readonly logger: PluginLogger;
+
+    get tx5TransmissionQueued(): boolean {
+        return this.lastTx5Receipt !== undefined
+            && this.lastTx5Receipt.sequence > this.tx5ReceiptBaseline
+            && this.lastTx5Receipt.lifecycleEpoch === this.qsoLifecycleEpoch
+            && this.lastTx5Receipt.recordId === this.completedQSORecord?.id;
+    }
+
+    set tx5TransmissionQueued(confirmed: boolean) {
+        if (confirmed) {
+            this.lastTx5Receipt = {
+                sequence: ++this.physicalReceiptSequence,
+                lifecycleEpoch: this.qsoLifecycleEpoch,
+                recordId: this.completedQSORecord?.id,
+            };
+        } else {
+            // A retry needs a new physical success; the earlier success remains
+            // a fact if a speculative transition to that retry is rolled back.
+            this.tx5ReceiptBaseline = this.physicalReceiptSequence;
+        }
+    }
 
     constructor(operator: StandardQSOPluginOperator, logger?: PluginLogger) {
         this.operator = operator;
@@ -1222,6 +1252,8 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
     private beginQsoLifecycle(reason: string): void {
         this.qsoLifecycleEpoch += 1;
         this.completedQSORecord = undefined;
+        this.pendingQSOCompletion = undefined;
+        this.clearPost73RetryContext('new QSO lifecycle');
         this.logger.debug('Started QSO lifecycle', {
             epoch: this.qsoLifecycleEpoch,
             reason,
@@ -1229,7 +1261,10 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
     }
 
     hasUnsettledQSOCompletion(): boolean {
-        return this.completedQSORecord !== undefined;
+        return this.completedQSORecord !== undefined
+            && !(this.completionSettlement?.recordId === this.completedQSORecord.id
+                && this.completionSettlement.lifecycleEpoch === this.qsoLifecycleEpoch
+                && this.completionSettlement.status === 'committed');
     }
 
     beginQsoWithTarget(callsign: string, reason: string): void {
@@ -1255,9 +1290,9 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
             });
             return;
         }
-        if (settlement.status === 'committed') {
-            this.completedQSORecord = undefined;
-        }
+        if (this.completionSettlement?.recordId === settlement.recordId
+            && this.completionSettlement.status === 'committed') return;
+        this.completionSettlement = { ...settlement };
     }
 
     async handleReceivedAndDicideNext(messages: ParsedFT8Message[], options?: { isReDecision?: boolean }): Promise<StrategyDecision> {
@@ -1464,7 +1499,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
             timeoutCycles: this.timeoutCycles,
             callAttempts: this.callAttempts,
             qsoStartTime: this.qsoStartTime,
-            tx5TransmissionQueued: this.tx5TransmissionQueued,
+            tx5ReceiptBaseline: this.tx5ReceiptBaseline,
             completedQSORecord: this.completedQSORecord ? { ...this.completedQSORecord } : undefined,
             pendingQSOCompletion: this.pendingQSOCompletion ? {
                 lifecycleEpoch: this.pendingQSOCompletion.lifecycleEpoch,
@@ -1501,7 +1536,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         this.timeoutCycles = state.timeoutCycles;
         this.callAttempts = state.callAttempts;
         this.qsoStartTime = state.qsoStartTime;
-        this.tx5TransmissionQueued = state.tx5TransmissionQueued;
+        this.tx5ReceiptBaseline = state.tx5ReceiptBaseline;
         this.completedQSORecord = state.completedQSORecord ? { ...state.completedQSORecord } : undefined;
         this.pendingQSOCompletion = state.pendingQSOCompletion ? {
             lifecycleEpoch: state.pendingQSOCompletion.lifecycleEpoch,
@@ -1848,7 +1883,8 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
             reportSent: this.context.reportSent,
             reportReceived: this.context.reportReceived,
             actualFrequency: this.context.actualFrequency,
-            completedQSO: this.completedQSORecord,
+            lifecycleEpoch: this.qsoLifecycleEpoch,
+            recordId: this.completedQSORecord?.id,
             expiresAt: Date.now() + retryWindowMs,
         };
 
@@ -1869,7 +1905,11 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
             return undefined;
         }
 
-        if (this.post73RetryContext.expiresAt < Date.now()) {
+        if (this.post73RetryContext.expiresAt < Date.now()
+            || (this.post73RetryContext.lifecycleEpoch !== undefined
+                && this.post73RetryContext.lifecycleEpoch !== this.qsoLifecycleEpoch)
+            || ((this.post73RetryContext.recordId ?? this.post73RetryContext.completedQSO?.id) !== undefined
+                && (this.post73RetryContext.recordId ?? this.post73RetryContext.completedQSO?.id) !== this.completedQSORecord?.id)) {
             this.clearPost73RetryContext('expired');
             return undefined;
         }
@@ -1883,7 +1923,6 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         this.context.reportSent = context.reportSent;
         this.context.reportReceived = context.reportReceived;
         this.context.actualFrequency = context.actualFrequency;
-        this.completedQSORecord = context.completedQSO;
         this.tx5TransmissionQueued = false;
         this.updateSlots();
     }

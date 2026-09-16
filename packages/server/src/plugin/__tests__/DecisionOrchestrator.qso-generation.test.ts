@@ -16,6 +16,25 @@ function qsoRecord(id = 'qso-1', callsign = 'JA1AAA'): QSORecord {
 }
 
 describe('DecisionOrchestrator QSO runtime identity', () => {
+  it('never turns a committed write into a failed settlement when delivery throws', async () => {
+    const settleQsoCompletion = vi.fn(() => { throw new Error('recipient failed'); });
+    const orchestrator = new DecisionOrchestrator({
+      submitQsoCompletion: async () => qsoRecord(), settleQsoCompletion,
+    } as any);
+    await (orchestrator as any).commitQSOCompletionEffect('op1', 10, { lifecycleEpoch: 1, record: qsoRecord() });
+    expect(settleQsoCompletion).toHaveBeenCalledTimes(1);
+    expect(settleQsoCompletion).toHaveBeenCalledWith('op1', 10, expect.objectContaining({ status: 'committed' }));
+  });
+
+  it('settles a synchronous writer rejection instead of abandoning the completion', async () => {
+    const settleQsoCompletion = vi.fn();
+    const orchestrator = new DecisionOrchestrator({
+      submitQsoCompletion: () => { throw new Error('writer unavailable'); }, settleQsoCompletion,
+    } as any);
+    await (orchestrator as any).commitQSOCompletionEffect('op1', 10, { lifecycleEpoch: 1, record: qsoRecord() });
+    expect(settleQsoCompletion).toHaveBeenCalledWith('op1', 10, expect.objectContaining({ status: 'failed' }));
+  });
+
   it('allows a changed queue observation to commit passive effects while TX is off', async () => {
     const token = { operatorId: 'op1', epoch: 3, source: 'late-decode', priority: 10 };
     const signal = new AbortController().signal;
@@ -101,6 +120,7 @@ describe('DecisionOrchestrator QSO runtime identity', () => {
       record,
     }, 'test-strategy');
 
+    await vi.waitFor(() => expect(request).toBeDefined());
     expect(request).toMatchObject({
       qsoLifecycleId: 'op1:runtime:10:qso:1:qso-1',
       qsoLifecycleEpoch: 1,
@@ -116,7 +136,7 @@ describe('DecisionOrchestrator QSO runtime identity', () => {
     expect(invokeStrategyRuntimeSync).not.toHaveBeenCalled();
   });
 
-  it('forwards persistence policy and settles every queued completion by stream after an earlier failure', async () => {
+  it('delegates ordering to the writer and correlates completion results by stream after an earlier failure', async () => {
     const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
     const requests: Array<Parameters<DigitalRadioEngineEvents['recordQSO']>[0]> = [];
     eventEmitter.on('recordQSO', (data) => requests.push(data));
@@ -167,7 +187,7 @@ describe('DecisionOrchestrator QSO runtime identity', () => {
       },
     ]);
 
-    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
     expect(requests[0]).toMatchObject({
       streamId: 'lane-1',
       persistencePolicy: 'preserve-distinct',
@@ -183,8 +203,7 @@ describe('DecisionOrchestrator QSO runtime identity', () => {
     (requests[0]!.metadata!.evidence as { finalAcknowledgement: string })
       .finalAcknowledgement = 'MUTATED';
     requests[0]!.reject?.(new Error('disk full'));
-
-    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    await vi.waitFor(() => expect(settleQSOCompletion).toHaveBeenCalledOnce());
     expect(requests[1]).toMatchObject({
       streamId: 'lane-2',
       persistencePolicy: 'preserve-distinct',

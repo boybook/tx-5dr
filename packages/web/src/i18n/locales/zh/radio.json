@@ -421,6 +421,20 @@
     }
   },
   "operator": {
+    "qsoPersistence": {
+      "saving": "正在保存通联记录（{{count}}）",
+      "slow": "通联记录保存较慢，请稍候",
+      "failed": "通联记录未保存，请在日志本中重试",
+      "uncertain": "通联记录写入状态不确定，请查看日志本恢复"
+    },
+    "callRejection": {
+      "saving": "上一笔通联记录仍在保存，请稍后重试呼叫。",
+      "failed": "有未保存的通联记录，请先在日志本中处理。",
+      "uncertain": "通联记录写入状态不确定，请先查看日志本恢复。",
+      "invalid_target": "无法呼叫这个目标，请选择有效呼号。",
+      "unavailable": "当前通联策略不可用，请检查操作员状态。",
+      "strategy_rejected": "当前通联状态不能接受新的呼叫。"
+    },
     "viewLog": "查看通联日志",
     "log": "日志",
     "toggleTx": "切换发射状态",

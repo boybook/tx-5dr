@@ -1220,6 +1220,13 @@ export const RadioOperator: React.FC<RadioOperatorProps> = React.memo(({
           </div>
           
           {/* 右侧 - 操作员页面入口和发射开关 */}
+          {operatorStatus.qsoPersistence && operatorStatus.qsoPersistence.state !== 'idle' && (
+            <div role="status" className="max-w-64 text-xs text-warning-700 dark:text-warning-400">
+              {t(`operator.qsoPersistence.${operatorStatus.qsoPersistence.state}`, {
+                count: operatorStatus.qsoPersistence.pendingCount,
+              })}
+            </div>
+          )}
           <div className="flex min-w-0 items-center gap-2">
             <div className="flex min-w-0 max-w-[52vw] items-center gap-1 overflow-x-auto sm:max-w-md">
               <OperatorActionButton

@@ -433,6 +433,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     // dataDir 异步获取，先用占位符，initialize() 中完成
     const digitalMessagePreflight = new DigitalMessagePreflightService();
     this._pluginManager = new PluginManager({
+      submitQsoCompletion: request => this._operatorManager.submitQsoCompletion(request),
+      getQsoPersistenceStatus: operatorId => this._operatorManager.qsoCompletions.status(operatorId),
+      retireQsoCompletions: (operatorId, generation) => this._operatorManager.qsoCompletions.retire(operatorId, generation),
       eventEmitter: this,
       getOperators: () => this._operatorManager.getAllOperators(),
       getOperatorById: (id) => this._operatorManager.getOperatorById(id),
@@ -1621,6 +1624,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   async destroy(): Promise<void> {
     logger.info('Destroying...');
+    this.operatorManager.qsoCompletions.stopAccepting();
     try {
       await this.stopTuneTone('engine destroyed');
       await this.audioSidecar.stop('engine-destroy');
@@ -1630,6 +1634,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       logger.warn('audio sidecar stop during destroy failed', err);
     }
     await this.stop();
+    await this.operatorManager.qsoCompletions.drain();
     this.squelchStatusMonitor.stop();
     this.releaseCwPttPolling?.();
     this.releaseCwPttPolling = null;

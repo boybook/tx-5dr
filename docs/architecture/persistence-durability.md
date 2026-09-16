@@ -38,6 +38,45 @@ Loading and validation run in an isolated worker. Content and expected I/O failu
 
 TX-5DR does not support another program writing the same `.adi` concurrently. Size and content hashes define the revision used by prepared mutations; inode, device and mtime are diagnostic metadata only and never lock a healthy logbook. External read-only access is supported.
 
+## QSO Completion Ownership
+
+`QsoCompletionService` owns accepted automatic QSO writes, their frozen destination
+and candidate, recovery attempts, and durable outcomes. Admission is asynchronous
+with respect to disk completion: the final protocol reply must not wait for a
+logbook write. The existing per-operator ordering and per-file mutation queue
+remain in force.
+
+An operation is correlated by operator, strategy instance generation, stream,
+QSO lifecycle and original record ID. Duplicate submissions join the same task;
+a different payload under that identity is rejected. A merged logbook record's
+ID is separate from the effect's original record ID. Successful operations release
+their full candidate after notifications finish, retaining only compact outcome
+information until the producer is retired. Active/recovery status queries index
+live tasks rather than scanning the accumulated completed contacts.
+
+Queued or saving tasks become visibly slow after five seconds. Slowness is not a
+write failure and never starts another writer or cancels an in-progress fsync.
+Only a definitively failed attempt can be explicitly retried or discarded.
+Uncertain file outcomes require logbook recovery. Post-commit notifications and
+remote synchronization cannot change a committed task back into a failed write.
+
+Durable results and physical-transmission receipts are facts, not speculative
+strategy state. The Host delivers them outside the operator's checkpoint/decision/
+rollback transaction through a non-coalescing fact inbox. Paused recipients retain
+their facts; retired or quarantined instances do not receive them. A fact never
+grants transmit permission or replays an earlier rejected call. Standard QSO
+retains a stable completion identity through TX4/TX5 and final-73 retries, while
+its save and physical confirmations survive protocol checkpoint restoration.
+
+`OperatorStatus.qsoPersistence` is the optional Host projection for saving, slow,
+failed and uncertain work. It does not use the strategy's general transmit gate,
+which would also suppress a legitimate final reply. Rejected manual calls return
+a localized error to the requesting connection.
+
+These task records are in-memory coordination state, not another logbook or a
+crash-replay journal. Only a verified ADIF commit is reported as saved. A hard
+process exit can still lose a record which has not reached durable storage.
+
 ## Logbook Backup And Manual Restore
 
 The main `.adi` remains the only source used for startup, queries and sync. A backup is an operator recovery point, never an automatic startup candidate. Each book has one bounded directory:
@@ -53,7 +92,20 @@ Legacy discovery uses exact names derived from a known `.adi` basename. Old jour
 
 ## Shutdown Coordination
 
-`PersistenceCoordinator` registers config, auth, runtime state, plugin storage, slotpack persistence, and logbook providers. For logbooks, flush drains the per-file mutation queue; close may spend the remaining 30-second deadline refreshing the optional backup but never rewrites `.adi`. Shutdown flow blocks new mutating HTTP requests, stops the engine/operators, closes logbooks, and calls `flushAll` with a deadline.
+`PersistenceCoordinator` registers config, auth, runtime state, plugin storage,
+slotpack persistence, QSO completions, and logbook providers. Shutdown closes new
+completion admission, stops the engine/operators, drains accepted completion
+tasks, then closes logbooks and calls `flushAll` within the existing deadline.
+Draining includes tasks which have not yet reached the provider's file queue.
+An internal admission scoped to the original logbook allows these accepted writes
+to finish after new mutations are blocked; it expires at completion and is never
+available to a plugin or HTTP caller. Unresolved or timed-out QSO writes make
+prepare-shutdown fail and signal shutdown exit unsuccessfully.
+
+For logbooks, flush drains the per-file mutation queue; close may spend the
+remaining deadline refreshing the optional backup but never rewrites `.adi`.
+Deleting a logbook or destroying a runtime contest logbook is rejected while it
+has accepted or unresolved QSO tasks. Engine stop alone retains those tasks.
 
 - Server `SIGINT` / `SIGTERM`: block mutations, stop engine, close logbooks, flush coordinator, then exit.
 - Electron quit/restart: call `POST /api/system/internal/prepare-shutdown` with the random internal token before terminating the embedded server child.

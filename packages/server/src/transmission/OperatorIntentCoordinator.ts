@@ -39,6 +39,8 @@ const PRIORITY: Record<OperatorCommandSource, number> = {
 /** Serializes operator mutations while letting newer, higher-priority intent revoke stale work. */
 export class OperatorIntentCoordinator {
   private readonly lanes = new Map<string, OperatorLane>();
+  private readonly facts = new Map<string, Map<string, () => boolean>>();
+  private readonly deliveringFacts = new Set<string>();
 
   constructor(
     private readonly options: {
@@ -77,6 +79,30 @@ export class OperatorIntentCoordinator {
     return this.lanes.get(token.operatorId)?.authoritativeEpoch === token.epoch;
   }
 
+  /** Facts never participate in priority replacement or speculative rollback. */
+  enqueueFact(operatorId: string, key: string, deliver: () => boolean): void {
+    const pending = this.facts.get(operatorId) ?? new Map<string, () => boolean>();
+    pending.set(key, deliver);
+    this.facts.set(operatorId, pending);
+    this.flushFacts(operatorId);
+  }
+
+  /** A false result retains a fact for a paused, still-existing recipient. */
+  flushFacts(operatorId: string): void {
+    if (this.lanes.get(operatorId)?.active || this.deliveringFacts.has(operatorId)) return;
+    const pending = this.facts.get(operatorId);
+    if (!pending) return;
+    this.deliveringFacts.add(operatorId);
+    try {
+      for (const [key, deliver] of pending) {
+        if (deliver()) pending.delete(key);
+      }
+      if (!pending.size) this.facts.delete(operatorId);
+    } finally {
+      this.deliveringFacts.delete(operatorId);
+    }
+  }
+
   /**
    * Whether this command still owns the serialized execution lane. A revoked
    * command may use this while unwinding to restore its uncommitted checkpoint,
@@ -105,11 +131,13 @@ export class OperatorIntentCoordinator {
   removeOperator(operatorId: string, reason = 'operator removed'): void {
     this.abortOperator(operatorId, reason);
     this.lanes.delete(operatorId);
+    this.facts.delete(operatorId);
   }
 
   clear(reason = 'intent coordinator cleared'): void {
     for (const operatorId of this.lanes.keys()) this.abortOperator(operatorId, reason);
     this.lanes.clear();
+    this.facts.clear();
   }
 
   private enqueue(lane: OperatorLane, job: IntentJob): void {
@@ -136,6 +164,7 @@ export class OperatorIntentCoordinator {
   }
 
   private start(lane: OperatorLane, job: IntentJob): void {
+    this.flushFacts(job.token.operatorId);
     lane.active = job;
     lane.authoritativeEpoch = job.token.epoch;
     let execution: Promise<unknown>;
@@ -147,26 +176,33 @@ export class OperatorIntentCoordinator {
 
     job.completion = execution.then(
       (value) => {
-        if (this.isCurrent(job.token) && !job.controller.signal.aborted) {
+        const current = this.isCurrent(job.token) && !job.controller.signal.aborted;
+        this.finish(lane, job);
+        if (current) {
           job.resolve({ status: 'completed', token: job.token, value });
         } else {
           job.resolve({ status: 'superseded', token: job.token });
         }
       },
       (error) => {
-        if (job.controller.signal.aborted || !this.isCurrent(job.token)) {
+        const revoked = job.controller.signal.aborted || !this.isCurrent(job.token);
+        this.finish(lane, job);
+        if (revoked) {
           job.resolve({ status: 'superseded', token: job.token });
         } else {
           job.reject(error);
         }
       },
-    ).finally(() => {
-      if (lane.active !== job) return;
-      lane.active = undefined;
-      const next = lane.pending;
-      lane.pending = undefined;
-      if (next) this.start(lane, next);
-    });
+    );
+  }
+
+  private finish(lane: OperatorLane, job: IntentJob): void {
+    if (lane.active !== job) return;
+    lane.active = undefined;
+    this.flushFacts(job.token.operatorId);
+    const next = lane.pending;
+    lane.pending = undefined;
+    if (next) this.start(lane, next);
   }
 
   private ensureTakeover(lane: OperatorLane, active: IntentJob): void {

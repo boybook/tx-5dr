@@ -1660,11 +1660,20 @@ export class WSServer extends WSMessageHandler {
             } as SlotInfo,
           }
         : this.digitalRadioEngine.getSlotPackManager().getLastMessageFromCallsign(callsign, operatorId);
-      this.digitalRadioEngine.pluginManager.requestCall(operatorId, callsign, lastMessage, {
+      const result = await this.digitalRadioEngine.pluginManager.requestCall(operatorId, callsign, lastMessage, {
         submitCurrentFrame: true,
         source: 'operator-edit',
         reason: 'UI requestCall updated operator context',
       });
+      if (result?.outcome === 'rejected') {
+        this.sendToConnection(connectionId, WSMessageType.ERROR, {
+          message: `operator_call_rejected:${result.reason}`,
+          userMessageKey: `radio:operator.callRejection.${result.reason}`,
+          code: 'OPERATOR_CALL_REJECTED',
+          severity: 'warning',
+          context: { command: 'operatorRequestCall', operatorId },
+        });
+      }
       this.digitalRadioEngine.operatorManager.emitOperatorStatusUpdate(operatorId);
     } catch (error) {
       this.handleCommandError(error, 'operatorRequestCall');

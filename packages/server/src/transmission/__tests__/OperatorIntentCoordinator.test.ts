@@ -8,6 +8,41 @@ function deferred<T>() {
 }
 
 describe('OperatorIntentCoordinator', () => {
+  it('keeps all facts through intent replacement and applies them after rollback', async () => {
+    const coordinator = new OperatorIntentCoordinator();
+    const gate = deferred<void>();
+    const events: string[] = [];
+    const first = coordinator.submit('a', 'slot-auto', async () => {
+      events.push('checkpoint');
+      await gate.promise;
+      events.push('restore');
+    });
+    coordinator.enqueueFact('a', 'qso', () => { events.push('committed'); return true; });
+    coordinator.enqueueFact('a', 'physical', () => { events.push('physical-success'); return true; });
+    const next = coordinator.submit('a', 'manual', () => { events.push('manual'); });
+    expect(events).toEqual(['checkpoint']);
+    gate.resolve();
+    await Promise.all([first, next]);
+    expect(events).toEqual(['checkpoint', 'restore', 'committed', 'physical-success', 'manual']);
+  });
+
+  it('retains paused facts without blocking another operator', async () => {
+    const coordinator = new OperatorIntentCoordinator();
+    let paused = true;
+    const delivered = vi.fn();
+    coordinator.enqueueFact('a', 'qso', () => {
+      if (paused) return false;
+      delivered();
+      return true;
+    });
+    await expect(coordinator.submit('b', 'manual', () => 'done')).resolves.toMatchObject({ value: 'done' });
+    expect(delivered).not.toHaveBeenCalled();
+    paused = false;
+    coordinator.flushFacts('a');
+    coordinator.flushFacts('a');
+    expect(delivered).toHaveBeenCalledOnce();
+  });
+
   it('runs different operators independently', async () => {
     const coordinator = new OperatorIntentCoordinator();
     const a = deferred<string>();

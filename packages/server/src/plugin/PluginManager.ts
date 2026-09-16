@@ -243,6 +243,11 @@ export class PluginManager {
       this.invocationGuard,
     );
     this.orchestrator = new DecisionOrchestrator({
+      submitQsoCompletion: deps.submitQsoCompletion,
+      settleQsoCompletion: (operatorId, generation, settlement) => this.enqueueStrategyFact(
+        operatorId, generation, `qso:${settlement.streamId ?? 'default'}:${settlement.lifecycleEpoch}:${settlement.recordId}:${settlement.status}`,
+        runtime => { runtime.settleQSOCompletion?.(settlement); },
+      ),
       getOperators: deps.getOperators,
       getOperatorById: deps.getOperatorById,
       getCurrentMode: deps.getCurrentMode,
@@ -1768,34 +1773,28 @@ export class PluginManager {
       reason?: string;
       commandToken?: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken;
     },
-  ): void {
+  ): Promise<import('./types.js').OperatorCallResult> {
     if (this.hasTargetQueue(operatorId)) {
       logger.debug('Ignoring direct requestCall while a target-queue strategy is active', { operatorId, callsign });
-      return;
+      return Promise.resolve({ outcome: 'rejected', reason: 'strategy_rejected' });
     }
     // 呼叫收敛点：autocall / WS 命令 / ctx.operator.call / replyToDecode 全部汇入此处，
     // 未解码占位符呼号（`<...>`/`...`）一律拒绝，避免向占位符发起呼叫。
     if (isUndecodedCallsignPlaceholder(callsign)) {
       logger.warn('Refusing requestCall with undecoded placeholder callsign', { operatorId, callsign });
-      return;
+      return Promise.resolve({ outcome: 'rejected', reason: 'invalid_target' });
     }
-    const apply = (token: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken) => {
-      if (!this.intentCoordinator.isCurrent(token)) return;
-      this.applyRequestCall(operatorId, callsign, lastMessage, options, token);
+    const apply = (token: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken): import('./types.js').OperatorCallResult => {
+      if (!this.intentCoordinator.isCurrent(token)) return { outcome: 'superseded' };
+      return this.applyRequestCall(operatorId, callsign, lastMessage, options, token);
     };
     if (options?.commandToken) {
-      apply(options.commandToken);
-      return;
+      return Promise.resolve(apply(options.commandToken));
     }
     const source = options?.source === 'plugin' ? 'plugin' : 'manual';
-    void this.intentCoordinator.submit(operatorId, source, (token, signal) => {
-      if (!signal.aborted) apply(token);
-    }).catch((error) => {
-      logger.warn('Operator requestCall command failed', {
-        operatorId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
+    return this.intentCoordinator.submit(operatorId, source, (token, signal) => (
+      signal.aborted ? { outcome: 'superseded' as const } : apply(token)
+    )).then(outcome => outcome.status === 'completed' ? outcome.value : { outcome: 'superseded' as const });
   }
 
   private async submitPluginOperatorCommand(
@@ -1837,21 +1836,25 @@ export class PluginManager {
             operator.stop();
             this.deps.requestOperatorStrategyStop?.(operatorId, 'plugin automation stop');
             break;
-          case 'request-call':
-            this.applyRequestCall(operatorId, command.callsign, command.lastMessage, {
+          case 'request-call': {
+            const result = this.applyRequestCall(operatorId, command.callsign, command.lastMessage, {
               source: 'plugin',
             }, token);
+            if (result.outcome === 'rejected') throw new Error(`operator_call_rejected:${result.reason}`);
             break;
-          case 'reply-to-decode':
+          }
+          case 'reply-to-decode': {
             this.eventEmitter.emit('pluginRemoteReplyToDecode', {
               operatorId,
               callsign: command.callsign,
               modifiers: command.modifiers,
             });
-            this.applyRequestCall(operatorId, command.callsign, command.lastMessage, {
+            const result = this.applyRequestCall(operatorId, command.callsign, command.lastMessage, {
               source: 'plugin',
             }, token);
+            if (result.outcome === 'rejected') throw new Error(`operator_call_rejected:${result.reason}`);
             break;
+          }
           case 'set-transmit-cycles':
             operator.setTransmitCycles(command.cycles, {
               commandEpoch: token.epoch,
@@ -1920,9 +1923,14 @@ export class PluginManager {
       reason?: string;
     } | undefined,
     token: import('../transmission/OperatorIntentCoordinator.js').OperatorCommandToken,
-  ): void {
+  ): import('./types.js').OperatorCallResult {
     const operator = this.deps.getOperatorById(operatorId);
-    if (!operator || !this.getStrategyRuntime(operatorId)) return;
+    if (!operator || !this.getStrategyRuntime(operatorId)) return { outcome: 'rejected', reason: 'unavailable' };
+    if (operator.isLogbookPersistenceBlocked) {
+      const state = this.deps.getQsoPersistenceStatus?.(operatorId).state;
+      return { outcome: 'rejected', reason: state === 'saving' || state === 'slow' ? 'saving'
+        : state === 'uncertain' ? 'uncertain' : 'failed' };
+    }
 
     this.orchestrator.invalidateDecisionMessageSet(operatorId);
     const checkpoint = this.invokeStrategyRuntimeSync(
@@ -1940,7 +1948,10 @@ export class PluginManager {
     );
     if (accepted === false) {
       logger.warn('Strategy rejected requestCall without starting the operator', { operatorId, callsign });
-      return;
+      const state = this.deps.getQsoPersistenceStatus?.(operatorId).state;
+      const reason = state === 'saving' || state === 'slow' ? 'saving'
+        : state === 'failed' || state === 'uncertain' ? state : 'strategy_rejected';
+      return { outcome: 'rejected', reason };
     }
     const nextSnapshot = this.invokeStrategyRuntimeSync(
       operatorId,
@@ -1964,7 +1975,7 @@ export class PluginManager {
         callsign,
         epoch: token.epoch,
       });
-      return;
+      return { outcome: 'rejected', reason: 'strategy_rejected' };
     }
     if (nextSnapshot?.qsoLifecycleEpoch !== undefined) {
       this.eventEmitter.emit('qsoLifecycleChanged', {
@@ -1993,33 +2004,93 @@ export class PluginManager {
         decisionEpoch: token.epoch,
       });
     }
+    return { outcome: 'accepted' };
+  }
+
+  private enqueueStrategyFact(
+    operatorId: string,
+    generation: number,
+    key: string,
+    apply: (runtime: StrategyRuntime) => void,
+  ): void {
+    this.intentCoordinator.enqueueFact(operatorId, `${generation}:${key}`, () => {
+      const instance = [...(this.instances.get(operatorId)?.values() ?? [])]
+        .find(candidate => candidate.generation === generation && candidate.runtime);
+      if (!instance || instance.lifecycle === 'disposed' || instance.lifecycle === 'quarantined') return true;
+      if (instance.lifecycle !== 'active' || !instance.enabled || this.isInstancePaused(instance)) return false;
+      try {
+        this.invocationGuard.invokeSync(instance, `fact:${key}`, () => apply(instance.runtime!));
+        this.deps.notifyOperatorStatusChanged?.(operatorId);
+      } catch (error) {
+        instance.lastError = error instanceof Error ? error.message : String(error);
+        logger.error('Strategy could not apply a committed fact', { operatorId, generation, key, error: instance.lastError });
+        this.broadcastStatusChanged(instance.plugin.definition.name);
+        this.deps.notifyOperatorStatusChanged?.(operatorId);
+      }
+      return true;
+    });
+  }
+
+  getStrategyFactOrigin(operatorId: string, streamId = 'default'): import('../transmission/TransmissionIntent.js').StrategyFactOrigin | undefined {
+    const instance = this.getStrategyInstance(operatorId);
+    if (!instance?.runtime) return undefined;
+    const snapshot = this.invokeStrategyRuntimeSync(operatorId, 'snapshot:fact-origin', runtime => runtime.getSnapshot());
+    const stream = snapshot?.streams?.find(candidate => candidate.streamId === streamId);
+    return { generation: instance.generation, streamId, lifecycleEpoch: stream?.qsoLifecycleEpoch ?? snapshot?.qsoLifecycleEpoch };
+  }
+
+  getSelectedStrategyGeneration(operatorId: string): number | undefined {
+    return this.instances.get(operatorId)?.get(this.getResolvedStrategyName(operatorId))?.generation;
+  }
+
+  resetAfterQsoWrite(operatorId: string, generation: number | undefined, lifecycleEpoch: number | undefined, reason: string): void {
+    const targetGeneration = generation ?? this.getStrategyInstance(operatorId)?.generation;
+    if (targetGeneration === undefined) return;
+    this.enqueueStrategyFact(operatorId, targetGeneration, `qso-reset:${lifecycleEpoch}:${reason}`, runtime => {
+      if (lifecycleEpoch !== undefined && runtime.getSnapshot().qsoLifecycleEpoch !== lifecycleEpoch) return;
+      this.resetOperatorPluginRuntime(operatorId, reason);
+    });
   }
 
   notifyTransmissionQueued(operatorId: string, transmission: string): void {
-    this.invokeStrategyRuntimeSync(
-      operatorId,
-      'onTransmissionQueued',
-      (runtime) => {
-        runtime.onTransmissionQueued?.(transmission);
-      },
-    );
+    const origin = this.getStrategyFactOrigin(operatorId);
+    if (!origin) return;
+    this.enqueueStrategyFact(operatorId, origin.generation, `legacy-physical:${origin.lifecycleEpoch}:${transmission}`, runtime => {
+      if (origin.lifecycleEpoch !== undefined && runtime.getSnapshot().qsoLifecycleEpoch !== origin.lifecycleEpoch) return;
+      runtime.onTransmissionQueued?.(transmission);
+    });
   }
 
   notifyTransmissionsCompleted(
     operatorId: string,
     receipts: import('@tx5dr/plugin-api').StreamPhysicalReceipt[],
+    origins?: ReadonlyMap<string, import('../transmission/TransmissionIntent.js').StrategyFactOrigin>,
   ): void {
-    this.invokeStrategyRuntimeSync(
-      operatorId,
-      'onTransmissionsCompleted',
-      (runtime) => {
-        if (runtime.onTransmissionsCompleted) {
-          runtime.onTransmissionsCompleted(snapshotPluginData(receipts, 'structured'));
-          return;
-        }
-        for (const receipt of receipts) runtime.onTransmissionQueued?.(receipt.text);
-      },
-    );
+    const batches = new Map<number, Array<{
+      receipt: import('@tx5dr/plugin-api').StreamPhysicalReceipt;
+      origin: import('../transmission/TransmissionIntent.js').StrategyFactOrigin;
+    }>>();
+    for (const receipt of receipts) {
+      const origin = origins ? origins.get(receipt.streamId) : this.getStrategyFactOrigin(operatorId, receipt.streamId);
+      if (!origin) continue;
+      const batch = batches.get(origin.generation) ?? [];
+      batch.push({ receipt: snapshotPluginData(receipt, 'structured'), origin: { ...origin } });
+      batches.set(origin.generation, batch);
+    }
+    for (const [generation, batch] of batches) {
+      const key = batch.map(({ receipt }) => `${receipt.frameId}:${receipt.revision}:${receipt.streamId}`).join('|');
+      this.enqueueStrategyFact(operatorId, generation, `physical:${key}`, runtime => {
+        const snapshot = runtime.getSnapshot();
+        const valid = batch.filter(({ origin }) => {
+          const epoch = snapshot.streams?.find(stream => stream.streamId === origin.streamId)?.qsoLifecycleEpoch
+            ?? snapshot.qsoLifecycleEpoch;
+          return origin.lifecycleEpoch === undefined || origin.lifecycleEpoch === epoch;
+        }).map(({ receipt }) => receipt);
+        if (!valid.length) return;
+        if (runtime.onTransmissionsCompleted) runtime.onTransmissionsCompleted(valid);
+        else for (const receipt of valid) runtime.onTransmissionQueued?.(receipt.text);
+      });
+    }
   }
 
   async interruptOperatorTransmission(operatorId: string): Promise<void> {
@@ -2266,6 +2337,7 @@ export class PluginManager {
   async setOperatorPluginPaused(operatorId: string, pluginName: string, paused: boolean): Promise<string[]> {
     this.assertTransmitControlPauseTarget(operatorId, pluginName);
     const changed = this.setOperatorPluginPausedInMemory(operatorId, pluginName, paused);
+    if (!paused) this.intentCoordinator.flushFacts(operatorId);
     const nextPaused = this.pluginsConfig.operatorPluginPauses?.[operatorId] ?? [];
     await ConfigManager.getInstance().setOperatorPluginPauses(operatorId, nextPaused);
     if (changed.length > 0) {
@@ -2293,6 +2365,7 @@ export class PluginManager {
     this.assertOperatorExists(operatorId);
     const pluginNames = this.getTransmitControlPluginNamesForOperator(operatorId);
     const changed = this.setOperatorPluginPausesInMemory(operatorId, pluginNames, false);
+    this.intentCoordinator.flushFacts(operatorId);
     await ConfigManager.getInstance().setOperatorPluginPauses(
       operatorId,
       this.pluginsConfig.operatorPluginPauses?.[operatorId] ?? [],
@@ -3749,6 +3822,8 @@ export class PluginManager {
       globalStore.dispose?.();
       operatorStore.dispose?.();
       instance.lifecycle = 'disposed';
+      this.deps.retireQsoCompletions?.(operatorId, instance.generation);
+      this.intentCoordinator.flushFacts(operatorId);
     } else {
       instance.lifecycle = 'inactive';
     }
