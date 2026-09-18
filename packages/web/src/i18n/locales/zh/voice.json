@@ -33,7 +33,9 @@
     "lsb": "LSB",
     "fm": "FM",
     "am": "AM",
-    "wfm": "WFM"
+    "wfm": "WFM",
+    "warningReverted": "模式切换失败，已回退至电台当前模式。可重新点选重试。",
+    "warningUnknown": "模式切换失败，且无法读取电台当前模式。可重新点选重试。"
   },
   "ptt": {
     "title": "语音发射",
