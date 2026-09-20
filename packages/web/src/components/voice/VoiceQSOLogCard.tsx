@@ -21,6 +21,7 @@ import { createLogger } from '../../utils/logger';
 import { api, getDisplayMode } from '@tx5dr/core';
 import { useWSEvent } from '../../hooks/useWSEvent';
 import type { QSORecord } from '@tx5dr/contracts';
+import { formatFrequencyMHz } from '../../utils/frequencyMHz';
 import { openLogbookWindow } from '../../utils/windowManager';
 import { QrzCallsignLink } from '../common/QrzCallsignLink';
 
@@ -473,7 +474,7 @@ export const VoiceQSOLogCard: React.FC<VoiceQSOLogCardProps> = ({
 
         {/* Auto-filled info */}
         <div className="flex gap-4 text-xs text-default-400">
-          <span>{t('qso.frequency')}: <span className="font-mono">{((displayedFrequency || 0) / 1000000).toFixed(3)} MHz</span></span>
+          <span>{t('qso.frequency')}: <span className="font-mono">{formatFrequencyMHz(displayedFrequency || 0)} MHz</span></span>
           <span>{t('qso.mode')}: <span className="font-mono">{displayedMode}</span></span>
         </div>
 
