@@ -7,37 +7,18 @@ import {
   type SstvTxPreferences,
 } from '@tx5dr/contracts';
 
-import { SafeFileWriter, loadJsonWithRecovery } from '../utils/persistence/index.js';
-
-interface PreferenceIndex { preferences: SstvTxPreferences[] }
+import { ImageRecordStore } from './ImageRecordStore.js';
+import { PersistedPreferenceSchema } from './ImagePersistenceSchema.js';
 
 export class SstvTxPreferenceStore {
-  private readonly writer = new SafeFileWriter({ backups: 3 });
-  private readonly filePath: string;
-  private readonly preferences = new Map<string, SstvTxPreferences>();
-  private initialized = false;
-  private persistTail: Promise<void> = Promise.resolve();
+  readonly persistence: ImageRecordStore<SstvTxPreferences>;
+  private get preferences() { return this.persistence.values; }
 
   constructor(baseDir: string) {
-    this.filePath = path.join(baseDir, 'sstv-tx-preferences.json');
+    this.persistence = new ImageRecordStore(path.join(baseDir, 'sstv-tx-preferences.json'), 'preferences', 'preferences', PersistedPreferenceSchema, item => item.operatorId);
   }
 
-  async initialize(): Promise<void> {
-    if (this.initialized) return;
-    const loaded = await loadJsonWithRecovery<PreferenceIndex>(this.filePath, {
-      defaultValue: () => ({ preferences: [] }),
-      validate: (value) => ({
-        preferences: SstvTxPreferencesSchema.array().parse(
-          (value as PreferenceIndex)?.preferences ?? [],
-        ),
-      }),
-      writer: this.writer,
-    });
-    for (const preference of loaded.value.preferences) {
-      this.preferences.set(preference.operatorId, preference);
-    }
-    this.initialized = true;
-  }
+  initialize(): Promise<void> { return this.persistence.initialize(); }
 
   get(operatorId: string): SstvTxPreferences {
     return this.preferences.get(operatorId) ?? {
@@ -59,17 +40,8 @@ export class SstvTxPreferenceStore {
       ...parsed,
       updatedAt: Date.now(),
     });
-    this.preferences.set(operatorId, preference);
-    await this.persist();
+    await this.persistence.transaction(records => records.set(operatorId, preference));
     return preference;
   }
 
-  private persist(): Promise<void> {
-    const serialized = `${JSON.stringify({ preferences: [...this.preferences.values()] }, null, 2)}\n`;
-    const operation = this.persistTail
-      .catch(() => undefined)
-      .then(() => this.writer.writeFile(this.filePath, serialized));
-    this.persistTail = operation;
-    return operation;
-  }
 }

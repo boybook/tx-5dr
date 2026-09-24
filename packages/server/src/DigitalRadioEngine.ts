@@ -1,3 +1,4 @@
+import { ImagePersistenceCoordinator } from './image-radio/ImagePersistenceCoordinator.js';
 import {
   SlotClock,
   SlotScheduler,
@@ -261,6 +262,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private physicalTxCoordinator: PhysicalTxCoordinator;
   private operatorIntentCoordinator: OperatorIntentCoordinator;
   private resourceManager: ResourceManager;
+  private imagePersistence: ImagePersistenceCoordinator | null = null;
   private imageRadioService: ImageRadioService | null = null;
   private imageArtifactStore: ImageArtifactStore | null = null;
   private imageComposerBackgroundStore: ImageComposerBackgroundStore | null = null;
@@ -1264,18 +1266,13 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     this.dataDir = dataDir;
     const cacheDir = await tx5drPaths.getCacheDir();
     this._pluginManager.setDataDir(dataDir);
-    this.imageArtifactStore = new ImageArtifactStore(path.join(dataDir, 'image-radio'));
-    await this.imageArtifactStore.initialize();
-    this.imageComposerBackgroundStore = new ImageComposerBackgroundStore(path.join(dataDir, 'image-radio'));
-    await this.imageComposerBackgroundStore.initialize();
-    this.imageHistoryStore = new ImageHistoryStore(path.join(dataDir, 'image-radio'));
-    await this.imageHistoryStore.initialize();
-    await this.imageHistoryStore.reconcileReceivedArtifacts(this.imageArtifactStore.listAll());
-    this.imageArtifactStore.setRemovalListener((artifactId) => this.imageHistoryStore!.removeByArtifact(artifactId));
-    this.imageTemplateStore = new ImageTemplateStore(path.join(dataDir, 'image-radio'));
-    await this.imageTemplateStore.initialize();
-    this.sstvTxPreferenceStore = new SstvTxPreferenceStore(path.join(dataDir, 'image-radio'));
-    await this.sstvTxPreferenceStore.initialize();
+    this.imagePersistence = new ImagePersistenceCoordinator(path.join(dataDir, 'image-radio'));
+    this.imageArtifactStore = this.imagePersistence.artifacts;
+    this.imageComposerBackgroundStore = this.imagePersistence.backgrounds;
+    this.imageHistoryStore = this.imagePersistence.history;
+    this.imageTemplateStore = this.imagePersistence.templates;
+    this.sstvTxPreferenceStore = this.imagePersistence.preferences;
+    await this.imagePersistence.initialize();
     this.imageRadioService = new ImageRadioService(
       this.audioStreamManager,
       this.imageArtifactStore,
@@ -1288,6 +1285,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       undefined,
       new ImagePaperSpool(path.join(cacheDir, 'image-radio-paper')),
       () => this.radioManager.getConfig().type === 'none' && !ConfigManager.getInstance().getActiveVirtualRadioProfile(),
+      () => this.imagePersistence!.getStatus(),
     );
     this.imageRadioService.on('status', (status) => this.emit('imageRadioStatus', status));
     this.imageRadioService.on('rxEvent', (event) => this.emit('imageRxEvent', event));

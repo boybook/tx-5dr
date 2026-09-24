@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 
 import { createLogger } from '../logger.js';
 
@@ -15,7 +16,7 @@ export interface SafeWriteOptions {
 
 export class JsonRecoveryError extends Error {
   constructor(message: string, public readonly filePath: string, public readonly causes: string[] = []) {
-    super(message);
+    super(causes.length ? `${message} (${causes.slice(0, 10).join('; ')})` : message);
     this.name = 'JsonRecoveryError';
   }
 }
@@ -33,8 +34,9 @@ async function exists(filePath: string): Promise<boolean> {
   try {
     await fs.access(filePath);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
   }
 }
 
@@ -157,45 +159,43 @@ export interface LoadJsonWithRecoveryOptions<T> {
   createIfMissing?: boolean;
 }
 
-interface Candidate<T> {
-  path: string;
-  label: string;
-  value?: T;
-  serialized?: string;
-  error?: string;
-}
-
-async function parseCandidate<T>(candidatePath: string, label: string, validate: (value: unknown) => T): Promise<Candidate<T>> {
-  try {
-    const serialized = await fs.readFile(candidatePath, 'utf-8');
-    if (serialized.trim().length === 0) {
-      throw new Error('empty file');
-    }
-    return { path: candidatePath, label, value: validate(JSON.parse(serialized)), serialized };
-  } catch (error) {
-    return { path: candidatePath, label, error: (error as Error).message };
+/** Only absence is recoverable as a new file; an inaccessible file is still user data. */
+export async function readOptionalFile(filePath: string): Promise<Buffer | null> {
+  try { return await fs.readFile(filePath); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
   }
 }
 
-async function listTempCandidates(filePath: string): Promise<string[]> {
+export async function listRecoveryCandidates(filePath: string, backups = 3): Promise<string[]> {
   const dir = path.dirname(filePath);
-  const base = path.basename(filePath);
-  try {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-    const files = await Promise.all(entries
-      .filter(entry => entry.isFile() && entry.name.startsWith(`${base}.tmp-`))
-      .map(async (entry) => {
-        const candidatePath = path.join(dir, entry.name);
-        const stat = await fs.stat(candidatePath).catch(() => null);
-        return stat ? { path: candidatePath, mtimeMs: stat.mtimeMs } : null;
-      }));
-    return files
-      .filter((entry): entry is { path: string; mtimeMs: number } => Boolean(entry))
-      .sort((a, b) => b.mtimeMs - a.mtimeMs)
-      .map(entry => entry.path);
-  } catch {
-    return [];
+  let entries;
+  try { entries = await fs.readdir(dir, { withFileTypes: true }); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
   }
+  const names = new Set(Array.from({ length: backups }, (_, i) => `${path.basename(filePath)}.bak.${i + 1}`));
+  const candidates = await Promise.all(entries
+    .filter(entry => names.has(entry.name) || entry.name.startsWith(`${path.basename(filePath)}.tmp-`))
+    .map(async entry => {
+      const candidatePath = path.join(dir, entry.name);
+      try { return { path: candidatePath, mtime: (await fs.stat(candidatePath)).mtimeMs }; }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw error;
+      }
+    }));
+  return candidates.filter((item): item is { path: string; mtime: number } => item !== null)
+    .sort((a, b) => b.mtime - a.mtime || a.path.localeCompare(b.path)).map(item => item.path);
+}
+
+/** Do not include JSON contents or validator messages (which can quote secret values). */
+export function jsonFailureCode(error: unknown): string {
+  if (error instanceof SyntaxError) return 'INVALID_JSON';
+  const code = (error as NodeJS.ErrnoException)?.code;
+  return typeof code === 'string' ? code : 'INVALID_SCHEMA';
 }
 
 export async function loadJsonWithRecovery<T>(
@@ -203,53 +203,39 @@ export async function loadJsonWithRecovery<T>(
   options: LoadJsonWithRecoveryOptions<T>,
 ): Promise<{ value: T; recoveredFrom?: string; createdDefault: boolean; serialized: string }> {
   const writer = options.writer ?? new SafeFileWriter({ backups: options.backups ?? 3 });
-  const createIfMissing = options.createIfMissing !== false;
-  const mainExists = await exists(filePath);
-
-  if (!mainExists) {
-    const defaultValue = options.defaultValue();
-    const serialized = `${JSON.stringify(defaultValue, null, 2)}\n`;
-    if (createIfMissing) {
-      await writer.writeFile(filePath, serialized, { backups: options.backups ?? 3 });
+  const main = await readOptionalFile(filePath);
+  const failures: string[] = [];
+  if (main !== null) {
+    try {
+      const serialized = main.toString('utf8');
+      return { value: options.validate(JSON.parse(serialized)), createdDefault: false, serialized };
+    } catch (error) { failures.push(`main: ${jsonFailureCode(error)}`); }
+  }
+  const candidates = await listRecoveryCandidates(filePath, options.backups);
+  for (const candidatePath of candidates) {
+    const raw = await readOptionalFile(candidatePath);
+    if (raw === null) continue;
+    let value: T;
+    const serialized = raw.toString('utf8');
+    try { value = options.validate(JSON.parse(serialized)); }
+    catch (error) {
+      failures.push(`${path.basename(candidatePath)}: ${jsonFailureCode(error)}`);
+      continue;
     }
-    return { value: defaultValue, createdDefault: true, serialized };
-  }
-
-  const main = await parseCandidate(filePath, 'main', options.validate);
-  if (main.value !== undefined) {
-    return { value: main.value, createdDefault: false, serialized: main.serialized ?? '' };
-  }
-
-  const rawCandidatePaths = [
-    ...(await listTempCandidates(filePath)),
-    ...Array.from({ length: options.backups ?? 3 }, (_, index) => `${filePath}.bak.${index + 1}`),
-  ];
-  const candidatePaths = (await Promise.all(rawCandidatePaths.map(async (candidatePath, order) => {
-    const stat = await fs.stat(candidatePath).catch(() => null);
-    return stat ? { path: candidatePath, mtimeMs: stat.mtimeMs, order } : null;
-  })))
-    .filter((candidate): candidate is { path: string; mtimeMs: number; order: number } => Boolean(candidate))
-    .sort((a, b) => b.mtimeMs - a.mtimeMs || a.order - b.order)
-    .map(candidate => candidate.path);
-
-  const failures = [`main: ${main.error ?? 'unknown error'}`];
-  for (const candidatePath of candidatePaths) {
-    const candidate = await parseCandidate(candidatePath, candidatePath, options.validate);
-    if (candidate.value !== undefined) {
-      const corruptPath = `${filePath}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-      await fs.rename(filePath, corruptPath).catch((error) => {
-        logger.warn('failed to move corrupt json aside', { filePath, corruptPath, error: (error as Error).message });
-      });
-      await writer.writeFile(filePath, candidate.serialized ?? `${JSON.stringify(candidate.value, null, 2)}\n`, { backups: options.backups ?? 3 });
-      return {
-        value: candidate.value,
-        recoveredFrom: candidate.path,
-        createdDefault: false,
-        serialized: candidate.serialized ?? '',
-      };
+    // Copy durably before replacing; a failed archive must never allow an overwrite.
+    if (main !== null) {
+      const digest = createHash('sha256').update(main).digest('hex');
+      await writer.writeFile(`${filePath}.corrupt-${digest}`, main, { backups: 0 });
     }
-    failures.push(`${candidate.label}: ${candidate.error ?? 'unknown error'}`);
+    // Recovery must not rotate away the candidate that made recovery possible.
+    await writer.writeFile(filePath, serialized, { backups: 0 });
+    return { value, recoveredFrom: candidatePath, createdDefault: false, serialized };
   }
-
+  if (main === null && candidates.length === 0) {
+    const value = options.validate(options.defaultValue());
+    const serialized = `${JSON.stringify(value, null, 2)}\n`;
+    if (options.createIfMissing !== false) await writer.writeFile(filePath, serialized, { backups: options.backups ?? 3 });
+    return { value, createdDefault: true, serialized };
+  }
   throw new JsonRecoveryError(`Unable to recover JSON file: ${filePath}`, filePath, failures);
 }

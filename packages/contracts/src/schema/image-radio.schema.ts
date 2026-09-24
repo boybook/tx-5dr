@@ -108,8 +108,23 @@ export const SstvTxStatusSchema = z.object({
 });
 export type SstvTxStatus = z.infer<typeof SstvTxStatusSchema>;
 
+export const ImagePersistenceStoreStatusSchema = z.object({
+  store: z.enum(['artifacts', 'history', 'templates', 'backgrounds', 'preferences']),
+  state: z.enum(['loading', 'ready', 'recovered', 'unavailable']),
+  reason: z.enum(['migrated', 'backup_restored', 'salvaged', 'rebuilt', 'future_version', 'io_error']).optional(),
+  retainedRecords: z.number().int().nonnegative().default(0),
+  rejectedRecords: z.number().int().nonnegative().default(0),
+});
+export type ImagePersistenceStoreStatus = z.infer<typeof ImagePersistenceStoreStatusSchema>;
+export const ImagePersistenceStatusSchema = z.object({
+  available: z.boolean(),
+  stores: z.array(ImagePersistenceStoreStatusSchema),
+});
+export type ImagePersistenceStatus = z.infer<typeof ImagePersistenceStatusSchema>;
+
 export const ImageRadioStatusSchema = z.object({
   serviceState: ImageRadioServiceStateSchema,
+  persistence: ImagePersistenceStatusSchema.optional(),
   family: ImageFamilySchema.nullable(),
   receiveProfile: ImageReceiveProfileSchema.nullable(),
   rxState: ImageRxStateSchema,

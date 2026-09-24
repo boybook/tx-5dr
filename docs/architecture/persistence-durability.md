@@ -20,7 +20,58 @@ Server JSON stores use `JsonFileStore` over `SafeFileWriter`:
 5. Best-effort `fsync` the parent directory on POSIX.
 6. Retry transient Windows `EPERM` / `EBUSY` / `EACCES` rename failures.
 
-On load, existing corrupt files are never overwritten with defaults. Recovery tries the main file, newest temp files, then backups. If recovery succeeds, the corrupt file is moved aside as `.corrupt-<timestamp>` and the recovered version is atomically restored. If recovery fails, startup surfaces an error rather than replacing user data.
+On load, existing corrupt files are never overwritten with defaults. Recovery tries the main file, then existing temp files and backups ordered by modification time. A missing main file does not bypass surviving recovery candidates. Only `ENOENT` means absence; permissions and I/O failures must not create defaults. Before replacing a corrupt main file, its bytes are durably copied to `.corrupt-<sha256>`; failure to preserve them aborts recovery. Recovery does not rotate away its source candidate. The default policy remains strict: unrecoverable critical configuration/auth data raises a classified error rather than being reset. Optional feature owners must contain that error within their own availability boundary.
+
+## Image Feature Persistence
+
+Image metadata is durable user data owned by the optional image feature, not a
+prerequisite for server readiness. `ImagePersistenceCoordinator` owns one shared
+initialization promise for artifacts, history, templates, composer backgrounds
+and transmit preferences. Every store is attempted; only after all are usable
+may history reconciliation and image operations begin. An unrecoverable store
+makes image operations unavailable for that process lifetime, without preventing
+HTTP/WebSocket readiness, settings access, or other radio modes. Repair is retried
+on restart, not by each API request.
+
+Disk collections use an explicit `schemaVersion` and server-owned record decoders,
+separate from API envelopes. Unversioned data is v0 and known historical values
+are migrated before validation; v1 is the current write format. A future version
+is never replaced by defaults or an older backup. Critical values such as identity
+and frequency are never invented to make an invalid record pass validation.
+
+Image recovery first prefers a complete migrated main file, then the newest
+complete backup/temp candidate. Otherwise it salvages individually valid records
+from the main collection, or the newest decodable candidate if the main collection
+cannot be decoded. It never merges generations or silently chooses between
+conflicting identities. If nothing survives, it creates an empty collection.
+Built-in templates and preference defaults remain business-layer defaults.
+
+Before migration or repair, raw candidates are durably archived under
+`image-radio/recovery/<filename>/<sha256>.original`, together with a deterministic
+report containing source names, validation paths/codes and recovery counts. These
+archives are deduplicated by content, excluded from backup rotation, and never
+automatically deleted. Archive/report/commit failure leaves the original main file
+unchanged and disables the image feature. Recovery never deletes image or asset
+files or runs quota eviction. Normal quota enforcement only considers current
+indexed artifacts, never unreferenced files or recovery archives.
+
+Each collection serializes complete read-modify-write transactions, validates the
+candidate before writing, and publishes memory only after the atomic file commit.
+Deletion commits metadata before unlinking PNGs. Composer backgrounds use immutable
+content-addressed assets for new records; legacy background paths remain readable.
+Cross-collection commits are not atomic: reconciliation may repair received-image
+history, and a cleanup failure may leave an unreferenced file, but never justifies
+clearing another collection or reporting a failed disk write as successful.
+
+Public image status carries schema-validated persistence health and recovery
+counts, independently of native codec availability. Unavailable operations return
+`IMAGE_PERSISTENCE_UNAVAILABLE` before acquiring playback/PTT resources. Clients
+show one persistent contextual notice rather than repeated notifications. Full
+filesystem paths and original data remain server-side.
+
+Every added image collection or disk-format change must include old-format fixtures,
+write/reload tests, failed-commit tests, and startup-isolation tests. Shared recovery
+changes must also keep the strict auth/config recovery tests passing.
 
 ## ADIF Logbook Commits
 

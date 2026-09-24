@@ -1,3 +1,5 @@
+import { ImagePersistenceNotice } from '../components/image-radio/ImagePersistenceNotice';
+import { useImageRadioControls } from '../hooks/useImageRadio';
 import React, { useEffect, useState } from 'react';
 import { Button, Card, CardBody } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
@@ -26,6 +28,8 @@ const IMAGE_LEFT_MIN_PANE_HEIGHT_PX = 120;
 
 export function ImageLeftLayout() {
   const { t } = useTranslation('common');
+  const { status } = useImageRadioControls();
+  const imageAvailable = status !== null && status.persistence?.available !== false;
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   const connection = useConnection();
   const stationInfo = useStationInfo();
@@ -124,7 +128,7 @@ export function ImageLeftLayout() {
               : undefined}
           >
             <Card shadow="sm" className="h-full w-full overflow-hidden">
-              <CardBody className="h-full p-0"><ImageReceiveCanvas /></CardBody>
+              <CardBody className="h-full p-0"><ImagePersistenceNotice persistence={status?.persistence} />{imageAvailable && <div className="min-h-0 flex-1"><ImageReceiveCanvas /></div>}</CardBody>
             </Card>
           </div>
           <HorizontalPaneDivider

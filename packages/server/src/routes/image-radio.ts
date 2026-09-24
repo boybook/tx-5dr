@@ -30,6 +30,13 @@ function requireSstvTxPreferences(engine: DigitalRadioEngine) {
 export async function imageRadioRoutes(fastify: FastifyInstance): Promise<void> {
   const engine = DigitalRadioEngine.getInstance();
 
+  fastify.addHook('preHandler', async (request, reply) => {
+    if (request.routeOptions.url?.endsWith('/status')) return;
+    if (engine.getImageRadioService()?.getStatus().persistence?.available === false) {
+      return reply.code(503).send({ success: false, error: { code: 'IMAGE_PERSISTENCE_UNAVAILABLE' } });
+    }
+  });
+
   fastify.get('/status', async (_request, reply) => {
     return reply.send({ success: true, status: engine.getImageRadioService()?.getStatus() ?? null });
   });

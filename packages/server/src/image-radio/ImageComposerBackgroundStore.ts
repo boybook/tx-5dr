@@ -5,41 +5,32 @@ import path from 'node:path';
 import { ImageComposerAssetSchema, ImageComposerBackgroundSchema, ImageComposerTransformSchema, type ImageComposerAsset, type ImageComposerBackground, type ImageComposerTransform } from '@tx5dr/contracts';
 import { PNG } from 'pngjs';
 
-import { SafeFileWriter, loadJsonWithRecovery } from '../utils/persistence/index.js';
+import { SafeFileWriter } from '../utils/persistence/index.js';
+
+import { ImageRecordStore } from './ImageRecordStore.js';
+import { PersistedBackgroundSchema } from './ImagePersistenceSchema.js';
 
 const MAX_BACKGROUND_BYTES = 5 * 1024 * 1024;
 const MAX_BACKGROUND_DIMENSION = 1024;
 const MAX_BACKGROUND_PIXELS = 1024 * 1024;
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 
-interface BackgroundIndex { backgrounds: ImageComposerBackground[] }
-
 export class ImageComposerBackgroundStore {
   private readonly writer = new SafeFileWriter({ backups: 3 });
   private readonly indexPath: string;
   private readonly imageDir: string;
   private readonly assetDir: string;
-  private readonly backgrounds = new Map<string, ImageComposerBackground>();
-  private initialized = false;
-  private persistTail: Promise<void> = Promise.resolve();
+  readonly persistence: ImageRecordStore<ImageComposerBackground>;
+  private get backgrounds() { return this.persistence.values; }
 
   constructor(baseDir: string) {
     this.indexPath = path.join(baseDir, 'composer-backgrounds.json');
     this.imageDir = path.join(baseDir, 'composer-backgrounds');
     this.assetDir = path.join(baseDir, 'composer-assets');
+    this.persistence = new ImageRecordStore(this.indexPath, 'backgrounds', 'backgrounds', PersistedBackgroundSchema, item => item.operatorId);
   }
 
-  async initialize(): Promise<void> {
-    if (this.initialized) return;
-    await fs.mkdir(this.imageDir, { recursive: true });
-    const loaded = await loadJsonWithRecovery<BackgroundIndex>(this.indexPath, {
-      defaultValue: () => ({ backgrounds: [] }),
-      validate: (value) => ({ backgrounds: ImageComposerBackgroundSchema.array().parse((value as BackgroundIndex)?.backgrounds ?? []) }),
-      writer: this.writer,
-    });
-    for (const background of loaded.value.backgrounds) this.backgrounds.set(background.operatorId, background);
-    this.initialized = true;
-  }
+  initialize(): Promise<void> { return this.persistence.initialize(); }
 
   get(operatorId: string): ImageComposerBackground | null {
     return this.backgrounds.get(operatorId) ?? null;
@@ -47,8 +38,9 @@ export class ImageComposerBackgroundStore {
 
   async read(operatorId: string): Promise<Buffer> {
     await this.initialize();
-    if (!this.backgrounds.has(operatorId)) throw new Error('IMAGE_COMPOSER_BACKGROUND_NOT_FOUND');
-    return fs.readFile(this.imagePath(operatorId));
+    const background = this.backgrounds.get(operatorId);
+    if (!background) throw new Error('IMAGE_COMPOSER_BACKGROUND_NOT_FOUND');
+    return background.assetId ? this.readAsset(operatorId, background.assetId) : fs.readFile(this.imagePath(operatorId));
   }
 
   async saveAsset(operatorId: string, source: Buffer): Promise<ImageComposerAsset> {
@@ -96,24 +88,23 @@ export class ImageComposerBackgroundStore {
       updatedAt: Date.now(),
       imageUrl: `/api/image-radio/composer-backgrounds/${encodeURIComponent(operatorId)}/image`,
     });
-    await this.writer.writeFile(this.imagePath(operatorId), await this.readAsset(operatorId, asset.id), { backups: 1 });
-    this.backgrounds.set(operatorId, background);
-    await this.persist();
+    await this.persistence.transaction(records => records.set(operatorId, background));
     return background;
   }
 
   async updateTransform(operatorId: string, transform: ImageComposerTransform): Promise<ImageComposerBackground> {
     await this.initialize();
-    const current = this.backgrounds.get(operatorId);
-    if (!current) throw new Error('IMAGE_COMPOSER_BACKGROUND_NOT_FOUND');
-    const next = ImageComposerBackgroundSchema.parse({
-      ...current,
-      transform: ImageComposerTransformSchema.parse(transform),
-      updatedAt: Date.now(),
+    return this.persistence.transaction(records => {
+      const current = records.get(operatorId);
+      if (!current) throw new Error('IMAGE_COMPOSER_BACKGROUND_NOT_FOUND');
+      const next = ImageComposerBackgroundSchema.parse({
+        ...current,
+        transform: ImageComposerTransformSchema.parse(transform),
+        updatedAt: Date.now(),
+      });
+      records.set(operatorId, next);
+      return next;
     });
-    this.backgrounds.set(operatorId, next);
-    await this.persist();
-    return next;
   }
 
   private imagePath(operatorId: string): string {
@@ -126,10 +117,4 @@ export class ImageComposerBackgroundStore {
     return path.join(this.assetDir, owner, `${assetId}.png`);
   }
 
-  private persist(): Promise<void> {
-    const serialized = `${JSON.stringify({ backgrounds: [...this.backgrounds.values()] }, null, 2)}\n`;
-    const operation = this.persistTail.catch(() => undefined).then(() => this.writer.writeFile(this.indexPath, serialized));
-    this.persistTail = operation;
-    return operation;
-  }
 }
