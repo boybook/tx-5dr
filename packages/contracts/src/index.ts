@@ -8,6 +8,7 @@ export * from './schema/spectrum-config.schema.js';
 export * from './schema/websocket.schema.js';
 export * from './schema/mode.schema.js';
 export * from './schema/qso.schema.js';
+export * from './schema/incomplete-qso.schema.js';
 export * from './schema/cycle.schema.js';
 
 // 显式导出slot-info.schema.js以避免与websocket.schema.js的冲突

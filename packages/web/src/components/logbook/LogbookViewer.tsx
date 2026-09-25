@@ -29,9 +29,11 @@ import {
 } from '@heroui/react';
 import type { DateRangePickerProps } from '@heroui/react';
 import QSOFormModal from './QSOFormModal';
+import IncompleteQsoReview from './IncompleteQsoReview';
+import AnimatedLogbookGlobe from './AnimatedLogbookGlobe';
 import { SearchIcon } from '@heroui/shared-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faChevronDown, faSync, faDownload, faUpload, faEdit, faTrash, faFolderOpen, faCog, faPlus, faTableCells } from '@fortawesome/free-solid-svg-icons';
+import { faChevronDown, faSync, faDownload, faUpload, faEdit, faTrash, faFolderOpen, faCog, faPlus, faTableCells, faListCheck } from '@fortawesome/free-solid-svg-icons';
 import type {
   QSORecord,
   LogBookStatistics,
@@ -139,6 +141,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   const importFileInputRef = useRef<HTMLInputElement | null>(null);
   const refreshLogbookDataRef = useRef<() => Promise<void>>(async () => {});
   const [qsos, setQsos] = useState<QSORecord[]>([]);
+  const [logbookView, setLogbookView] = useState<'qsos' | 'review'>('qsos');
   const [statistics, setStatistics] = useState<LogBookStatistics | null>(null);
   const [health, setHealth] = useState<LogbookHealth | null>(null);
   const [backupStatus, setBackupStatus] = useState<LogbookBackupStatus | null>(null);
@@ -2005,6 +2008,19 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           <span className="hidden md:inline">{t('addQso.button')}</span>
         </Button>
 
+        <Tooltip content={t('review.title')}>
+          <Button
+            variant="flat"
+            size="sm"
+            isIconOnly
+            aria-label={t('review.title')}
+            onPress={() => setLogbookView('review')}
+            className="h-8 w-8 min-w-8"
+          >
+            <FontAwesomeIcon icon={faListCheck} />
+          </Button>
+        </Tooltip>
+
         {viewPolicy.canOpenRecovery && (
           <Button
             color={backupStatus?.unsaved?.length ? 'danger' : 'warning'}
@@ -2332,21 +2348,35 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       )}
 
       {viewPolicy.showLogbookContent && (
-        <RecentQSOGlobeCard
-          logBookId={effectiveLogBookId}
-          qsos={qsos}
-          loading={loading}
-          bandFilter={filters.band}
-          pageSize={itemsPerPage}
-          pageSizeOptions={[...PAGE_SIZE_OPTIONS]}
-          onPageSizeChange={handleItemsPerPageChange}
-          desktopLeftOverlay={desktopGlobeTitleOverlay}
-          desktopRightOverlay={desktopDxccOverlay}
-          operators={operators}
-        />
+        <AnimatedLogbookGlobe visible={logbookView === 'qsos'}>
+          {drawingActive => <RecentQSOGlobeCard
+            active={drawingActive}
+            logBookId={effectiveLogBookId}
+            qsos={qsos}
+            loading={loading}
+            bandFilter={filters.band}
+            pageSize={itemsPerPage}
+            pageSizeOptions={[...PAGE_SIZE_OPTIONS]}
+            onPageSizeChange={handleItemsPerPageChange}
+            desktopLeftOverlay={desktopGlobeTitleOverlay}
+            desktopRightOverlay={desktopDxccOverlay}
+            operators={operators}
+          />}
+        </AnimatedLogbookGlobe>
       )}
 
-      {viewPolicy.showLogbookContent && (
+      {viewPolicy.showLogbookContent && logbookView === 'review' && (
+        <IncompleteQsoReview logBookId={effectiveLogBookId} writable={viewPolicy.writable}
+          onBack={() => setLogbookView('qsos')}
+          onRecorded={() => { void refreshLogbookData(); }}
+          onOpenQso={callsign => {
+            setFilters({ callsign });
+            setCurrentPage(1);
+            setLogbookView('qsos');
+          }} />
+      )}
+
+      {viewPolicy.showLogbookContent && logbookView === 'qsos' && (
       <div className="p-2 md:p-4 lg:p-6 max-w-7xl mx-auto">
       {/* 通知区域 */}
       {/* Plugin-based sync provider messages */}

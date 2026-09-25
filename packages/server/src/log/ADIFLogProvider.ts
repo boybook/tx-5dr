@@ -540,6 +540,11 @@ export class ADIFLogProvider implements ILogProvider {
     return record ? cloneRecord(record) : null;
   }
 
+  findByCallsign(callsign: string): QSORecord[] {
+    this.assertReadable();
+    return this.document?.findByCallsign(callsign).map(cloneRecord) ?? [];
+  }
+
   async queryQSOs(options?: LogQueryOptions): Promise<QSORecord[]> {
     this.assertReadable();
     return this.records.query(options);

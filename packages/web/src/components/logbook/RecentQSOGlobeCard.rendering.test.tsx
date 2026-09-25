@@ -53,9 +53,15 @@ describe('logbook globe drawing lifetime', () => {
     vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
     act(() => document.dispatchEvent(new Event('visibilitychange')));
     expect(mocks.globe.resumeAnimation).toHaveBeenCalledTimes(resumeCount + 1);
+    const pausedCount = mocks.globe.pauseAnimation.mock.calls.length;
+    view.rerender(<RecentQSOGlobeCard {...props} active={false} />);
+    expect(mocks.globe.pauseAnimation).toHaveBeenCalledTimes(pausedCount + 1);
+    view.rerender(<RecentQSOGlobeCard {...props} active />);
+    expect(mocks.globe.resumeAnimation).toHaveBeenCalledTimes(resumeCount + 2);
+    const resumeBeforeUnmount = mocks.globe.resumeAnimation.mock.calls.length;
     view.unmount();
     expect(disconnect).toHaveBeenCalledOnce();
     act(() => document.dispatchEvent(new Event('visibilitychange')));
-    expect(mocks.globe.resumeAnimation).toHaveBeenCalledTimes(resumeCount + 1);
+    expect(mocks.globe.resumeAnimation).toHaveBeenCalledTimes(resumeBeforeUnmount);
   });
 });

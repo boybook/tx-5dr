@@ -128,6 +128,29 @@ These task records are in-memory coordination state, not another logbook or a
 crash-replay journal. Only a verified ADIF commit is reported as saved. A hard
 process exit can still lose a record which has not reached durable storage.
 
+## Incomplete Digital QSO Review
+
+FT8/FT4 review candidates are evidence, not formal QSOs. They do not enter ADIF,
+statistics, exports, or plugin upload queues before an operator confirms a batch.
+The server observes finalized/late decode snapshots and physically on-air TX
+facts; capture, parsing, indexing, and candidate writes run in a separate process.
+Capture has a bounded admission queue and reports drops rather than delaying RF
+timing. Candidate files are versioned, safely replaced and synced in the data
+directory. Monthly summary indexes are derived and rebuilt from candidate files
+when missing or stale. The server never scans daily frame JSONL files to serve
+review queries.
+
+A confirmed batch first persists per-candidate commit intent, then appends formal
+QSOs through the logbook's revision-checked batch operation. Each QSO ID derives
+from its candidate ID. On restart, an intent is reconciled against that exact
+ADIF ID before any retry, so a committed QSO is not appended twice. Candidate
+status, WebSocket notices, and sync-provider uploads are post-commit effects;
+their failure cannot turn a verified ADIF commit into an uncommitted QSO. Upload
+enqueue is retried independently and uses the existing Host queue. A candidate
+linked by an ordinary QSO completion does not enter the retrospective upload
+recovery path. Candidate storage failure affects this optional review feature,
+not radio operation or formal logbook availability.
+
 ## Logbook Backup And Manual Restore
 
 The main `.adi` remains the only source used for startup, queries and sync. A backup is an operator recovery point, never an automatic startup candidate. Each book has one bounded directory:

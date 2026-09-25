@@ -48,6 +48,7 @@ import type { DecodeWorkerPoolHealthSnapshot } from './decode/WSJTXDecodeProcess
 import { WSJTXEncodeWorkQueue } from './decode/WSJTXEncodeWorkQueue.js';
 import { DigitalMessagePreflightService } from './decode/DigitalMessagePreflightService.js';
 import { SlotPackManager } from './slot/SlotPackManager.js';
+import { IncompleteQsoService } from './log/IncompleteQsoService.js';
 import { ConfigManager } from './config/config-manager.js';
 import { SpectrumScheduler } from './audio/SpectrumScheduler.js';
 import { AudioMixer } from './audio/AudioMixer.js';
@@ -299,6 +300,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private virtualRadioSession: VirtualRadioSession | null = null;
   private virtualRadioSessionStopPromise: Promise<void> | null = null;
   private dataDir = '';
+  private incompleteQsoService: IncompleteQsoService | null = null;
   private voiceManualPttActive = false;
   private voiceKeyerPttActive = false;
   private physicalPttActive = false;
@@ -756,6 +758,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   public getSlotPackManager(): SlotPackManager {
     return this.slotPackManager;
+  }
+
+  public getIncompleteQsoService(): IncompleteQsoService | null {
+    return this.incompleteQsoService;
   }
 
   public getRadioManager(): PhysicalRadioManager {
@@ -1264,6 +1270,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     // 更新插件管理器的数据目录（在 initialize 阶段异步获取）
     const dataDir = await tx5drPaths.getDataDir();
     this.dataDir = dataDir;
+    this.incompleteQsoService = new IncompleteQsoService(dataDir);
+    this.incompleteQsoService.start();
+    this.on('qsoRecordAdded', data => this.incompleteQsoService?.linkQso(data.logBookId, data.qsoRecord));
     const cacheDir = await tx5drPaths.getCacheDir();
     this._pluginManager.setDataDir(dataDir);
     this.imagePersistence = new ImagePersistenceCoordinator(path.join(dataDir, 'image-radio'));
@@ -1364,6 +1373,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       spectrumScheduler: this.spectrumScheduler,
       operatorManager: this._operatorManager,
       callsignTracker: this._callsignTracker,
+      reviewService: this.incompleteQsoService ?? undefined,
       getTransmissionPipeline: () => this.transmissionPipeline,
       getRadioBridge: () => this.radioBridge,
       getCurrentMode: () => this.currentMode,
