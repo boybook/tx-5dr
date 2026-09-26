@@ -1446,11 +1446,16 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       let observedFrequency: number | undefined;
       if (request.frequency !== undefined && result.frequencyApplied) {
         this.markCoreCapabilitySupported('writeFrequency');
-        const confirmation = await this.confirmFrequencyAfterWrite(request.frequency);
-        frequencyConfirmed = confirmation.confirmed;
-        observedFrequency = confirmation.observedFrequency;
-        if (frequencyWrite && confirmation.confirmed) {
-          this.completeFrequencyWrite(frequencyWrite, confirmation.observedFrequency ?? request.frequency);
+        if (result.frequencyConfirmed !== undefined) {
+          frequencyConfirmed = result.frequencyConfirmed;
+          observedFrequency = result.observedFrequency;
+        } else {
+          const confirmation = await this.confirmFrequencyAfterWrite(request.frequency);
+          frequencyConfirmed = confirmation.confirmed;
+          observedFrequency = confirmation.observedFrequency;
+        }
+        if (frequencyWrite && frequencyConfirmed) {
+          this.completeFrequencyWrite(frequencyWrite, observedFrequency ?? request.frequency);
         } else {
           this.lastFrequencyConfirmation = 'mismatch';
           this.pendingFrequencyTarget = request.frequency;
@@ -1490,7 +1495,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         ...result,
         frequencyConfirmed,
         ...(observedFrequency !== undefined ? { observedFrequency } : {}),
-        modeConfirmed: result.modeApplied,
+        modeConfirmed: result.modeConfirmed,
         operationId,
       };
       return enrichedResult;

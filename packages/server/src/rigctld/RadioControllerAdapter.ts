@@ -84,6 +84,23 @@ function hzToBandwidth(hz: number): RadioModeBandwidth {
   return 'normal';
 }
 
+function toRigctlVfo(raw: string): RigctlVfo {
+  switch (raw.trim().toUpperCase()) {
+    case 'VFOA':
+    case 'MAIN':
+    case 'MAINA':
+      return 'VFOA';
+    case 'VFOB':
+    case 'SUB':
+    case 'MAINB':
+      return 'VFOB';
+    case 'MEM':
+      return 'MEM';
+    default:
+      throw new RigctldProtocolError(RigErr.EIO, `unsupported radio VFO: ${raw}`);
+  }
+}
+
 export class RadioControllerAdapter implements RadioController {
   private pttLeaseId: string | null = null;
 
@@ -270,23 +287,40 @@ export class RadioControllerAdapter implements RadioController {
     return `tx-5dr rigctld bridge — connection=${status}`;
   }
 
-  /**
-   * tx-5dr operates a single VFO abstraction. We report `VFOA` as the current
-   * VFO so Hamlib's `rig_open()` handshake can complete — but writes that try
-   * to switch to a *different* VFO (B or MEM) must surface as ENIMPL, otherwise
-   * loggers would believe they successfully switched VFOs and drift out of
-   * sync with what the rig is actually doing.
-   */
   async getVFO(): Promise<RigctlVfo> {
-    return 'VFOA';
+    this.requireConnected();
+    const conn = this.pm.getCurrentConnection();
+    if (!conn?.getVfo) {
+      // Preserve the single-VFO handshake fallback for backends that do not
+      // expose VFO control. Multi-VFO backends must report the physical VFO.
+      return 'VFOA';
+    }
+
+    try {
+      return toRigctlVfo(await conn.getVfo());
+    } catch (error) {
+      if (error instanceof RigctldProtocolError) throw error;
+      throw new RigctldProtocolError(RigErr.EIO, (error as Error).message);
+    }
   }
 
   async setVFO(vfo: RigctlVfo): Promise<void> {
-    if (vfo === 'VFOA') return;
-    throw new RigctldProtocolError(
-      RigErr.ENIMPL,
-      `tx-5dr exposes a single VFO; cannot switch to ${vfo}`,
-    );
+    this.requireConnected();
+    const conn = this.pm.getCurrentConnection();
+    if (!conn?.setVfo) {
+      if (vfo === 'VFOA') return;
+      throw new RigctldProtocolError(
+        RigErr.ENIMPL,
+        `active radio connection cannot switch to ${vfo}`,
+      );
+    }
+
+    try {
+      await conn.setVfo(vfo);
+    } catch (error) {
+      if (error instanceof RigctldProtocolError) throw error;
+      throw new RigctldProtocolError(RigErr.EIO, (error as Error).message);
+    }
   }
 
   /**

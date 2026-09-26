@@ -18,6 +18,9 @@ type MockRig = {
   getSplitFreq: ReturnType<typeof vi.fn>;
   setSplitFreq: ReturnType<typeof vi.fn>;
   setMode: ReturnType<typeof vi.fn>;
+  getVfo: ReturnType<typeof vi.fn>;
+  setVfo: ReturnType<typeof vi.fn>;
+  getVfoInfo: ReturnType<typeof vi.fn>;
   setPtt: ReturnType<typeof vi.fn>;
   getPtt: ReturnType<typeof vi.fn>;
   getFrequency: ReturnType<typeof vi.fn>;
@@ -113,6 +116,15 @@ function createConnectedConnection(rigOverrides: Partial<MockRig> = {}): {
     getSplitFreq: vi.fn().mockResolvedValue(null),
     setSplitFreq: vi.fn().mockResolvedValue(0),
     setMode: vi.fn().mockResolvedValue(0),
+    getVfo: vi.fn().mockResolvedValue('VFOA'),
+    setVfo: vi.fn().mockResolvedValue(0),
+    getVfoInfo: vi.fn().mockResolvedValue({
+      frequency: 7_100_000,
+      mode: 'USB',
+      bandwidth: 2400,
+      split: false,
+      satMode: false,
+    }),
     setPtt: vi.fn().mockResolvedValue(0),
     getPtt: vi.fn().mockResolvedValue(false),
     getFrequency: vi.fn().mockResolvedValue(7100000),
@@ -203,6 +215,18 @@ describe('HamlibConnection', () => {
       expect(rig.getFunction).not.toHaveBeenCalled();
     });
 
+  });
+
+  it('bridges physical VFO reads and writes through the serialized Hamlib queue', async () => {
+    const { connection, rig } = createConnectedConnection({
+      getVfo: vi.fn().mockResolvedValue('VFOB'),
+    });
+
+    await expect(connection.getVfo()).resolves.toBe('VFOB');
+    await expect(connection.setVfo('vfob')).resolves.toBeUndefined();
+
+    expect(rig.getVfo).toHaveBeenCalledTimes(1);
+    expect(rig.setVfo).toHaveBeenCalledWith('VFOB');
   });
 
   it('exposes Yaesu FT-710 TX audio routing through model-specific EX CAT', async () => {
@@ -800,12 +824,12 @@ describe('HamlibConnection', () => {
   it('applies frequency and mode as a single critical operating-state update', async () => {
     const sequence: string[] = [];
     const { connection, rig } = createConnectedConnection({
-      setFrequency: vi.fn().mockImplementation(async (frequency) => {
-        sequence.push(`frequency:${frequency}`);
+      setFrequency: vi.fn().mockImplementation(async (frequency, vfo) => {
+        sequence.push(`frequency:${frequency}:${vfo}`);
         return 0;
       }),
-      setMode: vi.fn().mockImplementation(async (mode, bandwidth) => {
-        sequence.push(`mode:${mode}:${bandwidth}`);
+      setMode: vi.fn().mockImplementation(async (mode, bandwidth, vfo) => {
+        sequence.push(`mode:${mode}:${bandwidth}:${vfo}`);
         return 0;
       }),
     });
@@ -822,27 +846,34 @@ describe('HamlibConnection', () => {
 
     expect(result).toEqual({
       frequencyApplied: true,
+      frequencyConfirmed: true,
+      observedFrequency: 7_100_000,
       modeApplied: true,
+      modeConfirmed: true,
+      observedMode: 'USB',
+      targetVfo: 'VFOA',
       modeError: undefined,
     });
+    expect(rig.getVfo).toHaveBeenCalledTimes(1);
+    expect(rig.getVfoInfo).toHaveBeenCalledWith('VFOA');
     expect(rig.setMode).toHaveBeenCalledTimes(1);
     expect(rig.setFrequency).toHaveBeenCalledTimes(2);
     expect(sequence).toEqual([
-      'frequency:7100000',
-      'mode:USB:nochange',
-      'frequency:7100000',
+      'frequency:7100000:VFOA',
+      'mode:USB:nochange:VFOA',
+      'frequency:7100000:VFOA',
     ]);
   });
 
   it('reasserts operating-state frequency even when the cached mode already matches', async () => {
     const sequence: string[] = [];
     const { connection, rig } = createConnectedConnection({
-      setFrequency: vi.fn().mockImplementation(async (frequency) => {
-        sequence.push(`frequency:${frequency}`);
+      setFrequency: vi.fn().mockImplementation(async (frequency, vfo) => {
+        sequence.push(`frequency:${frequency}:${vfo}`);
         return 0;
       }),
-      setMode: vi.fn().mockImplementation(async (mode, bandwidth) => {
-        sequence.push(`mode:${mode}:${bandwidth}`);
+      setMode: vi.fn().mockImplementation(async (mode, bandwidth, vfo) => {
+        sequence.push(`mode:${mode}:${bandwidth}:${vfo}`);
         return 0;
       }),
     });
@@ -863,10 +894,82 @@ describe('HamlibConnection', () => {
     expect(rig.setMode).toHaveBeenCalledTimes(1);
     expect(rig.setFrequency).toHaveBeenCalledTimes(2);
     expect(sequence).toEqual([
-      'frequency:7100000',
-      'mode:USB:nochange',
-      'frequency:7100000',
+      'frequency:7100000:VFOA',
+      'mode:USB:nochange:VFOA',
+      'frequency:7100000:VFOA',
     ]);
+  });
+
+  it('keeps VFO-B bound through CW and USB operating-state transactions', async () => {
+    const state = {
+      frequency: 14_074_000,
+      mode: 'USB',
+    };
+    const { connection, rig } = createConnectedConnection({
+      getVfo: vi.fn().mockResolvedValue('VFOB'),
+      setFrequency: vi.fn().mockImplementation(async (frequency: number, vfo: string) => {
+        expect(vfo).toBe('VFOB');
+        state.frequency = frequency;
+        return 0;
+      }),
+      setMode: vi.fn().mockImplementation(async (mode: string, _bandwidth: unknown, vfo: string) => {
+        expect(vfo).toBe('VFOB');
+        state.mode = mode;
+        return 0;
+      }),
+      getVfoInfo: vi.fn().mockImplementation(async (vfo: string) => {
+        expect(vfo).toBe('VFOB');
+        return {
+          ...state,
+          bandwidth: state.mode === 'CW' ? 600 : 2400,
+          split: false,
+          satMode: false,
+        };
+      }),
+    });
+    const testConnection = asTestConnection(connection);
+    testConnection.supportedModes = new Set(['CW', 'USB']);
+    testConnection.currentRadioMode = 'USB';
+
+    await expect(connection.applyOperatingState({
+      frequency: 7_030_000,
+      mode: 'CW',
+      bandwidth: 'nochange',
+      options: { intent: 'cw' },
+    })).resolves.toMatchObject({
+      targetVfo: 'VFOB',
+      frequencyConfirmed: true,
+      modeConfirmed: true,
+      observedFrequency: 7_030_000,
+      observedMode: 'CW',
+    });
+
+    await expect(connection.applyOperatingState({
+      frequency: 14_074_000,
+      mode: 'USB',
+      bandwidth: 'nochange',
+      options: { intent: 'voice' },
+    })).resolves.toMatchObject({
+      targetVfo: 'VFOB',
+      frequencyConfirmed: true,
+      modeConfirmed: true,
+      observedFrequency: 14_074_000,
+      observedMode: 'USB',
+    });
+
+    expect(rig.setFrequency.mock.calls).toEqual([
+      [7_030_000, 'VFOB'],
+      [7_030_000, 'VFOB'],
+      [14_074_000, 'VFOB'],
+      [14_074_000, 'VFOB'],
+    ]);
+    expect(rig.setMode.mock.calls).toEqual([
+      ['CW', 'nochange', 'VFOB'],
+      ['USB', 'nochange', 'VFOB'],
+    ]);
+    expect(rig.getVfoInfo).toHaveBeenNthCalledWith(1, 'VFOB');
+    expect(rig.getVfoInfo).toHaveBeenNthCalledWith(2, 'VFOB');
+    expect(rig.setVfo).not.toHaveBeenCalled();
   });
 
   it('does not add extra writes for frequency-only or mode-only operating-state updates', async () => {

@@ -10,7 +10,7 @@
 
 import { EventEmitter } from 'eventemitter3';
 import { HamLib } from 'hamlib';
-import type { PttType } from 'hamlib';
+import type { PttType, VFO, VfoInfo } from 'hamlib';
 import { SpectrumController } from 'hamlib/spectrum';
 import type { ManagedSpectrumConfig, SpectrumLine, SpectrumSupportSummary } from 'hamlib/spectrum';
 import serialport from 'serialport';
@@ -53,6 +53,7 @@ import type { RadioWriteResult } from './IRadioConnection.js';
 
 const logger = createLogger('HamlibConnection');
 const HAMLIB_POLLING_OPERATION_TIMEOUT_MS = 5000;
+const OPERATING_STATE_FREQUENCY_TOLERANCE_HZ = 10;
 const { SerialPort } = serialport;
 
 // RigMetadata is imported from meter/types.ts
@@ -382,6 +383,33 @@ function extractDevicePath(raw: string): string | null {
 
 function normalizeModeName(mode: string): string {
   return mode.trim().toUpperCase();
+}
+
+function normalizeHamlibVfo(vfo: string): VFO {
+  const aliases: Readonly<Record<string, VFO>> = {
+    VFOA: 'VFOA',
+    VFOB: 'VFOB',
+    VFOC: 'VFOC',
+    CURRVFO: 'currVFO',
+    VFO: 'VFO',
+    MEM: 'MEM',
+    MAIN: 'Main',
+    SUB: 'Sub',
+    TX: 'TX',
+    RX: 'RX',
+    MAINA: 'MainA',
+    MAINB: 'MainB',
+    MAINC: 'MainC',
+    SUBA: 'SubA',
+    SUBB: 'SubB',
+    SUBC: 'SubC',
+    OTHER: 'Other',
+  };
+  const normalized = aliases[vfo.trim().toUpperCase()];
+  if (!normalized) {
+    throw new Error(`Unsupported Hamlib VFO: ${vfo}`);
+  }
+  return normalized;
 }
 
 
@@ -1022,6 +1050,19 @@ export class HamlibConnection
     }, { id: 'getFrequency' });
   }
 
+  async getVfo(): Promise<string> {
+    return this.runSerializedTask('getVfo', async () => {
+      return this.performVfoRead();
+    }, { id: 'getVfo' });
+  }
+
+  async setVfo(vfo: string): Promise<void> {
+    const normalizedVfo = normalizeHamlibVfo(vfo);
+    await this.runSerializedTask('setVfo', async () => {
+      await this.performVfoWrite(normalizedVfo);
+    }, { critical: true });
+  }
+
   /**
    * 控制 PTT
    */
@@ -1138,22 +1179,23 @@ export class HamlibConnection
     return this.runSerializedTask('applyOperatingState', async () => {
       this.checkConnected();
 
+      const targetVfo = await this.performVfoRead();
       let frequencyApplied = false;
       let modeApplied = false;
       let modeError: Error | undefined;
 
       if (request.frequency !== undefined) {
-        await this.performFrequencyWrite(request.frequency);
+        await this.performFrequencyWrite(request.frequency, targetVfo);
         frequencyApplied = true;
       }
 
       if (request.mode) {
         try {
-          await this.performModeWrite(request.mode, request.bandwidth, request.options);
+          await this.performModeWrite(request.mode, request.bandwidth, request.options, targetVfo);
           modeApplied = true;
 
           if (request.frequency !== undefined) {
-            await this.performFrequencyWrite(request.frequency);
+            await this.performFrequencyWrite(request.frequency, targetVfo);
           }
         } catch (error) {
           if (!request.tolerateModeFailure) {
@@ -1164,7 +1206,40 @@ export class HamlibConnection
         }
       }
 
-      return { frequencyApplied, modeApplied, modeError };
+      let readback: VfoInfo | undefined;
+      if (frequencyApplied || modeApplied) {
+        try {
+          readback = await this.withHamlibOperationTimeout(
+            'applyOperatingState.getVfoInfo',
+            this.rig!.getVfoInfo(targetVfo),
+          );
+          this.lastSuccessfulOperation = Date.now();
+        } catch (error) {
+          logger.warn('Operating-state target VFO readback failed', {
+            targetVfo,
+            error: this.getErrorMessage(error),
+          });
+        }
+      }
+
+      const expectedMode = modeApplied ? this.currentRadioMode : null;
+      return {
+        frequencyApplied,
+        modeApplied,
+        targetVfo,
+        ...(request.frequency !== undefined ? {
+          frequencyConfirmed: readback !== undefined
+            && Math.abs(readback.frequency - request.frequency) <= OPERATING_STATE_FREQUENCY_TOLERANCE_HZ,
+        } : {}),
+        ...(readback !== undefined ? { observedFrequency: readback.frequency } : {}),
+        ...(request.mode ? {
+          modeConfirmed: readback !== undefined
+            && expectedMode !== null
+            && normalizeModeName(readback.mode) === expectedMode,
+        } : {}),
+        ...(readback !== undefined ? { observedMode: normalizeModeName(readback.mode) } : {}),
+        modeError,
+      };
     }, { critical: true });
   }
 
@@ -3520,14 +3595,42 @@ export class HamlibConnection
     });
   }
 
-  private async performFrequencyWrite(frequency: number): Promise<void> {
+  private async performVfoRead(): Promise<VFO> {
+    this.checkConnected();
+
+    try {
+      const vfo = await this.withHamlibOperationTimeout('getVfo', this.rig!.getVfo());
+      this.lastSuccessfulOperation = Date.now();
+      return vfo;
+    } catch (error) {
+      throw this.convertOptionalOperationError(error, 'getVfo');
+    }
+  }
+
+  private async performVfoWrite(vfo: VFO): Promise<void> {
+    this.checkConnected();
+
+    try {
+      await this.rig!.setVfo(vfo);
+      this.lastSuccessfulOperation = Date.now();
+      logger.debug(`VFO set: ${vfo}`);
+    } catch (error) {
+      throw this.convertOptionalOperationError(error, 'setVfo');
+    }
+  }
+
+  private async performFrequencyWrite(frequency: number, vfo?: VFO): Promise<void> {
     this.checkConnected();
 
     try {
       // Critical writes must keep the RadioIoQueue occupied until the native
       // operation really settles. A local Promise.race timeout would let a
       // stale frequency write land during a newer transmission.
-      await this.rig!.setFrequency(frequency);
+      if (vfo === undefined) {
+        await this.rig!.setFrequency(frequency);
+      } else {
+        await this.rig!.setFrequency(frequency, vfo);
+      }
 
       this.lastSuccessfulOperation = Date.now();
       this.currentFrequencyHz = frequency;
@@ -3541,6 +3644,7 @@ export class HamlibConnection
     mode: string,
     bandwidth?: RadioModeBandwidth,
     options?: SetRadioModeOptions,
+    vfo?: VFO,
   ): Promise<boolean> {
     this.checkConnected();
 
@@ -3558,7 +3662,9 @@ export class HamlibConnection
 
       try {
         await Promise.race([
-          this.rig!.setMode(resolvedMode, bandwidth as any),
+          vfo === undefined
+            ? this.rig!.setMode(resolvedMode, bandwidth as any)
+            : this.rig!.setMode(resolvedMode, bandwidth as any, vfo),
           new Promise((_, reject) =>
             setTimeout(() => reject(new Error('Set mode timeout')), 5000)
           ),

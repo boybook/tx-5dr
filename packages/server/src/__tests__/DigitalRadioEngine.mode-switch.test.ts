@@ -698,6 +698,8 @@ describe('DigitalRadioEngine mode switching', () => {
     const applyOperatingState = vi.fn(async () => ({
       frequencyApplied: true,
       modeApplied: true,
+      frequencyConfirmed: true,
+      modeConfirmed: true,
     }));
     const emit = vi.fn();
     const configManager = {
@@ -732,6 +734,50 @@ describe('DigitalRadioEngine mode switching', () => {
       mode: 'CW',
       radioMode: 'CW',
       source: 'program',
+      confirmation: 'confirmed',
+      modeConfirmation: 'confirmed',
+    }));
+  });
+
+  it('reports a partial CW restore when target-VFO mode readback mismatches', async () => {
+    const applyOperatingState = vi.fn(async () => ({
+      frequencyApplied: true,
+      modeApplied: true,
+      frequencyConfirmed: true,
+      modeConfirmed: false,
+      targetVfo: 'VFOB',
+      observedFrequency: 7_030_000,
+      observedMode: 'USB',
+    }));
+    const emit = vi.fn();
+    const configManager = {
+      getLastCWFrequency: vi.fn(() => ({
+        frequency: 7_030_000,
+        radioMode: 'CW',
+        band: '40m',
+        description: '7.030 MHz 40m',
+      })),
+    };
+    const fakeEngine = Object.assign(Object.create(DigitalRadioEngine.prototype), {
+      radioManager: {
+        isConnected: vi.fn(() => true),
+        applyOperatingState,
+      },
+      emit,
+    });
+
+    const result = await (DigitalRadioEngine.prototype as unknown as {
+      restoreLastCWOperatingState: (configManager: ConfigManager) => Promise<{ status: string; detail?: string } | null>;
+    }).restoreLastCWOperatingState.call(fakeEngine, configManager as unknown as ConfigManager);
+
+    expect(result).toEqual({
+      status: 'partially-applied',
+      detail: 'radio mode write was not confirmed by readback',
+    });
+    expect(emit).toHaveBeenCalledWith('frequencyChanged', expect.objectContaining({
+      frequency: 7_030_000,
+      confirmation: 'confirmed',
+      modeConfirmation: 'unconfirmed',
     }));
   });
 
@@ -739,6 +785,8 @@ describe('DigitalRadioEngine mode switching', () => {
     const applyOperatingState = vi.fn(async () => ({
       frequencyApplied: true,
       modeApplied: true,
+      frequencyConfirmed: true,
+      modeConfirmed: true,
     }));
     const updateLastSelectedFrequency = vi.fn(async () => undefined);
     const emit = vi.fn();
@@ -784,6 +832,8 @@ describe('DigitalRadioEngine mode switching', () => {
       frequency: 14074000,
       mode: 'FT8',
       source: 'program',
+      confirmation: 'confirmed',
+      modeConfirmation: 'confirmed',
     }));
   });
 

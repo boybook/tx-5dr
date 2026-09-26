@@ -2,6 +2,55 @@ import { describe, expect, it, vi } from 'vitest';
 import { RadioControllerAdapter } from '../RadioControllerAdapter.js';
 
 describe('RadioControllerAdapter', () => {
+  it('reports the physical VFO-B through the active connection', async () => {
+    const getVfo = vi.fn().mockResolvedValue('VFOB');
+    const radioManager = {
+      isConnected: vi.fn(() => true),
+      getCurrentConnection: vi.fn(() => ({ getVfo })),
+    };
+    const adapter = new RadioControllerAdapter(radioManager as any, {} as any);
+
+    await expect(adapter.getVFO()).resolves.toBe('VFOB');
+    expect(getVfo).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps Hamlib Main/Sub VFO names to the rigctld vocabulary', async () => {
+    const getVfo = vi.fn()
+      .mockResolvedValueOnce('Main')
+      .mockResolvedValueOnce('Sub');
+    const radioManager = {
+      isConnected: vi.fn(() => true),
+      getCurrentConnection: vi.fn(() => ({ getVfo })),
+    };
+    const adapter = new RadioControllerAdapter(radioManager as any, {} as any);
+
+    await expect(adapter.getVFO()).resolves.toBe('VFOA');
+    await expect(adapter.getVFO()).resolves.toBe('VFOB');
+  });
+
+  it('switches to VFO-B through the active connection', async () => {
+    const setVfo = vi.fn().mockResolvedValue(undefined);
+    const radioManager = {
+      isConnected: vi.fn(() => true),
+      getCurrentConnection: vi.fn(() => ({ setVfo })),
+    };
+    const adapter = new RadioControllerAdapter(radioManager as any, {} as any);
+
+    await expect(adapter.setVFO('VFOB')).resolves.toBeUndefined();
+    expect(setVfo).toHaveBeenCalledWith('VFOB');
+  });
+
+  it('keeps the VFO-A fallback only for connections without VFO support', async () => {
+    const radioManager = {
+      isConnected: vi.fn(() => true),
+      getCurrentConnection: vi.fn(() => ({})),
+    };
+    const adapter = new RadioControllerAdapter(radioManager as any, {} as any);
+
+    await expect(adapter.getVFO()).resolves.toBe('VFOA');
+    await expect(adapter.setVFO('VFOB')).rejects.toMatchObject({ code: -11 });
+  });
+
   it('retries an unknown lease instead of reusing the cached release promise', async () => {
     let snapshot: any = {
       leaseId: null,
