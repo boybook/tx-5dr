@@ -699,7 +699,6 @@ describe('DigitalRadioEngine mode switching', () => {
       frequencyApplied: true,
       modeApplied: true,
       frequencyConfirmed: true,
-      modeConfirmed: true,
     }));
     const emit = vi.fn();
     const configManager = {

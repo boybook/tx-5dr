@@ -3021,7 +3021,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     requestedMode?: string,
   ): 'confirmed' | 'unconfirmed' | 'unknown' {
     if (!requestedMode) return 'unknown';
-    return result?.modeApplied && result.modeConfirmed === true && !result.modeError
+    return result?.modeApplied && result.modeConfirmed !== false && !result.modeError
       ? 'confirmed'
       : 'unconfirmed';
   }

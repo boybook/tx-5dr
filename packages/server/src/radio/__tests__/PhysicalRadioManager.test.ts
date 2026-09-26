@@ -834,6 +834,21 @@ describe('PhysicalRadioManager', () => {
     expect(getFrequency).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps legacy mode-write success for adapters without mode readback', async () => {
+    const applyOperatingState = vi.fn().mockResolvedValue({
+      frequencyApplied: false,
+      modeApplied: true,
+    });
+    asTestManager(manager).connection = { applyOperatingState };
+
+    const result = await manager.applyOperatingState({ mode: 'USB' });
+
+    expect(result).toMatchObject({
+      modeApplied: true,
+      modeConfirmed: true,
+    });
+  });
+
   it('preserves target-VFO-aware confirmation supplied by the connection', async () => {
     const getFrequency = vi.fn().mockResolvedValue(14_074_000);
     const applyOperatingState = vi.fn().mockResolvedValue({

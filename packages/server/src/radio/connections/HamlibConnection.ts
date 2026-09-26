@@ -54,6 +54,10 @@ import type { RadioWriteResult } from './IRadioConnection.js';
 const logger = createLogger('HamlibConnection');
 const HAMLIB_POLLING_OPERATION_TIMEOUT_MS = 5000;
 const OPERATING_STATE_FREQUENCY_TOLERANCE_HZ = 10;
+// Hamlib defines CPY and XCHG specifically in terms of VFO A/B. Other VFO
+// operations are not sufficient evidence of addressable A/B selection: for
+// example, some Yaesu backends expose TOGGLE while leaving set_vfo unavailable.
+const YAESU_EXPLICIT_AB_VFO_OPERATIONS = new Set(['CPY', 'XCHG']);
 const { SerialPort } = serialport;
 
 // RigMetadata is imported from meter/types.ts
@@ -1179,7 +1183,9 @@ export class HamlibConnection
     return this.runSerializedTask('applyOperatingState', async () => {
       this.checkConnected();
 
-      const targetVfo = await this.performVfoRead();
+      // Keep the legacy current-VFO path untouched unless Hamlib explicitly
+      // identifies a Yaesu backend as dual-VFO and can report the live A/B VFO.
+      const targetVfo = await this.resolveYaesuTargetVfoForCorrelation();
       let frequencyApplied = false;
       let modeApplied = false;
       let modeError: Error | undefined;
@@ -1207,7 +1213,7 @@ export class HamlibConnection
       }
 
       let readback: VfoInfo | undefined;
-      if (frequencyApplied || modeApplied) {
+      if (targetVfo !== undefined && (frequencyApplied || modeApplied)) {
         try {
           readback = await this.withHamlibOperationTimeout(
             'applyOperatingState.getVfoInfo',
@@ -1226,18 +1232,20 @@ export class HamlibConnection
       return {
         frequencyApplied,
         modeApplied,
-        targetVfo,
-        ...(request.frequency !== undefined ? {
-          frequencyConfirmed: readback !== undefined
-            && Math.abs(readback.frequency - request.frequency) <= OPERATING_STATE_FREQUENCY_TOLERANCE_HZ,
+        ...(targetVfo !== undefined ? {
+          targetVfo,
+          ...(request.frequency !== undefined ? {
+            frequencyConfirmed: readback !== undefined
+              && Math.abs(readback.frequency - request.frequency) <= OPERATING_STATE_FREQUENCY_TOLERANCE_HZ,
+          } : {}),
+          ...(readback !== undefined ? { observedFrequency: readback.frequency } : {}),
+          ...(request.mode ? {
+            modeConfirmed: readback !== undefined
+              && expectedMode !== null
+              && normalizeModeName(readback.mode) === expectedMode,
+          } : {}),
+          ...(readback !== undefined ? { observedMode: normalizeModeName(readback.mode) } : {}),
         } : {}),
-        ...(readback !== undefined ? { observedFrequency: readback.frequency } : {}),
-        ...(request.mode ? {
-          modeConfirmed: readback !== undefined
-            && expectedMode !== null
-            && normalizeModeName(readback.mode) === expectedMode,
-        } : {}),
-        ...(readback !== undefined ? { observedMode: normalizeModeName(readback.mode) } : {}),
         modeError,
       };
     }, { critical: true });
@@ -3619,6 +3627,39 @@ export class HamlibConnection
     }
   }
 
+  private supportsYaesuTargetVfoCorrelation(): boolean {
+    if (this.currentConfig?.type !== 'serial') return false;
+    if (this.meterRigMetadata?.mfgName.trim().toLowerCase() !== 'yaesu') return false;
+
+    return Array.from(YAESU_EXPLICIT_AB_VFO_OPERATIONS)
+      .some((operation) => this.supportedVfoOps.has(operation));
+  }
+
+  private async resolveYaesuTargetVfoForCorrelation(): Promise<VFO | undefined> {
+    if (!this.supportsYaesuTargetVfoCorrelation()) return undefined;
+
+    try {
+      const vfo = await this.performVfoRead();
+      if (vfo === 'VFOA' || vfo === 'VFOB') return vfo;
+
+      logger.warn('Yaesu dual-VFO correlation skipped because current VFO is not addressable A/B', {
+        vfo,
+        modelName: this.meterRigMetadata?.modelName ?? null,
+        rigModel: this.meterRigMetadata?.rigModel ?? null,
+      });
+    } catch (error) {
+      // Capability tables occasionally overstate old backend support. Falling
+      // back preserves the exact pre-correlation write path for those radios.
+      logger.warn('Yaesu dual-VFO correlation skipped because current VFO could not be read', {
+        error: this.getErrorMessage(error),
+        modelName: this.meterRigMetadata?.modelName ?? null,
+        rigModel: this.meterRigMetadata?.rigModel ?? null,
+      });
+    }
+
+    return undefined;
+  }
+
   private async performFrequencyWrite(frequency: number, vfo?: VFO): Promise<void> {
     this.checkConnected();
 
@@ -3661,8 +3702,25 @@ export class HamlibConnection
       const resolvedMode = candidates[index];
 
       try {
+        // Some Yaesu backends apply rig_set_mode(VFOB, ...) to VFO-A. Re-select
+        // the observed A/B target and write RIG_VFO_CURR instead. Radios outside
+        // the capability gate retain the exact legacy two-argument setMode call.
+        const useCurrentVfoWorkaround = vfo !== undefined && this.supportsYaesuTargetVfoCorrelation();
+        if (useCurrentVfoWorkaround) {
+          try {
+            await this.performVfoWrite(vfo);
+          } catch (error) {
+            if (!isRecoverableOptionalRadioError(error)) throw error;
+            logger.warn('Yaesu target VFO re-selection is unavailable; using the live current VFO', {
+              error: this.getErrorMessage(error),
+              vfo,
+              modelName: this.meterRigMetadata?.modelName ?? null,
+              rigModel: this.meterRigMetadata?.rigModel ?? null,
+            });
+          }
+        }
         await Promise.race([
-          vfo === undefined
+          vfo === undefined || useCurrentVfoWorkaround
             ? this.rig!.setMode(resolvedMode, bandwidth as any)
             : this.rig!.setMode(resolvedMode, bandwidth as any, vfo),
           new Promise((_, reject) =>

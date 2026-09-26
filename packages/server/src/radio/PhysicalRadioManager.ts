@@ -1495,7 +1495,9 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         ...result,
         frequencyConfirmed,
         ...(observedFrequency !== undefined ? { observedFrequency } : {}),
-        modeConfirmed: result.modeConfirmed,
+        // Adapters without a physical mode readback keep their historical
+        // success semantics; an explicit false from a capable adapter wins.
+        modeConfirmed: result.modeConfirmed ?? result.modeApplied,
         operationId,
       };
       return enrichedResult;
