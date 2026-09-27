@@ -11,6 +11,7 @@ import { ListenerManager } from './ListenerManager.js';
 import type { TransmissionPipeline } from './TransmissionPipeline.js';
 import type { RadioBridge } from './RadioBridge.js';
 import type { CallsignContextTracker } from '../slot/CallsignContextTracker.js';
+import type { IncompleteQsoService } from '../log/IncompleteQsoService.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('ClockCoordinator');
@@ -23,6 +24,7 @@ export interface ClockCoordinatorDeps {
   spectrumScheduler: SpectrumScheduler;
   operatorManager: RadioOperatorManager;
   callsignTracker: CallsignContextTracker;
+  reviewService?: IncompleteQsoService;
   getTransmissionPipeline: () => TransmissionPipeline;
   getRadioBridge: () => RadioBridge;
   getCurrentMode: () => ModeDescriptor;
@@ -179,6 +181,18 @@ export class ClockCoordinator {
       operatorManager.reDecideOnLateDecodes(slotPack);
     });
 
+    this.lm.listen(slotPackManager, 'slotPackReviewUpdated', (slotPack: SlotPack) => {
+      const mode = slotPack.frequencyContext?.mode;
+      const frequency = slotPack.frequencyContext?.frequency;
+      if (!this.deps.reviewService || (mode !== 'FT8' && mode !== 'FT4') || !frequency) return;
+      this.deps.reviewService.observeRx({
+        mode, startMs: slotPack.startMs, frequency,
+        frames: slotPack.frames.filter(frame => frame.snr !== -999).map(frame => ({
+          message: frame.message, snr: frame.snr, freq: frame.freq, confidence: frame.confidence,
+        })),
+      });
+    });
+
     // ─── SpectrumScheduler 事件 ────────────────────
 
     this.lm.listen(spectrumScheduler, 'spectrumReady', () => {
@@ -214,6 +228,18 @@ export class ClockCoordinator {
         data.replaceExisting,
         data.streamId,
       );
+      const operator = operatorManager.getOperator(data.operatorId);
+      const logBookId = operatorManager.getLogManager().getOperatorLogBookId(data.operatorId);
+      const mode = data.frequencyContext?.mode;
+      const baseFrequency = data.frequencyContext?.frequency;
+      if (this.deps.reviewService && operator && logBookId && baseFrequency
+        && (mode === 'FT8' || mode === 'FT4')) {
+        this.deps.reviewService.observeTx({
+          operatorId: data.operatorId, logBookId, myCallsign: operator.config.myCallsign,
+          mode, startMs: data.slotStartMs, frequency: baseFrequency,
+          audioOffsetHz: data.frequency < 1_000_000 ? data.frequency : 0, text: data.message,
+        });
+      }
     });
 
     logger.info(`event listeners registered (${this.lm.count})`);

@@ -51,6 +51,7 @@ import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/
 import { requireRole, requireExistingLogbookAccess } from '../auth/authPlugin.js';
 import { AuthManager } from '../auth/AuthManager.js';
 import { normalizeCallsign } from '../utils/callsign.js';
+import { registerIncompleteQsoRoutes } from './incompleteQsoRoutes.js';
 import { detectLogImportFormat, normalizeImportText } from '../log/logImportUtils.js';
 import { safeBackupErrorMessage } from '../log/backup/AdifBackupService.js';
 
@@ -515,6 +516,7 @@ function createImportFileTooLargeError(): RadioError {
 export async function logbookRoutes(fastify: FastifyInstance) {
   const digitalRadioEngine = DigitalRadioEngine.getInstance();
   const logManager = digitalRadioEngine.operatorManager.getLogManager();
+  registerIncompleteQsoRoutes(fastify, digitalRadioEngine, logManager);
   const existingLogbookAccess = requireExistingLogbookAccess(logManager);
   // ADMIN only preHandler
   const adminOnly = requireAdminPreHandler();

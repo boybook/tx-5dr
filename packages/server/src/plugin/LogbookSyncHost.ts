@@ -362,10 +362,15 @@ export class LogbookSyncHost {
    * buffered and drained in the next serialized auto batch.
    */
   onQSOComplete(callsign: string, qsoRecord: QSORecord): Promise<void> {
-    return this.onQSOCompleteAsync(callsign, qsoRecord);
+    return this.onQSOCompleteAsync(callsign, [qsoRecord]).then(() => undefined);
   }
 
-  private async onQSOCompleteAsync(callsign: string, qsoRecord: QSORecord): Promise<void> {
+  /** Persist one auto-upload batch before any provider starts sending it. */
+  onQSOsComplete(callsign: string, records: readonly QSORecord[]): Promise<boolean> {
+    return this.onQSOCompleteAsync(callsign, records);
+  }
+
+  private async onQSOCompleteAsync(callsign: string, records: readonly QSORecord[]): Promise<boolean> {
     let changed = false;
     for (const [id, entry] of this.providers) {
       const { provider, pluginName } = entry;
@@ -376,7 +381,9 @@ export class LogbookSyncHost {
 
         const key = LogbookSyncHost.uploadKey(id, callsign);
         const queuedRecords = this.pendingAutoRecords.get(key) ?? new Map<string, QSORecord>();
-        queuedRecords.set(qsoRecord.id, snapshotPluginData(qsoRecord, 'structured'));
+        for (const record of records) {
+          queuedRecords.set(record.id, snapshotPluginData(record, 'structured'));
+        }
         this.pendingAutoRecords.set(key, queuedRecords);
         changed = true;
       } catch (err) {
@@ -387,10 +394,12 @@ export class LogbookSyncHost {
         });
       }
     }
-    if (!changed || !await this.persistPendingQueue()) return;
+    if (!changed) return true;
+    if (!await this.persistPendingQueue()) return false;
     for (const [id, entry] of this.providers) {
       this.resumePendingForProvider(id, entry);
     }
+    return true;
   }
 
   private resumePendingForProvider(providerId: string, entry: RegisteredProvider): void {

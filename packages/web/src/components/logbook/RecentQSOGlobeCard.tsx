@@ -109,6 +109,7 @@ function getGridTileAltitude(tile: object): number {
 }
 
 interface RecentQSOGlobeCardProps {
+  active?: boolean;
   logBookId: string;
   qsos: QSORecord[];
   loading: boolean;
@@ -161,6 +162,7 @@ function formatUtcTime(timestamp?: number): string {
 }
 
 const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
+  active = true,
   logBookId,
   qsos,
   loading,
@@ -184,6 +186,9 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
   const [globeCenter, setGlobeCenter] = useState({ lat: 0, lng: 0 });
   const containerRef = useRef<HTMLDivElement | null>(null);
   const globeRef = useRef<GlobeMethods | undefined>(undefined);
+  const activeRef = useRef(active);
+  const refreshAnimationRef = useRef<(() => void) | null>(null);
+  activeRef.current = active;
   const hasInitialFocusRef = useRef(false);
   const lastFocusKeyRef = useRef<string | null>(null);
   const workedGridCacheRef = useRef<Map<string, LogBookWorkedGridItem[]>>(new Map());
@@ -197,9 +202,10 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
     if (!globe || !container) return;
     let visible = true;
     const updateAnimation = () => {
-      if (document.hidden || !visible) globe.pauseAnimation();
+      if (!activeRef.current || document.hidden || !visible) globe.pauseAnimation();
       else globe.resumeAnimation();
     };
+    refreshAnimationRef.current = updateAnimation;
     const observer = typeof IntersectionObserver === 'undefined' ? null : new IntersectionObserver(entries => {
       visible = entries.some(entry => entry.isIntersecting);
       updateAnimation();
@@ -208,10 +214,15 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
     document.addEventListener('visibilitychange', updateAnimation);
     updateAnimation();
     return () => {
+      refreshAnimationRef.current = null;
       observer?.disconnect();
       document.removeEventListener('visibilitychange', updateAnimation);
     };
   }, []);
+
+  useEffect(() => {
+    refreshAnimationRef.current?.();
+  }, [active]);
   const globeMaterial = useMemo(() => {
     const material = new THREE.MeshPhongMaterial({
       color: new THREE.Color('#dbeafe'),

@@ -45,6 +45,21 @@ function createPersistenceMock() {
 }
 
 describe('SlotPackManager event routing', () => {
+  it('emits review evidence only after final decode and for later decode updates', () => {
+    const manager = new SlotPackManager();
+    manager.setPersistenceEnabled(false);
+    manager.setMode({ ...MODES.FT8, windowTiming: [0, 1] });
+    const observed = vi.fn();
+    manager.on('slotPackReviewUpdated', observed);
+    manager.processDecodeResult(buildDecodeResult(45_000, [{ message: 'W1AAA K1BBB -12', snr: -12 }], { windowIdx: 0 }));
+    expect(observed).not.toHaveBeenCalled();
+    manager.processDecodeResult(buildDecodeResult(45_000, [], { windowIdx: 1 }));
+    expect(observed).toHaveBeenCalledTimes(1);
+    manager.addTransmissionFrame('slot-45000', 'op-1', 'K1BBB W1AAA R-09', 1000, 45_000);
+    expect(observed).toHaveBeenCalledTimes(1);
+    manager.processDecodeResult(buildDecodeResult(45_000, [{ message: 'W1AAA K1BBB RRR', snr: -10 }], { windowIdx: 2 }));
+    expect(observed).toHaveBeenCalledTimes(2);
+  });
   // 2026-04-19 BG5DRB 事故修复（方案 A）：晚到解码重决策必须与 TX echo 写入事件分离，
   // 否则 addTransmissionFrame 会把当前 TX 槽的 slotPack 当成「上一 RX 槽的晚到解码」
   // 喂给 standard-qso，污染 QSO 上下文。

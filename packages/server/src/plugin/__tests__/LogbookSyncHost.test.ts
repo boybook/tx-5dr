@@ -110,6 +110,21 @@ describe('LogbookSyncHost', () => {
     });
   });
 
+  it('passes a retrospective batch to the enabled provider once', async () => {
+    const host = new LogbookSyncHost();
+    const provider = createProvider();
+    host.register('wavelog-sync', provider, createOwner());
+    const first = createQso('review-1');
+    const second = createQso('review-2');
+
+    await expect(host.onQSOsComplete('BG5DRB', [first, second])).resolves.toBe(true);
+    await flushAsyncWork();
+
+    expect(provider.upload).toHaveBeenCalledWith('BG5DRB', {
+      trigger: 'auto', records: [first, second],
+    });
+  });
+
   it('audits structured auto-upload failures returned without rejection', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {

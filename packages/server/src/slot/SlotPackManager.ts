@@ -15,6 +15,7 @@ const EMPTY_SLOT_PACK_RETENTION_LIMIT = 4;
 
 export interface SlotPackManagerEvents {
   'slotPackUpdated': (slotPack: SlotPack) => void;
+  'slotPackReviewUpdated': (slotPack: SlotPack) => void;
   /**
    * 仅在 RX 解码结果写入（processDecodeResult）时触发，不在 TX echo
    * (addTransmissionFrame) 写入时触发。晚到解码重决策应订阅此事件，避免把
@@ -334,8 +335,10 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
 
     const snapshot = this.snapshotSlotPack(slotPack);
 
+    const alreadyFinal = this.decodeWindowCompletions.get(slotId)?.persistedFinal === true;
     this.markDecodeWindowCompleted(slotId, result.windowIdx, true);
     this.persistFinalDecodeBatchIfComplete(slotId);
+    if (alreadyFinal) this.emit('slotPackReviewUpdated', snapshot);
 
     // 发出通用更新事件（给前端/PSKReporter/callsignTracker 等消费者）
     this.emit('slotPackUpdated', snapshot);
@@ -404,6 +407,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
 
     state.persistedFinal = true;
     const snapshot = this.snapshotSlotPack(slotPack);
+    this.emit('slotPackReviewUpdated', snapshot);
 
     if (this.persistenceEnabled) {
       this.persistence.store(snapshot, 'updated', this.currentMode.name).catch(error => {

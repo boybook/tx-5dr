@@ -1,3 +1,4 @@
+import { ImagePersistenceCoordinator } from './image-radio/ImagePersistenceCoordinator.js';
 import {
   SlotClock,
   SlotScheduler,
@@ -47,6 +48,7 @@ import type { DecodeWorkerPoolHealthSnapshot } from './decode/WSJTXDecodeProcess
 import { WSJTXEncodeWorkQueue } from './decode/WSJTXEncodeWorkQueue.js';
 import { DigitalMessagePreflightService } from './decode/DigitalMessagePreflightService.js';
 import { SlotPackManager } from './slot/SlotPackManager.js';
+import { IncompleteQsoService } from './log/IncompleteQsoService.js';
 import { ConfigManager } from './config/config-manager.js';
 import { SpectrumScheduler } from './audio/SpectrumScheduler.js';
 import { AudioMixer } from './audio/AudioMixer.js';
@@ -261,6 +263,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private physicalTxCoordinator: PhysicalTxCoordinator;
   private operatorIntentCoordinator: OperatorIntentCoordinator;
   private resourceManager: ResourceManager;
+  private imagePersistence: ImagePersistenceCoordinator | null = null;
   private imageRadioService: ImageRadioService | null = null;
   private imageArtifactStore: ImageArtifactStore | null = null;
   private imageComposerBackgroundStore: ImageComposerBackgroundStore | null = null;
@@ -297,6 +300,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private virtualRadioSession: VirtualRadioSession | null = null;
   private virtualRadioSessionStopPromise: Promise<void> | null = null;
   private dataDir = '';
+  private incompleteQsoService: IncompleteQsoService | null = null;
   private voiceManualPttActive = false;
   private voiceKeyerPttActive = false;
   private physicalPttActive = false;
@@ -754,6 +758,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   public getSlotPackManager(): SlotPackManager {
     return this.slotPackManager;
+  }
+
+  public getIncompleteQsoService(): IncompleteQsoService | null {
+    return this.incompleteQsoService;
   }
 
   public getRadioManager(): PhysicalRadioManager {
@@ -1262,20 +1270,18 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     // 更新插件管理器的数据目录（在 initialize 阶段异步获取）
     const dataDir = await tx5drPaths.getDataDir();
     this.dataDir = dataDir;
+    this.incompleteQsoService = new IncompleteQsoService(dataDir);
+    this.incompleteQsoService.start();
+    this.on('qsoRecordAdded', data => this.incompleteQsoService?.linkQso(data.logBookId, data.qsoRecord));
     const cacheDir = await tx5drPaths.getCacheDir();
     this._pluginManager.setDataDir(dataDir);
-    this.imageArtifactStore = new ImageArtifactStore(path.join(dataDir, 'image-radio'));
-    await this.imageArtifactStore.initialize();
-    this.imageComposerBackgroundStore = new ImageComposerBackgroundStore(path.join(dataDir, 'image-radio'));
-    await this.imageComposerBackgroundStore.initialize();
-    this.imageHistoryStore = new ImageHistoryStore(path.join(dataDir, 'image-radio'));
-    await this.imageHistoryStore.initialize();
-    await this.imageHistoryStore.reconcileReceivedArtifacts(this.imageArtifactStore.listAll());
-    this.imageArtifactStore.setRemovalListener((artifactId) => this.imageHistoryStore!.removeByArtifact(artifactId));
-    this.imageTemplateStore = new ImageTemplateStore(path.join(dataDir, 'image-radio'));
-    await this.imageTemplateStore.initialize();
-    this.sstvTxPreferenceStore = new SstvTxPreferenceStore(path.join(dataDir, 'image-radio'));
-    await this.sstvTxPreferenceStore.initialize();
+    this.imagePersistence = new ImagePersistenceCoordinator(path.join(dataDir, 'image-radio'));
+    this.imageArtifactStore = this.imagePersistence.artifacts;
+    this.imageComposerBackgroundStore = this.imagePersistence.backgrounds;
+    this.imageHistoryStore = this.imagePersistence.history;
+    this.imageTemplateStore = this.imagePersistence.templates;
+    this.sstvTxPreferenceStore = this.imagePersistence.preferences;
+    await this.imagePersistence.initialize();
     this.imageRadioService = new ImageRadioService(
       this.audioStreamManager,
       this.imageArtifactStore,
@@ -1288,6 +1294,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       undefined,
       new ImagePaperSpool(path.join(cacheDir, 'image-radio-paper')),
       () => this.radioManager.getConfig().type === 'none' && !ConfigManager.getInstance().getActiveVirtualRadioProfile(),
+      () => this.imagePersistence!.getStatus(),
     );
     this.imageRadioService.on('status', (status) => this.emit('imageRadioStatus', status));
     this.imageRadioService.on('rxEvent', (event) => this.emit('imageRxEvent', event));
@@ -1366,6 +1373,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       spectrumScheduler: this.spectrumScheduler,
       operatorManager: this._operatorManager,
       callsignTracker: this._callsignTracker,
+      reviewService: this.incompleteQsoService ?? undefined,
       getTransmissionPipeline: () => this.transmissionPipeline,
       getRadioBridge: () => this.radioBridge,
       getCurrentMode: () => this.currentMode,

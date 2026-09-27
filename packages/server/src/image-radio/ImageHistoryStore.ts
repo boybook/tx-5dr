@@ -9,9 +9,8 @@ import {
   type SstvTxEnvelopeSnapshot,
 } from '@tx5dr/contracts';
 
-import { SafeFileWriter, loadJsonWithRecovery } from '../utils/persistence/index.js';
-
-interface HistoryIndex { records: ImageHistoryRecord[] }
+import { ImageRecordStore } from './ImageRecordStore.js';
+import { PersistedHistorySchema } from './ImagePersistenceSchema.js';
 
 interface HistoryCursor { occurredAt: number; id: string }
 
@@ -41,49 +40,35 @@ function decodeCursor(value?: string): HistoryCursor | null {
 }
 
 export class ImageHistoryStore {
-  private readonly writer = new SafeFileWriter({ backups: 3 });
-  private readonly filePath: string;
-  private readonly records = new Map<string, ImageHistoryRecord>();
-  private initialized = false;
-  private persistTail: Promise<void> = Promise.resolve();
+  readonly persistence: ImageRecordStore<ImageHistoryRecord>;
+  private get records() { return this.persistence.values; }
 
   constructor(baseDir: string) {
-    this.filePath = path.join(baseDir, 'history.json');
+    this.persistence = new ImageRecordStore(path.join(baseDir, 'history.json'), 'records', 'history', PersistedHistorySchema, item => item.id);
   }
 
-  async initialize(): Promise<void> {
-    if (this.initialized) return;
-    const loaded = await loadJsonWithRecovery<HistoryIndex>(this.filePath, {
-      defaultValue: () => ({ records: [] }),
-      validate: (value) => ({ records: ImageHistoryRecordSchema.array().parse((value as HistoryIndex)?.records ?? []) }),
-      writer: this.writer,
-    });
-    for (const record of loaded.value.records) this.records.set(record.id, record);
-    this.initialized = true;
-  }
+  initialize(): Promise<void> { return this.persistence.initialize(); }
 
   async reconcileReceivedArtifacts(artifacts: ImageArtifact[]): Promise<void> {
-    await this.initialize();
-    const recordedArtifacts = new Set([...this.records.values()].map((record) => record.artifactId));
-    let changed = false;
-    for (const artifact of artifacts) {
-      if (artifact.direction !== 'rx' || recordedArtifacts.has(artifact.id)) continue;
-      const record = ImageHistoryRecordSchema.parse({
-        id: `rx-${artifact.id}`,
-        artifactId: artifact.id,
-        family: artifact.family,
-        direction: 'rx',
-        operatorId: artifact.operatorId,
-        occurredAt: artifact.captureEndedAt ?? artifact.createdAt,
-        saveReason: artifact.saveReason ?? 'manual',
-        complete: artifact.complete,
-        truncated: artifact.truncated,
-        qsoId: artifact.qsoId,
-      });
-      this.records.set(record.id, record);
-      changed = true;
-    }
-    if (changed) await this.persist();
+    return this.persistence.transaction(records => {
+      const recordedArtifacts = new Set([...records.values()].map((record) => record.artifactId));
+      for (const artifact of artifacts) {
+        if (artifact.direction !== 'rx' || recordedArtifacts.has(artifact.id)) continue;
+        const record = ImageHistoryRecordSchema.parse({
+          id: records.has(`rx-${artifact.id}`) ? randomUUID() : `rx-${artifact.id}`,
+          artifactId: artifact.id,
+          family: artifact.family,
+          direction: 'rx',
+          operatorId: artifact.operatorId,
+          occurredAt: artifact.captureEndedAt ?? artifact.createdAt,
+          saveReason: artifact.saveReason ?? 'manual',
+          complete: artifact.complete,
+          truncated: artifact.truncated,
+          qsoId: artifact.qsoId,
+        });
+        records.set(record.id, record);
+      }
+    });
   }
 
   list(options: ImageHistoryListOptions = {}): { records: ImageHistoryRecord[]; nextCursor?: string } {
@@ -114,23 +99,23 @@ export class ImageHistoryStore {
   }
 
   async recordReceived(artifact: ImageArtifact): Promise<ImageHistoryRecord> {
-    await this.initialize();
-    if (artifact.direction !== 'rx') throw new Error('IMAGE_HISTORY_DIRECTION_INVALID');
-    const record = ImageHistoryRecordSchema.parse({
-      id: randomUUID(),
-      artifactId: artifact.id,
-      family: artifact.family,
-      direction: 'rx',
-      operatorId: artifact.operatorId,
-      occurredAt: artifact.captureEndedAt ?? artifact.createdAt,
-      saveReason: artifact.saveReason ?? 'manual',
-      complete: artifact.complete,
-      truncated: artifact.truncated,
-      qsoId: artifact.qsoId,
+    return this.persistence.transaction(records => {
+      if (artifact.direction !== 'rx') throw new Error('IMAGE_HISTORY_DIRECTION_INVALID');
+      const record = ImageHistoryRecordSchema.parse({
+        id: randomUUID(),
+        artifactId: artifact.id,
+        family: artifact.family,
+        direction: 'rx',
+        operatorId: artifact.operatorId,
+        occurredAt: artifact.captureEndedAt ?? artifact.createdAt,
+        saveReason: artifact.saveReason ?? 'manual',
+        complete: artifact.complete,
+        truncated: artifact.truncated,
+        qsoId: artifact.qsoId,
+      });
+      records.set(record.id, record);
+      return record;
     });
-    this.records.set(record.id, record);
-    await this.persist();
-    return record;
   }
 
   async recordTransmitStarted(input: {
@@ -143,73 +128,67 @@ export class ImageHistoryStore {
     sampleRate: number;
     estimatedTotalSamples: number;
   }): Promise<ImageHistoryRecord> {
-    await this.initialize();
-    if (input.artifact.direction !== 'tx' || input.artifact.family !== 'sstv') throw new Error('IMAGE_HISTORY_DIRECTION_INVALID');
-    const record = ImageHistoryRecordSchema.parse({
-      id: input.id ?? randomUUID(),
-      artifactId: input.artifact.id,
-      family: input.artifact.family,
-      direction: 'tx',
-      operatorId: input.operatorId,
-      sessionId: input.sessionId,
-      occurredAt: input.startedAt,
-      startedAt: input.startedAt,
-      outcome: 'transmitting',
-      envelope: input.envelope,
-      sampleRate: input.sampleRate,
-      estimatedTotalSamples: input.estimatedTotalSamples,
+    return this.persistence.transaction(records => {
+      if (input.artifact.direction !== 'tx' || input.artifact.family !== 'sstv') throw new Error('IMAGE_HISTORY_DIRECTION_INVALID');
+      const record = ImageHistoryRecordSchema.parse({
+        id: input.id ?? randomUUID(),
+        artifactId: input.artifact.id,
+        family: input.artifact.family,
+        direction: 'tx',
+        operatorId: input.operatorId,
+        sessionId: input.sessionId,
+        occurredAt: input.startedAt,
+        startedAt: input.startedAt,
+        outcome: 'transmitting',
+        envelope: input.envelope,
+        sampleRate: input.sampleRate,
+        estimatedTotalSamples: input.estimatedTotalSamples,
+      });
+      records.set(record.id, record);
+      return record;
     });
-    this.records.set(record.id, record);
-    await this.persist();
-    return record;
   }
 
   async finishTransmit(id: string, outcome: 'completed' | 'interrupted', errorCode?: string): Promise<ImageHistoryRecord> {
-    await this.initialize();
-    const current = this.records.get(id);
-    if (!current || current.direction !== 'tx') throw new Error('IMAGE_HISTORY_NOT_FOUND');
-    const updated = ImageHistoryRecordSchema.parse({
-      ...current,
-      outcome,
-      endedAt: Date.now(),
-      errorCode: outcome === 'interrupted' ? errorCode : undefined,
+    return this.persistence.transaction(records => {
+      const current = records.get(id);
+      if (!current || current.direction !== 'tx') throw new Error('IMAGE_HISTORY_NOT_FOUND');
+      const updated = ImageHistoryRecordSchema.parse({
+        ...current,
+        outcome,
+        endedAt: Date.now(),
+        errorCode: outcome === 'interrupted' ? errorCode : undefined,
+      });
+      records.set(id, updated);
+      return updated;
     });
-    this.records.set(id, updated);
-    await this.persist();
-    return updated;
   }
 
   async linkQso(id: string, qsoId: string): Promise<ImageHistoryRecord> {
-    await this.initialize();
-    const current = this.records.get(id);
-    if (!current) throw new Error('IMAGE_HISTORY_NOT_FOUND');
-    const updated = ImageHistoryRecordSchema.parse({ ...current, qsoId });
-    this.records.set(id, updated);
-    await this.persist();
-    return updated;
+    return this.persistence.transaction(records => {
+      const current = records.get(id);
+      if (!current) throw new Error('IMAGE_HISTORY_NOT_FOUND');
+      const updated = ImageHistoryRecordSchema.parse({ ...current, qsoId });
+      records.set(id, updated);
+      return updated;
+    });
   }
 
   async delete(id: string): Promise<ImageHistoryRecord> {
-    await this.initialize();
-    const current = this.records.get(id);
-    if (!current) throw new Error('IMAGE_HISTORY_NOT_FOUND');
-    this.records.delete(id);
-    await this.persist();
-    return current;
+    return this.persistence.transaction(records => {
+      const current = records.get(id);
+      if (!current) throw new Error('IMAGE_HISTORY_NOT_FOUND');
+      records.delete(id);
+      return current;
+    });
   }
 
   async removeByArtifact(artifactId: string): Promise<void> {
-    await this.initialize();
-    const matching = [...this.records.values()].filter((record) => record.artifactId === artifactId);
-    if (matching.length === 0) return;
-    for (const record of matching) this.records.delete(record.id);
-    await this.persist();
+    return this.persistence.transaction(records => {
+      const matching = [...records.values()].filter((record) => record.artifactId === artifactId);
+      if (matching.length === 0) return;
+      for (const record of matching) records.delete(record.id);
+    });
   }
 
-  private persist(): Promise<void> {
-    const serialized = `${JSON.stringify({ records: [...this.records.values()] }, null, 2)}\n`;
-    const operation = this.persistTail.catch(() => undefined).then(() => this.writer.writeFile(this.filePath, serialized));
-    this.persistTail = operation;
-    return operation;
-  }
 }

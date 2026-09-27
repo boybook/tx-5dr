@@ -33,6 +33,25 @@ Server 启动与 radio 链路固定分成 4 层：
 2. `DigitalRadioEngine` 按 phase 初始化运行时、领域服务、子系统装配与模式恢复
 3. `EngineLifecycle.start()` 才真正启动资源
 
+### 可选图像模块的故障边界
+
+`DigitalRadioEngine` 只组装图像存储与服务；`ImagePersistenceCoordinator` 负责五类
+图像元数据的兼容迁移、恢复和统一健康状态。初始化结果可以等待，但其成功与否
+不得决定核心 Server readiness。存储失败必须转换为图像模块不可用状态，不能沿
+`initializeRuntimePhase → createServer` 抛出并终止进程。
+
+图像存储全部可用后才整理历史关联并允许业务操作。故障状态下 HTTP 状态查询、
+WebSocket 状态快照和其他模式仍可用；图像 HTTP 操作返回 503，图像 WebSocket
+命令返回明确拒绝结果，且不得取得播放资源或发射许可。HTTP 路由和服务入口共同
+执行这条边界，不能仅靠前端禁用按钮。
+
+`ImageRadioService` 的可选资源启动边界包括纸带目录初始化、解码器初始化和
+监听器注册；失败必须清理已有资源并发布 unavailable，不能让恢复的 SSTV/FAX
+模式阻塞整个软件引擎启动。存储健康与原生编解码器可用性是独立事实。
+
+持久化恢复策略见 [Persistence durability](persistence-durability.md)。核心鉴权、
+授权和电台配置仍严格校验，不能通过全局 catch-and-reset 实现可选模块容错。
+
 ### 2.2 Radio 资源启动
 
 `radio` 永远是最高优先级资源，固定路径如下：

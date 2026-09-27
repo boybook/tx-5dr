@@ -1,4 +1,11 @@
 import { createLogger } from './utils/logger.js';
+import {
+  IncompleteQsoListResponseSchema, IncompleteQsoDetailResponseSchema,
+  IncompleteQsoPreviewResponseSchema, IncompleteQsoJobResponseSchema,
+  IncompleteQsoHealthResponseSchema,
+  IncompleteQsoCommitResponseSchema, IncompleteQsoDismissResponseSchema,
+  IncompleteQsoRetrySyncResponseSchema,
+} from '@tx5dr/contracts';
 
 const logger = createLogger('API');
 
@@ -47,6 +54,8 @@ import type {
   UpdateQSORequest,
   CreateQSORequest,
   QSOActionResponse,
+  IncompleteQsoQuery,
+  IncompleteQsoSelection,
   TunerCapabilities,
   TunerStatus,
   RadioConfigResponse,
@@ -1948,6 +1957,63 @@ export const api = {
     }
 
     return await res.json();
+  },
+
+  async getIncompleteQsoCandidates(logbookId: string, query: Partial<IncompleteQsoQuery> = {}) {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined && value !== '') params.set(key, String(value));
+    }
+    const suffix = params.size ? `?${params.toString()}` : '';
+    return IncompleteQsoListResponseSchema.parse(await apiRequest(
+      `/logbooks/${encodePathSegment(logbookId)}/review-candidates${suffix}`,
+    ));
+  },
+
+  async getIncompleteQsoHealth(logbookId: string) {
+    return IncompleteQsoHealthResponseSchema.parse(await apiRequest(
+      `/logbooks/${encodePathSegment(logbookId)}/review-candidates/health`,
+    ));
+  },
+
+  async getIncompleteQsoCandidate(logbookId: string, id: string) {
+    return IncompleteQsoDetailResponseSchema.parse(await apiRequest(
+      `/logbooks/${encodePathSegment(logbookId)}/review-candidates/${encodePathSegment(id)}`,
+    ));
+  },
+
+  async previewIncompleteQsos(logbookId: string, selection: IncompleteQsoSelection) {
+    return IncompleteQsoPreviewResponseSchema.parse(await apiRequest(
+      `/logbooks/${encodePathSegment(logbookId)}/review-candidates/preview`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(selection) },
+    ));
+  },
+
+  async commitIncompleteQsos(logbookId: string, selection: IncompleteQsoSelection) {
+    return IncompleteQsoCommitResponseSchema.parse(await apiRequest(
+      `/logbooks/${encodePathSegment(logbookId)}/review-candidates/commit`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(selection) },
+    ));
+  },
+
+  async getIncompleteQsoJob(logbookId: string, jobId: string) {
+    return IncompleteQsoJobResponseSchema.parse(await apiRequest(
+      `/logbooks/${encodePathSegment(logbookId)}/review-candidates/jobs/${encodePathSegment(jobId)}`,
+    ));
+  },
+
+  async dismissIncompleteQsos(logbookId: string, selection: IncompleteQsoSelection) {
+    return IncompleteQsoDismissResponseSchema.parse(await apiRequest(
+      `/logbooks/${encodePathSegment(logbookId)}/review-candidates/dismiss`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(selection) },
+    ));
+  },
+
+  async retryIncompleteQsoSync(logbookId: string, id: string) {
+    return IncompleteQsoRetrySyncResponseSchema.parse(await apiRequest(
+      `/logbooks/${encodePathSegment(logbookId)}/review-candidates/${encodePathSegment(id)}/retry-sync`,
+      { method: 'POST' },
+    ));
   },
 
   /**

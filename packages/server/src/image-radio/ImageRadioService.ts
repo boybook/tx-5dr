@@ -15,6 +15,7 @@ import type {
   ImagePixelFormat,
   ImageReceiveProfile,
   ImageRadioStatus,
+  ImagePersistenceStatus,
   ImageRxEvent,
   ImageSstvReceiveProfile,
   SstvTxStatus,
@@ -138,6 +139,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     private readonly runtime: RasterwaveRuntime = rasterwaveRuntime,
     paperSpool?: ImagePaperSpool,
     private readonly isLocalPlaybackConfigured: () => boolean = () => false,
+    private readonly getPersistenceStatus: () => ImagePersistenceStatus | undefined = () => undefined,
   ) {
     super();
     this.paper = paperSpool ?? new ImagePaperSpool(path.join(tmpdir(), `tx5dr-image-paper-${randomUUID()}`));
@@ -157,8 +159,10 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
 
   getStatus(): ImageRadioStatus {
     const availability = this.runtime.getAvailability();
+    const persistence = this.getPersistenceStatus();
     return {
-      serviceState: availability.available ? this.serviceState : 'unavailable',
+      serviceState: availability.available && persistence?.available !== false ? this.serviceState : 'unavailable',
+      persistence,
       family: this.family,
       sstvTxTarget: this.getSstvTxTarget(),
       receiveProfile: this.currentReceiveProfile(),
@@ -185,38 +189,45 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     return this.paper.renderSegment(boundaryId, (snapshot) => this.correctFaxSnapshot(snapshot));
   }
 
+  private assertPersistenceAvailable(): void {
+    if (this.getPersistenceStatus()?.available === false) throw new Error('IMAGE_PERSISTENCE_UNAVAILABLE');
+  }
+
   async start(family: ImageFamily): Promise<void> {
-    if (this.family === family && this.serviceState === 'ready') {
-      this.emitStatus();
-      return;
-    }
-    await this.stop('mode_changed');
-    await this.paper.initialize();
-    await this.paper.reset();
-    this.nativeLineOffset = 0;
-    this.lastFirstAvailableLine = 0;
-    this.family = family;
-    this.sstvCaptureActive = false;
-    this.serviceState = 'starting';
-    this.rxState = 'searching';
-    this.generation += 1;
-    this.emitStatus();
     try {
+      this.assertPersistenceAvailable();
+      if (this.family === family && this.serviceState === 'ready') {
+        this.emitStatus();
+        return;
+      }
+      await this.stop('mode_changed');
+      await this.paper.initialize();
+      await this.paper.reset();
+      this.nativeLineOffset = 0;
+      this.lastFirstAvailableLine = 0;
+      this.family = family;
+      this.sstvCaptureActive = false;
+      this.serviceState = 'starting';
+      this.rxState = 'searching';
+      this.generation += 1;
+      this.emitStatus();
       await this.artifacts.initialize();
       this.createDecoder(family, this.generation);
       this.audioStream.on('audioData', this.audioListener);
       this.serviceState = 'ready';
-      this.rxState = 'searching';
       this.emitStatus();
     } catch (error) {
+      await this.stop('start_failed').catch(() => undefined);
+      this.family = family;
       this.serviceState = 'unavailable';
       this.rxState = 'error';
-      logger.error('Failed to start image radio decoder', { family, error: error instanceof Error ? error.message : String(error) });
+      logger.error('Failed to start image radio service', { family, error: error instanceof Error ? error.name : 'unknown' });
       this.emitStatus();
     }
   }
 
   async configureSstvReceive(profile: ImageSstvReceiveProfile): Promise<ImageRadioStatus> {
+    this.assertPersistenceAvailable();
     if (profile.strategy === 'manual') {
       const supported = this.runtime.load().sstvModes().some((item) => item.mode === profile.mode);
       if (!supported) throw new Error('IMAGE_MODE_INVALID');
@@ -233,6 +244,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
   }
 
   async configureFaxReceive(profile: ImageFaxReceiveProfile): Promise<ImageRadioStatus> {
+    this.assertPersistenceAvailable();
     this.faxReceiveProfile = profile.strategy === 'auto'
       ? DEFAULT_FAX_RECEIVE_PROFILE
       : { ...profile };
@@ -310,7 +322,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
       await decoder.dispose().catch(() => undefined);
     }
     await Promise.allSettled([...this.pendingArtifactWrites]);
-    await this.paper.reset();
+    await this.paper.reset().catch(error => logger.warn('Failed to reset image paper during stop', { error: error instanceof Error ? error.name : 'unknown' }));
     this.family = null;
     this.serviceState = 'stopped';
     this.rxState = 'off';
@@ -334,6 +346,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
   }
 
   async startSstvTx(command: SstvTxStartCommand): Promise<SstvTxCommandResult> {
+    if (this.getPersistenceStatus()?.available === false) return { requestId: command.requestId, accepted: false, errorCode: 'IMAGE_PERSISTENCE_UNAVAILABLE' };
     const previous = this.txResults.get(command.requestId);
     if (previous) return previous;
     const reject = (errorCode: string): SstvTxCommandResult => {
@@ -613,6 +626,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
   }
 
   setFaxCalibration(command: FaxCalibrationSetCommand): FaxCalibrationCommandResult {
+    if (this.getPersistenceStatus()?.available === false) return { requestId: command.requestId, accepted: false, errorCode: 'IMAGE_PERSISTENCE_UNAVAILABLE' };
     const previous = this.calibrationResults.get(command.requestId);
     if (previous) return previous;
     const reject = (errorCode: string): FaxCalibrationCommandResult => {
@@ -639,6 +653,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
   }
 
   resetFaxCalibration(command: FaxCalibrationResetCommand): FaxCalibrationCommandResult {
+    if (this.getPersistenceStatus()?.available === false) return { requestId: command.requestId, accepted: false, errorCode: 'IMAGE_PERSISTENCE_UNAVAILABLE' };
     const previous = this.calibrationResults.get(command.requestId);
     if (previous) return previous;
     const session = this.paper.getSession();
@@ -782,6 +797,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
   }
 
   async saveCurrentPaper(command: ImagePaperSaveCommand): Promise<{ artifactId: string }> {
+    this.assertPersistenceAvailable();
     const previous = this.saveResults.get(command.requestId);
     if (previous) return previous;
     const session = this.paper.getSession();
