@@ -4,6 +4,7 @@ import { Popover, PopoverTrigger, PopoverContent, Button } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faTriangleExclamation } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
+import { formatFrequencyMHz } from '../../../utils/frequencyMHz';
 import { createLogger } from '../../../utils/logger';
 import {
   cropSpectrumToRange,
@@ -5006,7 +5007,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
                 <div className="px-2 py-1">
                   <div className="text-sm font-semibold">{marker.description}</div>
                   <div className="text-xs text-default-400">
-                    {`${(marker.frequency / 1_000_000).toFixed(3)} MHz`}
+                    {`${formatFrequencyMHz(marker.frequency)} MHz`}
                   </div>
                 </div>
               </PopoverContent>

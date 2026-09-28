@@ -1,4 +1,5 @@
 import type { QSORecord } from '@tx5dr/contracts';
+import { formatFrequencyMHz } from '../utils/frequencyMHz';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('NotificationDriver');
@@ -254,7 +255,7 @@ export function buildQsoNotificationSummary(qso: Pick<QSORecord, 'callsign' | 'g
   }
 
   if (typeof qso.frequency === 'number' && qso.frequency > 0) {
-    summaryParts.push(`${(qso.frequency / 1_000_000).toFixed(3)} MHz`);
+    summaryParts.push(`${formatFrequencyMHz(qso.frequency)} MHz`);
   }
 
   if (qso.mode) {
