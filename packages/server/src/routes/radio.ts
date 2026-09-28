@@ -924,7 +924,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
     return reply.send({
       success: true,
       frequency,
-      radioMode: effectiveRadioMode,
+      radioMode: applyResult.modeError ? lastFrequency?.radioMode : effectiveRadioMode,
       repeaterShift: repeaterDuplexToApply?.repeaterShift,
       repeaterOffsetHz: repeaterDuplexToApply?.repeaterOffsetHz,
       toneMode: toneSquelchToApply?.toneMode,
