@@ -20,8 +20,8 @@ describe('QrzCallsignLink helpers', () => {
     expect(buildQrzCallsignUrl('ABC')).toBeNull();
   });
 
-  it('accepts portable callsigns and URL-encodes slash separators', () => {
+  it('accepts portable callsigns and does not URL-encode slash separators', () => {
     expect(isValidQrzCallsign('VK2/BG5DRB')).toBe(true);
-    expect(buildQrzCallsignUrl('VK2/BG5DRB')).toBe('https://www.qrz.com/db/VK2%2FBG5DRB');
+    expect(buildQrzCallsignUrl('VK2/BG5DRB')).toBe('https://www.qrz.com/db/VK2/BG5DRB');
   });
 });
