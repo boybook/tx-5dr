@@ -34,6 +34,7 @@ import { RadioConnectionStatus } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
 import { isProcessShuttingDown } from '../utils/process-shutdown.js';
 import { RadioConnectionFactory } from './connections/RadioConnectionFactory.js';
+import { listHamlibRigs, getHamlibRigMetadata } from './connections/hamlib/HamlibMetadata.js';
 import type {
   ApplyOperatingStateRequest,
   ApplyOperatingStateResult,
@@ -66,7 +67,6 @@ const FAST_FREQUENCY_POLL_WINDOW_MS = 5000;
 const FREQUENCY_WRITE_SETTLE_MS = 2000;
 const FREQUENCY_MATCH_TOLERANCE_HZ = 10;
 const FREQUENCY_READBACK_DELAYS_MS = [0, 100, 250, 500, 1000] as const;
-const HAMLIB_RIG_SCHEMA_TIMEOUT_MS = 3000;
 
 /** Hamlib valid frequency range: 1 kHz to 10 GHz */
 const HAMLIB_MIN_FREQUENCY_HZ = 1000;
@@ -89,23 +89,6 @@ function isFrequencyInHamlibRange(freq: unknown): freq is number {
     && Number.isFinite(freq)
     && freq >= HAMLIB_MIN_FREQUENCY_HZ
     && freq <= HAMLIB_MAX_FREQUENCY_HZ;
-}
-
-function withHamlibSchemaTimeout<T>(
-  operation: string,
-  promise: Promise<T>,
-  timeoutMs = HAMLIB_RIG_SCHEMA_TIMEOUT_MS,
-): Promise<T> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => reject(new Error(`${operation} operation timeout`)), timeoutMs);
-  });
-
-  return Promise.race([promise, timeoutPromise]).finally(() => {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  });
 }
 
 function collectErrorMessages(error: unknown, messages: string[] = []): string[] {
@@ -318,18 +301,6 @@ type RigConfigFieldSchema = {
   type: string;
   numeric?: { min: number; max: number; step: number };
   options?: string[];
-};
-
-type TemporaryHamlibRig = {
-  getConfigSchema?: () => Promise<unknown[]>;
-  getPortCaps?: () => Promise<HamlibPortCaps>;
-  destroy?: () => Promise<unknown>;
-};
-
-type HamlibConstructorWithMetadata = {
-  new (rigModel: number): TemporaryHamlibRig;
-  getConfigSchemaForModel?: (rigModel: number) => unknown[];
-  getPortCapsForModel?: (rigModel: number) => HamlibPortCaps;
 };
 
 function deriveRigEndpointKind(portType?: string): RigEndpointKind {
@@ -2457,12 +2428,8 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 列出支持的电台型号
    */
   static async listSupportedRigs(): Promise<Array<{ rigModel: number; mfgName: string; modelName: string }>> {
-    // 这个方法依赖 HamLib，需要从 hamlib 包导入
     try {
-      // 使用 ES 模块动态导入 HamLib
-      const hamlibModule = await import('hamlib');
-      const { HamLib } = hamlibModule;
-      return HamLib.getSupportedRigs();
+      return await listHamlibRigs(ConfigManager.getInstance().getRadioConfig().hamlibExecutionMode ?? 'process');
     } catch (error) {
       logger.warn('Failed to get HamLib supported rig list:', (error as Error).message);
       return [];
@@ -2475,31 +2442,8 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     endpointKind: RigEndpointKind;
     fields: RigConfigFieldSchema[];
   }> {
-    let rig: TemporaryHamlibRig | null = null;
     try {
-      const hamlibModule = await import('hamlib');
-      const { HamLib } = hamlibModule as unknown as { HamLib: HamlibConstructorWithMetadata };
-      if (typeof HamLib.getConfigSchemaForModel === 'function'
-        && typeof HamLib.getPortCapsForModel === 'function') {
-        const fields = HamLib.getConfigSchemaForModel(rigModel);
-        const portCaps = HamLib.getPortCapsForModel(rigModel);
-        const portType = typeof portCaps?.portType === 'string' ? portCaps.portType : 'other';
-        return {
-          rigModel,
-          portType,
-          endpointKind: deriveRigEndpointKind(portType),
-          fields: enrichRigConfigFields(fields, portCaps),
-        };
-      }
-
-      rig = new HamLib(rigModel) as unknown as TemporaryHamlibRig;
-      const fields = typeof rig?.getConfigSchema === 'function'
-        ? await withHamlibSchemaTimeout('getRigConfigSchema.getConfigSchema', rig.getConfigSchema())
-        : [];
-      const portCaps = typeof rig?.getPortCaps === 'function'
-        ? await withHamlibSchemaTimeout('getRigConfigSchema.getPortCaps', rig.getPortCaps())
-        : undefined;
-
+      const { fields, portCaps } = await getHamlibRigMetadata(rigModel, ConfigManager.getInstance().getRadioConfig().hamlibExecutionMode ?? 'process');
       const portType = typeof portCaps?.portType === 'string' ? portCaps.portType : 'other';
       return {
         rigModel,
@@ -2515,14 +2459,6 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         endpointKind: 'device-path',
         fields: [],
       };
-    } finally {
-      if (typeof rig?.destroy === 'function') {
-        try {
-          await rig.destroy();
-        } catch {
-          // Temporary rig cleanup is best-effort; schema probing already falls back safely.
-        }
-      }
     }
   }
 
@@ -2726,8 +2662,19 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     try {
       logger.debug('Post-connect safety: releasing PTT');
       await connection.setPTT?.(false);
+      if (connection.getType() === RadioConnectionType.HAMLIB && this.currentConfig.pttMethod !== 'vox' && connection.getPTT) {
+        try {
+          if (await connection.getPTT()) throw new RadioError({ code: RadioErrorCode.CONNECTION_FAILED,
+            message: 'Radio still reports TX after post-connect PTT release',
+            context: { operation: 'postConnectPttRelease', stateUncertain: true } });
+        } catch (error) {
+          if (!isRecoverableOptionalRadioError(error)) throw error;
+          logger.debug('PTT readback unsupported; relying on acknowledged release');
+        }
+      }
     } catch (error) {
       logger.warn(`Post-connect PTT release failed: ${buildCapabilityDiagnosticMessage(error)}`);
+      if (connection.getType() === RadioConnectionType.HAMLIB) throw error;
     }
   }
 
@@ -2854,6 +2801,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       logger.error(`Connection error: ${error.message}`);
       // 向上层转发错误（RadioBridge 监听此事件推送到前端）
       this.emit('error', error);
+      if (error instanceof RadioError && error.context?.restartRequired === true) {
+        this.radioActor?.send({ type: 'DISCONNECT', reason: 'Hamlib host requires a server restart' });
+        return;
+      }
       // 用户主动切换电源期间，底层 CAT 经常出现 "Command rejected" 类错误，
       // 不要让它们触发 HEALTH_CHECK_FAILED → 重连循环
       if (this.intentionalDisconnectFlag.active) {

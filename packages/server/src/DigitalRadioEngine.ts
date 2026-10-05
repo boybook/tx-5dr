@@ -1550,6 +1550,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   }
 
   async stop(): Promise<void> {
+    this.radioBridge.wasRunningBeforeDisconnect = false;
     // Profile/power/shutdown stops are full session boundaries. Let an
     // already-serialized mode transaction settle before disconnecting CAT.
     await this.modeSwitchTail.catch(() => undefined);

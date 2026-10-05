@@ -119,6 +119,9 @@
     "finish": "Finish"
   },
   "radio": {
+    "hamlibExecutionMode": "Hamlib execution mode",
+    "hamlibExecutionProcess": "Separate process (recommended)",
+    "hamlibExecutionInProcess": "In process",
     "pttSection": "PTT Method",
     "pttPort": "PTT Serial Port",
     "pttPortPlaceholder": "Use CAT serial port (default)",

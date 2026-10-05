@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { HamlibConnection } from '../connections/HamlibConnection.js';
+import { HamlibRuntime as HamlibConnection } from '../connections/hamlib/HamlibRuntime.js';
 import { RadioConnectionState } from '../connections/IRadioConnection.js';
 import type { MeterReadContext } from '../connections/meter/types.js';
 import { HamlibMeterReader } from '../connections/meter/HamlibMeterReader.js';
 import { defaultHamlibProfile } from '../connections/meter/profiles/index.js';
 import { RadioErrorCode } from '../../utils/errors/RadioError.js';
+import type { HamlibNativeMonitor } from '../connections/hamlib/HamlibNativeMonitor.js';
 
 type MockRig = {
   getCtcssTone: ReturnType<typeof vi.fn>;
@@ -61,6 +62,7 @@ type TestFrequencyRange = {
 };
 
 type HamlibConnectionTestAccessor = {
+  nativeMonitor: HamlibNativeMonitor;
   rig: MockRig;
   state: RadioConnectionState;
   supportedModes?: Set<string>;
@@ -1099,7 +1101,7 @@ describe('HamlibConnection', () => {
     vi.useFakeTimers();
     try {
       const { connection } = createConnectedConnection();
-      const startManagedSpectrum = vi.fn().mockReturnValue(new Promise<boolean>(() => {}));
+      const startManagedSpectrum = vi.fn().mockImplementation(() => asTestConnection(connection).nativeMonitor.run('startManagedSpectrum', () => new Promise<boolean>(() => {})));
 
       asTestConnection(connection).currentConfig = {
         type: 'network',
@@ -1130,11 +1132,11 @@ describe('HamlibConnection', () => {
     }
   });
 
-  it('times out stuck Hamlib spectrum support and stop calls', async () => {
+  it('poisons the runtime after a spectrum call stalls and rejects later stop I/O', async () => {
     vi.useFakeTimers();
     try {
       const { connection } = createConnectedConnection();
-      const getSpectrumSupportSummary = vi.fn().mockReturnValue(new Promise(() => {}));
+      const getSpectrumSupportSummary = vi.fn().mockImplementation(() => asTestConnection(connection).nativeMonitor.run('getSpectrumSupportSummary', () => new Promise(() => {})));
       const stopManagedSpectrum = vi.fn().mockReturnValue(new Promise(() => {}));
 
       asTestConnection(connection).spectrumController = {
@@ -1154,10 +1156,10 @@ describe('HamlibConnection', () => {
       const stopPromise = connection.stopManagedSpectrum();
       const stopAssertion = expect(stopPromise).rejects.toMatchObject({
         code: RadioErrorCode.OPERATION_TIMEOUT,
-        context: expect.objectContaining({ operation: 'stopManagedSpectrum' }),
+        context: expect.objectContaining({ hamlibHostFatal: true }),
       });
-      await vi.advanceTimersByTimeAsync(5_000);
       await stopAssertion;
+      expect(stopManagedSpectrum).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
@@ -1234,7 +1236,7 @@ describe('HamlibConnection', () => {
     });
   });
 
-  it('times out the extra Yaesu meter diagnostic strength read so polling can finish', async () => {
+  it('poisons the runtime when the extra Yaesu strength read stalls', async () => {
     vi.useFakeTimers();
     try {
       const { connection, rig } = createConnectedConnection({
@@ -1249,6 +1251,8 @@ describe('HamlibConnection', () => {
         }),
       });
       const testConnection = asTestConnection(connection);
+      const getLevel = rig.getLevel;
+      testConnection.nativeMonitor.instrument(rig);
       testConnection.supportedLevels = new Set(['RAWSTR', 'STRENGTH']);
       testConnection.meterDecodeStrategy = {
         name: 'yaesu',
@@ -1272,9 +1276,9 @@ describe('HamlibConnection', () => {
       await vi.advanceTimersByTimeAsync(5_000);
 
       await expect(pollPromise).resolves.toBeUndefined();
-      await expect(connection.getFrequency()).resolves.toBe(7100000);
-      expect(rig.getLevel).toHaveBeenCalledWith('RAWSTR');
-      expect(rig.getLevel).toHaveBeenCalledWith('STRENGTH');
+      await expect(connection.getFrequency()).rejects.toMatchObject({ context: { hamlibHostFatal: true } });
+      expect(getLevel).toHaveBeenCalledWith('RAWSTR');
+      expect(getLevel).toHaveBeenCalledWith('STRENGTH');
     } finally {
       vi.useRealTimers();
     }
