@@ -12,7 +12,7 @@ vi.mock('serialport', () => ({
   },
 }));
 
-import { HamlibConnection } from '../connections/HamlibConnection.js';
+import { HamlibRuntime as HamlibConnection } from '../connections/hamlib/HamlibRuntime.js';
 import type { RadioConnectionConfig } from '../connections/IRadioConnection.js';
 
 type ResolveAccessor = {
