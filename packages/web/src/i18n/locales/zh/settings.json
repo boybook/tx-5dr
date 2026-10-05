@@ -141,6 +141,8 @@
       "UNKNOWN_ERROR": "连接测试失败，请检查配置"
     },
     "pttMethod": "PTT 方法",
+    "pttNone": "无",
+    "pttNoneDesc": "不使用电台 PTT 控制。由外部软件或电台自身管理发射状态。",
     "pttCat": "CAT 命令（推荐）",
     "pttVox": "VOX 声控",
     "pttDtrDisabled": "DTR 引脚（需串口连接）",
@@ -271,7 +273,7 @@
     "tipRemoteNetwork": "远程网络：100-200ms",
     "tipIcomAudio": "音频由 ICOM WLAN 直接提供，无需单独配置音频设备",
     "noneTitle": "无电台控制",
-    "noneDesc": "不使用电台控制功能，仅进行FT8解码",
+    "noneDesc": "不使用 CAT 控制电台；仍可通过独立串口 PTT 或 CW DTR/RTS 引脚触发。",
     "resetToZero": "重置为 0",
     "tipNoneMode": "无电台模式通常无需补偿",
     "pageTitle": "电台设备设置",

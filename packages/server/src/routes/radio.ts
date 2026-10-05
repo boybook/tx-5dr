@@ -1041,16 +1041,17 @@ export async function radioRoutes(fastify: FastifyInstance) {
   fastify.post('/test-ptt', { schema: { body: zodToJsonSchema(HamlibConfigSchema) }, onRequest: adminOnly }, async (req, reply) => {
     const config = normalizeHamlibConfig(HamlibConfigSchema.parse(req.body));
 
-    if (config.type === 'none') {
+    if (config.pttMethod === 'none' || config.pttMethod === 'vox') {
+      return reply.send({ success: true, message: config.pttMethod === 'none' ? 'PTT control is disabled.' : 'VOX mode does not require a PTT test.' });
+    }
+
+    if (config.type === 'none' && (config.pttMethod === 'dtr' || config.pttMethod === 'rts') && !config.pttPort?.trim()) {
       throw new RadioError({
         code: RadioErrorCode.INVALID_CONFIG,
-        message: 'No radio mode, PTT test not needed',
-        userMessage: 'Current configuration is no-radio mode',
+        message: 'PTT port is required for DTR/RTS in no-radio mode',
+        userMessage: 'Configure a PTT serial port first',
         severity: RadioErrorSeverity.WARNING,
-        suggestions: [
-          'Configure radio connection type first (serial or network)',
-          'Select correct radio type in settings page'
-        ],
+        suggestions: ['Select or enter the serial port used for PTT'],
       });
     }
 
