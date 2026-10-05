@@ -98,6 +98,16 @@ describe('SSTV local audio playback (mocked codec and output)', () => {
     expect(h.setPTT).not.toHaveBeenCalled();
   });
 
+  it('explicitly enables the realtime transmit monitor for SSTV playback', async () => {
+    const h = await harness();
+    await h.service.startSstvTx(h.command);
+    expect(h.audio.openDeterministicPlayback).toHaveBeenCalledWith(expect.objectContaining({
+      playbackKind: 'sstv', injectIntoMonitor: true,
+    }));
+    const tx = h.service.getStatus().tx;
+    await h.service.cancelSstvTx({ operatorId: 'op', sessionId: tx.sessionId!, expectedRevision: tx.revision });
+  });
+
   it('rechecks configuration after output preparation before playback', async () => {
     const h = await harness();
     await h.service.startSstvTx(h.command);

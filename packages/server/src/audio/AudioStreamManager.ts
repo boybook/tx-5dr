@@ -19,6 +19,7 @@ import { AndroidAudioInputSocket, AndroidAudioOutputSocket, type AndroidAudioOut
 import { getAndroidAudioStartFailure, isAndroidAudioDeviceId, isAndroidBridgeRuntime, isLegacyAndroidAudioDeviceName } from './android-audio-devices.js';
 import { findOwnedUsbAudioHardwareId } from './linux-usb-audio-identity.js';
 import { IcomIfSsbDemodulator } from './IcomIfSsbDemodulator.js';
+import { DeterministicTxMonitorTap } from './DeterministicTxMonitorTap.js';
 import type { AudioInputSignalType } from '@tx5dr/contracts';
 import { VIRTUAL_AUDIO_INGRESS_TOKEN } from '../virtual-radio/virtualAudioIngress.js';
 import {
@@ -39,6 +40,7 @@ export const DEFAULT_INPUT_PROCESSING_SAMPLE_RATE = 12_000;
 export const CW_INPUT_PROCESSING_SAMPLE_RATE = 9_600;
 const INPUT_RING_BUFFER_DURATION_MS = 60_000;
 const ICOM_WLAN_TX_CHUNK_SIZE = 1200;
+const DETERMINISTIC_TX_SUBMISSION_LEAD_MS = 100;
 const ICOM_WLAN_TX_TARGET_BUFFER_LEAD_MS = 150;
 const ICOM_WLAN_TX_MAX_WAIT_SLICE_MS = 20;
 const TCI_AUDIO_DEVICE_NAME = 'TCI Audio';
@@ -270,9 +272,9 @@ export function classifyRtAudioOutputIssue(
 
 export interface PlayAudioOptions {
   /**
-   * Mirrors the audio chunks written to the TX output into the monitor broadcast
-   * side path. This is intentionally opt-in: normal RX monitor, spectrum, and
-   * decoding must continue to use the physical input ring buffer only.
+   * Publishes TX playback PCM through the monitor side path. Deterministic
+   * playback uses its own realtime cadence and requires this explicit opt-in;
+   * RX decoding and spectrum continue to use physical input only.
    */
   injectIntoMonitor?: boolean;
   playbackKind?: PlaybackKind;
@@ -378,6 +380,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    */
   private readonly stopRequestedPlaybackIds = new Set<number>();
   private deterministicPlaybackWake: { playbackId: number; wake: () => void } | null = null;
+  private deterministicMonitorTap: DeterministicTxMonitorTap | null = null;
   private voiceOutputObserver: VoiceTxOutputObserver | null = null;
   private voiceTxOutputPipeline: VoiceTxOutputPipeline;
   private nativeAudioInputSequence = 0;
@@ -1344,6 +1347,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    * 停止音频输出流
    */
   async stopOutput(): Promise<void> {
+    this.deterministicMonitorTap?.abort();
     if (!this.isOutputting && !this.rtAudioOutput && !this.usingIcomWlanOutput && !this.usingTciOutput && !this.usingAndroidOutput) {
       logger.warn('audio output is not running');
       return;
@@ -2468,11 +2472,39 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     await writer?.(tail);
   }
 
+  private createDeterministicMonitorTap(
+    playbackId: number,
+    sampleRate: number,
+    backend: 'rtaudio' | 'tci' | 'icom-wlan' | 'android',
+    enabled: boolean,
+    reservedLeadMs = 0,
+  ): DeterministicTxMonitorTap | null {
+    if (!enabled) return null;
+    const tap = new DeterministicTxMonitorTap(
+      sampleRate,
+      (samples, rate) => this.emit('txMonitorAudioData', { samples, sampleRate: rate }),
+      (stats) => {
+        if (this.deterministicMonitorTap === tap) this.deterministicMonitorTap = null;
+        logger.info('SSTV transmit monitor finished', {
+          playbackId, backend,
+          emittedFrames: stats.emittedFrames,
+          droppedFrames: stats.droppedFrames,
+          observerFailures: stats.observerFailures,
+          maxQueuedAudioMs: Math.round(stats.maxQueuedAudioMs),
+        });
+      },
+      reservedLeadMs,
+    );
+    this.deterministicMonitorTap = tap;
+    return tap;
+  }
+
   private openRtAudioDeterministicPlayback(options: PlayAudioOptions): DeterministicPlaybackSession {
     const output = this.rtAudioOutput!;
     const generation = this.outputStreamGeneration;
     const playbackId = ++this.playbackSequence;
     const sampleRate = this.outputSampleRate;
+    const monitorTap = this.createDeterministicMonitorTap(playbackId, sampleRate, 'rtaudio', Boolean(options.injectIntoMonitor));
     const frameSamples = Math.max(64, this.outputBufferSize || 1024);
     const capacity = Math.max(2, Math.ceil(sampleRate * 0.1 / frameSamples));
     const queue: Float32Array[] = [];
@@ -2516,11 +2548,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       } catch (error) {
         logger.warn('Deterministic playback chunk observer failed', error);
       }
-      // Preserve the native SSTV monitor tap alongside its preview tap.
-      if (options.injectIntoMonitor || options.onPlaybackChunk) {
-        try { this.emit('txMonitorAudioData', { samples, sampleRate }); }
-        catch (error) { logger.warn('Deterministic playback monitor observer failed', error); }
-      }
     };
     const finish = (error?: Error) => {
       if (settled) return;
@@ -2555,12 +2582,14 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         elapsedMs: firstConsumeAt === null ? 0 : Math.round(performance.now() - firstConsumeAt),
       });
       if (error) {
+        monitorTap?.abort();
         observed.length = 0;
         observedSamples = 0;
         rejectStart(error);
         rejectEnd(error);
       } else {
         flushObservation();
+        queueMicrotask(() => monitorTap?.finish());
         resolveEnd();
       }
     };
@@ -2634,8 +2663,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             const frame = pendingPcm.shift();
             const pcm = frame?.pcm;
             consumedSamples += frame?.samples ?? 0;
-            if (pcm) { observed.push(pcm); observedSamples += pcm.length; }
+            if (pcm && options.onPlaybackChunk) { observed.push(pcm); observedSamples += pcm.length; }
             pump();
+            if (pcm) monitorTap?.offer(pcm);
             // Progress and preview run after refill, never inside native write.
             if (!settled && observedSamples >= sampleRate * 0.1 && !observation) observation = setImmediate(flushObservation);
           };
@@ -2664,6 +2694,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private openPreparedTciPlayback(adapter: TciAudioAdapter, options: PlayAudioOptions): DeterministicPlaybackSession {
     const sampleRate = adapter.getSampleRate();
     const playbackId = ++this.playbackSequence;
+    const monitorTap = this.createDeterministicMonitorTap(playbackId, sampleRate, 'tci', Boolean(options.injectIntoMonitor));
     const chunks: Float32Array[] = [];
     let totalSamples = 0;
     let waveform: Float32Array | null = null;
@@ -2688,12 +2719,12 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         observedSamples = end;
         try {
           options.onPlaybackChunk?.(samples, sampleRate);
-          if (options.injectIntoMonitor) this.emit('txMonitorAudioData', { samples, sampleRate });
         } catch (error) { logger.warn('Prepared TCI audio observer failed', error); }
       }
     };
     const interrupt = (reason: string) => {
       failure ??= new Error(reason);
+      monitorTap?.abort();
       rejectStart(failure);
       transmission?.end();
     };
@@ -2731,6 +2762,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
                 if (failure) return;
                 const first = consumedSamples === 0;
                 consumedSamples = Math.min(totalSamples, count);
+                if (waveform) monitorTap?.acceptPrepared(waveform, consumedSamples);
                 lastConsumptionAt = performance.now();
                 if (first && consumedSamples > 0) {
                   resolveStart();
@@ -2745,7 +2777,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               if (failure) throw failure;
               if (consumedSamples !== totalSamples) throw new Error('Prepared TCI audio drained without complete consumption');
               observe();
+              monitorTap?.finish();
             } catch (error) {
+              monitorTap?.abort();
               failure ??= error instanceof Error ? error : new Error(String(error));
               rejectStart(failure);
               throw failure;
@@ -2782,6 +2816,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
   public openDeterministicPlayback(options: PlayAudioOptions & { playbackKind: 'sstv' }): DeterministicPlaybackSession {
     if (this.playing || this.hasPendingRtAudioPlayback()) throw new Error('audio output is busy');
+    this.deterministicMonitorTap?.abort();
     const radioAdapter = this.usingIcomWlanOutput && this.icomWlanAudioAdapter
       ? { kind: 'icom' as const, adapter: this.icomWlanAudioAdapter }
       : this.usingTciOutput && this.tciAudioAdapter
@@ -2798,6 +2833,10 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     const highWaterSamples = sampleRate;
     const lowWaterSamples = Math.round(sampleRate * 0.3);
     const playbackId = ++this.playbackSequence;
+    const monitorTap = this.createDeterministicMonitorTap(
+      playbackId, sampleRate, radioAdapter ? 'icom-wlan' : 'android',
+      Boolean(options.injectIntoMonitor), DETERMINISTIC_TX_SUBMISSION_LEAD_MS,
+    );
     const queue: Float32Array[] = [];
     let queuedSamples = 0;
     let started = false;
@@ -2877,10 +2916,10 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             await radioAdapter.adapter.sendAudio(output);
             observedChunk = output;
             signalStarted();
-            if (options.injectIntoMonitor) this.emit('txMonitorAudioData', { samples: output, sampleRate });
+            monitorTap?.offer(output);
           } else if (this.usingAndroidOutput && this.androidAudioOutput) {
             if (!await this.androidAudioOutput.write(chunk, this.volumeGain)) throw new Error('Android audio output write failed');
-            if (options.onPlaybackChunk) {
+            if (options.onPlaybackChunk || monitorTap) {
               const output = new Float32Array(chunk.length);
               for (let index = 0; index < chunk.length; index += 1) {
                 output[index] = Math.max(-1, Math.min(1, chunk[index] * this.volumeGain));
@@ -2888,7 +2927,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               observedChunk = output;
             }
             signalStarted();
-            if (options.injectIntoMonitor) this.emit('txMonitorAudioData', { samples: chunk, sampleRate });
+            monitorTap?.offer(observedChunk);
           } else {
             throw new Error('audio output became unavailable');
           }
@@ -2903,9 +2942,11 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
         }
       } catch (error) {
         aborted = error instanceof Error ? error : new Error(String(error));
+        monitorTap?.abort();
         rejectFirstStart(error);
         throw error;
       } finally {
+        if (!aborted) monitorTap?.finish();
         if (this.deterministicPlaybackWake?.playbackId === playbackId) this.deterministicPlaybackWake = null;
         this.stopRequestedPlaybackIds.delete(playbackId);
         for (const resolve of backpressureWaiters.splice(0)) resolve();
@@ -2948,6 +2989,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       },
       abort: async (reason = 'deterministic playback aborted') => {
         aborted = new Error(reason);
+        monitorTap?.abort();
         this.stopRequestedPlaybackIds.add(playbackId);
         wake();
         await completion?.catch(() => undefined);
