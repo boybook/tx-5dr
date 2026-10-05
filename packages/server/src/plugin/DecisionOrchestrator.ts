@@ -1345,7 +1345,7 @@ export class DecisionOrchestrator {
     const myCallsign = operator.config.myCallsign.trim().toUpperCase();
     const scoredMessages = await this.getScoredAutomaticTargetMessages(operatorId, parsedMessages);
     const directedMessages = scoredMessages.filter((message) =>
-      this.isInboundDirectCallMessage(message, myCallsign)
+      this.isInboundDirectedProtocolMessage(message, myCallsign)
     );
     if (directedMessages.length === 0) {
       return false;
@@ -1369,8 +1369,9 @@ export class DecisionOrchestrator {
     const beforeTarget = before?.context?.targetCallsign?.trim().toUpperCase();
     const afterTarget = after?.context?.targetCallsign?.trim().toUpperCase();
     const afterState = after?.currentState ?? 'TX6';
+    // The strategy selects the reply stage for both initial calls and follow-up exchanges.
     if (!afterTarget
-        || (afterState !== 'TX2' && afterState !== 'TX3')
+        || (afterState !== 'TX2' && afterState !== 'TX3' && afterState !== 'TX4' && afterState !== 'TX5')
         || (before?.currentState === afterState && beforeTarget === afterTarget)) {
       return false;
     }

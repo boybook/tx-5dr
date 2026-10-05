@@ -624,6 +624,13 @@ runtime 将稳定记录身份、保存确认和最终回复确认分开，协议
 需求。它不属于插件私有 context，也不代替 `transmitGate`。手动起呼被拒绝时，
 Host 向该连接返回原因；插件命令端口则拒绝对应 Promise。
 
+标准通联启用 `autoReplyToDirectCallWhenStopped` 时，停发且无目标的 TX6 操作员可由
+可靠的入站直呼或后续协议报文唤醒：CALL、信号报告、R-report、RRR/RR73 必须明确
+发给本呼号。Host 将报文交给 strategy 决定 TX2 至 TX5 的回复阶段，再对齐对方
+报文的下一发射周期；已通联规则、目标冲突和持久化约束仍由标准 runtime 验证。
+单独的 73、部分解码、发给其他台站的报文不触发这条路径；辅助队列仍由自己的
+执行许可与入站队列规则处理，不使用停发直呼唤醒。
+
 ## 7. Settings、存储与 UI
 
 ### 7.1 Settings
