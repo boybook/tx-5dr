@@ -746,6 +746,23 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
     }
   };
 
+    const renderHamlibExecutionMode = () => (
+      <Select
+        label={t('radio.hamlibExecutionMode')}
+        isDisabled={isTestingConnection || isTestingPTT || isTestingCW}
+        selectedKeys={[config.hamlibExecutionMode ?? 'process']}
+        onSelectionChange={keys => {
+          const mode = Array.from(keys)[0];
+          if (mode === 'process' || mode === 'in-process') updateConfig({ hamlibExecutionMode: mode });
+        }}
+        size="sm"
+        variant="flat"
+      >
+        <SelectItem key="process">{t('radio.hamlibExecutionProcess')}</SelectItem>
+        <SelectItem key="in-process">{t('radio.hamlibExecutionInProcess')}</SelectItem>
+      </Select>
+    );
+
     // 渲染 PTT 配置区块（仅 serial / network 模式）
     const renderPttConfig = () => {
       const currentMethod = config.pttMethod || 'cat';
@@ -927,6 +944,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
           return (
             <Card shadow="none" radius="lg" classNames={{ base: "border border-divider bg-content1" }}>
               <CardBody className="space-y-4 p-4">
+                {renderHamlibExecutionMode()}
                 <h4 className="font-semibold text-default-900">{t('radio.networkTitle')}</h4>
                 <p className="text-sm text-default-600">{t('radio.networkDesc')}</p>
                 <Divider />
@@ -1064,6 +1082,7 @@ export const RadioDeviceSettings = forwardRef<RadioDeviceSettingsRef, RadioDevic
           return (
             <Card shadow="none" radius="lg" classNames={{ base: "border border-divider bg-content1" }}>
               <CardBody className="space-y-4 p-4">
+                {renderHamlibExecutionMode()}
                 <div className="flex items-center justify-between">
                   <h4 className="font-semibold text-default-900">{t('radio.serialTitle')}</h4>
                   {usesSerialPortEndpoint && (

@@ -87,6 +87,7 @@ export function normalizeHamlibConfig(config: HamlibConfig): HamlibConfig {
   const normalizedConfig: HamlibConfig = {
     ...config,
     digitalModeRadioMode: config.digitalModeRadioMode ?? 'none',
+    hamlibExecutionMode: config.hamlibExecutionMode ?? 'process',
   };
 
   if (config.type !== 'serial') {

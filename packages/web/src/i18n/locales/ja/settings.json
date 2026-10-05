@@ -119,6 +119,9 @@
     "viewerPermissionInsufficient": "トークンの権限が不十分であるため、無線を構成するには管理者トークンが必要です"
   },
   "radio": {
+    "hamlibExecutionMode": "Hamlib 実行モード",
+    "hamlibExecutionProcess": "独立プロセス（推奨）",
+    "hamlibExecutionInProcess": "プロセス内で実行",
     "pttSection": "PTT方式",
     "pttPort": "PTTシリアルポート",
     "pttPortPlaceholder": "CAT シリアル ポートを使用する (デフォルト)",

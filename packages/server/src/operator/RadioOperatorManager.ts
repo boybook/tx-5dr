@@ -291,6 +291,12 @@ export class RadioOperatorManager {
   }>();
   private readonly targetReservations = new TargetReservationCoordinator();
   private transmissionMaintenanceReason: string | null = null;
+  private radioRecovery: {
+    resumeAt: number | null;
+    profileId: string | null;
+    mode: string;
+    intents: Map<string, { operator: RadioOperator; epoch: number; configuration: string }>;
+  } | null = null;
 
   constructor(options: RadioOperatorManagerOptions) {
     this.eventEmitter = options.eventEmitter;
@@ -352,6 +358,9 @@ export class RadioOperatorManager {
     };
     this.eventEmitter.on('requestTransmit', handleRequestTransmit);
     this.eventListeners.set('requestTransmit', handleRequestTransmit);
+    const resumeRecoveredOperators = (slot: SlotInfo) => this.resumeRecoveredOperatorsAtSlot(slot);
+    this.eventEmitter.on('slotStart', resumeRecoveredOperators);
+    this.eventListeners.set('slotStart', resumeRecoveredOperators);
 
     const handleRequestTransmitBatch = (request: TransmitBatchRequest) => {
       if (this.transmissionMaintenanceReason) return;
@@ -1111,6 +1120,7 @@ export class RadioOperatorManager {
    * 启动操作员发射
    */
   startOperator(operatorId: string): void {
+    this.radioRecovery?.intents.delete(operatorId);
     this.startOperatorInternal(operatorId, false);
   }
 
@@ -1140,6 +1150,7 @@ export class RadioOperatorManager {
   }
 
   private startOperatorInternal(operatorId: string, deferInitialDecision: boolean): boolean {
+    if (this.transmissionMaintenanceReason) throw new Error(`Operator transmission paused: ${this.transmissionMaintenanceReason}`);
     const operator = this.operators.get(operatorId);
     if (!operator) {
       throw new Error(`operator ${operatorId} not found`);
@@ -2384,6 +2395,7 @@ export class RadioOperatorManager {
    * 停止操作员发射
    */
   stopOperator(operatorId: string): void {
+    this.radioRecovery?.intents.delete(operatorId);
     const operator = this.operators.get(operatorId);
     if (!operator) {
       throw new Error(`operator ${operatorId} not found`);
@@ -2404,7 +2416,8 @@ export class RadioOperatorManager {
    * 停止所有操作员发射
    * 通常在电台断开连接时调用
    */
-  stopAllOperators(): void {
+  stopAllOperators(preserveRadioRecovery = false): void {
+    if (!preserveRadioRecovery) this.cancelRadioRecovery();
     let stoppedCount = 0;
     
     this.operators.forEach((operator, operatorId) => {
@@ -2423,6 +2436,61 @@ export class RadioOperatorManager {
     
     if (stoppedCount > 0) {
       logger.info(`Stopped ${stoppedCount} operator(s) transmitting (radio disconnected)`);
+    }
+  }
+
+  beginRadioRecovery(): void {
+    if (this.radioRecovery || this.transmissionMaintenanceReason) return;
+    const transmitting = [...this.operators.values()].filter(operator => operator.isTransmitting);
+    this.stopAllOperators(true);
+    this.enterTransmissionMaintenance('Hamlib recovery');
+    const config = ConfigManager.getInstance();
+    this.radioRecovery = {
+      resumeAt: null, profileId: config.getActiveProfileId(), mode: this.getCurrentMode().name,
+      intents: new Map(transmitting.map(operator => [operator.config.id, {
+        operator, epoch: this.intentCoordinator.getCurrentEpoch(operator.config.id),
+        configuration: this.getRecoveryConfiguration(operator),
+      }])),
+    };
+  }
+
+  confirmRadioRecovery(): void {
+    if (!this.radioRecovery) return;
+    const slotMs = this.getCurrentMode().slotMs;
+    this.radioRecovery.resumeAt = (Math.floor(this.clockSource.now() / slotMs) + 1) * slotMs;
+  }
+
+  cancelRadioRecovery(): void {
+    this.radioRecovery = null;
+    if (this.transmissionMaintenanceReason === 'Hamlib recovery') this.exitTransmissionMaintenance();
+  }
+
+  private getRecoveryConfiguration(operator: RadioOperator): string {
+    const config = ConfigManager.getInstance();
+    return JSON.stringify({ operator: config.getOperatorConfig(operator.config.id) ?? operator.config, plugins: config.getPluginsConfig() });
+  }
+
+  private resumeRecoveredOperatorsAtSlot(slot: SlotInfo): void {
+    const recovery = this.radioRecovery;
+    if (!recovery || recovery.resumeAt === null || slot.startMs < recovery.resumeAt || !this.isRunning) return;
+    const config = ConfigManager.getInstance();
+    this.cancelRadioRecovery();
+    if (config.getActiveProfileId() !== recovery.profileId || this.getCurrentMode().name !== recovery.mode) return;
+    for (const [id, intent] of recovery.intents) {
+      if (this.operators.get(id) !== intent.operator || this.intentCoordinator.getCurrentEpoch(id) !== intent.epoch
+        || this.getRecoveryConfiguration(intent.operator) !== intent.configuration) continue;
+      try {
+        // Arm at the new boundary; fresh strategy decisions remain with the Host.
+        this.startOperatorInternal(id, true);
+        if (this._pluginManager?.hasTargetQueue?.(id)) {
+          void this._pluginManager.resumeQueueExecution(id).catch(error => {
+            this.stopOperator(id);
+            logger.warn('Assisted queue recovery was rejected', { operatorId: id, error: String(error) });
+          });
+        }
+      } catch (error) {
+        logger.warn('Operator automation recovery was rejected', { operatorId: id, error: String(error) });
+      }
     }
   }
 

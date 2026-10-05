@@ -1,6 +1,6 @@
 import path from 'path';
 import { createSocket } from 'node:dgram';
-import * as hostHamlib from 'hamlib';
+import { createRequire } from 'node:module';
 import type { RemoteInfo, Socket, SocketType } from 'node:dgram';
 import {
   getBandFromFrequency,
@@ -56,12 +56,14 @@ type HostHamlibModule = {
   PASSBAND: HamlibHostDependency['PASSBAND'];
 };
 
-function createAllowedHamlibDependency(source: HostHamlibModule): HamlibHostDependency {
+const requireHostDependency = createRequire(import.meta.url);
+
+function createAllowedHamlibDependency(): HamlibHostDependency {
   return {
-    Rotator: source.Rotator,
+    get Rotator() { return (requireHostDependency('hamlib') as HostHamlibModule).Rotator; },
     PASSBAND: {
-      NORMAL: source.PASSBAND.NORMAL,
-      NOCHANGE: source.PASSBAND.NOCHANGE,
+      NORMAL: 0,
+      NOCHANGE: -1,
     },
   };
 }
@@ -253,7 +255,7 @@ export class PluginContextFactory {
         },
       },
       hostDependencies: {
-        hamlib: createAllowedHamlibDependency(hostHamlib as unknown as HostHamlibModule),
+        hamlib: createAllowedHamlibDependency(),
       },
     };
     const declaredCapabilities: Record<string, unknown> = {};

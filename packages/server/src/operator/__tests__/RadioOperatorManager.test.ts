@@ -279,6 +279,62 @@ function attachQSOHookSpy(manager: RadioOperatorManager) {
   };
 }
 
+describe('Hamlib automation recovery', () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  async function recoveryFixture() {
+    const fixture = createManager({ logBook: { id: 'log', name: 'Recovery', provider: { hasWorkedCallsign: vi.fn().mockResolvedValue(false) } }, clockNow: 1000 });
+    await fixture.manager.addOperator({ id: 'op-recovery', myCallsign: 'N0CALL', myGrid: 'AA00', frequency: 1500, transmitCycles: [0] });
+    const operator = fixture.manager.getOperator('op-recovery')!;
+    operator.start();
+    fixture.manager.start();
+    fixture.manager.beginRadioRecovery();
+    fixture.manager.start();
+    return { ...fixture, operator };
+  }
+
+  it('waits for safety confirmation and a new complete slot without replaying a frame', async () => {
+    const { manager, operator, eventEmitter, encodeQueue } = await recoveryFixture();
+    eventEmitter.emit('slotStart', createSlotInfo(15000), null);
+    expect(operator.isTransmitting).toBe(false);
+    manager.confirmRadioRecovery();
+    eventEmitter.emit('slotStart', createSlotInfo(0), null);
+    expect(operator.isTransmitting).toBe(false);
+    eventEmitter.emit('slotStart', createSlotInfo(15000), null);
+    expect(operator.isTransmitting).toBe(true);
+    expect(encodeQueue.push).not.toHaveBeenCalled();
+  });
+
+  it('does not restore an operator explicitly stopped during recovery', async () => {
+    const { manager, operator, eventEmitter } = await recoveryFixture();
+    manager.stopOperator(operator.config.id);
+    manager.confirmRadioRecovery();
+    eventEmitter.emit('slotStart', createSlotInfo(15000), null);
+    expect(operator.isTransmitting).toBe(false);
+  });
+
+  it('does not restore automation after global stop or profile changes', async () => {
+    const { manager, operator, eventEmitter } = await recoveryFixture();
+    manager.stopAllOperators();
+    manager.confirmRadioRecovery();
+    eventEmitter.emit('slotStart', createSlotInfo(15000), null);
+    expect(operator.isTransmitting).toBe(false);
+    operator.start(); manager.beginRadioRecovery(); manager.start();
+    vi.spyOn(ConfigManager.getInstance(), 'getActiveProfileId').mockReturnValue('different-profile');
+    manager.confirmRadioRecovery();
+    eventEmitter.emit('slotStart', createSlotInfo(30000), null);
+    expect(operator.isTransmitting).toBe(false);
+  });
+
+  it('rechecks strategy gates before restoring automation', async () => {
+    const { manager, operator, eventEmitter } = await recoveryFixture();
+    manager.setPluginManager({ getOperatorTransmitGate: () => ({ allowed: false, reason: 'permission revoked' }) } as any);
+    manager.confirmRadioRecovery();
+    eventEmitter.emit('slotStart', createSlotInfo(15000), null);
+    expect(operator.isTransmitting).toBe(false);
+  });
+});
+
 function mockMaxSameTransmissionCount(limit: number) {
   return vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
     getFT8Config: () => ({ maxSameTransmissionCount: limit }),
