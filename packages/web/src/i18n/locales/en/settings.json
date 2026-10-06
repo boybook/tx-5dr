@@ -320,6 +320,9 @@
     "tipTciCompensation": "TCI mode: usually needs low network compensation on localhost"
   },
   "audio": {
+    "recording": "Recording",
+    "recordingStart": "Start recording",
+    "recordingStop": "Stop recording",
     "loading": "Loading audio devices...",
     "deviceConfig": "Audio Device Configuration",
     "loadFailed": "Failed to load audio devices",
@@ -399,6 +402,30 @@
     "deviceManagedFixed": "Managed by this device; no manual setting is required",
     "autoMatched": "USB audio device matched: {{device}} ({{rate}} Hz)"
   },
+  "recording": {
+    "title": "Recording Settings",
+    "description": "Configure server recording format, sample rate, bit depth, source, and storage location.",
+    "format": "Format",
+    "sampleRate": "Sample rate",
+    "bitDepth": "Bit depth",
+    "source": "Recording source",
+    "sourceRx": "Receive only",
+    "sourceTx": "Transmit only",
+    "sourceBoth": "Receive and transmit",
+    "directory": "Storage directory",
+    "chooseDirectory": "Choose storage directory",
+    "save": "Save settings",
+    "saveSuccess": "Recording settings saved",
+    "saveFailed": "Failed to save recording settings",
+    "loadFailed": "Failed to load recordings",
+    "listTitle": "Recording files",
+    "empty": "No recordings",
+    "refresh": "Refresh list",
+    "download": "Download",
+    "downloadFailed": "Failed to download recording",
+    "delete": "Delete",
+    "deleteFailed": "Failed to delete recording"
+  },
   "radioType": {
     "none": "Monitor Only",
     "noneDesc": "No radio connected, FT8 decode only",
@@ -428,6 +455,7 @@
     "tabDisplay": "Display",
     "tabRadioProfile": "Radio Config",
     "tabSystem": "System",
+    "tabRecording": "Recording",
     "tabHelpImprove": "Help Improve",
     "tabRigctld": "Rigctld Bridge",
     "tabFrequencyPresets": "Frequencies",

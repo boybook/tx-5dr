@@ -77,6 +77,13 @@ export interface AppConfig {
   // Profile 系统（取代旧的顶层 radio/audio）
   profiles: InternalRadioProfile[];
   activeProfileId: string | null;
+  recording?: {
+    format: 'wav' | 'mp3';
+    sampleRate: 16000 | 24000 | 44100 | 48000;
+    bitDepth: 16 | 24 | 32;
+    source: 'rx' | 'tx' | 'both';
+    directory: string;
+  };
 
   ft8: {
     myCallsign: string;
@@ -255,6 +262,13 @@ const DEFAULT_CONFIG: AppConfig = {
   observability: {
     enabled: true,
     noticeVersion: 0,
+  },
+  recording: {
+    format: 'wav',
+    sampleRate: 24000,
+    bitDepth: 16,
+    source: 'both',
+    directory: 'recordings',
   },
 };
 

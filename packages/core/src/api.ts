@@ -924,6 +924,15 @@ export const api = {
     );
   },
 
+  async getRecordingSettings(apiBase?: string) { return apiRequest('/recordings/settings', undefined, apiBase); },
+  async updateRecordingSettings(settings: unknown, apiBase?: string) { return apiRequest('/recordings/settings', { method: 'PUT', body: JSON.stringify(settings) }, apiBase); },
+  async getRecordings(apiBase?: string) { return apiRequest('/recordings', undefined, apiBase); },
+  async getRecordingStatus(apiBase?: string) { return apiRequest('/recordings/status', undefined, apiBase); },
+  async startRecording(apiBase?: string) { return apiRequest('/recordings/start', { method: 'POST' }, apiBase); },
+  async stopRecording(apiBase?: string) { return apiRequest('/recordings/stop', { method: 'POST' }, apiBase); },
+  async downloadRecording(id: string, apiBase?: string) { return apiBlobRequest(`/recordings/${encodePathSegment(id)}/download`, undefined, apiBase); },
+  async deleteRecording(id: string, apiBase?: string) { return apiRequest(`/recordings/${encodePathSegment(id)}`, { method: 'DELETE' }, apiBase); },
+
   async resolveAudioSettings(
     request: AudioSettingsResolveRequest,
     apiBase?: string,

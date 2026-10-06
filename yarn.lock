@@ -6711,6 +6711,7 @@ __metadata:
     fastify-plugin: "npm:^5.1.0"
     hamlib: "npm:0.7.7"
     icom-wlan-node: "npm:^0.7.0"
+    lamejs: "npm:^1.2.1"
     mic: "npm:^2.1.2"
     node-datachannel: "npm:0.32.3"
     node-forge: "npm:^1.4.0"
@@ -13919,6 +13920,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"lamejs@npm:^1.2.1":
+  version: 1.2.1
+  resolution: "lamejs@npm:1.2.1"
+  dependencies:
+    use-strict: "npm:1.0.1"
+  checksum: 10c0/9396e3233f1d5f718f0f09e1c6936dea3332ab64f4d00f2cbdf93226b762faba390fc4b10311d97c92c8cdb666571b5032bd9ede90499a708a26448ead2e5c4a
+  languageName: node
+  linkType: hard
+
 "latest-version@npm:^5.1.0":
   version: 5.1.0
   resolution: "latest-version@npm:5.1.0"
@@ -19885,6 +19895,13 @@ __metadata:
     "@types/react":
       optional: true
   checksum: 10c0/067c648814ad0c1f1e89d2d0e496254b05c4bed6a34e23045b4413824222aab08fd803c59a42852acc16830c17567d03f8c90af0a62be2f4e4b931454d079798
+  languageName: node
+  linkType: hard
+
+"use-strict@npm:1.0.1":
+  version: 1.0.1
+  resolution: "use-strict@npm:1.0.1"
+  checksum: 10c0/c78ee085cbcb68bd3abd4a7dec78704dc3ad4ddeb19f37ed077f93617dd36415b4219991fbc270ad9a953e672ac65f3fd26e251d98bd7086098fd7e00fb87f2f
   languageName: node
   linkType: hard
 

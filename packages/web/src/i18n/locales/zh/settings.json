@@ -320,6 +320,9 @@
     "tipTciCompensation": "TCI 模式：本机连接通常只需要较低网络补偿"
   },
   "audio": {
+    "recording": "录音",
+    "recordingStart": "开始录音",
+    "recordingStop": "停止录音",
     "loading": "正在加载音频设备...",
     "deviceConfig": "音频设备配置",
     "loadFailed": "加载音频设备失败",
@@ -399,6 +402,30 @@
     "deviceManagedFixed": "由当前设备自动管理，无需手动设置",
     "autoMatched": "已自动匹配 USB 音频设备：{{device}}（{{rate}} Hz）"
   },
+  "recording": {
+    "title": "录音设置",
+    "description": "配置服务端录音格式、采样率、位深、来源和保存位置。",
+    "format": "格式",
+    "sampleRate": "采样率",
+    "bitDepth": "位深",
+    "source": "录制来源",
+    "sourceRx": "仅接收",
+    "sourceTx": "仅发射",
+    "sourceBoth": "接收和发射",
+    "directory": "保存目录",
+    "chooseDirectory": "选择保存目录",
+    "save": "保存设置",
+    "saveSuccess": "录音设置已保存",
+    "saveFailed": "保存录音设置失败",
+    "loadFailed": "加载录音列表失败",
+    "listTitle": "录音文件",
+    "empty": "暂无录音文件",
+    "refresh": "刷新列表",
+    "download": "下载",
+    "downloadFailed": "下载录音失败",
+    "delete": "删除",
+    "deleteFailed": "删除录音失败"
+  },
   "radioType": {
     "none": "纯监听",
     "noneDesc": "不连接电台，仅进行 FT8 解码",
@@ -428,6 +455,7 @@
     "tabDisplay": "显示通知",
     "tabRadioProfile": "电台配置",
     "tabSystem": "系统设置",
+    "tabRecording": "录音",
     "tabHelpImprove": "帮助改进",
     "tabRigctld": "Rigctld 桥接",
     "tabFrequencyPresets": "频率预设",
