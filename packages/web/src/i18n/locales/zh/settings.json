@@ -404,7 +404,8 @@
   },
   "recording": {
     "title": "录音设置",
-    "description": "配置服务端录音格式、采样率、位深、来源和保存位置。",
+    "description": "配置服务端录音前缀、格式、采样率、位深、来源和保存位置。",
+    "prefix": "文件名前缀",
     "format": "格式",
     "quality": "采样率 / 位深",
     "source": "录制来源",

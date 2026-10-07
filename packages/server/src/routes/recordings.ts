@@ -12,7 +12,7 @@ export async function recordingRoutes(fastify: FastifyInstance): Promise<void> {
   const configPath = await getConfigFilePath('config.json');
   const service = new RecordingService(engine.getAudioStreamManager(), path.dirname(configPath));
   fastify.addHook('onClose', async () => service.dispose());
-  fastify.get('/settings', { preHandler: [requireRole(UserRole.OPERATOR)] }, async () => ({ ...service.getSettings(), mp3Supported: true }));
+  fastify.get('/settings', { preHandler: [requireRole(UserRole.OPERATOR)] }, async () => ({ ...service.getSettings(), mp3Supported: service.isMp3Supported() }));
   fastify.get('/status', { preHandler: [requireRole(UserRole.OPERATOR)] }, async () => service.getStatus());
   fastify.put('/settings', { preHandler: [requireRole(UserRole.OPERATOR)] }, async request => service.setSettings(RecordingSettingsSchema.parse(request.body)));
   fastify.get('/', { preHandler: [requireRole(UserRole.OPERATOR)] }, async () => service.list());

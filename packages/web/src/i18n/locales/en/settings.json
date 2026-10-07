@@ -404,7 +404,8 @@
   },
   "recording": {
     "title": "Recording Settings",
-    "description": "Configure server recording format, sample rate, bit depth, source, and storage location.",
+    "description": "Configure server recording prefix, format, sample rate, bit depth, source, and storage location.",
+    "prefix": "Filename prefix",
     "format": "Format",
     "quality": "Sample rate / bit depth",
     "source": "Recording source",

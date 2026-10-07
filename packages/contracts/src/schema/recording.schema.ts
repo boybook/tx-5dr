@@ -6,6 +6,7 @@ export const RecordingSampleRateSchema = z.union([z.literal(16000), z.literal(24
 export const RecordingBitDepthSchema = z.union([z.literal(16), z.literal(24), z.literal(32)]);
 
 export const RecordingSettingsSchema = z.object({
+  prefix: z.string().trim().min(1).max(64).regex(/^[^/\\\0\r\n]+$/).default('recording'),
   format: RecordingFormatSchema.default('wav'),
   sampleRate: RecordingSampleRateSchema.default(24000),
   bitDepth: RecordingBitDepthSchema.default(16),
