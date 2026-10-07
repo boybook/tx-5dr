@@ -38,7 +38,9 @@
     "txVolumeGain": "发射音量增益",
     "volumeControl": "音量控制",
     "selectFrequency": "选择频率",
-    "selectMode": "选择通联模式"
+    "selectMode": "选择通联模式",
+    "startRecording": "开始录音",
+    "stopRecording": "停止录音"
   },
   "alcWarning": {
     "title": "ALC 过高",

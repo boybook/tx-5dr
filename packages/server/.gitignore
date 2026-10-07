@@ -2,6 +2,7 @@
 src/**/*.js.map
 src/**/*.d.ts
 src/**/*.d.ts.map
+!src/types/lamejs.d.ts
 
 # Node
 node_modules/
@@ -12,4 +13,4 @@ dist/
 npm-debug.log*
 
 # OS
-.DS_Store 
+.DS_Store

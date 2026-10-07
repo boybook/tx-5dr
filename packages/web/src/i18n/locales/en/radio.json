@@ -38,7 +38,9 @@
     "txVolumeGain": "TX volume gain",
     "volumeControl": "Volume control",
     "selectFrequency": "Select frequency",
-    "selectMode": "Select mode"
+    "selectMode": "Select mode",
+    "startRecording": "Start recording",
+    "stopRecording": "Stop recording"
   },
   "alcWarning": {
     "title": "ALC Too High",

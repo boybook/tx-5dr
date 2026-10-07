@@ -2,6 +2,16 @@
 
 ## Design Goal
 
+## Recording Boundary
+
+Server recording subscribes to `AudioStreamManager` native RX frames and the
+pre-gain TX recording tap. It is independent of operating mode, monitor volume,
+and realtime transport.
+Configured RX/TX sources are mixed into one server-side file. Recording stops
+on explicit stop or audio/runtime failure; completed files remain downloadable.
+Configured paths are resolved as the configured server recording directory, and
+recording file names are constrained to that directory.
+
 TX-5DR keeps digital decoding audio and realtime radio monitoring explicit and separate. Radio monitoring uses native input frames in both voice and digital modes; the digital 12 kHz ring buffer is internal to decode/spectrum work.
 
 ```mermaid

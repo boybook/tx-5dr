@@ -18,6 +18,7 @@ import { faHeart, faSave } from '@fortawesome/free-solid-svg-icons';
 import { OperatorSettings, type OperatorSettingsRef } from './OperatorSettings';
 import { DisplayNotificationSettings, type DisplayNotificationSettingsRef } from './DisplayNotificationSettings';
 import { SystemSettings, type SystemSettingsRef } from './SystemSettings';
+import { RecordingSettings } from './RecordingSettings';
 import { HelpImproveSettings, type HelpImproveSettingsRef } from './HelpImproveSettings';
 import { RigctldBridgeSettings, type RigctldBridgeSettingsRef } from './RigctldBridgeSettings';
 import { FrequencyPresetSettings, type FrequencyPresetSettingsRef } from './FrequencyPresetSettings';
@@ -43,7 +44,7 @@ interface SettingsModalProps {
 }
 
 // 设置标签页类型（radio 和 audio 已迁移到 ProfileModal，logbook_sync 已迁移到 SyncConfigModal）
-export type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'system' | 'help_improve' | 'rigctld' | 'frequency_presets' | 'tokens' | 'station_info' | 'openwebrx' | 'plugins' | 'shortcuts' | 'about';
+export type SettingsTab = 'radio' | 'audio' | 'operator' | 'display' | 'radio_profile' | 'system' | 'recording' | 'help_improve' | 'rigctld' | 'frequency_presets' | 'tokens' | 'station_info' | 'openwebrx' | 'plugins' | 'shortcuts' | 'about';
 
 const DEFAULT_USES_MODAL_FOOTER_SAVE: Record<SettingsTab, boolean> = {
   radio: false,
@@ -52,6 +53,7 @@ const DEFAULT_USES_MODAL_FOOTER_SAVE: Record<SettingsTab, boolean> = {
   display: true,
   radio_profile: false,
   system: true,
+  recording: false,
   help_improve: true,
   rigctld: true,
   frequency_presets: true,
@@ -77,6 +79,7 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
   const effectiveInitialTab = (
     initialTab === 'radio'
     || initialTab === 'audio'
+    || (initialTab === 'recording' && !isOperator)
     || (initialTab === 'help_improve' && !isAdmin)
   ) ? defaultTab : (initialTab || defaultTab);
   const [activeTab, setActiveTab] = useState<SettingsTab>(effectiveInitialTab);
@@ -104,6 +107,7 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
       const tab = (
         initialTab === 'radio'
         || initialTab === 'audio'
+        || (initialTab === 'recording' && !isOperator)
         || (initialTab === 'help_improve' && !isAdmin)
       ) ? defaultTab : (initialTab || defaultTab);
       setActiveTab(tab);
@@ -318,6 +322,8 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
           return '📻';
         case 'system':
           return '⚙️';
+        case 'recording':
+          return '🎙️';
         case 'help_improve':
           return <FontAwesomeIcon icon={faHeart} aria-label={t('modal.tabHelpImprove')} />;
         case 'rigctld':
@@ -351,6 +357,8 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
         return `📻 ${t('modal.tabRadioProfile')}`;
       case 'system':
         return `⚙️ ${t('modal.tabSystem')}`;
+      case 'recording':
+        return `🎙️ ${t('modal.tabRecording')}`;
       case 'help_improve':
         return <span className="flex items-center gap-2"><FontAwesomeIcon icon={faHeart} />{t('modal.tabHelpImprove')}</span>;
       case 'rigctld':
@@ -399,6 +407,8 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
             initialRemoteAccessPreset={initialRemoteAccessPreset}
           />
         );
+      case 'recording':
+        return isOperator ? <RecordingSettings /> : null;
       case 'help_improve':
         return (
           <HelpImproveSettings
@@ -555,6 +565,12 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
                     <Tab
                       key="system"
                       title={getTabTitle('system', isMobile)}
+                    />
+                  )}
+                  {isOperator && (
+                    <Tab
+                      key="recording"
+                      title={getTabTitle('recording', isMobile)}
                     />
                   )}
                   {canRigctld && (

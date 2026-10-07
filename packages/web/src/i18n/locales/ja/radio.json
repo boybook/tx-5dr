@@ -38,7 +38,9 @@
     "txVolumeGain": "送信音量ゲイン",
     "volumeControl": "ボリュームコントロール",
     "selectFrequency": "周波数の選択",
-    "selectMode": "交信モードの選択"
+    "selectMode": "交信モードの選択",
+    "startRecording": "録音開始",
+    "stopRecording": "録音停止"
   },
   "alcWarning": {
     "title": "ALCが高すぎる",

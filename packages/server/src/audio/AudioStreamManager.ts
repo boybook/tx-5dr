@@ -75,6 +75,7 @@ export interface AudioStreamEvents {
   'audioData': (samples: Float32Array, sampleRate: number) => void;
   'nativeAudioInputData': (frame: NativeAudioInputFrame) => void;
   'txMonitorAudioData': (data: { samples: Float32Array; sampleRate: number }) => void;
+  'txRecordingAudioData': (data: { samples: Float32Array; sampleRate: number }) => void;
   'inputSignalTypeChanged': (inputSignalType: AudioInputSignalType) => void;
   'error': (error: Error) => void;
   'started': () => void;
@@ -1682,6 +1683,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     const bytesPerSample = this.getOutputBytesPerSample();
     const buffer = Buffer.allocUnsafe(targetFrames * channels * bytesPerSample);
     const monitorChunk = includeMonitor ? new Float32Array(chunk.length) : null;
+    if (chunk.length > 0) this.emit('txRecordingAudioData', { samples: new Float32Array(chunk), sampleRate: this.outputSampleRate });
     let peak = 0;
     let sumSquares = 0;
 
@@ -2750,6 +2752,9 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               if (performance.now() - lastConsumptionAt >= 5_000) interrupt('TCI SSTV audio consumption stalled');
             }, 250);
             try {
+              for (const chunk of chunks) {
+                if (chunk.length > 0) this.emit('txRecordingAudioData', { samples: new Float32Array(chunk), sampleRate });
+              }
               waveform = new Float32Array(totalSamples);
               let offset = 0;
               const gain = this.volumeGain;
@@ -2908,6 +2913,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           }
 
           let observedChunk = chunk;
+          if (chunk.length > 0) this.emit('txRecordingAudioData', { samples: new Float32Array(chunk), sampleRate });
           if (radioAdapter) {
             const output = new Float32Array(chunk.length);
             for (let index = 0; index < chunk.length; index += 1) {
@@ -3122,6 +3128,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             const start = i * chunkSize;
             const end = Math.min(start + chunkSize, playbackData.length);
             const sourceChunk = playbackData.subarray(start, end);
+            if (sourceChunk.length > 0) this.emit('txRecordingAudioData', { samples: new Float32Array(sourceChunk), sampleRate: targetSampleRate });
             const chunk = new Float32Array(sourceChunk.length);
             const gain = this.volumeGain;
             for (let j = 0; j < sourceChunk.length; j++) {
@@ -3235,6 +3242,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
             throw new Error('playback interrupted');
           }
           const chunk = playbackData.subarray(offset, Math.min(offset + chunkSize, playbackData.length));
+          if (chunk.length > 0) this.emit('txRecordingAudioData', { samples: new Float32Array(chunk), sampleRate: this.outputSampleRate });
           if (chunk.length > 0) lastSourceSample = chunk[chunk.length - 1]!;
           const wrote = await this.androidAudioOutput?.write(chunk, this.volumeGain);
           if (this.outputRuntimeIssueError?.audioIssue.streamGeneration === playbackStreamGeneration) {
@@ -3849,6 +3857,10 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   }
 
   private async writeVoiceTxOutputChunk(samples: Float32Array, sink: VoiceTxOutputSinkState): Promise<boolean> {
+    if (samples.length > 0) {
+      const sampleRate = sink.outputSampleRate || this.outputSampleRate;
+      this.emit('txRecordingAudioData', { samples: new Float32Array(samples), sampleRate });
+    }
     if (sink.kind === 'icom-wlan' || sink.kind === 'tci') {
       const adapter = sink.kind === 'tci' ? this.tciAudioAdapter : this.icomWlanAudioAdapter;
       if (!adapter) {

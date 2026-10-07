@@ -2,7 +2,7 @@ import * as React from 'react';
 import {Select, SelectItem, Switch, Button, Slider, Popover, PopoverTrigger, PopoverContent, Modal, ModalContent, ModalHeader, ModalBody, ModalFooter, Input, Spinner, Alert, Tabs, Tab, Tooltip, Card, CardBody} from "@heroui/react";
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCog, faChevronDown, faVolumeUp, faHeadphones, faMicrophone, faRadio, faSlidersH, faTowerBroadcast, faPowerOff, faCircleInfo, faTriangleExclamation, faRightLeft } from '@fortawesome/free-solid-svg-icons';
+import { faCog, faChevronDown, faVolumeUp, faHeadphones, faMicrophone, faRadio, faSlidersH, faTowerBroadcast, faPowerOff, faCircleInfo, faTriangleExclamation, faRightLeft, faRecordVinyl, faStop } from '@fortawesome/free-solid-svg-icons';
 import { useConnection, useProfiles, useRadioErrors, useCapabilityState, useRadioConnectionState, useRadioModeState, usePTTState, useAudioSidecarState, useRadioActions, useAndroidOperatorAudioState, useSquelchState, useOperators } from '../../../store/radioStore';
 import type { AudioSidecarStatusPayload } from '@tx5dr/contracts';
 import { AudioSidecarStatus } from '@tx5dr/contracts';
@@ -616,6 +616,9 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const { state: authState } = useAuth();
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   const isOperator = useHasMinRole(UserRole.OPERATOR);
+  const [recording, setRecording] = useState(false);
+  useEffect(() => { if (!isOperator) return; let cancelled = false; const refresh = () => { void api.getRecordingStatus().then((status: unknown) => { if (!cancelled) setRecording(Boolean((status as { recording?: boolean }).recording)); }).catch(() => undefined); }; refresh(); const timer = window.setInterval(refresh, 3000); return () => { cancelled = true; window.clearInterval(timer); }; }, [isOperator]);
+  const toggleRecording = async () => { try { if (recording) await api.stopRecording(); else await api.startRecording(); setRecording(!recording); } catch (error) { addToast({ title: error instanceof Error ? error.message : 'Recording failed', color: 'danger' }); } };
   const canUseAuthenticatedRest = !authState.authEnabled || Boolean(authState.jwt);
   const canSetFrequency = useCan('execute', 'RadioFrequency');
   const canSwitchMode = useCan('execute', 'ModeSwitch');
@@ -2493,6 +2496,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
               </ToolbarIconTooltip>
             )}
             <RadioControlPluginToolbar />
+            {isOperator && <ToolbarIconTooltip label={recording ? t('control.stopRecording') : t('control.startRecording')}><Button isIconOnly size="sm" variant="light" className={recording ? 'text-danger' : 'text-default-500'} aria-label={recording ? t('control.stopRecording') : t('control.startRecording')} onPress={() => { void toggleRecording(); }}><FontAwesomeIcon icon={recording ? faStop : faRecordVinyl} /></Button></ToolbarIconTooltip>}
             {/* 天调控制：已连接且具备电台控制权限时统一露出内置/外接天调入口 */}
             {showAntennaTuneEntry && (
               <ToolbarIconTooltip label={t('tuner.control')}>
