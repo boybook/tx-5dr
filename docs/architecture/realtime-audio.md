@@ -192,6 +192,33 @@ pending observations. TCI also reports consumed samples only, excluding any
 protocol tail padding. Its progress and preview read the consumed prefix of the
 prepared waveform via deferred callbacks, after CHRONO responses have been sent.
 ICOM WLAN and Android retain paced submission observations.
+
+SSTV transmit monitoring is explicitly enabled by `ImageRadioService` and is
+independent of the progress/preview observer. Each deterministic playback owns
+a realtime TX monitor tap that emits one 20 ms PCM frame per scheduled media
+slot. Small timer delays are corrected against a monotonic clock; a long delay
+never triggers a catch-up burst. RtAudio offers gain-adjusted PCM after the
+native consumption callback has refilled the output FIFO; monitor encoding
+and network publishing never run in that callback. TCI uses the
+CHRONO-consumed sample count as an eligibility watermark over its prepared
+waveform, so a burst of CHRONO requests does not become a burst of monitor
+packets. ICOM WLAN and Android offer audio
+after a successful output write. The monitor tap never feeds RX decoding or
+spectrum processing.
+
+The live monitor queue is bounded to 160 ms beyond any declared output lead;
+an overrun retains the newest 80 ms beyond that lead. ICOM WLAN and Android
+declare their existing 100 ms submission lead. TCI only skips samples already
+consumed by CHRONO. Old frames are discarded after a long JS stall rather than
+sent in a catch-up burst. Output completion publishes at most one final 20 ms
+monitor frame and discards older queued audio; cancellation, output failure, or
+a replacement playback discards pending audio. A monitor tail cannot continue
+masking RX after PTT release. The source's existing
+120 ms RX suppression hold still applies to the last frame already emitted.
+Monitor frame, drop, and observer-failure counts are
+logged when the tap stops. These policies affect listening only; they do not
+pace, trim, or fail the physical SSTV output.
+
 Encoder diagnostics are broadcast only when changed. `encoderStage` and
 `currentRow` remain encoder diagnostics. Native consumption notifications are
 delivered to JS asynchronously, so they are not a sample-exact hardware playhead.

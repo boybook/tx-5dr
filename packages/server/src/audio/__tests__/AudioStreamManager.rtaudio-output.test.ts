@@ -235,7 +235,7 @@ describe('AudioStreamManager RtAudio output diagnostics', () => {
     for (let index = 0; index < 300; index++) await Promise.resolve();
   }
 
-  async function startSstvWithNativeFifo() {
+  async function startSstvWithNativeFifo(injectIntoMonitor = false) {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
     vi.spyOn(performance, 'now').mockImplementation(() => Date.now());
     mockRtAudioState.consumeOnWrite = false;
@@ -245,7 +245,7 @@ describe('AudioStreamManager RtAudio output diagnostics', () => {
     manager.setVolumeGain(1);
     const observed: Float32Array[] = [];
     const session = manager.openDeterministicPlayback({
-      playbackKind: 'sstv', onPlaybackChunk: (samples) => observed.push(samples),
+      playbackKind: 'sstv', injectIntoMonitor, onPlaybackChunk: (samples) => observed.push(samples),
     });
     const first = new Float32Array(session.frameSamples).fill(0.25);
     await session.write(first);
@@ -324,6 +324,72 @@ describe('AudioStreamManager RtAudio output diagnostics', () => {
     await manager.stopOutput();
   });
 
+  it('does not infer monitor injection from the preview observer', async () => {
+    const { manager, output, session, observed } = await startSstvWithNativeFifo();
+    const monitor = vi.fn();
+    manager.on('txMonitorAudioData', monitor);
+    for (let index = 0; index < 100; index++) await session.write(new Float32Array(session.frameSamples));
+    for (let index = 0; index < 74; index++) output.consumeNextFrame();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(observed).toHaveLength(1);
+    expect(monitor).not.toHaveBeenCalled();
+    await session.abort();
+    await manager.stopOutput();
+  });
+
+  it('discards a pending SSTV monitor tail when the output device stops', async () => {
+    const { manager, session } = await startSstvWithNativeFifo(true);
+    const monitor = vi.fn();
+    manager.on('txMonitorAudioData', monitor);
+    await session.end();
+    const atEnd = monitor.mock.calls.length;
+    await manager.stopOutput();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(monitor).toHaveBeenCalledTimes(atEnd);
+  });
+
+  it('does not publish a completed SSTV session tail after a new session opens', async () => {
+    const { manager, session } = await startSstvWithNativeFifo(true);
+    const monitor = vi.fn();
+    manager.on('txMonitorAudioData', monitor);
+    await session.end();
+    const atEnd = monitor.mock.calls.length;
+    const next = manager.openDeterministicPlayback({ playbackKind: 'sstv', injectIntoMonitor: true });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(monitor).toHaveBeenCalledTimes(atEnd);
+    await next.abort();
+    await manager.stopOutput();
+  });
+
+  it('publishes USB SSTV monitor frames at 20 ms cadence independently of 100 ms preview batches', async () => {
+    mockConfigManager.getAudioConfig.mockReturnValue({
+      inputDeviceName: 'USB Audio', outputDeviceName: 'USB Audio',
+      inputSampleRate: 48000, outputSampleRate: 48000,
+      inputBufferSize: 1024, outputBufferSize: 1024,
+    });
+    const { manager, output, session, observed } = await startSstvWithNativeFifo(true);
+    const monitor: Array<{ at: number; samples: Float32Array }> = [];
+    manager.on('txMonitorAudioData', ({ samples }) => monitor.push({ at: Date.now(), samples }));
+    for (let index = 1; index < 11; index++) await session.write(new Float32Array(session.frameSamples).fill(index / 10));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(monitor).toHaveLength(1);
+    expect(observed).toHaveLength(0);
+    for (let index = 1; index < 11; index++) {
+      const before = mockRtAudioState.writes.length;
+      output.consumeNextFrame();
+      expect(mockRtAudioState.writes.length).toBeGreaterThanOrEqual(before);
+      await vi.advanceTimersByTimeAsync(22);
+    }
+    await session.end();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(monitor.reduce((sum, frame) => sum + frame.samples.length, 0)).toBe(11 * session.frameSamples);
+    expect(monitor.slice(0, -1).every((frame) => frame.samples.length === 960)).toBe(true);
+    expect(monitor.slice(1).every((frame, index) => frame.at - monitor[index]!.at >= 19)).toBe(true);
+    expect(observed.length).toBeLessThan(monitor.length);
+    await manager.stopOutput();
+  });
+
   it.each(['cancel', 'device-loss', 'stall'] as const)('settles SSTV during final drain on %s', async (failure) => {
     const { manager, output, session } = await startSstvWithNativeFifo();
     manager.on('error', () => undefined);
@@ -346,11 +412,12 @@ describe('AudioStreamManager RtAudio output diagnostics', () => {
     const observed: number[] = [];
     const monitored: number[] = [];
     manager.on('txMonitorAudioData', ({ samples }) => monitored.push(...samples));
-    const session = manager.openDeterministicPlayback({ playbackKind: 'sstv', onPlaybackChunk: (samples) => observed.push(...samples) });
+    const session = manager.openDeterministicPlayback({ playbackKind: 'sstv', injectIntoMonitor: true, onPlaybackChunk: (samples) => observed.push(...samples) });
     await session.write(new Float32Array(session.frameSamples).fill(0.25));
     await session.start();
     await session.write(new Float32Array(7).fill(0.5));
     await session.end();
+    await vi.waitFor(() => expect(monitored).toHaveLength(observed.length));
     expect(observed).toEqual([...new Float32Array(session.frameSamples).fill(0.25), ...new Float32Array(7).fill(0.5)]);
     expect(monitored).toEqual(observed);
     expect(mockRtAudioState.writes).toHaveLength(2);

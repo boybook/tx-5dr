@@ -197,6 +197,66 @@ describe('AudioStreamManager ICOM WLAN output pacing', () => {
     expect(manager.isPlaying()).toBe(false);
   });
 
+  it('only monitors explicitly enabled, successfully sent ICOM SSTV audio', async () => {
+    const adapter: MockIcomAdapter = {
+      sendAudio: vi.fn().mockResolvedValue(undefined), getSampleRate: vi.fn().mockReturnValue(12000),
+    };
+    const manager = createIcomManager(adapter);
+    manager.setVolumeGain(1);
+    const monitored: Float32Array[] = [];
+    manager.on('txMonitorAudioData', ({ samples }) => monitored.push(samples));
+    const disabled = manager.openDeterministicPlayback({ playbackKind: 'sstv', onPlaybackChunk: vi.fn() });
+    await disabled.write(new Float32Array(1200));
+    await disabled.start();
+    await disabled.end();
+    expect(monitored).toHaveLength(0);
+
+    const enabled = manager.openDeterministicPlayback({ playbackKind: 'sstv', injectIntoMonitor: true });
+    await enabled.write(new Float32Array(1200).fill(0.25));
+    await enabled.write(new Float32Array(1200).fill(0.5));
+    await enabled.start();
+    await enabled.end();
+    expect(monitored.length).toBeGreaterThanOrEqual(8);
+    expect(monitored.every((frame) => frame.length <= 240)).toBe(true);
+    expect(monitored.slice(0, 5).every((frame) => frame[0] === 0.25)).toBe(true);
+    expect(monitored[5]?.[0]).toBeCloseTo(0.5);
+    const atEnd = monitored.length;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(monitored).toHaveLength(atEnd);
+
+    const failingAdapter: MockIcomAdapter = {
+      sendAudio: vi.fn().mockRejectedValue(new Error('send failed')), getSampleRate: vi.fn().mockReturnValue(12000),
+    };
+    const failingManager = createIcomManager(failingAdapter);
+    const failedMonitor = vi.fn();
+    failingManager.on('txMonitorAudioData', failedMonitor);
+    const failed = failingManager.openDeterministicPlayback({ playbackKind: 'sstv', injectIntoMonitor: true });
+    await failed.write(new Float32Array(1200));
+    await expect(failed.start()).rejects.toThrow('send failed');
+    expect(failedMonitor).not.toHaveBeenCalled();
+  });
+
+  it('monitors Android SSTV only after a successful output write', async () => {
+    const manager = new AudioStreamManager();
+    manager.setVolumeGain(1);
+    const write = vi.fn().mockResolvedValue(true);
+    Object.assign(manager, { usingAndroidOutput: true, isOutputting: true, androidAudioOutput: { write } });
+    const monitored: Float32Array[] = [];
+    manager.on('txMonitorAudioData', ({ samples }) => monitored.push(samples));
+    const session = manager.openDeterministicPlayback({ playbackKind: 'sstv', injectIntoMonitor: true });
+    await session.write(new Float32Array(1024).fill(0.3));
+    await session.start();
+    await session.end();
+    await vi.waitFor(() => expect(monitored.reduce((sum, frame) => sum + frame.length, 0)).toBe(1024));
+    expect(monitored[0]?.[0]).toBeCloseTo(0.3);
+
+    write.mockResolvedValue(false);
+    const failed = manager.openDeterministicPlayback({ playbackKind: 'sstv', injectIntoMonitor: true });
+    await failed.write(new Float32Array(1024));
+    await expect(failed.start()).rejects.toThrow('Android audio output write failed');
+    expect(monitored.reduce((sum, frame) => sum + frame.length, 0)).toBe(1024);
+  });
+
   it('does not fail deterministic output when its playback observer throws', async () => {
     const adapter: MockIcomAdapter = {
       sendAudio: vi.fn().mockResolvedValue(undefined),
@@ -271,6 +331,30 @@ describe('AudioStreamManager ICOM WLAN output pacing', () => {
       },
     };
   }
+
+  it('paces TCI SSTV monitoring even when CHRONO consumes about 1.2 seconds in a burst', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+    vi.setSystemTime(0);
+    vi.spyOn(performance, 'now').mockImplementation(() => Date.now());
+    const { manager, chrono } = preparedTciHarness();
+    const monitored: number[] = [];
+    manager.on('txMonitorAudioData', ({ samples }) => monitored.push(samples.length));
+    const session = manager.openDeterministicPlayback({ playbackKind: 'sstv', injectIntoMonitor: true });
+    for (let index = 0; index < 12; index++) await session.write(new Float32Array(1200));
+    const started = session.start();
+    await Promise.resolve();
+    for (let index = 0; index < 28; index++) chrono();
+    await started;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(monitored).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(monitored.length).toBeGreaterThanOrEqual(10);
+    expect(monitored.length).toBeLessThanOrEqual(11);
+    await session.abort();
+    const before = monitored.length;
+    await vi.advanceTimersByTimeAsync(200);
+    expect(monitored).toHaveLength(before);
+  });
 
   it('prepares the full Robot36 duration before playback and tolerates 1.2-second CHRONO bursts without inserted silence', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });

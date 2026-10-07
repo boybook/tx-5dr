@@ -18,6 +18,8 @@ const { rtcTestState } = vi.hoisted(() => ({
 vi.mock('node-datachannel', () => {
   class FakeDataChannel {
     private open = true;
+    private bufferedBytes = 0;
+    readonly binaryMessages: Uint8Array[] = [];
     private onOpenCallback: (() => void) | null = null;
     private onClosedCallback: (() => void) | null = null;
 
@@ -31,8 +33,14 @@ vi.mock('node-datachannel', () => {
     onError(): void {}
     isOpen(): boolean { return this.open; }
     sendMessage(): boolean { return true; }
-    sendMessageBinary(): boolean { return true; }
-    bufferedAmount(): number { return 0; }
+    sendMessageBinary(payload: Uint8Array): boolean {
+      this.binaryMessages.push(payload);
+      this.bufferedBytes += payload.byteLength;
+      return true;
+    }
+    bufferedAmount(): number { return this.bufferedBytes; }
+    drain(bytes: number): void { this.bufferedBytes = Math.max(0, this.bufferedBytes - bytes); }
+    setBufferedAmount(bytes: number): void { this.bufferedBytes = bytes; }
     triggerOpen(): void { this.onOpenCallback?.(); }
     close(): void {
       if (!this.open) return;
@@ -195,5 +203,33 @@ describe('RtcDataAudioManager', () => {
     expect(peer.close).toHaveBeenCalledTimes(1);
     expect(source.listenerCount('audioFrame')).toBe(0);
     expect(source.listenerCount('unavailable')).toBe(0);
+  });
+
+  it('keeps paced 20 ms PCM monitor frames flowing with nonzero DataChannel backlog', async () => {
+    const source = Object.assign(new EventEmitter(), {
+      id: 'native-radio:radio', sourcePath: 'native-radio' as const,
+      isAvailable: () => true, getLatestStats: () => null,
+    });
+    const manager = new RtcDataAudioManager({} as never, { resolveSource: () => source } as never);
+    const offer = await manager.buildOffer({ scope: 'radio', direction: 'recv', role: UserRole.VIEWER });
+    const socket = Object.assign(new EventEmitter(), { readyState: 1, send: vi.fn(), close: vi.fn() });
+    manager.acceptConnection(socket as never, `/api/realtime/rtc-data-audio?token=${offer?.token}`);
+    await vi.waitFor(() => expect(rtcTestState.dataChannels).toHaveLength(1));
+    const channel = rtcTestState.dataChannels[0] as {
+      triggerOpen: () => void;
+      setBufferedAmount: (bytes: number) => void;
+      drain: (bytes: number) => void;
+      binaryMessages: Uint8Array[];
+    };
+    channel.triggerOpen();
+    channel.setBufferedAmount(512);
+    for (let sequence = 0; sequence < 10; sequence += 1) {
+      source.emit('audioFrame', {
+        samples: new Float32Array(240).fill(0.2), sampleRate: 12_000, channels: 1,
+        timestamp: Date.now(), sequence, sourceKind: 'native-radio', nativeSourceKind: 'voice-tx-monitor',
+      });
+      channel.drain(512);
+    }
+    expect(channel.binaryMessages).toHaveLength(10);
   });
 });
