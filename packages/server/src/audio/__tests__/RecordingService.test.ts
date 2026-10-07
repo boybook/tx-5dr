@@ -38,6 +38,7 @@ describe('RecordingService', () => {
     const settings: RecordingSettings = {
       prefix: 'recording',
       format: 'wav',
+      mp3Bitrate: 128,
       sampleRate: 24000,
       bitDepth: 16,
       source: 'rx',
@@ -117,7 +118,7 @@ describe('RecordingService', () => {
   });
 
   it('writes a usable MP3 through the bundled lamejs encoder', async () => {
-    const { manager, service, directory } = await setup({ format: 'mp3' });
+    const { manager, service, directory } = await setup({ format: 'mp3', mp3Bitrate: 320 });
     expect(service.isMp3Supported()).toBe(true);
     await service.start();
     manager.emit('nativeAudioInputData', rxFrame(new Float32Array(1152).fill(0.2)));

@@ -404,10 +404,11 @@
   },
   "recording": {
     "title": "Recording Settings",
-    "description": "Configure server recording prefix, format, sample rate, bit depth, source, and storage location.",
+    "description": "Configure server recording prefix, format, bit depth, sample rate, MP3 bitrate, source, and storage location.",
     "prefix": "Filename prefix",
+    "mp3Bitrate": "MP3 bitrate",
     "format": "Format",
-    "quality": "Sample rate / bit depth",
+    "quality": "Bit depth / sample rate",
     "source": "Recording source",
     "sourceRx": "Receive only",
     "sourceTx": "Transmit only",
@@ -423,6 +424,8 @@
     "refresh": "Refresh list",
     "download": "Download",
     "downloadFailed": "Failed to download recording",
+    "preview": "Preview",
+    "previewFailed": "Failed to preview recording",
     "delete": "Delete",
     "deleteFailed": "Failed to delete recording"
   },

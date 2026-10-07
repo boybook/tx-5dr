@@ -24,6 +24,7 @@ const LEGACY_RECORDING_FILE_PATTERN = /^(.+?)-(\d{6})\.(wav|mp3)$/i;
 const DEFAULT_SETTINGS: RecordingSettings = {
   prefix: 'recording',
   format: 'wav',
+  mp3Bitrate: 128,
   sampleRate: 24000,
   bitDepth: 16,
   source: 'both',
@@ -54,6 +55,7 @@ interface RecordingSession {
   startedAt: number;
   source: RecordingSettings['source'];
   format: RecordingSettings['format'];
+  mp3Bitrate: RecordingSettings['mp3Bitrate'];
   sampleRate: RecordingSettings['sampleRate'];
   bitDepth: RecordingSettings['bitDepth'];
   finalPath: string;
@@ -206,7 +208,7 @@ export class RecordingService {
 
   isMp3Supported(): boolean {
     try {
-      this.getMp3EncoderConstructor(this.settings.sampleRate);
+      this.getMp3EncoderConstructor(this.settings.sampleRate, this.settings.mp3Bitrate);
       return true;
     } catch {
       return false;
@@ -227,7 +229,7 @@ export class RecordingService {
     const root = this.resolveRoot(settings.directory);
     await fs.mkdir(root, { recursive: true });
     await this.cleanupTemporaryFiles(root);
-    if (settings.format === 'mp3') this.getMp3EncoderConstructor(settings.sampleRate);
+    if (settings.format === 'mp3') this.getMp3EncoderConstructor(settings.sampleRate, settings.mp3Bitrate);
 
     const allocation = await this.allocateFile(root, settings.format, settings.prefix);
     const session: RecordingSession = {
@@ -235,6 +237,7 @@ export class RecordingService {
       startedAt: Date.now(),
       source: settings.source,
       format: settings.format,
+      mp3Bitrate: settings.mp3Bitrate,
       sampleRate: settings.sampleRate,
       bitDepth: settings.bitDepth,
       finalPath: allocation.finalPath,
@@ -382,8 +385,8 @@ export class RecordingService {
   }
 
   private async writeMp3(session: RecordingSession): Promise<void> {
-    const Constructor = this.getMp3EncoderConstructor(session.sampleRate);
-    const encoder = new Constructor(1, session.sampleRate, session.sampleRate >= 44100 ? 192 : session.sampleRate >= 24000 ? 128 : 64);
+    const Constructor = this.getMp3EncoderConstructor(session.sampleRate, session.mp3Bitrate);
+    const encoder = new Constructor(1, session.sampleRate, session.mp3Bitrate);
     const stream = createWriteStream(session.tempPath, { flags: 'wx' });
     try {
       await this.waitForOpen(stream);
@@ -616,8 +619,7 @@ export class RecordingService {
     await fs.rename(tempPath, indexPath);
   }
 
-  private getMp3EncoderConstructor(sampleRate: number): Mp3EncoderConstructor {
-    const bitrate = sampleRate >= 44100 ? 192 : sampleRate >= 24000 ? 128 : 64;
+  private getMp3EncoderConstructor(sampleRate: number, bitrate: RecordingSettings['mp3Bitrate']): Mp3EncoderConstructor {
     if (cachedMp3Encoder) {
       try {
         void new cachedMp3Encoder(1, sampleRate, bitrate);

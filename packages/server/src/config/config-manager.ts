@@ -80,6 +80,7 @@ export interface AppConfig {
   recording?: {
     prefix: string;
     format: 'wav' | 'mp3';
+    mp3Bitrate: 64 | 128 | 192 | 320;
     sampleRate: 16000 | 24000 | 44100 | 48000;
     bitDepth: 16 | 24 | 32;
     source: 'rx' | 'tx' | 'both';
@@ -267,6 +268,7 @@ const DEFAULT_CONFIG: AppConfig = {
   recording: {
     prefix: 'recording',
     format: 'wav',
+    mp3Bitrate: 128,
     sampleRate: 24000,
     bitDepth: 16,
     source: 'both',

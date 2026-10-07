@@ -404,10 +404,11 @@
   },
   "recording": {
     "title": "录音设置",
-    "description": "配置服务端录音前缀、格式、采样率、位深、来源和保存位置。",
+    "description": "配置服务端录音前缀、格式、位深、采样率、MP3 码率、来源和保存位置。",
     "prefix": "文件名前缀",
+    "mp3Bitrate": "MP3 码率",
     "format": "格式",
-    "quality": "采样率 / 位深",
+    "quality": "位深 / 采样率",
     "source": "录制来源",
     "sourceRx": "仅接收",
     "sourceTx": "仅发射",
@@ -423,6 +424,8 @@
     "refresh": "刷新列表",
     "download": "下载",
     "downloadFailed": "下载录音失败",
+    "preview": "预览播放",
+    "previewFailed": "预览录音失败",
     "delete": "删除",
     "deleteFailed": "删除录音失败"
   },
