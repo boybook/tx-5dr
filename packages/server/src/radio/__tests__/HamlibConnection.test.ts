@@ -18,6 +18,9 @@ type MockRig = {
   getSplitFreq: ReturnType<typeof vi.fn>;
   setSplitFreq: ReturnType<typeof vi.fn>;
   setMode: ReturnType<typeof vi.fn>;
+  getVfo: ReturnType<typeof vi.fn>;
+  setVfo: ReturnType<typeof vi.fn>;
+  getVfoInfo: ReturnType<typeof vi.fn>;
   setPtt: ReturnType<typeof vi.fn>;
   getPtt: ReturnType<typeof vi.fn>;
   getFrequency: ReturnType<typeof vi.fn>;
@@ -77,6 +80,7 @@ type HamlibConnectionTestAccessor = {
   currentFrequencyHz?: number;
   currentRadioMode?: string;
   meterRigMetadata?: { rigModel: number; mfgName: string; modelName: string } | null;
+  supportedVfoOps?: Set<string>;
   spectrumController?: MockSpectrumController;
   currentConfig?: unknown;
   resolveCurrentTxPowerMaxWatts: () => number | null;
@@ -113,6 +117,15 @@ function createConnectedConnection(rigOverrides: Partial<MockRig> = {}): {
     getSplitFreq: vi.fn().mockResolvedValue(null),
     setSplitFreq: vi.fn().mockResolvedValue(0),
     setMode: vi.fn().mockResolvedValue(0),
+    getVfo: vi.fn().mockResolvedValue('VFOA'),
+    setVfo: vi.fn().mockResolvedValue(0),
+    getVfoInfo: vi.fn().mockResolvedValue({
+      frequency: 7_100_000,
+      mode: 'USB',
+      bandwidth: 2400,
+      split: false,
+      satMode: false,
+    }),
     setPtt: vi.fn().mockResolvedValue(0),
     getPtt: vi.fn().mockResolvedValue(false),
     getFrequency: vi.fn().mockResolvedValue(7100000),
@@ -203,6 +216,18 @@ describe('HamlibConnection', () => {
       expect(rig.getFunction).not.toHaveBeenCalled();
     });
 
+  });
+
+  it('bridges physical VFO reads and writes through the serialized Hamlib queue', async () => {
+    const { connection, rig } = createConnectedConnection({
+      getVfo: vi.fn().mockResolvedValue('VFOB'),
+    });
+
+    await expect(connection.getVfo()).resolves.toBe('VFOB');
+    await expect(connection.setVfo('vfob')).resolves.toBeUndefined();
+
+    expect(rig.getVfo).toHaveBeenCalledTimes(1);
+    expect(rig.setVfo).toHaveBeenCalledWith('VFOB');
   });
 
   it('exposes Yaesu FT-710 TX audio routing through model-specific EX CAT', async () => {
@@ -797,21 +822,31 @@ describe('HamlibConnection', () => {
     expect(rig.setMode).toHaveBeenCalledWith('USB', 3000);
   });
 
-  it('applies frequency and mode as a single critical operating-state update', async () => {
+  it('applies FTDX-10 frequency and mode as a single target-VFO operating-state update', async () => {
     const sequence: string[] = [];
     const { connection, rig } = createConnectedConnection({
-      setFrequency: vi.fn().mockImplementation(async (frequency) => {
-        sequence.push(`frequency:${frequency}`);
+      setFrequency: vi.fn().mockImplementation(async (frequency, vfo) => {
+        sequence.push(`frequency:${frequency}:${vfo}`);
         return 0;
       }),
-      setMode: vi.fn().mockImplementation(async (mode, bandwidth) => {
-        sequence.push(`mode:${mode}:${bandwidth}`);
+      setVfo: vi.fn().mockImplementation(async (vfo) => {
+        sequence.push(`vfo:${vfo}`);
+        return 0;
+      }),
+      setMode: vi.fn().mockImplementation(async (mode, bandwidth, vfo) => {
+        sequence.push(`mode:${mode}:${bandwidth}:${vfo}`);
         return 0;
       }),
     });
     const testConnection = asTestConnection(connection);
     testConnection.supportedModes = new Set(['USB']);
     testConnection.currentRadioMode = 'LSB';
+    testConnection.currentConfig = {
+      type: 'serial',
+      serial: { path: 'COM3', rigModel: 1042 },
+    };
+    testConnection.meterRigMetadata = { rigModel: 1042, mfgName: 'Yaesu', modelName: 'FTDX-10' };
+    testConnection.supportedVfoOps = new Set(['XCHG']);
 
     const result = await connection.applyOperatingState({
       frequency: 7100000,
@@ -822,33 +857,51 @@ describe('HamlibConnection', () => {
 
     expect(result).toEqual({
       frequencyApplied: true,
+      frequencyConfirmed: true,
+      observedFrequency: 7_100_000,
       modeApplied: true,
+      modeConfirmed: true,
+      observedMode: 'USB',
+      targetVfo: 'VFOA',
       modeError: undefined,
     });
+    expect(rig.getVfo).toHaveBeenCalledTimes(1);
+    expect(rig.getVfoInfo).toHaveBeenCalledWith('VFOA');
     expect(rig.setMode).toHaveBeenCalledTimes(1);
     expect(rig.setFrequency).toHaveBeenCalledTimes(2);
     expect(sequence).toEqual([
-      'frequency:7100000',
-      'mode:USB:nochange',
-      'frequency:7100000',
+      'frequency:7100000:VFOA',
+      'vfo:VFOA',
+      'mode:USB:nochange:undefined',
+      'frequency:7100000:VFOA',
     ]);
   });
 
-  it('reasserts operating-state frequency even when the cached mode already matches', async () => {
+  it('uses the correlated path for a CPY-only legacy Yaesu dual-VFO backend', async () => {
     const sequence: string[] = [];
     const { connection, rig } = createConnectedConnection({
-      setFrequency: vi.fn().mockImplementation(async (frequency) => {
-        sequence.push(`frequency:${frequency}`);
+      setFrequency: vi.fn().mockImplementation(async (frequency, vfo) => {
+        sequence.push(`frequency:${frequency}:${vfo}`);
         return 0;
       }),
-      setMode: vi.fn().mockImplementation(async (mode, bandwidth) => {
-        sequence.push(`mode:${mode}:${bandwidth}`);
+      setVfo: vi.fn().mockImplementation(async (vfo) => {
+        sequence.push(`vfo:${vfo}`);
+        return 0;
+      }),
+      setMode: vi.fn().mockImplementation(async (mode, bandwidth, vfo) => {
+        sequence.push(`mode:${mode}:${bandwidth}:${vfo}`);
         return 0;
       }),
     });
     const testConnection = asTestConnection(connection);
     testConnection.supportedModes = new Set(['USB']);
     testConnection.currentRadioMode = 'USB';
+    testConnection.currentConfig = {
+      type: 'serial',
+      serial: { path: 'COM3', rigModel: 1024 },
+    };
+    testConnection.meterRigMetadata = { rigModel: 1024, mfgName: 'Yaesu', modelName: 'FT-1000MP' };
+    testConnection.supportedVfoOps = new Set(['CPY', 'FROM_VFO', 'TO_VFO']);
 
     await expect(connection.applyOperatingState({
       frequency: 7100000,
@@ -863,10 +916,248 @@ describe('HamlibConnection', () => {
     expect(rig.setMode).toHaveBeenCalledTimes(1);
     expect(rig.setFrequency).toHaveBeenCalledTimes(2);
     expect(sequence).toEqual([
-      'frequency:7100000',
-      'mode:USB:nochange',
-      'frequency:7100000',
+      'frequency:7100000:VFOA',
+      'vfo:VFOA',
+      'mode:USB:nochange:undefined',
+      'frequency:7100000:VFOA',
     ]);
+  });
+
+  it('keeps VFO-B bound through CW and USB operating-state transactions', async () => {
+    const state = {
+      frequency: 14_074_000,
+      mode: 'USB',
+    };
+    const { connection, rig } = createConnectedConnection({
+      getVfo: vi.fn().mockResolvedValue('VFOB'),
+      setVfo: vi.fn().mockImplementation(async (vfo: string) => {
+        expect(vfo).toBe('VFOB');
+        return 0;
+      }),
+      setFrequency: vi.fn().mockImplementation(async (frequency: number, vfo: string) => {
+        expect(vfo).toBe('VFOB');
+        state.frequency = frequency;
+        return 0;
+      }),
+      setMode: vi.fn().mockImplementation(async (mode: string, _bandwidth: unknown, vfo?: string) => {
+        expect(vfo).toBeUndefined();
+        state.mode = mode;
+        return 0;
+      }),
+      getVfoInfo: vi.fn().mockImplementation(async (vfo: string) => {
+        expect(vfo).toBe('VFOB');
+        return {
+          ...state,
+          bandwidth: state.mode === 'CW' ? 600 : 2400,
+          split: false,
+          satMode: false,
+        };
+      }),
+    });
+    const testConnection = asTestConnection(connection);
+    testConnection.supportedModes = new Set(['CW', 'USB']);
+    testConnection.currentRadioMode = 'USB';
+    testConnection.currentConfig = {
+      type: 'serial',
+      serial: { path: 'COM3', rigModel: 1042 },
+    };
+    testConnection.meterRigMetadata = { rigModel: 1042, mfgName: 'Yaesu', modelName: 'FTDX-10' };
+    testConnection.supportedVfoOps = new Set(['XCHG']);
+
+    await expect(connection.applyOperatingState({
+      frequency: 7_030_000,
+      mode: 'CW',
+      bandwidth: 'nochange',
+      options: { intent: 'cw' },
+    })).resolves.toMatchObject({
+      targetVfo: 'VFOB',
+      frequencyConfirmed: true,
+      modeConfirmed: true,
+      observedFrequency: 7_030_000,
+      observedMode: 'CW',
+    });
+
+    await expect(connection.applyOperatingState({
+      frequency: 14_074_000,
+      mode: 'USB',
+      bandwidth: 'nochange',
+      options: { intent: 'voice' },
+    })).resolves.toMatchObject({
+      targetVfo: 'VFOB',
+      frequencyConfirmed: true,
+      modeConfirmed: true,
+      observedFrequency: 14_074_000,
+      observedMode: 'USB',
+    });
+
+    expect(rig.setFrequency.mock.calls).toEqual([
+      [7_030_000, 'VFOB'],
+      [7_030_000, 'VFOB'],
+      [14_074_000, 'VFOB'],
+      [14_074_000, 'VFOB'],
+    ]);
+    expect(rig.setMode.mock.calls).toEqual([
+      ['CW', 'nochange'],
+      ['USB', 'nochange'],
+    ]);
+    expect(rig.getVfoInfo).toHaveBeenNthCalledWith(1, 'VFOB');
+    expect(rig.getVfoInfo).toHaveBeenNthCalledWith(2, 'VFOB');
+    expect(rig.setVfo.mock.calls).toEqual([['VFOB'], ['VFOB']]);
+  });
+
+  it('preserves legacy current-VFO writes when Hamlib does not report explicit Yaesu A/B support', async () => {
+    const { connection, rig } = createConnectedConnection({
+      getVfo: vi.fn().mockRejectedValue(new Error('getVfo unsupported')),
+    });
+    const testConnection = asTestConnection(connection);
+    testConnection.supportedModes = new Set(['USB']);
+    testConnection.currentRadioMode = 'LSB';
+    testConnection.currentConfig = {
+      type: 'serial',
+      serial: { path: 'COM4', rigModel: 1234 },
+    };
+
+    await expect(connection.applyOperatingState({
+      frequency: 14_074_000,
+      mode: 'USB',
+      bandwidth: 'nochange',
+      options: { intent: 'digital' },
+    })).resolves.toEqual({
+      frequencyApplied: true,
+      modeApplied: true,
+      modeError: undefined,
+    });
+
+    expect(rig.getVfo).not.toHaveBeenCalled();
+    expect(rig.getVfoInfo).not.toHaveBeenCalled();
+    expect(rig.setVfo).not.toHaveBeenCalled();
+    expect(rig.setFrequency.mock.calls).toEqual([[14_074_000], [14_074_000]]);
+    expect(rig.setMode).toHaveBeenCalledWith('PKTUSB', 'nochange');
+  });
+
+  it('does not treat TOGGLE-only Yaesu backends as explicitly addressable A/B radios', async () => {
+    const { connection, rig } = createConnectedConnection({
+      getVfo: vi.fn().mockRejectedValue(new Error('getVfo must not be called')),
+    });
+    const testConnection = asTestConnection(connection);
+    testConnection.supportedModes = new Set(['USB']);
+    testConnection.currentRadioMode = 'LSB';
+    testConnection.currentConfig = {
+      type: 'serial',
+      serial: { path: 'COM5', rigModel: 1023 },
+    };
+    testConnection.meterRigMetadata = { rigModel: 1023, mfgName: 'Yaesu', modelName: 'FT-897' };
+    testConnection.supportedVfoOps = new Set(['TOGGLE', 'TUNE']);
+
+    await expect(connection.applyOperatingState({
+      frequency: 14_074_000,
+      mode: 'USB',
+      bandwidth: 'nochange',
+      options: { intent: 'voice' },
+    })).resolves.toEqual({
+      frequencyApplied: true,
+      modeApplied: true,
+      modeError: undefined,
+    });
+
+    expect(rig.getVfo).not.toHaveBeenCalled();
+    expect(rig.setVfo).not.toHaveBeenCalled();
+    expect(rig.setFrequency.mock.calls).toEqual([[14_074_000], [14_074_000]]);
+    expect(rig.setMode).toHaveBeenCalledWith('USB', 'nochange');
+  });
+
+  it('does not use Yaesu correlation for another manufacturer with dual-VFO operations', async () => {
+    const { connection, rig } = createConnectedConnection({
+      getVfo: vi.fn().mockRejectedValue(new Error('getVfo must not be called')),
+    });
+    const testConnection = asTestConnection(connection);
+    testConnection.supportedModes = new Set(['USB']);
+    testConnection.currentRadioMode = 'LSB';
+    testConnection.currentConfig = {
+      type: 'serial',
+      serial: { path: 'COM6', rigModel: 9999 },
+    };
+    testConnection.meterRigMetadata = { rigModel: 9999, mfgName: 'Icom', modelName: 'Test Rig' };
+    testConnection.supportedVfoOps = new Set(['CPY', 'XCHG']);
+
+    await expect(connection.applyOperatingState({
+      frequency: 14_074_000,
+      mode: 'USB',
+      bandwidth: 'nochange',
+      options: { intent: 'voice' },
+    })).resolves.toEqual({
+      frequencyApplied: true,
+      modeApplied: true,
+      modeError: undefined,
+    });
+
+    expect(rig.getVfo).not.toHaveBeenCalled();
+    expect(rig.setVfo).not.toHaveBeenCalled();
+    expect(rig.setFrequency.mock.calls).toEqual([[14_074_000], [14_074_000]]);
+    expect(rig.setMode).toHaveBeenCalledWith('USB', 'nochange');
+  });
+
+  it('falls back to legacy writes when a qualifying Yaesu backend cannot read the current VFO', async () => {
+    const { connection, rig } = createConnectedConnection({
+      getVfo: vi.fn().mockRejectedValue(new Error('getVfo unavailable')),
+    });
+    const testConnection = asTestConnection(connection);
+    testConnection.supportedModes = new Set(['USB']);
+    testConnection.currentRadioMode = 'LSB';
+    testConnection.currentConfig = {
+      type: 'serial',
+      serial: { path: 'COM7', rigModel: 1049 },
+    };
+    testConnection.meterRigMetadata = { rigModel: 1049, mfgName: 'Yaesu', modelName: 'FT-710' };
+    testConnection.supportedVfoOps = new Set(['XCHG']);
+
+    await expect(connection.applyOperatingState({
+      frequency: 14_074_000,
+      mode: 'USB',
+      bandwidth: 'nochange',
+      options: { intent: 'voice' },
+    })).resolves.toEqual({
+      frequencyApplied: true,
+      modeApplied: true,
+      modeError: undefined,
+    });
+
+    expect(rig.getVfo).toHaveBeenCalledTimes(1);
+    expect(rig.getVfoInfo).not.toHaveBeenCalled();
+    expect(rig.setVfo).not.toHaveBeenCalled();
+    expect(rig.setFrequency.mock.calls).toEqual([[14_074_000], [14_074_000]]);
+    expect(rig.setMode).toHaveBeenCalledWith('USB', 'nochange');
+  });
+
+  it('uses the live current VFO when a qualifying Yaesu backend cannot re-select it', async () => {
+    const { connection, rig } = createConnectedConnection({
+      getVfo: vi.fn().mockResolvedValue('VFOB'),
+      setVfo: vi.fn().mockRejectedValue(new Error('Feature not available')),
+    });
+    const testConnection = asTestConnection(connection);
+    testConnection.supportedModes = new Set(['USB']);
+    testConnection.currentRadioMode = 'LSB';
+    testConnection.currentConfig = {
+      type: 'serial',
+      serial: { path: 'COM8', rigModel: 1007 },
+    };
+    testConnection.meterRigMetadata = { rigModel: 1007, mfgName: 'Yaesu', modelName: 'FT-757GXII' };
+    testConnection.supportedVfoOps = new Set(['CPY']);
+
+    await expect(connection.applyOperatingState({
+      frequency: 7_074_000,
+      mode: 'USB',
+      bandwidth: 'nochange',
+      options: { intent: 'voice' },
+    })).resolves.toMatchObject({
+      frequencyApplied: true,
+      modeApplied: true,
+      targetVfo: 'VFOB',
+    });
+
+    expect(rig.setVfo).toHaveBeenCalledWith('VFOB');
+    expect(rig.setMode).toHaveBeenCalledWith('USB', 'nochange');
+    expect(rig.setMode).not.toHaveBeenCalledWith('USB', 'nochange', 'VFOB');
   });
 
   it('does not add extra writes for frequency-only or mode-only operating-state updates', async () => {

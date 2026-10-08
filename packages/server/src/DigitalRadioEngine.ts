@@ -2100,13 +2100,13 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       }
       frequencyConfirmed = applyResult.frequencyConfirmed !== false;
 
-      if (request.mode && (!applyResult.modeApplied || applyResult.modeError)) {
+      if (request.mode && (!applyResult.modeApplied || applyResult.modeConfirmed === false || applyResult.modeError)) {
         logger.warn(
           `Switched digital frequency but failed to set radio mode: ${applyResult.modeError?.message || 'not confirmed'}`,
         );
         syncResult = {
           status: 'partially-applied',
-          detail: applyResult.modeError?.message || 'radio mode write was not confirmed',
+          detail: applyResult.modeError?.message || 'radio mode write was not confirmed by readback',
         };
       } else if (syncResult.status !== 'partially-applied') {
         syncResult = { status: 'applied' };
@@ -2217,8 +2217,12 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
             description: `${(currentFrequency / 1_000_000).toFixed(3)} MHz`,
           });
         }
-        return result.frequencyConfirmed === false || result.modeError
-          ? { status: 'partially-applied', detail: result.modeError?.message ?? 'radio frequency write was not confirmed by readback' }
+        return result.frequencyConfirmed === false || result.modeConfirmed === false || result.modeError
+          ? {
+            status: 'partially-applied',
+            detail: result.modeError?.message
+              ?? (result.modeConfirmed === false ? 'radio mode write was not confirmed by readback' : 'radio frequency write was not confirmed by readback'),
+          }
           : { status: 'applied' };
       } catch (error) {
         return { status: 'failed', detail: error instanceof Error ? error.message : String(error) };
@@ -2783,6 +2787,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       if (applyResult.modeError) {
         logger.warn(`Restored CW frequency but failed to set radio mode: ${applyResult.modeError.message}`);
       }
+      if (applyResult.modeConfirmed === false) {
+        logger.warn('Restored CW frequency but the physical radio mode readback did not match');
+      }
 
       const band = this.resolveBandLabel(targetFrequency);
       const description = `${(targetFrequency / 1000000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`;
@@ -2811,8 +2818,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       if (applyResult.frequencyConfirmed === false) {
         return { status: 'partially-applied', detail: 'radio frequency write was not confirmed by readback' };
       }
-      return applyResult.modeError
-        ? { status: 'partially-applied', detail: applyResult.modeError.message }
+      return applyResult.modeError || applyResult.modeConfirmed === false
+        ? {
+          status: 'partially-applied',
+          detail: applyResult.modeError?.message ?? 'radio mode write was not confirmed by readback',
+        }
         : { status: 'applied' };
     } catch (error) {
       logger.warn(`Failed to restore CW operating state: ${(error as Error).message}`);
@@ -3007,11 +3017,13 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   }
 
   private resolveModeConfirmation(
-    result: { modeApplied: boolean; modeError?: Error } | null | undefined,
+    result: { modeApplied: boolean; modeConfirmed?: boolean; modeError?: Error } | null | undefined,
     requestedMode?: string,
   ): 'confirmed' | 'unconfirmed' | 'unknown' {
     if (!requestedMode) return 'unknown';
-    return result?.modeApplied && !result.modeError ? 'confirmed' : 'unconfirmed';
+    return result?.modeApplied && result.modeConfirmed !== false && !result.modeError
+      ? 'confirmed'
+      : 'unconfirmed';
   }
 
   private emitProgramFrequencyState(payload: {

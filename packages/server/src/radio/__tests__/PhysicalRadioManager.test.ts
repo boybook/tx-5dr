@@ -834,6 +834,56 @@ describe('PhysicalRadioManager', () => {
     expect(getFrequency).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps legacy mode-write success for adapters without mode readback', async () => {
+    const applyOperatingState = vi.fn().mockResolvedValue({
+      frequencyApplied: false,
+      modeApplied: true,
+    });
+    asTestManager(manager).connection = { applyOperatingState };
+
+    const result = await manager.applyOperatingState({ mode: 'USB' });
+
+    expect(result).toMatchObject({
+      modeApplied: true,
+      modeConfirmed: true,
+    });
+  });
+
+  it('preserves target-VFO-aware confirmation supplied by the connection', async () => {
+    const getFrequency = vi.fn().mockResolvedValue(14_074_000);
+    const applyOperatingState = vi.fn().mockResolvedValue({
+      frequencyApplied: true,
+      modeApplied: true,
+      targetVfo: 'VFOB',
+      frequencyConfirmed: true,
+      observedFrequency: 7_030_000,
+      modeConfirmed: false,
+      observedMode: 'USB',
+    });
+    asTestManager(manager).connection = {
+      applyOperatingState,
+      getFrequency,
+      getRadioIoQueueSnapshot: vi.fn().mockReturnValue({ busy: false, backpressure: false }),
+      setKnownFrequency: vi.fn(),
+    };
+
+    const result = await manager.applyOperatingState({
+      frequency: 7_030_000,
+      mode: 'CW',
+      bandwidth: 'nochange',
+    });
+
+    expect(result).toMatchObject({
+      targetVfo: 'VFOB',
+      frequencyConfirmed: true,
+      observedFrequency: 7_030_000,
+      modeConfirmed: false,
+      observedMode: 'USB',
+    });
+    expect(getFrequency).not.toHaveBeenCalled();
+    expect(manager.getLastConfirmedFrequency()).toBe(7_030_000);
+  });
+
   it('reports a mismatch without advancing the confirmed frequency cache', async () => {
     vi.useFakeTimers();
     try {

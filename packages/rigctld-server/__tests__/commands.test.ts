@@ -97,6 +97,22 @@ describe('rigctld commands', () => {
     expect(out).toBe(`RPRT ${RigErr.ENIMPL}\n`);
   });
 
+  it('get_vfo returns the controller physical VFO', async () => {
+    const out = await run('v', makeController({
+      async getVFO() { return 'VFOB'; },
+    }));
+    expect(out).toBe('VFOB\nRPRT 0\n');
+  });
+
+  it('set_vfo forwards VFO-B to the controller', async () => {
+    let captured = '';
+    const out = await run('V VFOB', makeController({
+      async setVFO(vfo) { captured = vfo; },
+    }));
+    expect(out).toBe('RPRT 0\n');
+    expect(captured).toBe('VFOB');
+  });
+
   it('controller throw becomes RPRT -5 (EIO)', async () => {
     const out = await run('f', makeController({
       async getFrequency() { throw new Error('bang'); },
