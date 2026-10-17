@@ -9,14 +9,19 @@ import { dispatchOperatorForceStopRequested } from '../../utils/operatorForceSto
 import { dispatchOperatorSlotShortcutFeedback } from '../../utils/operatorSlotShortcutFeedbackEvents';
 import {
   getShortcutConfig,
+  getShortcutToggles,
   isKnownShortcutActionId,
   isTypingShortcutTarget,
   matchesShortcutEvent,
   normalizeShortcutConfig,
+  normalizeShortcutToggles,
+  resolveShortcutTransport,
   SHORTCUT_ACTION_IDS,
   SHORTCUT_CONFIG_CHANGED_EVENT,
+  SHORTCUT_TOGGLES_CHANGED_EVENT,
   type ShortcutActionId,
   type ShortcutConfig,
+  type ShortcutToggles,
 } from '../../utils/shortcutPreferences';
 
 const logger = createLogger('GlobalShortcutBridge');
@@ -38,6 +43,18 @@ async function loadInitialShortcutConfig(): Promise<ShortcutConfig> {
   return getShortcutConfig();
 }
 
+async function loadInitialShortcutToggles(): Promise<ShortcutToggles> {
+  if (window.electronAPI?.shortcuts) {
+    try {
+      return normalizeShortcutToggles(await window.electronAPI.shortcuts.getToggles());
+    } catch (error) {
+      logger.warn('Failed to load Electron shortcut toggles, falling back to browser toggles', error);
+    }
+  }
+
+  return getShortcutToggles();
+}
+
 export function GlobalShortcutBridge() {
   const connection = useConnection();
   const { operators } = useOperators();
@@ -48,7 +65,10 @@ export function GlobalShortcutBridge() {
   const tunerSwitchState = useCapabilityState('tuner_switch');
   const tunerTuneState = useCapabilityState('tuner_tune');
   const [config, setConfig] = useState<ShortcutConfig>(() => getShortcutConfig());
+  const [toggles, setToggles] = useState<ShortcutToggles>(() => getShortcutToggles());
   const configRef = useRef(config);
+  const supportsGlobalShortcuts = Boolean(window.electronAPI?.shortcuts);
+  const transport = resolveShortcutTransport(toggles, supportsGlobalShortcuts);
 
   useEffect(() => {
     configRef.current = config;
@@ -65,6 +85,16 @@ export function GlobalShortcutBridge() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    void loadInitialShortcutToggles().then((loadedToggles) => {
+      if (!cancelled) setToggles(loadedToggles);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     const handleConfigChange = (event: Event) => {
       const detail = (event as CustomEvent<ShortcutConfig>).detail;
       setConfig(normalizeShortcutConfig(detail));
@@ -72,6 +102,16 @@ export function GlobalShortcutBridge() {
 
     window.addEventListener(SHORTCUT_CONFIG_CHANGED_EVENT, handleConfigChange);
     return () => window.removeEventListener(SHORTCUT_CONFIG_CHANGED_EVENT, handleConfigChange);
+  }, []);
+
+  useEffect(() => {
+    const handleTogglesChange = (event: Event) => {
+      const detail = (event as CustomEvent<ShortcutToggles>).detail;
+      setToggles(normalizeShortcutToggles(detail));
+    };
+
+    window.addEventListener(SHORTCUT_TOGGLES_CHANGED_EVENT, handleTogglesChange);
+    return () => window.removeEventListener(SHORTCUT_TOGGLES_CHANGED_EVENT, handleTogglesChange);
   }, []);
 
   const runAction = useCallback((actionId: ShortcutActionId) => {
@@ -176,6 +216,8 @@ export function GlobalShortcutBridge() {
   ]);
 
   useEffect(() => {
+    if (transport !== 'electron-global') return undefined;
+
     const electronShortcuts = window.electronAPI?.shortcuts;
     if (!electronShortcuts) return undefined;
 
@@ -186,10 +228,10 @@ export function GlobalShortcutBridge() {
 
     electronShortcuts.onCommand(handleCommand);
     return () => electronShortcuts.offCommand(handleCommand);
-  }, [runAction]);
+  }, [runAction, transport]);
 
   useEffect(() => {
-    if (window.electronAPI?.shortcuts) return undefined;
+    if (transport !== 'window') return undefined;
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.repeat || isTypingShortcutTarget(event.target)) return;
@@ -207,7 +249,7 @@ export function GlobalShortcutBridge() {
 
     window.addEventListener('keydown', handleKeyDown, { capture: true });
     return () => window.removeEventListener('keydown', handleKeyDown, { capture: true });
-  }, [runAction]);
+  }, [runAction, transport]);
 
   return null;
 }

@@ -305,6 +305,7 @@ interface ElectronSettings {
   desktopHttps?: PersistentDesktopHttpsConfig;
   remoteAccessPreset?: 'local' | 'lan' | 'public';
   shortcuts?: ShortcutConfig;
+  shortcutToggles?: ShortcutToggles;
 }
 
 const SHORTCUT_ACTION_IDS = [
@@ -356,11 +357,35 @@ interface ShortcutRecordingCancelledPayload {
   actionId: ShortcutActionId;
 }
 
+interface ShortcutToggles {
+  enabled: boolean;
+  globalEnabled: boolean;
+}
+
+const DEFAULT_SHORTCUT_TOGGLES: ShortcutToggles = { enabled: true, globalEnabled: true };
+
+function createDefaultShortcutToggles(): ShortcutToggles {
+  return { ...DEFAULT_SHORTCUT_TOGGLES };
+}
+
+function normalizeShortcutToggles(value: unknown): ShortcutToggles {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return createDefaultShortcutToggles();
+  }
+
+  const raw = value as Partial<ShortcutToggles>;
+  return {
+    enabled: raw.enabled !== false,
+    globalEnabled: raw.globalEnabled !== false,
+  };
+}
+
 const DEFAULT_ELECTRON_SETTINGS: ElectronSettings = {
   closeBehavior: 'ask',
   desktopHttps: { ...DEFAULT_DESKTOP_HTTPS_CONFIG, enabled: false },
   remoteAccessPreset: 'local',
   shortcuts: createDefaultShortcutConfig(),
+  shortcutToggles: createDefaultShortcutToggles(),
 };
 
 function getElectronSettingsPath(): string {
@@ -763,6 +788,7 @@ function loadElectronSettings(): ElectronSettings {
     () => ({
       ...DEFAULT_ELECTRON_SETTINGS,
       shortcuts: createDefaultShortcutConfig(),
+      shortcutToggles: createDefaultShortcutToggles(),
     }),
     (parsed) => {
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -778,6 +804,7 @@ function loadElectronSettings(): ElectronSettings {
           // LAN-exposed gateway defaults. Preserve that effective behavior.
           ?? 'lan',
         shortcuts: normalizeShortcutConfig(settings.shortcuts),
+        shortcutToggles: normalizeShortcutToggles(settings.shortcutToggles),
       };
     },
   );
@@ -806,8 +833,13 @@ function unregisterGlobalShortcuts(): void {
   registeredShortcutAccelerators.clear();
 }
 
+function getShortcutToggles(): ShortcutToggles {
+  return loadElectronSettings().shortcutToggles ?? createDefaultShortcutToggles();
+}
+
 function applyGlobalShortcutConfig(configInput: unknown): ShortcutRegistrationStatus {
   const config = normalizeShortcutConfig(configInput);
+  const toggles = getShortcutToggles();
   const status: ShortcutRegistrationStatus = {
     config,
     registered: [],
@@ -815,6 +847,11 @@ function applyGlobalShortcutConfig(configInput: unknown): ShortcutRegistrationSt
   };
 
   unregisterGlobalShortcuts();
+
+  if (!toggles.enabled || !toggles.globalEnabled) {
+    logger.info('global shortcuts are switched off in shortcut settings', toggles);
+    return status;
+  }
 
   for (const actionId of SHORTCUT_ACTION_IDS) {
     const accelerator = shortcutBindingToAccelerator(config[actionId]);
@@ -4206,6 +4243,17 @@ function setupIpcHandlers() {
 
   ipcMain.handle('shortcuts:getConfig', () => {
     return loadElectronSettings().shortcuts ?? createDefaultShortcutConfig();
+  });
+
+  ipcMain.handle('shortcuts:getToggles', () => {
+    return getShortcutToggles();
+  });
+
+  ipcMain.handle('shortcuts:setToggles', (_event, toggles: unknown) => {
+    const settings = loadElectronSettings();
+    const shortcutToggles = normalizeShortcutToggles(toggles);
+    saveElectronSettings({ ...settings, shortcutToggles });
+    return applyGlobalShortcutConfig(settings.shortcuts);
   });
 
   ipcMain.handle('shortcuts:setConfig', (_event, config: unknown) => {
