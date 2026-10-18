@@ -909,8 +909,9 @@ A record the remote refuses permanently — a duplicate or a same-minute collisi
 failing the operation. A rejection stays terminal until the local QSO identity
 changes or an explicit reconcile re-verifies it, so re-running a sync cannot
 surface the same record as a new error. Failures with no definitive remote
-answer — network loss, timeouts, 5xx — keep their records pending and end the
-run as a retryable failure; they are never recorded as rejections.
+answer — network loss, timeouts, 5xx, or a successful status whose body cannot be
+parsed (a proxy or PHP error page) — keep their records pending and end the run
+as a retryable failure; they are never recorded as rejections.
 
 A remote record that cannot be parsed is skipped and reported as a bounded
 failure while the download cursor advances, so one malformed contact cannot pin

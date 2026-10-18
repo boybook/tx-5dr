@@ -263,6 +263,21 @@ describe.each(['v1', 'v2'] as const)('Wavelog %s synchronization', version => {
     expect(next.uploaded).toBe(1); expect(next.state).toBe('completed');
     expect(f.remote).toHaveLength(1);
   });
+  it('keeps a batch pending when a successful status carries an unreadable body', async () => {
+    // A proxy error page or a PHP warning printed before the JSON answers 200 without a payload.
+    for (const body of ['<html>gateway error</html>', '']) {
+      const f = fixture(version, [qso('a')]);
+      f.setPostHook(() => new Response(body, { status: 200, headers: { 'Content-Type': 'text/html' } }));
+      const status = await f.run();
+      // An unreadable answer is not a refusal: it must never blacklist the records.
+      expect(status.rejected).toBe(0);
+      expect(status.failed).toBeGreaterThan(0);
+      f.setPostHook(undefined);
+      const next = await f.run();
+      expect(next.uploaded).toBe(1); expect(next.state).toBe('completed');
+      expect(f.remote).toHaveLength(1);
+    }
+  });
   it('never re-sends a batch whose manual outcome is still unresolved', async () => {
     const record = qso('a');
     const f = fixture('v2', [record]);

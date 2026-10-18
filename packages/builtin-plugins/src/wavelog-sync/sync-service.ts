@@ -602,9 +602,11 @@ export class WavelogSyncService {
         }
         if (session.uncertain) {
           session.uncertain.message = error instanceof Error ? error.message : 'Upload result is uncertain';
-          // No definitive answer from the remote: never turn this into a permanent rejection.
+          // A 2xx status with an unreadable body is not a refusal: the remote may have
+          // imported the batch already. Keep those records pending instead of blacklisting
+          // them, exactly like transport loss, timeouts and 5xx.
           const status = error instanceof WavelogError ? error.httpStatus : undefined;
-          session.uncertain.retryable = status === undefined || status === 408 || status >= 500;
+          session.uncertain.retryable = status === undefined || status < 400 || status === 408 || status >= 500;
         }
       }
       return;
