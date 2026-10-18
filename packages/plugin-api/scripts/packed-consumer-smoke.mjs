@@ -61,7 +61,7 @@ try {
   const core = stageAndPack('packages/core');
   const pluginApi = stageAndPack('packages/plugin-api');
   const archive = execFileSync('tar', ['-tf', pluginApi], { encoding: 'utf8' });
-  for (const asset of ['package/ui.css', 'package/dist/contest-logbook-ui/contest-log.html', 'package/dist/contest-logbook-ui/assets/contest-log.js', 'package/dist/contest-logbook-ui/assets/contest-log.css']) {
+  for (const asset of ['package/dist/ui.css', 'package/dist/contest-logbook-ui/contest-log.html', 'package/dist/contest-logbook-ui/assets/contest-log.js', 'package/dist/contest-logbook-ui/assets/contest-log.css']) {
     if (!archive.split('\n').includes(asset)) throw new Error(`missing packed contest logbook UI asset: ${asset}`);
   }
 
