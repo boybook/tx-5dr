@@ -193,3 +193,57 @@ has accepted or unresolved QSO tasks. Engine stop alone retains those tasks.
 - Linux Electron: XDG config/data directories; Electron injects `TX5DR_CONFIG_DIR` / `TX5DR_DATA_DIR` / `TX5DR_LOGS_DIR` / `TX5DR_CACHE_DIR` into the embedded server so a desktop app never accidentally uses `/etc/tx5dr/config.env` headless-service paths.
 - Linux server: `/etc/tx5dr/config.env` sets `TX5DR_CONFIG_DIR=/var/lib/tx5dr/config`, `TX5DR_DATA_DIR=/var/lib/tx5dr`, `TX5DR_LOGS_DIR=/var/lib/tx5dr/logs`, and `TX5DR_CACHE_DIR=/var/lib/tx5dr/cache`.
 - Docker: durable state is under the `/app/data` volume.
+
+## External logbook synchronization checkpoints
+
+The local ADIF logbook remains the source of truth for QSO data. A sync plugin
+may keep a rebuildable, versioned identity index and remote cursor in its sandbox
+using `ctx.files.write`, which uses the existing atomic persistence path. Commit
+local mutations before advancing a durable remote cursor. If the checkpoint
+write fails, discard the uncommitted in-memory cursor and replay against the
+last durable checkpoint; exact identities prevent duplicate imports.
+
+Wavelog keeps the remote inventory cursor separate from the locally applied
+cursor. An upload-only inventory scan does not import remote QSOs and must not
+hide them from a later download. Only a committed local reconciliation advances
+the applied cursor.
+
+Plugin receipts associate a stable local QSO ID with its original remote
+identity. Editing an acknowledged local record's identity fields does not turn
+it into a new outbound contact, nor cause the old remote copy to be reimported.
+Uncertain POST intents include the same association before network I/O; only
+remote evidence or an unambiguous success promotes it to an acknowledged receipt.
+
+Before an upload, persist the identities represented by the request. A lost or
+rejected response may represent a partial remote commit. Resolve that uncertainty
+by reading remote identities before repeating writes. Credentials belong in
+plugin configuration, never in checkpoint identities or status projections.
+The Host's existing automatic-upload queue is unchanged: plugin-owned receipts
+make replay of a partially successful batch cheap.
+
+The sync status endpoint is a read-only projection of plugin-owned facts. It has
+no task database, retry scheduler, or provider-specific state transitions.
+
+Built-in QRZ/LoTW upload acceptance receipts contain QSO IDs and remote acceptance
+times only. They live in plugin KV storage and are flushed before attempting the
+local sent-state commit; LoTW also checkpoints each accepted remote batch. A failed local status commit retains the receipt; the next awaited
+provider invocation repairs a minimal sent-state patch using revision-aware
+reconciliation before selecting uploads. User-deleted records are not recreated.
+These receipts are recoverable synchronization metadata, not a second QSO store.
+
+Automatic sync sent-state patches select local records by exact ID and retain the
+whole-book revision check. Durable batch rewrites prepare/validate documents and
+build the complete replacement projection in cooperative slices. Candidate data
+stays private until document, record service and generation can be published
+together; snapshot reads remain serialized behind the owning transaction.
+Synchronous and cooperative document factories execute the same construction
+steps, including external runtime ID allocation and byte-range layout. Rewrite
+source collection coalesces adjacent ranges from the same generation before
+existing worker IPC; this changes neither file contents nor the worker protocol.
+The physical TX maintenance fence remains held through commit and installation.
+
+Wavelog checkpoint and Club Log ledger formats are unchanged. Wavelog's automatic
+encoder yields while visiting large collections, with no deferred POST intent or
+cursor commit. An accepted final batch and its terminal status can share the same
+durable write. Club Log returns success only after the ledger flush; a failed
+flush invalidates its provider cache and leaves automatic queue records pending.

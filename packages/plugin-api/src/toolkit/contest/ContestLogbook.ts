@@ -654,7 +654,7 @@ export function defaultContestLogbook<
   } : undefined;
   const customPages = options.ui === false ? [] : adapter.ui?.pages ?? [];
   const customPanels = options.ui === false ? [] : adapter.panels ?? [];
-  const pages = mergeArrayById(
+  const pages = mergeArrayById<PluginUIPageDescriptor>(
     defaultPage ? [defaultPage] : undefined,
     customPages,
   );

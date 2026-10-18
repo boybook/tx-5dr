@@ -145,7 +145,7 @@ describe('PluginManager page handler routing', () => {
         'utf8',
       ),
     ]);
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify([{
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.includes('/check_auth/') ? { status: 'valid', rights: 'rw' } : [{
       station_id: 7,
       station_profile_name: 'Primary',
       station_callsign: 'BG5DRB',
@@ -215,7 +215,8 @@ describe('PluginManager page handler routing', () => {
       requestContext,
     ) as { success: boolean; stations: Array<{ station_id: string }> };
 
-    expect(wavelog).toEqual(wavelogConfig);
+    const { apiKey: _secret, ...publicWavelog } = wavelogConfig;
+    expect(wavelog).toEqual({ ...publicWavelog, apiVersion: 'v1', hasApiKey: true });
     expect(lotw).toEqual(lotwConfig);
     expect(qrz).toEqual(qrzConfig);
     expect(clublog.config).toEqual(clublogConfig);
@@ -224,7 +225,7 @@ describe('PluginManager page handler routing', () => {
     wavelog.url = 'https://mutated.example.test';
     await expect(manager.invokePluginPageHandler(
       'wavelog-sync', 'settings', 'getConfig', { callsign: 'BG5DRB' }, requestContext,
-    )).resolves.toEqual(wavelogConfig);
+    )).resolves.toEqual({ ...publicWavelog, apiVersion: 'v1', hasApiKey: true });
 
     await manager.shutdown();
   });

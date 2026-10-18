@@ -1,3 +1,4 @@
+import { SyncOperationGate, SyncBusyError, busyUpload, busyDownload } from '../_shared/sync-operation-gate.js';
 import type {
   LogbookSyncProvider,
   PluginContextFor,
@@ -140,6 +141,9 @@ function missingQsoIssues(qso: QSORecord, boundCallsign: string): NonNullable<Sy
 }
 
 export class ClubLogSyncProvider implements LogbookSyncProvider {
+  private readonly operationGate = new SyncOperationGate();
+  private readonly ledgers = new Map<string, ClubLogUploadLedger>();
+  private readonly pendingLedgerFlush = new Set<string>();
   readonly id = 'clublog';
   readonly displayName = 'Club Log';
   readonly color = 'warning' as const;
@@ -164,6 +168,10 @@ export class ClubLogSyncProvider implements LogbookSyncProvider {
   }
 
   setConfig(callsign: string, config: ClubLogPluginConfig): void {
+    this.operationGate.assertIdle(callsign);
+    this.writeConfig(callsign, config);
+  }
+  private writeConfig(callsign: string, config: ClubLogPluginConfig): void {
     this.ctx.store.global.set(this.configKey(callsign), config);
   }
 
@@ -176,11 +184,26 @@ export class ClubLogSyncProvider implements LogbookSyncProvider {
   }
 
   private getLedger(callsign: string): ClubLogUploadLedger {
-    return this.ctx.store.global.get<ClubLogUploadLedger | undefined>(this.ledgerKey(callsign)) ?? {};
+    const key = this.ledgerKey(callsign);
+    if (this.pendingLedgerFlush.has(key)) throw new Error('Previous ledger write has not committed; retry upload');
+    let ledger = this.ledgers.get(key);
+    if (!ledger) {
+      ledger = this.ctx.store.global.get<ClubLogUploadLedger | undefined>(key) ?? {};
+      this.ledgers.set(key, ledger);
+    }
+    return ledger;
   }
 
-  private setLedger(callsign: string, ledger: ClubLogUploadLedger): void {
-    this.ctx.store.global.set(this.ledgerKey(callsign), ledger);
+  private async setLedger(callsign: string, ledger: ClubLogUploadLedger): Promise<void> {
+    const key = this.ledgerKey(callsign);
+    try {
+      this.ctx.store.global.set(key, ledger);
+      await this.ctx.store.global.flush();
+      this.ledgers.set(key, ledger);
+      this.pendingLedgerFlush.delete(key);
+    } catch (error) {
+      this.ledgers.delete(key); this.pendingLedgerFlush.add(key); throw error;
+    }
   }
 
   private markUploaded(
@@ -269,6 +292,10 @@ export class ClubLogSyncProvider implements LogbookSyncProvider {
   }
 
   async upload(callsign: string, options?: SyncUploadOptions): Promise<SyncUploadResult> {
+    try { return await this.operationGate.run(callsign, () => this.uploadImpl(callsign, options), options?.trigger === 'auto'); }
+    catch (error) { if (error instanceof SyncBusyError) return busyUpload(this.id); throw error; }
+  }
+  private async uploadImpl(callsign: string, options?: SyncUploadOptions): Promise<SyncUploadResult> {
     const config = this.getConfig(callsign);
     const apiKey = this.resolveApiKey();
     if (!config?.email || !config.password) {
@@ -285,6 +312,11 @@ export class ClubLogSyncProvider implements LogbookSyncProvider {
       }));
     }
 
+    const ledgerKey = this.ledgerKey(callsign);
+    if (this.pendingLedgerFlush.has(ledgerKey)) {
+      await this.ctx.store.global.flush();
+      this.pendingLedgerFlush.delete(ledgerKey);
+    }
     if (options?.trigger === 'auto' && options.records) {
       return this.uploadRealtime(callsign, config, apiKey, options);
     }
@@ -292,7 +324,11 @@ export class ClubLogSyncProvider implements LogbookSyncProvider {
     return this.uploadBatch(callsign, config, apiKey, options);
   }
 
-  async download(_callsign: string): Promise<SyncDownloadResult> {
+  async download(callsign: string): Promise<SyncDownloadResult> {
+    try { return await this.operationGate.run(callsign, () => this.downloadImpl()); }
+    catch (error) { if (error instanceof SyncBusyError) return busyDownload(this.id); throw error; }
+  }
+  private async downloadImpl(): Promise<SyncDownloadResult> {
     return {
       downloaded: 0,
       matched: 0,
@@ -367,8 +403,8 @@ export class ClubLogSyncProvider implements LogbookSyncProvider {
     }
 
     if (uploaded > 0 || skipped > 0) {
-      this.setLedger(callsign, ledger);
-      this.setConfig(callsign, { ...config, lastRealtimeUploadTime: Date.now() });
+      await this.setLedger(callsign, ledger);
+      this.writeConfig(callsign, { ...config, lastRealtimeUploadTime: Date.now() });
     }
 
     return { uploaded, skipped, failed, failures: failures.length > 0 ? failures : undefined };
@@ -438,8 +474,8 @@ export class ClubLogSyncProvider implements LogbookSyncProvider {
       for (const qso of qsos) {
         this.markUploaded(callsign, ledger, qso, 'batch_submitted', 'batch');
       }
-      this.setLedger(callsign, ledger);
-      this.setConfig(callsign, { ...config, lastBatchUploadTime: Date.now() });
+      await this.setLedger(callsign, ledger);
+      this.writeConfig(callsign, { ...config, lastBatchUploadTime: Date.now() });
       this.ctx.log.info('Club Log batch upload accepted', { callsign, qsoCount: qsos.length, responseSummary });
       this.emitUploadProgress(options, {
         stage: 'batch_accepted',

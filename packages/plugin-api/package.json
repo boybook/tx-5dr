@@ -52,10 +52,11 @@
     "./contest-logbook-ui/*": "./dist/contest-logbook-ui/*",
     "./bridge": {
       "types": "./src/bridge.d.ts"
-    }
+    },
+    "./ui.css": "./dist/ui.css"
   },
   "scripts": {
-    "build": "tsc && npx vite build --config contest-logbook-ui/vite.config.ts",
+    "build": "tsc && node scripts/copy-ui-css.mjs && node scripts/generate-theme-reference.mjs && npx vite build --config contest-logbook-ui/vite.config.ts",
     "dev": "tsc --watch",
     "lint": "eslint src/**/*.ts",
     "test": "vitest run --passWithNoTests",

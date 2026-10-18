@@ -716,6 +716,8 @@ ui: {
       title: 'settingsTitle',
       entry: 'settings.html',
       accessScope: 'admin',
+      styles: 'standard', // Optional namespaced controls; absent keeps legacy styling.
+      dialogSize: 'lg', // Optional sync action modal size: md / lg / 3xl.
     },
   ],
 },
@@ -777,10 +779,14 @@ Web 打开新标签页，Android 在当前 WebView 中导航并使用系统返�
 需要打开官方网站等外部 HTTP(S) 链接时，页面应调用 `tx5dr.openExternal(url)`；Host 在 Electron
 中转交系统默认浏览器，在普通 Web 中打开新标签页，并拒绝非 HTTP(S) 协议。
 
-Host 注入的 `tokens.css` 只提供 CSS 变量，不提供按钮、Chip 或表格组件 class。插件自行组织 DOM 和
-class，并使用 `--tx5dr-control-*` 组装尺寸与交互状态，使用语义色的 `*-soft`、`*-soft-hover` 和
-`*-foreground` 组装 solid / flat / bordered / light 变体。紧凑状态、数据表格和反馈区域分别使用
-`--tx5dr-chip-*`、`--tx5dr-table-*`、`--tx5dr-alert-*`；基础主题切换由 Host 自动更新。
+Host 始终注入主题 tokens；运行时 CSS、bridge 的主题切换和 SDK `tokens.css` 参考文件来自同一份定义。
+页面可声明 `styles: 'standard'`，由 Host 注入 `/_bridge/ui.css`，复用 `tx5dr-button`、
+`tx5dr-input`、`tx5dr-label`、`tx5dr-field`、`tx5dr-actions`、`tx5dr-chip`、
+`tx5dr-muted`、`tx5dr-feedback`、`tx5dr-progress`、`tx5dr-spinner` 和 `tx5dr-switch`。
+主按钮使用 `tx5dr-button--primary`，错误反馈使用 `tx5dr-feedback--danger`。这些基础样式仅依赖
+现有 tokens，不包含业务布局、弹窗或主应用 CSS。插件继续拥有 DOM、业务布局和文案。
+SDK 也导出 `@tx5dr/plugin-api/ui.css`，适合独立开发预览；与 Host 路由使用同一份源码。
+旧页面不声明 `styles` 时不加载这些 class，外观保持兼容。
 
 启用类型补全：
 
@@ -870,3 +876,104 @@ import {
 
 插件作者应以这些公开类型和实际导出为准。Host 内部 Coordinator、Manager、REST、
 WebSocket 与硬件实现不属于 Plugin API，不应被插件直接依赖。
+
+### Logbook sync status projection
+
+`LogbookSyncProvider.getStatus(callsign)` is optional. It returns a detached,
+credential-free `SyncStatus` snapshot or `null` when no valid state is available.
+A status read must not start synchronization, perform remote I/O, or wait for an
+upload queue. The Host validates the runtime schema and authorizes the callsign
+before projecting it through `/api/plugins/sync-providers/status`. Invalid,
+expired, missing, or timed-out projections are unavailable, not successful idle
+states. Older providers without this method retain their existing UI behavior.
+
+Plugins own operation identities, progress revisions, results, retries and
+checkpoints. The Host does not infer completion or schedule work from this
+projection. Optional automatic-upload summaries can coexist with a resumable
+manual operation. Frontends retain the last snapshot on a read failure, mark it
+stale, and discard lower revisions for the same operation.
+
+Wavelog uses the existing callsign-bound iframe bridge to advance one remote
+page or upload batch per invocation. Its short page execution lease is distinct
+from the Host page session lifetime. Closing the page stops further advances;
+an already accepted batch finishes its durable commit. Reopening resumes from
+the plugin checkpoint. Neither page capabilities nor Host handles escape the
+invocation that owns a batch.
+
+A paused operation retains its type: an upload request cannot resume a download
+or full sync. The plugin page exposes paged operation-specific error details,
+while the shared status projection carries only a bounded summary.
+
+A record the remote refuses permanently — a duplicate or a same-minute collision
+— is recorded in the plugin checkpoint and counted as `rejected` instead of
+failing the operation. A rejection stays terminal until the local QSO identity
+changes or an explicit reconcile re-verifies it, so re-running a sync cannot
+surface the same record as a new error. Failures with no definitive remote
+answer — network loss, timeouts, 5xx — keep their records pending and end the
+run as a retryable failure; they are never recorded as rejections.
+
+A remote record that cannot be parsed is skipped and reported as a bounded
+failure while the download cursor advances, so one malformed contact cannot pin
+the operation. Contact identity compares the ADIF spelling, treating `MFSK` with
+an `FT8` submode as `FT8`; FT4 keeps its existing projection so stored
+checkpoints stay valid.
+
+The automatic-upload queue is capped per provider and callsign and evicts the
+oldest QSOs first; an unreadable queue file is quarantined and the queue starts
+empty instead of blocking engine startup. When a provider cannot be evaluated
+(plugin reloading or unavailable), a completed QSO is reported as *not* queued
+rather than silently dropped. A provider id belongs to the plugin that registered
+it: another plugin cannot claim an active id, and a reused id starts without the
+previous owner's backlog.
+
+Sync actions can opt into `pageParams` to open the same page for different operations.
+The Host supplies a stable `launchId` for each click, including across iframe reloads;
+plugin-declared parameters cannot override resource bindings, credentials or reserved
+Host parameters. `launchId` is a correlation/idempotency key, never authorization.
+Page handlers must use the Host-authorized `requestContext` resource. Page descriptors
+may declare `dialogSize` (`md`, `lg`, `3xl`); the container owns its title, close action,
+focus and scrolling. Business content uses `resize()` and `requestClose()`.
+
+Providers may project `trigger` and `launchId` with their status. The frontend first
+establishes a quiet baseline and notifies a locally initiated manual result once.
+Automatic success and historical success are quiet; automatic failure and pending
+historical work mark the entry. Client dismissal/notification memory is isolated by
+callsign, provider and operation, and never modifies plugin checkpoints. A stale
+active snapshot remains visible with an unavailable marker, never a fabricated
+completion. Inspecting a result does not renew an execution lease or advance work.
+
+Built-in sync providers serialize execution per provider instance and normalized
+callsign. Competing manual work returns a retryable `sync_busy`; automatic callers
+await the gate inside their invocation and refresh queued record state after entry.
+Configuration/certificate mutations are rejected while relevant execution is active.
+Different services may perform network I/O concurrently. Local commits use
+`reconcileLogbookBatch` with `expectedRevision`, rebuilding minimal patches after a
+revision conflict without repeating remote uploads. QRZ and LoTW persist remote
+acceptance IDs/dates until local sent-state patches commit, so a local conflict does
+not force retransmission. No Host task scheduler or cross-provider network lock is
+involved; these guarantees do not extend to independent TX-5DR processes.
+
+### Automatic sync performance boundary
+
+`QSOQueryFilter.ids` optionally selects at most 1,000 exact IDs through the local
+record index. An empty list returns no records and a current revision; missing
+IDs are omitted. Other filters still apply. Use the same filtered
+`readQsoSnapshot()` when replanning a sent-state patch after a revision conflict.
+A moved record keeps its ID; a deleted record must not be reconstructed from an
+old automatic queue snapshot. The Host still authorizes the bound logbook and
+validates the ID input. Returned snapshots remain detached and capability-checked;
+a Host-marked detached result avoids a redundant Guard copy.
+
+Built-in QRZ and LoTW automatic backlogs refresh and commit at most 100 records at
+a time inside the awaited provider invocation. Remote acceptance receipts survive
+local commit failures, and repair reads only the corresponding IDs. A failed
+batch leaves the existing Host queue available for retry; local replanning does
+not repeat successful remote POSTs.
+
+Wavelog keeps its checkpoint file format and durability ordering. Automatic writes
+encode large collections in short event-loop slices; the last accepted batch and
+terminal status share one commit. Club Log caches its ledger within the provider
+instance and invalidates the cache on persistence failure. Its existing KV key,
+JSON format and synchronous KV costs remain. No migration, new worker, or new
+Host task mechanism is involved. Cold loading, native IPC and whole-file writes
+are measured separately from cooperative CPU work.
