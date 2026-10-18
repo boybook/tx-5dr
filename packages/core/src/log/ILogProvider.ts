@@ -91,6 +91,8 @@ export class LogbookOperationError extends Error {
  * 日志查询选项
  */
 export interface LogQueryOptions {
+  /** Exact IDs selected through the record index, intersected with other filters. */
+  ids?: readonly string[];
   /**
    * 呼号（支持模糊匹配）
    */

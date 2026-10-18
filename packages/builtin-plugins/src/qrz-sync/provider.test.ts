@@ -53,6 +53,7 @@ function createContext(fetchImpl: (input: string, init?: RequestInit) => Promise
   const ctx = {
     store: {
       global: {
+        flush: vi.fn(async () => undefined),
         get: vi.fn((key: string) => store.get(key)),
         set: vi.fn((key: string, value: unknown) => {
           store.set(key, value);
@@ -129,6 +130,57 @@ function qrzDownloadResponse(records: Array<{
 }
 
 describe('QRZSyncProvider', () => {
+  it('serializes stale automatic records behind manual upload and rejects configuration changes while busy', async () => {
+    let release!: (response: Response) => void;
+    let started!: () => void;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const f = createContext(async () => { started(); return new Promise<Response>(resolve => { release = resolve; }); });
+    const provider = new QRZSyncProvider(f.ctx);
+    provider.setConfig('BG5DRB', { apiKey: 'key', autoUploadQSO: true });
+    const original = createQso('one'); let current = original;
+    f.readQsoSnapshot.mockImplementation(async () => ({ revision: 'r', records: [current] }));
+    f.updateQSO.mockImplementation(async (id, updates) => { current = { ...current, ...updates, id }; return current; });
+    const first = provider.upload('BG5DRB', { records: [original] });
+    await entered;
+    const queued = provider.upload('BG5DRB', { trigger: 'auto', records: [original] });
+    expect((await provider.download('BG5DRB')).failures?.[0]?.code).toBe('sync_busy');
+    expect(() => provider.setConfig('BG5DRB', { apiKey: 'other', autoUploadQSO: false })).toThrow();
+    release(okResponse('RESULT=OK'));
+    expect((await first).uploaded).toBe(1);
+    expect((await queued).uploaded).toBe(0);
+    expect(f.fetch).toHaveBeenCalledTimes(1);
+    expect(f.readQsoSnapshot).toHaveBeenCalledWith({ ids: ['one'] });
+  });
+  it('repairs remote acceptance after local conflicts without another upload POST', async () => {
+    const f = createContext(async () => okResponse('RESULT=OK'));
+    const provider = new QRZSyncProvider(f.ctx);
+    provider.setConfig('BG5DRB', { apiKey: 'key', autoUploadQSO: true });
+    const original = createQso('one'); let current = original;
+    f.readQsoSnapshot.mockImplementation(async () => ({ revision: 'r', records: [current] }));
+    f.updateQSO.mockImplementation(async (id, updates) => { current = { ...current, ...updates, id }; return current; });
+    const commit = f.applyQsoBatch.getMockImplementation()!;
+    f.applyQsoBatch.mockRejectedValue(Object.assign(new Error('conflict'), { code: 'LOGBOOK_REVISION_CONFLICT' }));
+    expect((await provider.upload('BG5DRB', { records: [original] })).failed).toBe(1);
+    f.applyQsoBatch.mockImplementation(commit);
+    expect((await provider.upload('BG5DRB', { trigger: 'auto', records: [original] })).uploaded).toBe(0);
+    expect(current.qrzQslSent).toBe('Y');
+    expect(f.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses bounded ID snapshots for automatic backlog and sent-state commits', async () => {
+    const f = createContext(async () => okResponse('RESULT=OK'));
+    const provider = new QRZSyncProvider(f.ctx); provider.setConfig('BG5DRB', { apiKey: 'key', autoUploadQSO: true });
+    const records = Array.from({ length: 201 }, (_, i) => createQso(`q${i}`));
+    f.readQsoSnapshot.mockImplementation(async (filter?: unknown) => {
+      const ids = (filter as { ids?: string[] })?.ids;
+      expect(ids).toBeDefined(); expect(ids!.length).toBeLessThanOrEqual(100);
+      return { revision: 'r', records: records.filter(record => ids!.includes(record.id)) };
+    });
+    const result = await provider.upload('BG5DRB', { trigger: 'auto', records });
+    expect(result.uploaded).toBe(201);
+    expect(f.applyQsoBatch.mock.calls.map(([mutations]) => mutations.length)).toEqual([100, 100, 1]);
+    expect(f.fetch).toHaveBeenCalledTimes(201);
+  });
   it('auto-upload uses explicit records and skips already-uploaded QSOs', async () => {
     const { ctx, queryQSOs, updateQSO, readQsoSnapshot, notifyUpdated } = createContext(async () =>
       okResponse('RESULT=OK'),
@@ -158,6 +210,16 @@ describe('QRZSyncProvider', () => {
     expect(provider.getConfig('BG5DRB')?.lastSyncTime).toEqual(expect.any(Number));
   });
 
+  it('backfills the sent date when another service confirms the upload before local commit', async () => {
+    const f = createContext(async () => okResponse('RESULT=OK'));
+    const provider = new QRZSyncProvider(f.ctx); provider.setConfig('BG5DRB', { apiKey: 'key', autoUploadQSO: false });
+    const original = createQso('one');
+    f.readQsoSnapshot.mockResolvedValueOnce({ revision: 'r1', records: [original] })
+      .mockResolvedValue({ revision: 'r2', records: [{ ...original, qrzQslSent: 'Y', notes: 'concurrent edit' }] });
+    expect((await provider.upload('BG5DRB', { records: [original] })).uploaded).toBe(1);
+    expect(f.updateQSO).toHaveBeenCalledWith('one', { qrzQslSentDate: expect.any(Number) });
+    expect(f.fetch).toHaveBeenCalledTimes(1);
+  });
   it('manual upload still scans the logbook for pending QSOs', async () => {
     const { ctx, queryQSOs, readQsoSnapshot } = createContext(async () => okResponse('RESULT=OK'));
     const provider = new QRZSyncProvider(ctx);
@@ -196,13 +258,14 @@ describe('QRZSyncProvider', () => {
   });
 
   it('surfaces QRZ API rejection details as structured failures', async () => {
-    const { ctx } = createContext(async () => okResponse('RESULT=FAIL&REASON=Invalid API key'));
+    const { ctx, readQsoSnapshot } = createContext(async () => okResponse('RESULT=FAIL&REASON=Invalid API key'));
     const provider = new QRZSyncProvider(ctx);
     provider.setConfig('BG5DRB', {
       apiKey: 'api-key',
       autoUploadQSO: true,
     });
 
+    readQsoSnapshot.mockResolvedValue({ revision: 'r', records: [createQso('qso-1')] });
     const result = await provider.upload('BG5DRB', {
       trigger: 'auto',
       records: [createQso('qso-1')],
@@ -218,7 +281,7 @@ describe('QRZSyncProvider', () => {
   });
 
   it('surfaces QRZ network errors as retryable structured failures', async () => {
-    const { ctx } = createContext(async () => {
+    const { ctx, readQsoSnapshot } = createContext(async () => {
       throw new Error('fetch failed');
     });
     const provider = new QRZSyncProvider(ctx);
@@ -227,6 +290,7 @@ describe('QRZSyncProvider', () => {
       autoUploadQSO: true,
     });
 
+    readQsoSnapshot.mockResolvedValue({ revision: 'r', records: [createQso('qso-1')] });
     const result = await provider.upload('BG5DRB', {
       trigger: 'auto',
       records: [createQso('qso-1')],

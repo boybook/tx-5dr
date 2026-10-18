@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { QSORecord } from '@tx5dr/contracts';
 
@@ -17,6 +17,15 @@ function qso(id: string, overrides: Partial<QSORecord> = {}): QSORecord {
 }
 
 describe('LogbookRecordService', () => {
+  it('selects exact IDs without scanning the full collection and intersects filters', () => {
+    const service = new LogbookRecordService([qso('one'), qso('two', { mode: 'FT4' }), qso('three')]);
+    const all = (service as unknown as { records: QSORecord[] }).records;
+    const filter = vi.spyOn(all, 'filter');
+    expect(service.query({ ids: ['two', 'one', 'one', 'missing'], mode: 'FT8' }).map(record => record.id)).toEqual(['one']);
+    expect(service.count({ ids: ['one', 'one', 'missing'] })).toBe(1);
+    expect(service.query({ ids: [] })).toEqual([]);
+    expect(filter).not.toHaveBeenCalled();
+  });
   it('keeps physically duplicated records as independent runtime records', () => {
     const service = new LogbookRecordService([
       qso('external:hash:1'),

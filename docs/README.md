@@ -47,6 +47,8 @@ configuration.
 
 ## Research
 
+- [Automatic upload main-thread performance validation](research/auto-upload-performance.md)
+- [Wavelog sync protocol and interaction validation](research/wavelog-sync-validation.md)
 - [ICOM remote protocol and spectrum research](research/icom-remote-protocol.md)
 - [ICOM USB/ACC IF demodulation spike](research/icom-usb-if-demod-spike.md)
 - [FT8/FT4 contest framework coverage](research/ft8-contest-framework-coverage.md)

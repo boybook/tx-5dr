@@ -4,6 +4,7 @@ import type {
   LogbookBatchMutation,
   LogbookBatchResult,
   LogbookQsoSnapshot,
+  QSOQueryFilter,
 } from '@tx5dr/plugin-api';
 
 export type { LogbookBatchMutation, LogbookBatchResult } from '@tx5dr/plugin-api';
@@ -153,9 +154,10 @@ export async function reconcileLogbookBatch<T>(
   logbook: BatchLogbookAccess,
   planner: (snapshot: LogbookSnapshot) => ReconcilePlan<T>,
   maxReplans = 2,
+  filter?: QSOQueryFilter,
 ): Promise<ReconcileResult<T>> {
   for (let replanCount = 0; ; replanCount += 1) {
-    const snapshot = await logbook.readQsoSnapshot();
+    const snapshot = filter ? await logbook.readQsoSnapshot(filter) : await logbook.readQsoSnapshot();
     const plan = planner(snapshot);
     if (plan.mutations.length === 0) {
       return {

@@ -1,3 +1,4 @@
+import { finishWork, finishWorkInSlices } from './cooperative-work.js';
 import {
   ContestQsoEnvelopeSchema,
   type ContestQsoEnvelope,
@@ -379,14 +380,24 @@ export class LogbookRecordService {
   private indexValid = true;
 
   constructor(records: Iterable<Readonly<QSORecord>>) {
-    const collected: QSORecord[] = [];
+    this.records = [];
+    finishWork(this.build(records));
+  }
+
+  static async createInSlices(records: Iterable<Readonly<QSORecord>>): Promise<LogbookRecordService> {
+    const service = new LogbookRecordService([]);
+    await finishWorkInSlices(service.build(records));
+    return service;
+  }
+
+  private *build(records: Iterable<Readonly<QSORecord>>): Generator<void, void> {
     for (const input of records) {
       const record = enrichQsoWithDxcc(cloneRecord(input));
-      collected.push(record);
+      this.records.push(record);
       this.byId.set(record.id, record);
       addToIndex(this.index, record);
+      yield;
     }
-    this.records = collected;
   }
 
   /** Append one committed record without rebuilding the complete projection. */
@@ -465,7 +476,9 @@ export class LogbookRecordService {
   }
 
   query(options?: LogQueryOptions): QSORecord[] {
-    let records = this.records.filter(record => matchesFilters(record, options));
+    const candidates = options?.ids === undefined ? this.records
+      : [...new Set(options.ids)].flatMap(id => this.byId.get(id) ?? []);
+    let records = candidates.filter(record => matchesFilters(record, options));
     if (options) {
       const orderBy = options.orderBy ?? 'time';
       const direction = options.orderDirection === 'asc' ? 1 : -1;
@@ -484,7 +497,9 @@ export class LogbookRecordService {
 
   count(options?: LogQueryOptions): number {
     let count = 0;
-    for (const record of this.records) if (matchesFilters(record, options)) count += 1;
+    const candidates = options?.ids === undefined ? this.records
+      : [...new Set(options.ids)].flatMap(id => this.byId.get(id) ?? []);
+    for (const record of candidates) if (matchesFilters(record, options)) count += 1;
     return count;
   }
 
