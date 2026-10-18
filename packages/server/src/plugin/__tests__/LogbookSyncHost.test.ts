@@ -215,7 +215,8 @@ describe('LogbookSyncHost', () => {
     host.register('wavelog-sync', provider, createOwner());
     const records = Array.from({ length: 1_001 }, (_, index) => createQso(`cap-${index}`));
     await host.onQSOsComplete('BG5DRB', records);
-    const uploadedIds = () => provider.upload.mock.calls.flatMap(call => (call[1]?.records ?? []).map(record => record.id));
+    const uploadedIds = () => provider.upload.mock.calls
+      .flatMap(call => ((call[1]?.records ?? []) as QSORecord[]).map(record => record.id));
     for (let i = 0; i < 50 && uploadedIds().length < 1_000; i++) await flushAsyncWork();
     expect(uploadedIds()).toHaveLength(1_000);
     expect(uploadedIds()).not.toContain('cap-0');
