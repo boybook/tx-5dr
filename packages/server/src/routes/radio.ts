@@ -42,6 +42,8 @@ export {
   resolveFrequencyRadioMode,
 } from '../radio/frequencyRadioMode.js';
 
+import { formatFrequencyMHz } from '../utils/frequencyMHz.js';
+
 type SerialPortInfo = Awaited<ReturnType<typeof SerialPort.list>>[number];
 
 function buildDarwinCalloutPortFromDialin(port: SerialPortInfo): SerialPortInfo | null {
@@ -447,7 +449,7 @@ function emitRepeaterDuplexWarning(
     timeout: 5000,
     key: 'repeaterDuplexUnsupported',
     params: {
-      frequency: (frequency / 1_000_000).toFixed(3),
+      frequency: formatFrequencyMHz(frequency),
       reason: result.message || '',
     },
   });
@@ -519,7 +521,7 @@ function emitToneSquelchWarning(
     timeout: 5000,
     key: 'toneSquelchUnsupported',
     params: {
-      frequency: (frequency / 1_000_000).toFixed(3),
+      frequency: formatFrequencyMHz(frequency),
       reason: result.message || '',
     },
   });
@@ -818,7 +820,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
     // 检查电台是否已连接
     if (!radioConnected) {
       // 电台未连接时，只记录频率但不实际设置
-      logger.debug(`Radio not connected, recording frequency: ${(frequency / 1000000).toFixed(3)} MHz${effectiveRadioMode ? ` (${effectiveRadioMode})` : ''}`);
+      logger.debug(`Radio not connected, recording frequency: ${formatFrequencyMHz(frequency)} MHz${effectiveRadioMode ? ` (${effectiveRadioMode})` : ''}`);
 
       // 只有在频率真正改变时才广播
       if (isFrequencyChanged) {
@@ -828,7 +830,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
           logicalState: {
             mode: effectiveMode,
             band: band || '',
-            description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
+            description: description || `${formatFrequencyMHz(frequency)} MHz`,
             ...(effectiveRadioMode ? { radioMode: effectiveRadioMode } : {}),
           },
         });
@@ -915,7 +917,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
         logicalState: {
           mode: effectiveMode,
           band: band || '',
-          description: description || `${(frequency / 1000000).toFixed(3)} MHz`,
+          description: description || `${formatFrequencyMHz(frequency)} MHz`,
           ...(effectiveRadioMode ? { radioMode: effectiveRadioMode } : {}),
         },
       });

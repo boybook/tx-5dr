@@ -21,6 +21,7 @@ import type { EngineLifecycle } from './EngineLifecycle.js';
 import type { PhysicalTxCoordinator } from '../transmission/PhysicalTxCoordinator.js';
 import { createLogger } from '../utils/logger.js';
 import { buildRadioStatusPayload } from '../radio/buildRadioStatusPayload.js';
+import { formatFrequencyMHz } from '../utils/frequencyMHz.js';
 
 const logger = createLogger('RadioBridge');
 
@@ -173,7 +174,7 @@ export class RadioBridge {
       const revision = typeof metadata.revision === 'number'
         ? metadata.revision
         : this.latestFrequencyRevision + 1;
-      logger.debug(`Radio frequency changed: ${(frequency / 1000000).toFixed(3)} MHz`);
+      logger.debug(`Radio frequency changed: ${formatFrequencyMHz(frequency)} MHz`);
 
       this.frequencyEventTail = this.frequencyEventTail
         .catch(() => undefined)
@@ -320,7 +321,7 @@ export class RadioBridge {
         mode: logicalState?.mode ?? preset.mode,
         band: logicalState?.band ?? preset.band,
         radioMode: logicalState?.radioMode ?? preset.radioMode,
-        description: logicalState?.description ?? (preset.description || `${(preset.frequency / 1000000).toFixed(3)} MHz`),
+        description: logicalState?.description ?? (preset.description || `${formatFrequencyMHz(preset.frequency)} MHz`),
         repeaterShift: supportsFmOptions ? preset.repeaterShift : undefined,
         repeaterOffsetHz: supportsFmOptions ? preset.repeaterOffsetHz : undefined,
         toneMode: supportsFmOptions ? preset.toneMode : undefined,
@@ -343,7 +344,7 @@ export class RadioBridge {
       mode: logicalState?.mode ?? (isVoiceMode ? 'VOICE' : isCWMode ? 'CW' : digitalModeName),
       band: logicalState?.band ?? band,
       radioMode: logicalState?.radioMode ?? (isVoiceMode ? lastVoiceFrequency?.radioMode : isCWMode ? (lastCWFrequency?.radioMode || 'CW') : undefined),
-      description: logicalState?.description ?? `${(frequency / 1000000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`,
+      description: logicalState?.description ?? `${formatFrequencyMHz(frequency)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`,
       repeaterShift: supportsFmOptions ? lastVoiceFrequency?.repeaterShift : undefined,
       repeaterOffsetHz: supportsFmOptions ? lastVoiceFrequency?.repeaterOffsetHz : undefined,
       toneMode: supportsFmOptions ? lastVoiceFrequency?.toneMode : undefined,
