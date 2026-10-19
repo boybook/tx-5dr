@@ -257,12 +257,13 @@ export const DigitalModeRadioModePreferenceSchema = z.enum(['none', 'usb', 'usb-
 /**
  * PTT (Push-to-Talk) 方法Schema
  *
+ * - none: 不使用 TX-5DR 的 PTT 控制，由外部软件或电台自身处理
  * - cat: 通过 CAT 命令控制 PTT（Hamlib RIG 类型，推荐）
  * - vox: 不主动控制 PTT，电台通过检测音频信号自动发射（适用于 SignaLink USB 等）
  * - dtr: 通过 RS-232 DTR 引脚控制 PTT（适用于古老电台或外部功放）
  * - rts: 通过 RS-232 RTS 引脚控制 PTT（适用于古老电台或外部功放）
  */
-export const PttMethodSchema = z.enum(['cat', 'vox', 'dtr', 'rts']);
+export const PttMethodSchema = z.enum(['none', 'cat', 'vox', 'dtr', 'rts']);
 
 /**
  * 虚拟频差（Virtual Frequency Offset / "Fake It" Split）配置Schema
@@ -315,14 +316,14 @@ export const HamlibConfigSchema = z.object({
   fakeFrequency: FakeFrequencyConfigSchema.optional(),
 
   // PTT 方法（默认 'cat'，即 Hamlib RIG 类型）
-  // 仅对 network 和 serial 连接类型有效，icom-wlan 固定使用 CI-V PTT
+  // none/vox 不主动拉 PTT；dtr/rts 可在无 CAT 的 none 类型下使用独立串口。
   pttMethod: PttMethodSchema.optional(),
 
   // PTT 独立串口路径（仅当 pttMethod 为 dtr/rts 时有效）
-  // 留空则复用 CAT 同一串口
+  // none 类型必须配置；有 CAT 串口时留空则复用同一串口。
   pttPort: z.string().optional(),
 
-  // CW 键控串口路径（用于 DTR/RTS 引脚驱动电台 CW KEY 输入）
+  // CW 键控串口路径（DTR/RTS 引脚驱动电台 CW KEY 输入，可独立于 CAT）
   cwKeyPort: z.string().optional(),
 
   // CW 键控引脚类型（dtr 或 rts）

@@ -141,6 +141,8 @@
       "UNKNOWN_ERROR": "接続テストに失敗しました。構成を確認してください"
     },
     "pttMethod": "PTT方式",
+    "pttNone": "なし",
+    "pttNoneDesc": "TX-5DR の PTT 制御を使用しません。外部ソフトウェアまたは無線機が送信状態を管理します。",
     "pttCat": "CATコマンド(推奨)",
     "pttVox": "VOXボイスコントロール",
     "pttDtrDisabled": "DTR ピン (シリアル ポート接続が必要)",
@@ -269,7 +271,7 @@
     "tipRemoteNetwork": "リモートネットワーク: 100-200ms",
     "tipIcomAudio": "音声は ICOM WLAN によって直接提供されるため、個別の音声デバイスを設定する必要がありません。",
     "noneTitle": "無線機制御なし",
-    "noneDesc": "無線制御機能は使用せず、FT8 デコードのみを実行します。",
+    "noneDesc": "CAT 制御は使用しませんが、独立したシリアル PTT または CW DTR/RTS キーイングは使用できます。",
     "resetToZero": "0にリセットする",
     "tipNoneMode": "通常、局なしモードでは補償は必要ありません",
     "pageTitle": "無線機器の設定",

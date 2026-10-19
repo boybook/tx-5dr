@@ -141,6 +141,8 @@
       "UNKNOWN_ERROR": "Connection test failed, please check configuration"
     },
     "pttMethod": "PTT Method",
+    "pttNone": "None",
+    "pttNoneDesc": "Do not use TX-5DR PTT control. External software or the radio manages transmit state.",
     "pttCat": "CAT Command (Recommended)",
     "pttVox": "VOX",
     "pttDtrDisabled": "DTR Pin (serial required)",
@@ -271,7 +273,7 @@
     "tipRemoteNetwork": "Remote network: 100-200ms",
     "tipIcomAudio": "Audio is provided directly by ICOM WLAN, no separate audio device needed",
     "noneTitle": "No Radio Control",
-    "noneDesc": "No radio control, FT8 decode only",
+    "noneDesc": "No CAT control; standalone serial PTT or CW DTR/RTS keying remains available.",
     "resetToZero": "Reset to 0",
     "tipNoneMode": "No-radio mode usually needs no compensation",
     "pageTitle": "Radio Device Settings",
