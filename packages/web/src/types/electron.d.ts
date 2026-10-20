@@ -1,5 +1,5 @@
 import type { DesktopHttpsMode, DesktopHttpsStatus } from '@tx5dr/contracts';
-import type { ShortcutConfig, ShortcutActionId } from '../utils/shortcutPreferences';
+import type { ShortcutConfig, ShortcutActionId, ShortcutToggles } from '../utils/shortcutPreferences';
 import type { VoicePttShortcutPreset } from '../utils/voicePttShortcutPreferences';
 
 export type DesktopUpdateSource = 'oss' | 'github';
@@ -212,6 +212,8 @@ interface ElectronAPI {
   shortcuts?: {
     getConfig(): Promise<ShortcutConfig>;
     setConfig(config: ShortcutConfig): Promise<ShortcutRegistrationStatus>;
+    getToggles(): Promise<ShortcutToggles>;
+    setToggles(toggles: ShortcutToggles): Promise<ShortcutRegistrationStatus>;
     register(config?: ShortcutConfig): Promise<ShortcutRegistrationStatus>;
     startRecording(actionId: ShortcutActionId): Promise<void>;
     stopRecording(): Promise<void>;

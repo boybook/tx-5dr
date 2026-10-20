@@ -305,6 +305,7 @@ interface ElectronSettings {
   desktopHttps?: PersistentDesktopHttpsConfig;
   remoteAccessPreset?: 'local' | 'lan' | 'public';
   shortcuts?: ShortcutConfig;
+  shortcutToggles?: ShortcutToggles;
 }
 
 const SHORTCUT_ACTION_IDS = [
@@ -356,11 +357,35 @@ interface ShortcutRecordingCancelledPayload {
   actionId: ShortcutActionId;
 }
 
+interface ShortcutToggles {
+  enabled: boolean;
+  globalEnabled: boolean;
+}
+
+const DEFAULT_SHORTCUT_TOGGLES: ShortcutToggles = { enabled: true, globalEnabled: true };
+
+function createDefaultShortcutToggles(): ShortcutToggles {
+  return { ...DEFAULT_SHORTCUT_TOGGLES };
+}
+
+function normalizeShortcutToggles(value: unknown): ShortcutToggles {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return createDefaultShortcutToggles();
+  }
+
+  const raw = value as Partial<ShortcutToggles>;
+  return {
+    enabled: raw.enabled !== false,
+    globalEnabled: raw.globalEnabled !== false,
+  };
+}
+
 const DEFAULT_ELECTRON_SETTINGS: ElectronSettings = {
   closeBehavior: 'ask',
   desktopHttps: { ...DEFAULT_DESKTOP_HTTPS_CONFIG, enabled: false },
   remoteAccessPreset: 'local',
   shortcuts: createDefaultShortcutConfig(),
+  shortcutToggles: createDefaultShortcutToggles(),
 };
 
 function getElectronSettingsPath(): string {
@@ -753,7 +778,8 @@ function stopShortcutRecording(options: { restoreGlobalShortcuts?: boolean } = {
   shortcutRecordingActionId = null;
 
   if (options.restoreGlobalShortcuts) {
-    applyGlobalShortcutConfig(loadElectronSettings().shortcuts);
+    const settings = loadElectronSettings();
+    applyShortcutSettings(settings.shortcuts, settings.shortcutToggles);
   }
 }
 
@@ -763,6 +789,7 @@ function loadElectronSettings(): ElectronSettings {
     () => ({
       ...DEFAULT_ELECTRON_SETTINGS,
       shortcuts: createDefaultShortcutConfig(),
+      shortcutToggles: createDefaultShortcutToggles(),
     }),
     (parsed) => {
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -778,18 +805,21 @@ function loadElectronSettings(): ElectronSettings {
           // LAN-exposed gateway defaults. Preserve that effective behavior.
           ?? 'lan',
         shortcuts: normalizeShortcutConfig(settings.shortcuts),
+        shortcutToggles: normalizeShortcutToggles(settings.shortcutToggles),
       };
     },
   );
 }
 
-function saveElectronSettings(settings: ElectronSettings): void {
+function saveElectronSettings(settings: ElectronSettings): boolean {
   try {
     const dir = getAppConfigDir();
     fs.mkdirSync(dir, { recursive: true });
     safeWriteFileSync(getElectronSettingsPath(), `${JSON.stringify(settings, null, 2)}\n`, { backups: 3, mode: 0o600 });
+    return true;
   } catch (err) {
     logger.error('failed to save electron settings', err);
+    return false;
   }
 }
 
@@ -806,8 +836,16 @@ function unregisterGlobalShortcuts(): void {
   registeredShortcutAccelerators.clear();
 }
 
-function applyGlobalShortcutConfig(configInput: unknown): ShortcutRegistrationStatus {
+function getShortcutToggles(): ShortcutToggles {
+  return loadElectronSettings().shortcutToggles ?? createDefaultShortcutToggles();
+}
+
+function applyShortcutSettings(
+  configInput: unknown,
+  togglesInput: unknown,
+): ShortcutRegistrationStatus {
   const config = normalizeShortcutConfig(configInput);
+  const toggles = normalizeShortcutToggles(togglesInput);
   const status: ShortcutRegistrationStatus = {
     config,
     registered: [],
@@ -815,6 +853,11 @@ function applyGlobalShortcutConfig(configInput: unknown): ShortcutRegistrationSt
   };
 
   unregisterGlobalShortcuts();
+
+  if (!toggles.enabled || !toggles.globalEnabled) {
+    logger.info('global shortcuts are switched off in shortcut settings', toggles);
+    return status;
+  }
 
   for (const actionId of SHORTCUT_ACTION_IDS) {
     const accelerator = shortcutBindingToAccelerator(config[actionId]);
@@ -3491,7 +3534,8 @@ const startApp = async () => {
   createDockMenu();
   createApplicationMenu();
   setupIpcHandlers();
-  applyGlobalShortcutConfig(loadElectronSettings().shortcuts);
+  const startupSettings = loadElectronSettings();
+  applyShortcutSettings(startupSettings.shortcuts, startupSettings.shortcutToggles);
 
   const vcRuntimeOk = await ensureWindowsVCRuntimeInstalled();
   if (!vcRuntimeOk) return;
@@ -4208,22 +4252,39 @@ function setupIpcHandlers() {
     return loadElectronSettings().shortcuts ?? createDefaultShortcutConfig();
   });
 
+  ipcMain.handle('shortcuts:getToggles', () => {
+    return getShortcutToggles();
+  });
+
+  ipcMain.handle('shortcuts:setToggles', (_event, toggles: unknown) => {
+    const settings = loadElectronSettings();
+    const shortcutToggles = normalizeShortcutToggles(toggles);
+    if (!saveElectronSettings({ ...settings, shortcutToggles })) {
+      throw new Error('failed_to_persist_shortcut_toggles');
+    }
+    return applyShortcutSettings(settings.shortcuts, shortcutToggles);
+  });
+
   ipcMain.handle('shortcuts:setConfig', (_event, config: unknown) => {
     const settings = loadElectronSettings();
     const shortcuts = normalizeShortcutConfig(config);
-    saveElectronSettings({ ...settings, shortcuts });
-    return applyGlobalShortcutConfig(shortcuts);
+    if (!saveElectronSettings({ ...settings, shortcuts })) {
+      throw new Error('failed_to_persist_shortcut_config');
+    }
+    return applyShortcutSettings(shortcuts, settings.shortcutToggles);
   });
 
   ipcMain.handle('shortcuts:register', (_event, config?: unknown) => {
-    if (config !== undefined) {
-      const settings = loadElectronSettings();
-      const shortcuts = normalizeShortcutConfig(config);
-      saveElectronSettings({ ...settings, shortcuts });
-      return applyGlobalShortcutConfig(shortcuts);
+    const settings = loadElectronSettings();
+    if (config === undefined) {
+      return applyShortcutSettings(settings.shortcuts, settings.shortcutToggles);
     }
 
-    return applyGlobalShortcutConfig(loadElectronSettings().shortcuts);
+    const shortcuts = normalizeShortcutConfig(config);
+    if (!saveElectronSettings({ ...settings, shortcuts })) {
+      throw new Error('failed_to_persist_shortcut_config');
+    }
+    return applyShortcutSettings(shortcuts, settings.shortcutToggles);
   });
 
   ipcMain.handle('shortcuts:startRecording', (event, actionId: unknown) => {

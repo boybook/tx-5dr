@@ -1,15 +1,23 @@
+// @vitest-environment jsdom
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import {
   createShortcutBindingFromKeyboardEvent,
   DEFAULT_SHORTCUT_CONFIG,
+  DEFAULT_SHORTCUT_TOGGLES,
   findShortcutConflicts,
   getShortcutConfig,
+  getShortcutToggles,
   isModifierOnlyShortcutEvent,
   isTypingShortcutTarget,
   matchesShortcutEvent,
   normalizeShortcutConfig,
+  normalizeShortcutToggles,
   resetShortcutConfig,
+  resolveShortcutTransport,
   saveShortcutConfig,
+  saveShortcutToggles,
+  shortcutTogglesEqual,
+  SHORTCUT_TOGGLES_CHANGED_EVENT,
 } from '../shortcutPreferences';
 
 function keyEvent(init: Partial<KeyboardEvent>): KeyboardEvent {
@@ -121,5 +129,45 @@ describe('shortcutPreferences utils', () => {
     expect(isTypingShortcutTarget({ tagName: 'INPUT', isContentEditable: false, closest: () => null } as unknown as EventTarget)).toBe(true);
     expect(isTypingShortcutTarget({ tagName: 'DIV', isContentEditable: true, closest: () => null } as unknown as EventTarget)).toBe(true);
     expect(isTypingShortcutTarget({ tagName: 'BUTTON', isContentEditable: false, closest: () => null } as unknown as EventTarget)).toBe(false);
+  });
+
+  it('defaults shortcut toggles to enabled and keeps partial values', () => {
+    expect(DEFAULT_SHORTCUT_TOGGLES).toEqual({ enabled: true, globalEnabled: true });
+    expect(getShortcutToggles()).toEqual({ enabled: true, globalEnabled: true });
+    expect(normalizeShortcutToggles(undefined)).toEqual({ enabled: true, globalEnabled: true });
+    expect(normalizeShortcutToggles({ enabled: false })).toEqual({ enabled: false, globalEnabled: true });
+    expect(normalizeShortcutToggles({ globalEnabled: false })).toEqual({ enabled: true, globalEnabled: false });
+    expect(normalizeShortcutToggles({ enabled: 'no', globalEnabled: 0 })).toEqual({ enabled: true, globalEnabled: true });
+  });
+
+  it('saves shortcut toggles and announces the change', () => {
+    const handler = vi.fn();
+    window.addEventListener(SHORTCUT_TOGGLES_CHANGED_EVENT, handler);
+
+    expect(saveShortcutToggles({ enabled: false, globalEnabled: true })).toEqual({ enabled: false, globalEnabled: true });
+    expect(getShortcutToggles()).toEqual({ enabled: false, globalEnabled: true });
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    window.removeEventListener(SHORTCUT_TOGGLES_CHANGED_EVENT, handler);
+  });
+
+  it('falls back to default toggles when storage is corrupt', () => {
+    localStorage.setItem('tx5dr_shortcut_toggles_v1', '{bad json');
+    expect(getShortcutToggles()).toEqual({ enabled: true, globalEnabled: true });
+  });
+
+  it('compares shortcut toggles by value', () => {
+    expect(shortcutTogglesEqual({ enabled: true, globalEnabled: true }, { enabled: true, globalEnabled: true })).toBe(true);
+    expect(shortcutTogglesEqual({ enabled: true, globalEnabled: true }, { enabled: false, globalEnabled: true })).toBe(false);
+    expect(shortcutTogglesEqual({ enabled: true, globalEnabled: true }, { enabled: true, globalEnabled: false })).toBe(false);
+  });
+
+  it('resolves the shortcut transport from toggles and runtime support', () => {
+    expect(resolveShortcutTransport({ enabled: true, globalEnabled: true }, true)).toBe('electron-global');
+    expect(resolveShortcutTransport({ enabled: true, globalEnabled: true }, false)).toBe('window');
+    expect(resolveShortcutTransport({ enabled: true, globalEnabled: false }, true)).toBe('window');
+    expect(resolveShortcutTransport({ enabled: true, globalEnabled: false }, false)).toBe('window');
+    expect(resolveShortcutTransport({ enabled: false, globalEnabled: true }, true)).toBe('disabled');
+    expect(resolveShortcutTransport({ enabled: false, globalEnabled: false }, false)).toBe('disabled');
   });
 });

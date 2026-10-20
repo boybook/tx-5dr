@@ -55,6 +55,11 @@ interface ShortcutRecordingCancelledPayload {
   actionId: ShortcutActionId;
 }
 
+interface ShortcutToggles {
+  enabled: boolean;
+  globalEnabled: boolean;
+}
+
 type VoicePttShortcutPreset =
   | 'Backquote'
   | 'Space'
@@ -439,6 +444,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   shortcuts: {
     getConfig: (): Promise<ShortcutConfig> => ipcRenderer.invoke('shortcuts:getConfig'),
     setConfig: (config: ShortcutConfig): Promise<ShortcutRegistrationStatus> => ipcRenderer.invoke('shortcuts:setConfig', config),
+    getToggles: (): Promise<ShortcutToggles> => ipcRenderer.invoke('shortcuts:getToggles'),
+    setToggles: (toggles: ShortcutToggles): Promise<ShortcutRegistrationStatus> => ipcRenderer.invoke('shortcuts:setToggles', toggles),
     register: (config?: ShortcutConfig): Promise<ShortcutRegistrationStatus> => ipcRenderer.invoke('shortcuts:register', config),
     startRecording: (actionId: ShortcutActionId): Promise<void> => ipcRenderer.invoke('shortcuts:startRecording', actionId),
     stopRecording: (): Promise<void> => ipcRenderer.invoke('shortcuts:stopRecording'),
@@ -583,6 +590,8 @@ declare global {
       shortcuts: {
         getConfig(): Promise<ShortcutConfig>;
         setConfig(config: ShortcutConfig): Promise<ShortcutRegistrationStatus>;
+        getToggles(): Promise<ShortcutToggles>;
+        setToggles(toggles: ShortcutToggles): Promise<ShortcutRegistrationStatus>;
         register(config?: ShortcutConfig): Promise<ShortcutRegistrationStatus>;
         startRecording(actionId: ShortcutActionId): Promise<void>;
         stopRecording(): Promise<void>;
