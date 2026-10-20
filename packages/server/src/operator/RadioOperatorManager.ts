@@ -59,6 +59,11 @@ type QueuedTransmitRequest = TransmitRequest & {
 const DEFAULT_MAX_SAME_TRANSMISSION_COUNT = 20;
 const SAME_TRANSMISSION_GUARD_RESET_REASON = 'same transmission guard limit';
 const DISTINCT_QSO_BATCH_MAX_REPLANS = 2;
+/**
+ * Upper bound for strategy-provided QSO history anchors. Keeps a stale or
+ * malformed anchor from scanning the whole retained slot cache.
+ */
+const MAX_QSO_HISTORY_LOOKBACK_MS = 30 * 60 * 1000;
 const AP_DECODE_QSO_PROGRESS: Record<string, number | undefined> = {
   TX3: 3,
   TX4: 4,
@@ -1214,6 +1219,7 @@ export class RadioOperatorManager {
       qsoLifecycleEpoch: input.qsoLifecycleEpoch,
       qsoRuntimeGeneration: input.qsoRuntimeGeneration,
       streamId: input.streamId,
+      startedAt: input.startedAt,
       persistencePolicy: input.persistencePolicy,
       destination: input.destination,
       sourcePluginName: input.sourcePluginName,
@@ -1251,7 +1257,7 @@ export class RadioOperatorManager {
       const frequency = originalFreq < 1_000_000 && base > 1_000_000 ? base + originalFreq : originalFreq;
       return this.completeAutomaticQSORecord(data.operatorId, {
         ...data.qsoRecord, frequency, myCallsign: data.qsoRecord.myCallsign || data.stationCallsign,
-      }, data.enrichment);
+      }, data.enrichment, data.startedAt);
     });
     const mergeCandidate = (data.persistencePolicy ?? 'merge-nearby') === 'merge-nearby'
       ? await this.findMergeCandidate(logBook.provider, completedQSO) : null;
@@ -2905,19 +2911,34 @@ export class RadioOperatorManager {
     this.targetReservations.releaseOperator(operatorId, epoch);
   }
 
+  /**
+   * Anchor for message-history reconstruction. The ADIF `startTime` is the
+   * moment the contact was established, so using it would drop everything that
+   * happened during a delayed exchange. Strategies that know when the attempt
+   * began pass `startedAt`; others keep the previous one-slot lookback.
+   */
+  private resolveQsoHistoryAnchor(qsoRecord: QSORecord, startedAt?: number): number {
+    if (startedAt === undefined || !Number.isFinite(startedAt) || startedAt <= 0) {
+      return qsoRecord.startTime;
+    }
+    const earliestAccepted = qsoRecord.startTime - MAX_QSO_HISTORY_LOOKBACK_MS;
+    return Math.min(qsoRecord.startTime, Math.max(startedAt, earliestAccepted));
+  }
+
   private async completeAutomaticQSORecord(
     operatorId: string, qsoRecord: QSORecord,
     fallback?: QsoCompletionRequest['enrichment'],
+    startedAt?: number,
   ): Promise<QSORecord> {
     const enrichmentStartedAt = performance.now();
     const memoryBefore = process.memoryUsage();
     const myCallsign = (qsoRecord.myCallsign || this.logManager.getOperatorCallsign(operatorId) || '').toUpperCase();
     const targetCallsign = qsoRecord.callsign.toUpperCase();
     const slotMs = this.getSlotDurationForMode(qsoRecord.mode);
-    const historyStartMs = Math.max(0, qsoRecord.startTime - slotMs);
+    const historyStartMs = Math.max(0, this.resolveQsoHistoryAnchor(qsoRecord, startedAt) - slotMs);
     const historyEndMs = qsoRecord.endTime ?? qsoRecord.startTime;
     logger.info(`automatic QSO record enrichment started operatorId=${operatorId} startMs=${historyStartMs} endMs=${historyEndMs} heapUsedBytes=${memoryBefore.heapUsed} rssBytes=${memoryBefore.rss}`);
-    const historySlotPacks = await this.collectRelevantSlotPacks(historyStartMs, historyEndMs);
+    const historySlotPacks = await this.collectRelevantSlotPacks(historyStartMs, historyEndMs, slotMs);
     const historyCollectedAt = performance.now();
 
     const grid = qsoRecord.grid
@@ -2976,7 +2997,21 @@ export class RadioOperatorManager {
     };
   }
 
-  private async collectRelevantSlotPacks(startMs: number, endMs: number): Promise<SlotPack[]> {
+  /**
+   * Point from which the in-memory slot cache is complete. Test doubles may
+   * omit it; an unknown origin is treated as 0 so the cache stays authoritative.
+   */
+  private getSlotCacheOriginMs(): number {
+    const slotPackManager = this.slotPackManager as SlotPackManager & {
+      getRetainedSinceMs?: () => number;
+    };
+    const getRetainedSinceMs = slotPackManager.getRetainedSinceMs;
+    return typeof getRetainedSinceMs === 'function'
+      ? getRetainedSinceMs.call(slotPackManager)
+      : 0;
+  }
+
+  private async collectRelevantSlotPacks(startMs: number, endMs: number, slotMs: number): Promise<SlotPack[]> {
     const collectionStartedAt = performance.now();
     const memoryBefore = process.memoryUsage();
     logger.info(`automatic QSO history collection started startMs=${startMs} endMs=${endMs} heapUsedBytes=${memoryBefore.heapUsed} rssBytes=${memoryBefore.rss}`);
@@ -2991,11 +3026,16 @@ export class RadioOperatorManager {
 
     // Recent QSO history is already retained in memory. Avoid reading and
     // parsing the entire daily JSONL file while the TX timing path is active.
-    // Fall back to persistence only when the active cache cannot cover both
-    // ends of the requested history window (for example after a restart or
-    // an explicit in-memory cache clear).
-    const cacheCoversWindow = activeSlotPacks.some((slotPack) => slotPack.startMs <= startMs)
-      && activeSlotPacks.some((slotPack) => slotPack.endMs >= endMs);
+    // Fall back to persistence only when the attempt itself predates the cache
+    // (a previous process or a cleared frequency). The window starts one slot
+    // before the attempt anchor for safety, and the anchor slot can begin up to
+    // one slot before the cache origin when the process starts mid-slot; that
+    // margin alone must not trigger a full-day read.
+    const cacheOriginMs = this.getSlotCacheOriginMs();
+    const anchorMs = startMs + slotMs;
+    const cacheCoversWindow = (activeSlotPacks.some((slotPack) => slotPack.startMs <= startMs)
+      && activeSlotPacks.some((slotPack) => slotPack.endMs >= endMs))
+      || anchorMs >= cacheOriginMs - slotMs;
     if (cacheCoversWindow) {
       const result = Array.from(merged.values()).sort((left, right) => {
         if (left.startMs !== right.startMs) return left.startMs - right.startMs;
@@ -3013,7 +3053,7 @@ export class RadioOperatorManager {
 
     const dateStrings = this.getDateStringsBetween(startMs, endMs);
     logger.warn(
-      `automatic QSO history cache incomplete startMs=${startMs} endMs=${endMs} activeSlotPackCount=${activeSlotPacks.length} dates=${dateStrings.join(',') || 'none'}`,
+      `automatic QSO history cache incomplete startMs=${startMs} endMs=${endMs} cacheOriginMs=${cacheOriginMs} activeSlotPackCount=${activeSlotPacks.length} dates=${dateStrings.join(',') || 'none'}`,
     );
     for (const dateStr of dateStrings) {
       const readStartedAt = performance.now();
@@ -3072,6 +3112,11 @@ export class RadioOperatorManager {
   ): { messages: string[]; reportSent?: string } {
     const messages: string[] = [];
     let reportSent: string | undefined;
+    // Every frame related to this QSO mentions the target or the local
+    // callsign. Skipping the rest before parsing keeps the wider history
+    // window cheap on a busy band.
+    const myCallsign = options.myCallsign.toUpperCase();
+    const targetCallsign = options.targetCallsign.toUpperCase();
 
     for (const slotPack of slotPacks) {
       if (slotPack.startMs > options.endMs || slotPack.endMs < options.startMs) {
@@ -3079,6 +3124,10 @@ export class RadioOperatorManager {
       }
 
       for (const frame of slotPack.frames) {
+        const upperMessage = frame.message.toUpperCase();
+        if (!upperMessage.includes(targetCallsign) && !upperMessage.includes(myCallsign)) {
+          continue;
+        }
         if (!this.isFrameRelatedToQSO(frame, options)) {
           continue;
         }

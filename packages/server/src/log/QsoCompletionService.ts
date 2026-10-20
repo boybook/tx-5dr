@@ -19,6 +19,8 @@ export interface QsoCompletionRequest {
   qsoLifecycleEpoch?: number;
   qsoRuntimeGeneration?: number;
   streamId?: string;
+  /** Attempt start from the strategy; anchors message-history reconstruction. */
+  startedAt?: number;
   persistencePolicy?: QSOPersistencePolicy;
   destination?: StrategyQSOCompletionEffect['destination'];
   sourcePluginName?: string;

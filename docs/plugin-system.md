@@ -603,8 +603,13 @@ return {
 qsoCompletion: {
   record,
   lifecycleEpoch,
+  startedAt, // 可选：本次呼叫尝试开始时间（Unix ms）
 }
 ```
+
+`record.startTime` 是 ADIF 的建联时刻，不是尝试开始时刻。`startedAt` 让 Host 按
+整段呼叫尝试重建 `messageHistory`，避免对方延迟回复时只保留完成时隙附近的报文；
+省略时回退到 `record.startTime`。Host 对过旧的锚点做上限裁剪。
 
 Host 完成持久化后，可通过可选的 `settleQSOCompletion({ lifecycleEpoch, recordId,
 status })` 通知 runtime。旧 lifecycle 的结果不会成为新 QSO 的 RF 决策依据。

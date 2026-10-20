@@ -3493,6 +3493,54 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
+  it('logs the report sent at TX2 when skipTx1 is enabled and the acknowledgement decodes weaker', async () => {
+    let recorded: RecordQSORequest | undefined;
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG5JKZ',
+      myGrid: 'PM01',
+      autoReplyToCQ: true,
+      skipTx1: true,
+      recordQSOHandler: (request) => {
+        recorded = request;
+        request.resolve?.(request.qsoRecord);
+      },
+    });
+
+    const sourceSlot = createSlotInfo(45_000);
+    await (pluginManager as any).handleSlotStart(sourceSlot, createSlotPack(sourceSlot, [{
+      message: 'CQ VE6TL DO21',
+      snr: -12,
+      freq: 2722,
+    }]));
+
+    // skipTx1 answers with the report measured from the CQ, not with a grid.
+    const reportTransmission = getCurrentTransmission(pluginManager, operator.config.id);
+    expect(reportTransmission).toBe('VE6TL BG5JKZ -12');
+    // RadioOperatorManager reports terminal physical success before the next slot.
+    pluginManager.notifyTransmissionQueued(operator.config.id, reportTransmission!);
+
+    const acknowledgementSlot = createSlotInfo(90_000);
+    await (pluginManager as any).handleSlotStart(acknowledgementSlot, createSlotPack(acknowledgementSlot, [{
+      message: 'BG5JKZ VE6TL R-12',
+      snr: -14,
+      freq: 2723,
+    }]));
+
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX4');
+    await vi.waitFor(() => expect(recorded).toBeDefined());
+    expect(recorded?.qsoRecord).toMatchObject({
+      callsign: 'VE6TL',
+      reportSent: '-12',
+      reportReceived: '-12',
+    });
+    // The completion effect carries the attempt start so the Host can rebuild
+    // the whole contact history rather than the completion slot only.
+    expect(recorded?.startedAt).toEqual(expect.any(Number));
+    expect(recorded!.startedAt!).toBeLessThanOrEqual(recorded!.qsoRecord.startTime);
+
+    await pluginManager.shutdown();
+  });
+
   it('auto-replies to CQ when the callsign is only worked on another band by default', async () => {
     const hasWorkedSpy = vi.fn((_callsign: string, options?: { anyBand?: boolean }) => options?.anyBand === true);
     const { operator, pluginManager } = await createRuntimeHarness({

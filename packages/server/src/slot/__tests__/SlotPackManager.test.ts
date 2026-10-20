@@ -538,3 +538,20 @@ describe('SlotPackManager event routing', () => {
     ]);
   });
 });
+
+describe('SlotPackManager retained cache origin', () => {
+  it('tracks the point from which the in-memory cache is complete', () => {
+    const createdAt = Date.now();
+    const manager = new SlotPackManager({ persistence: createPersistenceMock() });
+    const retainedSince = manager.getRetainedSinceMs();
+    expect(retainedSince).toBeGreaterThanOrEqual(createdAt);
+
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(retainedSince + 60_000);
+    try {
+      manager.clearInMemory();
+      expect(manager.getRetainedSinceMs()).toBe(retainedSince + 60_000);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+});

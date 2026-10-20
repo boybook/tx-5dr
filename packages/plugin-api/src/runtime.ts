@@ -526,6 +526,13 @@ export interface StrategyQSOCompletionEffect {
   record: QSORecord;
   /** Stable within one strategy runtime generation; distinct from RF decision epochs. */
   lifecycleEpoch: number;
+  /**
+   * Unix epoch milliseconds when this contact attempt began (its first call
+   * cycle). The Host bounds message-history reconstruction to this attempt so
+   * delays between the first call and the contact are still part of the log.
+   * Omitted effects fall back to the record's `startTime`.
+   */
+  startedAt?: number;
   /** Lane that produced the completion; omitted by legacy single-lane strategies. */
   streamId?: string;
   /** Host persistence behavior requested by the strategy. */

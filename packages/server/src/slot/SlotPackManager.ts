@@ -54,6 +54,8 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
   private decodeWindowCompletions = new Map<string, DecodeWindowCompletionState>();
   /** 上一次 clearInMemory() 的时间戳，用于过滤过时的解码结果 */
   private lastClearTimestamp = 0;
+  /** 本实例开始接收时隙包的时间，早于它的帧只可能存在于持久化日志中 */
+  private readonly createdAt = Date.now();
 
   constructor(options: SlotPackManagerOptions = {}) {
     super();
@@ -70,6 +72,16 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     this.decodeWindowCompletions.clear();
     this.lastSlotPack = null;
     this.lastClearTimestamp = Date.now();
+  }
+
+  /**
+   * Earliest timestamp for which this in-memory cache is complete. Frames from
+   * before it (a previous process or a cleared frequency) may still exist only
+   * in the persisted daily log, so callers must not treat the cache as a full
+   * history before this point.
+   */
+  getRetainedSinceMs(): number {
+    return Math.max(this.createdAt, this.lastClearTimestamp);
   }
 
   /**
