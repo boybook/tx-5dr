@@ -31,16 +31,21 @@ function actionIdToSlot(actionId: ShortcutActionId): OperatorRuntimeSlot | null 
   return match ? (`TX${match[1]}` as OperatorRuntimeSlot) : null;
 }
 
-async function loadInitialShortcutConfig(): Promise<ShortcutConfig> {
-  if (window.electronAPI?.shortcuts) {
-    try {
-      return normalizeShortcutConfig(await window.electronAPI.shortcuts.getConfig());
-    } catch (error) {
-      logger.warn('Failed to load Electron shortcut config, falling back to browser config', error);
-    }
+async function loadInitialShortcutConfig(): Promise<ShortcutConfig | null> {
+  const electronShortcuts = window.electronAPI?.shortcuts;
+  if (!electronShortcuts) {
+    return getShortcutConfig();
   }
 
-  return getShortcutConfig();
+  try {
+    return normalizeShortcutConfig(await electronShortcuts.getConfig());
+  } catch (error) {
+    // The desktop config is the only binding set that matches Settings. Falling
+    // back to the browser store would let window-scoped dispatch fire defaults
+    // the user never configured here, so keep dispatch off until a load succeeds.
+    logger.error('Failed to load Electron shortcut config; window shortcuts stay off', error);
+    return null;
+  }
 }
 
 async function loadInitialShortcutToggles(): Promise<ShortcutToggles> {
@@ -64,10 +69,15 @@ export function GlobalShortcutBridge() {
   const canControlRadio = useCan('execute', 'RadioControl');
   const tunerSwitchState = useCapabilityState('tuner_switch');
   const tunerTuneState = useCapabilityState('tuner_tune');
+  const supportsGlobalShortcuts = Boolean(window.electronAPI?.shortcuts);
   const [config, setConfig] = useState<ShortcutConfig>(() => getShortcutConfig());
   const [toggles, setToggles] = useState<ShortcutToggles>(() => getShortcutToggles());
+  // On desktop the initial state above is only a placeholder: the authoritative
+  // bindings live in the Electron settings file. Window-scoped dispatch must wait
+  // for that load, otherwise a default binding can fire an action the user never
+  // configured (or already remapped).
+  const [windowShortcutsReady, setWindowShortcutsReady] = useState(() => !supportsGlobalShortcuts);
   const configRef = useRef(config);
-  const supportsGlobalShortcuts = Boolean(window.electronAPI?.shortcuts);
   const transport = resolveShortcutTransport(toggles, supportsGlobalShortcuts);
 
   useEffect(() => {
@@ -77,7 +87,9 @@ export function GlobalShortcutBridge() {
   useEffect(() => {
     let cancelled = false;
     void loadInitialShortcutConfig().then((loadedConfig) => {
-      if (!cancelled) setConfig(loadedConfig);
+      if (cancelled || !loadedConfig) return;
+      setConfig(loadedConfig);
+      setWindowShortcutsReady(true);
     });
     return () => {
       cancelled = true;
@@ -98,6 +110,8 @@ export function GlobalShortcutBridge() {
     const handleConfigChange = (event: Event) => {
       const detail = (event as CustomEvent<ShortcutConfig>).detail;
       setConfig(normalizeShortcutConfig(detail));
+      // A saved config is authoritative even if the initial desktop load failed.
+      setWindowShortcutsReady(true);
     };
 
     window.addEventListener(SHORTCUT_CONFIG_CHANGED_EVENT, handleConfigChange);
@@ -231,7 +245,7 @@ export function GlobalShortcutBridge() {
   }, [runAction, transport]);
 
   useEffect(() => {
-    if (transport !== 'window') return undefined;
+    if (transport !== 'window' || !windowShortcutsReady) return undefined;
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.repeat || isTypingShortcutTarget(event.target)) return;
@@ -249,7 +263,7 @@ export function GlobalShortcutBridge() {
 
     window.addEventListener('keydown', handleKeyDown, { capture: true });
     return () => window.removeEventListener('keydown', handleKeyDown, { capture: true });
-  }, [runAction, transport]);
+  }, [runAction, transport, windowShortcutsReady]);
 
   return null;
 }

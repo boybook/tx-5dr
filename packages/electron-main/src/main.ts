@@ -778,7 +778,8 @@ function stopShortcutRecording(options: { restoreGlobalShortcuts?: boolean } = {
   shortcutRecordingActionId = null;
 
   if (options.restoreGlobalShortcuts) {
-    applyGlobalShortcutConfig(loadElectronSettings().shortcuts);
+    const settings = loadElectronSettings();
+    applyShortcutSettings(settings.shortcuts, settings.shortcutToggles);
   }
 }
 
@@ -810,13 +811,15 @@ function loadElectronSettings(): ElectronSettings {
   );
 }
 
-function saveElectronSettings(settings: ElectronSettings): void {
+function saveElectronSettings(settings: ElectronSettings): boolean {
   try {
     const dir = getAppConfigDir();
     fs.mkdirSync(dir, { recursive: true });
     safeWriteFileSync(getElectronSettingsPath(), `${JSON.stringify(settings, null, 2)}\n`, { backups: 3, mode: 0o600 });
+    return true;
   } catch (err) {
     logger.error('failed to save electron settings', err);
+    return false;
   }
 }
 
@@ -837,9 +840,12 @@ function getShortcutToggles(): ShortcutToggles {
   return loadElectronSettings().shortcutToggles ?? createDefaultShortcutToggles();
 }
 
-function applyGlobalShortcutConfig(configInput: unknown): ShortcutRegistrationStatus {
+function applyShortcutSettings(
+  configInput: unknown,
+  togglesInput: unknown,
+): ShortcutRegistrationStatus {
   const config = normalizeShortcutConfig(configInput);
-  const toggles = getShortcutToggles();
+  const toggles = normalizeShortcutToggles(togglesInput);
   const status: ShortcutRegistrationStatus = {
     config,
     registered: [],
@@ -3528,7 +3534,8 @@ const startApp = async () => {
   createDockMenu();
   createApplicationMenu();
   setupIpcHandlers();
-  applyGlobalShortcutConfig(loadElectronSettings().shortcuts);
+  const startupSettings = loadElectronSettings();
+  applyShortcutSettings(startupSettings.shortcuts, startupSettings.shortcutToggles);
 
   const vcRuntimeOk = await ensureWindowsVCRuntimeInstalled();
   if (!vcRuntimeOk) return;
@@ -4252,26 +4259,32 @@ function setupIpcHandlers() {
   ipcMain.handle('shortcuts:setToggles', (_event, toggles: unknown) => {
     const settings = loadElectronSettings();
     const shortcutToggles = normalizeShortcutToggles(toggles);
-    saveElectronSettings({ ...settings, shortcutToggles });
-    return applyGlobalShortcutConfig(settings.shortcuts);
+    if (!saveElectronSettings({ ...settings, shortcutToggles })) {
+      throw new Error('failed_to_persist_shortcut_toggles');
+    }
+    return applyShortcutSettings(settings.shortcuts, shortcutToggles);
   });
 
   ipcMain.handle('shortcuts:setConfig', (_event, config: unknown) => {
     const settings = loadElectronSettings();
     const shortcuts = normalizeShortcutConfig(config);
-    saveElectronSettings({ ...settings, shortcuts });
-    return applyGlobalShortcutConfig(shortcuts);
+    if (!saveElectronSettings({ ...settings, shortcuts })) {
+      throw new Error('failed_to_persist_shortcut_config');
+    }
+    return applyShortcutSettings(shortcuts, settings.shortcutToggles);
   });
 
   ipcMain.handle('shortcuts:register', (_event, config?: unknown) => {
-    if (config !== undefined) {
-      const settings = loadElectronSettings();
-      const shortcuts = normalizeShortcutConfig(config);
-      saveElectronSettings({ ...settings, shortcuts });
-      return applyGlobalShortcutConfig(shortcuts);
+    const settings = loadElectronSettings();
+    if (config === undefined) {
+      return applyShortcutSettings(settings.shortcuts, settings.shortcutToggles);
     }
 
-    return applyGlobalShortcutConfig(loadElectronSettings().shortcuts);
+    const shortcuts = normalizeShortcutConfig(config);
+    if (!saveElectronSettings({ ...settings, shortcuts })) {
+      throw new Error('failed_to_persist_shortcut_config');
+    }
+    return applyShortcutSettings(shortcuts, settings.shortcutToggles);
   });
 
   ipcMain.handle('shortcuts:startRecording', (event, actionId: unknown) => {
