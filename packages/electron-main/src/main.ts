@@ -1215,6 +1215,12 @@ async function applyDesktopHttpsSettings(update: Partial<PersistentDesktopHttpsC
   return persistDesktopHttpsConfig(next);
 }
 
+// ===== Linux GTK 兼容性 =====
+// Electron 36 在 GNOME 上默认使用 GTK 4，而 TX-5DR 使用 Electron 的 GTK 3 运行时
+if (process.platform === 'linux') {
+  app.commandLine.appendSwitch('gtk-version', '3');
+}
+
 // ===== macOS 后台节流防护 =====
 // 必须在 app.whenReady() 之前调用，阻止 App Nap 降低渲染进程定时器精度
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
