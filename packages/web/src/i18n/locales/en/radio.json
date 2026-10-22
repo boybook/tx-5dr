@@ -333,6 +333,7 @@
     "dontRemind": "Don't remind me"
   },
   "error": {
+    "hamlibHostFailed": "Hamlib stopped responding. Radio connection recovery is in progress. In-process mode requires restarting the server.",
     "unknown": "An unknown error occurred",
     "connectionFailed": "Radio connection failed",
     "deviceNotFound": "Device not found",

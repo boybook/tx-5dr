@@ -119,6 +119,9 @@
     "viewerPermissionInsufficient": "该令牌权限不足，需要管理员令牌才能配置电台"
   },
   "radio": {
+    "hamlibExecutionMode": "Hamlib 运行模式",
+    "hamlibExecutionProcess": "独立进程（推荐）",
+    "hamlibExecutionInProcess": "进程内运行",
     "pttSection": "PTT 方法",
     "pttPort": "PTT 串口",
     "pttPortPlaceholder": "使用 CAT 串口（默认）",

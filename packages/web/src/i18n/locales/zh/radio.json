@@ -385,6 +385,7 @@
     }
   },
   "error": {
+    "hamlibHostFailed": "Hamlib 已停止响应，正在恢复电台连接。进程内模式需要重启服务。",
     "unknown": "发生未知错误",
     "connectionFailed": "电台连接失败",
     "deviceNotFound": "未找到设备",

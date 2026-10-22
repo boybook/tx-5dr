@@ -373,6 +373,7 @@
     }
   },
   "error": {
+    "hamlibHostFailed": "Hamlib が応答しなくなりました。無線機への接続を復旧しています。プロセス内モードではサーバーの再起動が必要です。",
     "unknown": "不明なエラーが発生しました",
     "connectionFailed": "無線接続に失敗しました",
     "deviceNotFound": "デバイスが見つかりません",

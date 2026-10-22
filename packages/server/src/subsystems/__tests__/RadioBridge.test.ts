@@ -31,6 +31,26 @@ describe('RadioBridge', () => {
     vi.useRealTimers();
   });
 
+  it('captures Hamlib automation intent but cannot confirm recovery while physical TX is uncertain', async () => {
+    const radioManager = createRadioManagerStub();
+    const operatorManager = { beginRadioRecovery: vi.fn(), confirmRadioRecovery: vi.fn(), cancelRadioRecovery: vi.fn(), stopAllOperators: vi.fn() };
+    const lifecycle = { getIsRunning: vi.fn(() => true), getEngineState: vi.fn(() => 'running'), start: vi.fn(), sendRadioDisconnected: vi.fn() };
+    const bridge = new RadioBridge({ engineEmitter: new EventEmitter() as any, radioManager: radioManager as any,
+      frequencyManager: {} as any, slotPackManager: {} as any, operatorManager: operatorManager as any,
+      getTransmissionPipeline: () => ({ getIsPTTActive: () => false } as any),
+      physicalTxCoordinator: { retryUnknownStop: vi.fn().mockResolvedValue({ success: false }), getSnapshot: () => ({ phase: 'unknown' }) } as any,
+      getEngineLifecycle: () => lifecycle as any, getEngineMode: () => 'digital' });
+    bridge.setupListeners();
+    radioManager.emit('error', new RadioError({ code: RadioErrorCode.CONNECTION_LOST, message: 'worker stalled', context: { hamlibHostFatal: true } }));
+    expect(operatorManager.beginRadioRecovery).toHaveBeenCalledTimes(1);
+    radioManager.emit('connected');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(operatorManager.confirmRadioRecovery).not.toHaveBeenCalled();
+    expect(lifecycle.start).not.toHaveBeenCalled();
+    bridge.wasRunningBeforeDisconnect = false;
+    expect(operatorManager.cancelRadioRecovery).toHaveBeenCalledTimes(1);
+  });
+
   it('projects connected state without performing connection-time frequency writes', async () => {
     const radioManager = createRadioManagerStub();
     const engineEmitter = new EventEmitter();

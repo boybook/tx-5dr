@@ -11,6 +11,9 @@ import { PhysicalRadioManager } from '../PhysicalRadioManager.js';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
 import { RadioConnectionFactory } from '../connections/RadioConnectionFactory.js';
 import { RadioConnectionState, RadioConnectionType } from '../connections/IRadioConnection.js';
+import { getHamlibRigMetadata } from '../connections/hamlib/HamlibMetadata.js';
+
+vi.mock('../connections/hamlib/HamlibMetadata.js', () => ({ getHamlibRigMetadata: vi.fn(), listHamlibRigs: vi.fn().mockResolvedValue([]) }));
 
 type TestRadioActor = {
   send: ReturnType<typeof vi.fn>;
@@ -1480,6 +1483,7 @@ describe('PhysicalRadioManager', () => {
     const order: string[] = [];
     const testManager = asTestManager(manager);
     const connection: TestRadioConnection = {
+      getType: vi.fn().mockReturnValue(RadioConnectionType.HAMLIB),
       on: vi.fn(),
       off: vi.fn(),
       connect: vi.fn().mockImplementation(async () => {
@@ -1710,83 +1714,30 @@ describe('PhysicalRadioManager', () => {
     }));
   });
 
-  it('destroys temporary HamLib rigs when dynamic config schema probing fails', async () => {
-    const destroy = vi.fn().mockResolvedValue(undefined);
-
-    vi.doMock('hamlib', () => ({
-      HamLib: vi.fn().mockImplementation(() => ({
-        getConfigSchema: vi.fn().mockRejectedValue(new Error('schema probe failed')),
-        getPortCaps: vi.fn().mockResolvedValue({ portType: 'serial' }),
-        destroy,
-      })),
-    }));
-
-    try {
-      await expect(PhysicalRadioManager.getRigConfigSchema(1234)).resolves.toMatchObject({
-        rigModel: 1234,
-        portType: 'other',
-        endpointKind: 'device-path',
-        fields: [],
-      });
-      expect(destroy).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.doUnmock('hamlib');
-      vi.resetModules();
-    }
+  it('returns an unavailable metadata result when the hosted query fails', async () => {
+    vi.mocked(getHamlibRigMetadata).mockRejectedValueOnce(new Error('schema probe failed'));
+    await expect(PhysicalRadioManager.getRigConfigSchema(1234)).resolves.toMatchObject({ rigModel: 1234, portType: 'other', fields: [] });
   });
 
-  it('uses static HamLib model metadata without constructing a temporary rig', async () => {
-    const HamLib = Object.assign(vi.fn(), {
-      getConfigSchemaForModel: vi.fn().mockReturnValue([
-        { token: 1, name: 'rig_pathname', label: 'Path', tooltip: '', defaultValue: '', type: 'string' },
-      ]),
-      getPortCapsForModel: vi.fn().mockReturnValue({
-        portType: 'serial',
-        serialRateMax: 38400,
-      }),
-    });
-
-    vi.doMock('hamlib', () => ({ HamLib }));
-
-    try {
-      await expect(PhysicalRadioManager.getRigConfigSchema(1049)).resolves.toMatchObject({
-        rigModel: 1049,
-        portType: 'serial',
-        endpointKind: 'serial-port',
-      });
-      expect(HamLib).not.toHaveBeenCalled();
-      expect(HamLib.getConfigSchemaForModel).toHaveBeenCalledWith(1049);
-      expect(HamLib.getPortCapsForModel).toHaveBeenCalledWith(1049);
-    } finally {
-      vi.doUnmock('hamlib');
-      vi.resetModules();
-    }
+  it('does not finish Hamlib bootstrap when PTT release cannot be acknowledged', async () => {
+    const connection = { getType: () => RadioConnectionType.HAMLIB, setPTT: vi.fn().mockRejectedValue(new Error('release failed')) };
+    await expect((manager as any).releasePTTAfterConnect(connection)).rejects.toThrow('release failed');
   });
 
-  it('falls back to temporary HamLib instance when static model metadata is unavailable', async () => {
-    const destroy = vi.fn().mockResolvedValue(undefined);
-    const HamLib = vi.fn().mockImplementation(() => ({
-      getConfigSchema: vi.fn().mockResolvedValue([
-        { token: 1, name: 'rig_pathname', label: 'Path', tooltip: '', defaultValue: '', type: 'string' },
-      ]),
-      getPortCaps: vi.fn().mockResolvedValue({ portType: 'network' }),
-      destroy,
-    }));
+  it('does not finish Hamlib bootstrap when readback still reports TX', async () => {
+    const connection = { getType: () => RadioConnectionType.HAMLIB, setPTT: vi.fn().mockResolvedValue(undefined), getPTT: vi.fn().mockResolvedValue(true) };
+    await expect((manager as any).releasePTTAfterConnect(connection)).rejects.toMatchObject({ context: { stateUncertain: true } });
+  });
 
-    vi.doMock('hamlib', () => ({ HamLib }));
+  it('enriches hosted serial metadata with rig capability defaults', async () => {
+    vi.mocked(getHamlibRigMetadata).mockResolvedValueOnce({ fields: [{ token: 1, name: 'serial_speed', label: 'Speed', tooltip: '', defaultValue: '9600', type: 'numeric' }], portCaps: { portType: 'serial', serialRateMax: 38400 } });
+    await expect(PhysicalRadioManager.getRigConfigSchema(1049)).resolves.toMatchObject({ portType: 'serial', endpointKind: 'serial-port', fields: [{ effectiveDefaultValue: '38400', effectiveDefaultSource: 'rig-caps' }] });
+    expect(getHamlibRigMetadata).toHaveBeenCalledWith(1049, 'process');
+  });
 
-    try {
-      await expect(PhysicalRadioManager.getRigConfigSchema(2036)).resolves.toMatchObject({
-        rigModel: 2036,
-        portType: 'network',
-        endpointKind: 'network-address',
-      });
-      expect(HamLib).toHaveBeenCalledWith(2036);
-      expect(destroy).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.doUnmock('hamlib');
-      vi.resetModules();
-    }
+  it('projects hosted network metadata without opening a temporary radio', async () => {
+    vi.mocked(getHamlibRigMetadata).mockResolvedValueOnce({ fields: [], portCaps: { portType: 'network' } });
+    await expect(PhysicalRadioManager.getRigConfigSchema(2036)).resolves.toMatchObject({ portType: 'network', endpointKind: 'network-address' });
   });
 
   describe('fake frequency TX dial offset', () => {

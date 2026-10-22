@@ -100,6 +100,37 @@ activation 负责长生命周期后台行为，只能在 bootstrap 完成后开�
 
 ## 4. Radio I/O 规则
 
+### Hamlib 宿主边界
+
+`HamlibConnection` 是固定的连接门面。唯一的 `HamlibRuntime` 持有原生实例、
+机型适配、CAT 串行队列、仪表轮询和频谱控制；LocalTransport 与 ProcessTransport
+只改变运行位置。Profile 的 `hamlibExecutionMode` 可选 `process` 或 `in-process`，
+旧配置缺省使用 `process`，模式在新连接会话创建时应用。
+
+独立宿主通过 Node `fork()` 与 `advanced` 二进制 IPC 运行。操作目录中的运行时
+schema 是调用白名单；请求、结果、事件与快照均绑定宿主代次。同步查询读取门面
+快照，原生 I/O 仍由 Runtime 的唯一队列调度。频谱帧保留一个正在发送帧和一个
+最新待发送帧，旧会话消息不能更新新连接。
+
+原生调用的开始、结束与时限由 `HamlibNativeMonitor` 记录；父进程同时监督执行
+进展和心跳，心跳正常不能掩盖原生调用挂起。等待超时使旧 Runtime 永久失效，
+不会释放该实例继续执行新 I/O。独立宿主必须确认退出后才能创建替代进程；进程内
+宿主失效后需要重启服务。worker 没有自己的重连循环，重建继续由
+`PhysicalRadioManager` 的会话流程及现有五次退避重连负责。
+
+电台型号与配置项查询经过相同宿主边界，父进程缓存解码后的元数据，无活动连接
+时使用短生命周期宿主。普通服务启动不加载 Hamlib 原生模块。为保持公开 Plugin API
+兼容，明确使用 `host:hamlib` Rotator 的插件仍会按需在 Host 进程加载其原生依赖；
+该 Rotator 实例不属于电台 CAT worker 的恢复范围。
+
+宿主故障先撤销旧发射意图与音频帧。新会话完成 bootstrap、PTT-off 应答及可用
+读回检查、物理发射租约清理后，`RadioBridge` 才恢复引擎。操作员自动化只保存
+启用意图，并在下一完整时隙通过现有 Host 重新决策；旧命令不重放。用户停止、
+配置或 Profile 变化、策略门禁变化会取消相应恢复。语音按键、测试音和旧 CW
+消息不自动恢复。终止 worker 不代表物理 PTT 已经释放。
+
+### 通用约束
+
 这些规则适用于所有 radio 实现，尤其是老机型或串口后端：
 
 - 所有底层 CAT/CI-V 访问必须经过连接对象自己的串行队列

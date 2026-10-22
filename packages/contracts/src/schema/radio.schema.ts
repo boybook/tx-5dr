@@ -284,6 +284,7 @@ export type FakeFrequencyConfig = z.infer<typeof FakeFrequencyConfigSchema>;
  */
 export const HamlibConfigSchema = z.object({
   type: z.enum(['none', 'network', 'serial', 'icom-wlan', 'tci']),
+  hamlibExecutionMode: z.enum(['process', 'in-process']).optional(),
 
   // 网络模式配置
   network: NetworkConfigSchema.optional(),
