@@ -11,6 +11,8 @@
   "autoTuneAfterSwitchEnabledDesc": "切换频率成功后，如果已连接的电台支持自动天调，会自动打开天调并执行一次调谐。",
   "bandScheduleEntries": "频率时间表",
   "bandScheduleEntriesDesc": "使用本机本地时间。星期可写 daily、mon-fri、sat,sun 或 1-5（1=周一，7=周日）。频率单位是 MHz。",
+  "keepScheduleFrequency": "持续维持设定频率",
+  "keepScheduleFrequencyDesc": "勾选后，时间窗口内频率一旦偏离设定值就会自动纠正。不勾选则每个时间窗口只在开始后切换一次，之后由操作员自由控制频率。",
   "entryEnabled": "启用",
   "entryDays": "星期",
   "entryDaysDesc": "例如 daily、mon-fri、sat,sun、1-5。",

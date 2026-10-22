@@ -11,6 +11,8 @@
   "autoTuneAfterSwitchEnabledDesc": "After a successful frequency switch, automatically enable the tuner and run one tune cycle when the connected radio supports it.",
   "bandScheduleEntries": "Frequency Schedule",
   "bandScheduleEntriesDesc": "Uses local system time. Days accept daily, mon-fri, sat,sun, or 1-5 where 1 is Monday and 7 is Sunday. Frequencies are in MHz.",
+  "keepScheduleFrequency": "Hold the scheduled frequency",
+  "keepScheduleFrequencyDesc": "When enabled, the radio is moved back whenever its frequency drifts from the scheduled value during the window. When disabled, each window switches once when it opens and the operator then keeps full control of the frequency.",
   "entryEnabled": "Enabled",
   "entryDays": "Days",
   "entryDaysDesc": "Examples: daily, mon-fri, sat,sun, 1-5.",
