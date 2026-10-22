@@ -26,6 +26,16 @@ describe('LogbookRecordService', () => {
     expect(service.query({ ids: [] })).toEqual([]);
     expect(filter).not.toHaveBeenCalled();
   });
+  it('filters records whose DXCC entity needs review', () => {
+    const service = new LogbookRecordService([
+      qso('review', { callsign: 'QQ1QQQ' }),
+      qso('resolved', { callsign: 'N0CALL' }),
+    ]);
+
+    expect(service.query({ dxccNeedsReview: true }).map(record => record.id)).toEqual(['review']);
+    expect(service.count({ dxccNeedsReview: true })).toBe(1);
+    expect(service.dxccSummary().reviewCount).toBe(1);
+  });
   it('keeps physically duplicated records as independent runtime records', () => {
     const service = new LogbookRecordService([
       qso('external:hash:1'),

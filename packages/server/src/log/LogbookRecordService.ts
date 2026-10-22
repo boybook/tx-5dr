@@ -172,6 +172,7 @@ function matchesFilters(qso: QSORecord, options?: LogQueryOptions): boolean {
   if (options.band
     && getBandFromFrequency(qso.frequency).toUpperCase() !== options.band.toUpperCase()) return false;
   if (options.dxccStatus && qso.dxccStatus !== options.dxccStatus) return false;
+  if (options.dxccNeedsReview && !qso.dxccNeedsReview) return false;
   if (options.qslFlow) {
     const confirmed = isTwoWayConfirmed(qso);
     if (options.qslFlow === 'two_way_confirmed' ? !confirmed : confirmed) return false;

@@ -101,6 +101,7 @@ interface QSOFilters {
   endDate?: string;
   qslStatus?: 'none' | 'confirmed' | 'uploaded';
   dxccStatus?: 'deleted';
+  dxccNeedsReview?: true;
   qslFlow?: 'two_way_confirmed' | 'not_two_way_confirmed';
 }
 
@@ -1010,7 +1011,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   const isWorkedFilterActive = isAllFiltersCleared;
   const isConfirmedFilterActive = filters.qslFlow === 'two_way_confirmed';
   const isDeletedFilterActive = filters.dxccStatus === 'deleted';
-  const isReviewFilterActive = filters.qslFlow === 'not_two_way_confirmed';
+  const isReviewFilterActive = filters.dxccNeedsReview === true;
   const isDxccBandBucketActive = (key: string) => filters.band === key;
   const isDxccModeBucketActive = (key: string) => filters.mode === key;
 
@@ -1212,6 +1213,11 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 size="sm"
                 ariaLabel={t('qso.callsignInfo', { callsign: qso.callsign })}
               />
+              {qso.dxccNeedsReview && (
+                <Chip size="sm" variant="flat" color="danger" className="h-4">
+                  {t('editQso.reviewBadge')}
+                </Chip>
+              )}
             </div>
             {(qso.dxccEntity || qso.dxccId) && (
               <div className="flex flex-wrap items-center gap-1 text-xs text-default-500">
@@ -1516,7 +1522,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
               </button>
               <button
                 type="button"
-                onClick={() => applyDxccPresetFilters({ qslFlow: 'not_two_way_confirmed' })}
+                onClick={() => applyDxccPresetFilters({ dxccNeedsReview: true })}
                 className={getMetricCardClassName(isReviewFilterActive)}
               >
                 <p className="text-[11px] uppercase tracking-[0.18em] text-slate-300/70">{t('stats.dxccReview')}</p>
@@ -1634,7 +1640,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
             </button>
             <button
               type="button"
-              onClick={() => applyDxccPresetFilters({ qslFlow: 'not_two_way_confirmed' })}
+              onClick={() => applyDxccPresetFilters({ dxccNeedsReview: true })}
               className={`rounded-xl border px-3 py-3 text-left transition-colors ${isReviewFilterActive ? 'border-primary/20 bg-primary/12 text-primary' : 'border-default-200 bg-white/70 dark:bg-default-100/10'}`}
             >
               <p className="text-xs text-default-500">{t('stats.dxccReview')}</p>
@@ -1791,25 +1797,49 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
               variant="flat"
               size="sm"
               endContent={<FontAwesomeIcon icon={faChevronDown} className="text-default-400 text-xs hidden md:inline" />}
-              color={filters.dxccStatus ? "primary" : "default"}
+              color={filters.dxccStatus || filters.dxccNeedsReview ? "primary" : "default"}
               className="min-w-0"
             >
-              <span className="hidden md:inline">{filters.dxccStatus === 'deleted' ? t('filter.dxccDeleted') : t('filter.dxccStatus')}</span>
-              <span className="md:hidden">{filters.dxccStatus === 'deleted' ? t('filter.dxccDeleted') : t('filter.dxccStatus')}</span>
+              <span className="hidden md:inline">
+                {filters.dxccNeedsReview
+                  ? t('filter.dxccNeedsReview')
+                  : filters.dxccStatus === 'deleted' ? t('filter.dxccDeleted') : t('filter.dxccStatus')}
+              </span>
+              <span className="md:hidden">
+                {filters.dxccNeedsReview
+                  ? t('filter.dxccNeedsReview')
+                  : filters.dxccStatus === 'deleted' ? t('filter.dxccDeleted') : t('filter.dxccStatus')}
+              </span>
             </Button>
           </DropdownTrigger>
           <DropdownMenu
             aria-label={t('filter.dxccStatusFilter')}
-            selectedKeys={filters.dxccStatus ? [filters.dxccStatus] : []}
+            selectedKeys={
+              filters.dxccNeedsReview
+                ? ['needs-review']
+                : filters.dxccStatus ? [filters.dxccStatus] : []
+            }
             selectionMode="single"
             onSelectionChange={(keys) => {
               const selected = Array.from(keys as Set<string>);
               const value = selected[0] || undefined;
-              handleFilterChange('dxccStatus', value as QSOFilters['dxccStatus']);
+              setFilters((prev) => {
+                const next = { ...prev };
+                delete next.dxccStatus;
+                delete next.dxccNeedsReview;
+                if (value === 'needs-review') {
+                  next.dxccNeedsReview = true;
+                } else if (value === 'deleted') {
+                  next.dxccStatus = 'deleted';
+                }
+                return next;
+              });
+              setCurrentPage(1);
             }}
           >
             <DropdownItem key="">{t('filter.allDxccStatus')}</DropdownItem>
             <DropdownItem key="deleted">{t('filter.dxccDeleted')}</DropdownItem>
+            <DropdownItem key="needs-review">{t('filter.dxccNeedsReview')}</DropdownItem>
           </DropdownMenu>
         </Dropdown>
 
@@ -2179,6 +2209,9 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     filters.band,
     filters.mode,
     filters.qslStatus,
+    filters.dxccStatus,
+    filters.dxccNeedsReview,
+    filters.qslFlow,
     totalRecords,
     actualTotalRecords,
     hasFilters,

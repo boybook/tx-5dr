@@ -215,6 +215,7 @@ function substantiveFilter(options?: LogQueryOptions): boolean {
     || options.mode
     || options.band
     || options.dxccStatus
+    || options.dxccNeedsReview
     || options.qslFlow
     || options.excludeModes?.length
     || options.qslStatus

@@ -997,6 +997,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         grid: normalizeGridQuery(options.grid),
         mode: options.mode,
         dxccStatus: options.dxccStatus,
+        dxccNeedsReview: options.dxccNeedsReview,
         qslFlow: options.qslFlow,
         excludeModes: options.excludeModes
           ? options.excludeModes.split(',').map(m => m.trim()).filter(Boolean)
@@ -1274,6 +1275,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
         grid: normalizeGridQuery(options.grid),
         mode: options.mode,
         dxccStatus: options.dxccStatus,
+        dxccNeedsReview: options.dxccNeedsReview,
         qslFlow: options.qslFlow,
         excludeModes: options.excludeModes
           ? options.excludeModes.split(',').map(m => m.trim()).filter(Boolean)

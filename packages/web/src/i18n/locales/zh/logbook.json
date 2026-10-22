@@ -157,6 +157,7 @@
     "dxccStatus": "DXCC状态",
     "allDxccStatus": "全部DXCC状态",
     "dxccDeleted": "已删除实体",
+    "dxccNeedsReview": "待复核",
     "dxccStatusFilter": "DXCC状态筛选",
     "qslFlow": "QSL流程",
     "allQslFlow": "全部QSL流程",
@@ -434,6 +435,7 @@
     "needsReview": "需要复核",
     "needsReviewYes": "需要人工复核",
     "needsReviewNo": "无需复核",
+    "reviewBadge": "待复核",
     "statusValue": {
       "current": "当前实体",
       "deleted": "已删除实体",

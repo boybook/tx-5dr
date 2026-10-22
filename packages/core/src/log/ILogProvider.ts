@@ -135,6 +135,11 @@ export interface LogQueryOptions {
   dxccStatus?: 'deleted';
 
   /**
+   * 只保留 DXCC 实体待复核（没能可靠解析出实体）的记录
+   */
+  dxccNeedsReview?: true;
+
+  /**
    * QSL 流程筛选
    */
   qslFlow?: 'two_way_confirmed' | 'not_two_way_confirmed';

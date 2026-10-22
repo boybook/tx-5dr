@@ -157,6 +157,7 @@
     "dxccStatus": "DXCC Status",
     "allDxccStatus": "All DXCC Status",
     "dxccDeleted": "Deleted Entities",
+    "dxccNeedsReview": "Needs review",
     "dxccStatusFilter": "DXCC Status Filter",
     "qslFlow": "QSL Flow",
     "allQslFlow": "All QSL Flows",
@@ -434,6 +435,7 @@
     "needsReview": "Review",
     "needsReviewYes": "Manual review recommended",
     "needsReviewNo": "No review needed",
+    "reviewBadge": "Needs review",
     "statusValue": {
       "current": "Current entity",
       "deleted": "Deleted entity",
