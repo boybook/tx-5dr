@@ -1,3 +1,4 @@
+import type { UpdateSelection } from '@tx5dr/contracts';
 import type { DesktopHttpsMode, DesktopHttpsStatus } from '@tx5dr/contracts';
 
 type DesktopUpdateSource = 'oss' | 'github';
@@ -120,7 +121,7 @@ interface DesktopDownloadProgress {
   bytesPerSecond: number;
 }
 
-interface DesktopUpdateStatus {
+interface DesktopUpdateStatus extends UpdateSelection {
   channel: 'release' | 'nightly';
   currentVersion: string;
   currentCommit: string | null;
@@ -334,8 +335,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updater: {
     getStatus: (): Promise<DesktopUpdateStatus> => ipcRenderer.invoke('updater:getStatus'),
     check: (): Promise<DesktopUpdateStatus> => ipcRenderer.invoke('updater:check'),
-    download: (): Promise<DesktopUpdateStatus> => ipcRenderer.invoke('updater:download'),
-    installAndRestart: (): Promise<DesktopUpdateStatus> => ipcRenderer.invoke('updater:installAndRestart'),
+    setChannel: (channel: 'release' | 'nightly'): Promise<DesktopUpdateStatus> => ipcRenderer.invoke('updater:setChannel', { channel }),
+    download: (request: { identity: string; allowDowngrade: boolean }): Promise<DesktopUpdateStatus> => ipcRenderer.invoke('updater:download', request),
+    installAndRestart: (request: { identity: string; allowDowngrade: boolean }): Promise<DesktopUpdateStatus> => ipcRenderer.invoke('updater:installAndRestart', request),
     openDownload: (url?: string): Promise<void> => ipcRenderer.invoke('updater:openDownload', url),
     onStatus: (callback: (status: DesktopUpdateStatus) => void) => {
       if (updaterStatusListeners.has(callback)) return;
@@ -556,8 +558,9 @@ declare global {
       updater: {
         getStatus(): Promise<DesktopUpdateStatus>;
         check(): Promise<DesktopUpdateStatus>;
-        download(): Promise<DesktopUpdateStatus>;
-        installAndRestart(): Promise<DesktopUpdateStatus>;
+        setChannel(channel: 'release' | 'nightly'): Promise<DesktopUpdateStatus>;
+    download(request: { identity: string; allowDowngrade: boolean }): Promise<DesktopUpdateStatus>;
+        installAndRestart(request: { identity: string; allowDowngrade: boolean }): Promise<DesktopUpdateStatus>;
         openDownload(url?: string): Promise<void>;
         onStatus(callback: (status: DesktopUpdateStatus) => void): void;
         offStatus(callback: (status: DesktopUpdateStatus) => void): void;

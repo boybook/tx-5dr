@@ -1,20 +1,20 @@
 name: Build and Release Electron App
 
 on:
-  push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
-  workflow_dispatch:
+  workflow_call:
     inputs:
       version:
-        description: 'Release version (e.g., v1.0.0, leave empty for nightly)'
-        required: false
+        type: string
         default: ''
+      source_ref:
+        type: string
+        required: true
+      verify_only:
+        type: boolean
+        default: false
 
-# 授予 GITHUB_TOKEN 写入权限以创建 release
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -54,6 +54,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.source_ref }}
           fetch-depth: 20
 
       - name: Setup Node.js
@@ -89,7 +90,7 @@ jobs:
           fi
 
       - name: Setup Python (for native modules)
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -137,22 +138,22 @@ jobs:
         run: |
           yarn check:versions
           CHANNEL="release"
-          if [ -z "${{ github.event.inputs.version }}" ]; then
+          if [ -z "${{ inputs.version }}" ]; then
             CHANNEL="nightly"
           fi
 
-          COMMIT_TIMESTAMP=$(git show -s --format=%cI "${{ github.sha }}")
-          COMMIT_STAMP=$(git show -s --date=format-local:%Y%m%d%H%M --format=%cd "${{ github.sha }}")
+          COMMIT_TIMESTAMP=$(git show -s --format=%cI "${{ inputs.source_ref }}")
+          COMMIT_STAMP=$(git show -s --date=format-local:%Y%m%d%H%M --format=%cd "${{ inputs.source_ref }}")
 
           node scripts/prepare-electron-release.mjs \
             --channel "$CHANNEL" \
-            --version "${{ github.event.inputs.version }}" \
-            --commit "${{ github.sha }}" \
+            --version "${{ inputs.version }}" \
+            --commit "${{ inputs.source_ref }}" \
             --build-timestamp "$COMMIT_TIMESTAMP" \
             --build-stamp "$COMMIT_STAMP"
 
       - name: Verify macOS signing secrets (release builds)
-        if: matrix.platform == 'darwin' && github.event_name != 'pull_request'
+        if: matrix.platform == 'darwin' && !inputs.verify_only
         env:
           MACOS_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
           MACOS_CERTIFICATE_PWD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -170,7 +171,7 @@ jobs:
           done
 
       - name: Import Code Signing Certificate (macOS)
-        if: matrix.platform == 'darwin' && github.event_name != 'pull_request'
+        if: matrix.platform == 'darwin' && !inputs.verify_only
         env:
           MACOS_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
           MACOS_CERTIFICATE_PWD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -369,7 +370,7 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          IS_PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
+          IS_PULL_REQUEST: ${{ inputs.verify_only }}
           DEBUG: electron-osx-sign*
         run: |
           set -euo pipefail
@@ -542,6 +543,8 @@ jobs:
             run_packaged_import_order wsjtx-lib audify hamlib
           fi
 
+          SOURCE_SHA="${{ inputs.source_ref }}" node scripts/smoke-packaged-server.mjs "$APP_ROOT" "$NODE_BIN"
+
           echo "=== Packaged Image Radio runtime smoke ==="
           (cd "$SERVER_SCRIPT_DIR" && "$NODE_BIN" -e '
             const { PNG } = require("pngjs");
@@ -571,7 +574,7 @@ jobs:
           echo "✅ electron-builder package content verified: $RESOURCES_DIR"
 
       - name: Validate macOS signing and notarization
-        if: matrix.platform == 'darwin' && github.event_name != 'pull_request'
+        if: matrix.platform == 'darwin' && !inputs.verify_only
         shell: bash
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -596,7 +599,7 @@ jobs:
           echo "=== Verify app code signature ==="
           codesign --verify --deep --strict --verbose=2 "${APP_PATH}"
           spctl --assess --type execute --verbose=4 "${APP_PATH}"
-          xcrun stapler validate "${APP_PATH}"
+          bash scripts/retry-stapler.sh validate "${APP_PATH}"
 
           DMG_FILE=$(find out/electron-builder -maxdepth 1 -name "*.dmg" -type f | head -1)
           if [ -z "${DMG_FILE:-}" ] || [ ! -f "$DMG_FILE" ]; then
@@ -611,10 +614,10 @@ jobs:
             --password "${APPLE_APP_SPECIFIC_PASSWORD}" \
             --team-id "${APPLE_TEAM_ID}" \
             --wait
-          xcrun stapler staple "${DMG_FILE}"
+          bash scripts/retry-stapler.sh staple "${DMG_FILE}"
 
           echo "=== Verify DMG notarization ticket ==="
-          xcrun stapler validate "${DMG_FILE}"
+          bash scripts/retry-stapler.sh validate "${DMG_FILE}"
 
           ZIP_FILE=$(find out/electron-builder -maxdepth 1 -name "*.zip" -type f | head -1)
           if [ -z "${ZIP_FILE:-}" ] || [ ! -f "$ZIP_FILE" ]; then
@@ -633,7 +636,7 @@ jobs:
           echo "=== Verify ZIP app signature and notarization ticket ==="
           codesign --verify --deep --strict --verbose=2 "${ZIP_APP_PATH}"
           spctl --assess --type execute --verbose=4 "${ZIP_APP_PATH}"
-          xcrun stapler validate "${ZIP_APP_PATH}"
+          bash scripts/retry-stapler.sh validate "${ZIP_APP_PATH}"
           rm -rf "${ZIP_CHECK_DIR}"
 
       - name: Verify Linux package metadata
@@ -787,7 +790,7 @@ jobs:
         run: |
           PLATFORM="${{ matrix.platform }}"
           ARCH="${{ matrix.arch }}"
-          VERSION="${{ github.event.inputs.version }}"
+          VERSION="${{ inputs.version }}"
 
           # 创建统一的产物目录
           mkdir -p release-artifacts
@@ -911,396 +914,3 @@ jobs:
           path: release-artifacts/*
           retention-days: 30
           overwrite: true
-
-  create-release:
-    needs: [build]
-    runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
-    env:
-      OSS_ACCESS_KEY_ID: ${{ secrets.ALIYUN_ACCESS_KEY_ID }}
-      OSS_ACCESS_KEY_SECRET: ${{ secrets.ALIYUN_ACCESS_KEY_SECRET }}
-      OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
-      OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
-      OSS_BASE_URL: ${{ secrets.OSS_BASE_URL }}
-      OSS_REGION: ${{ secrets.OSS_REGION }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 20
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist/
-
-      - name: Prepare release assets
-        shell: bash
-        run: |
-          echo "=== 准备 release 产物 ==="
-          mkdir -p publish-assets
-          mkdir -p release-assets
-          find dist/ -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.deb" -o -name "*.rpm" -o -name "*.7z" -o -name "*.exe" -o -name "*.AppImage" -o -name "*.blockmap" \) -exec cp {} publish-assets/ \;
-          find publish-assets/ -type f -exec cp {} release-assets/ \;
-          echo "=== Release 产物列表 ==="
-          ls -lh release-assets/
-
-      - name: Generate release info
-        id: release_info
-        env:
-          TZ: UTC
-        run: |
-          echo "timestamp=$(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
-          echo "short_sha=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
-          echo "commit_title=$(git show -s --format=%s "${{ github.sha }}")" >> $GITHUB_OUTPUT
-          echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
-          COMMIT_STAMP=$(git show -s --date=format-local:%Y%m%d%H%M --format=%cd "${{ github.sha }}")
-          if [ -z "${{ github.event.inputs.version }}" ]; then
-            echo "tag=nightly-app" >> $GITHUB_OUTPUT
-            echo "version=nightly" >> $GITHUB_OUTPUT
-            echo "channel=nightly" >> $GITHUB_OUTPUT
-            echo "channel_path=nightly" >> $GITHUB_OUTPUT
-            HOST_VERSION=$(node scripts/host-version.mjs --channel nightly --build-stamp "$COMMIT_STAMP" --commit "${{ github.sha }}")
-            echo "app_version=${HOST_VERSION}" >> $GITHUB_OUTPUT
-          else
-            echo "tag=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
-            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
-            echo "channel=release" >> $GITHUB_OUTPUT
-            echo "channel_path=release" >> $GITHUB_OUTPUT
-            echo "app_version=${{ github.event.inputs.version }}" | sed 's/^app_version=v/app_version=/' >> $GITHUB_OUTPUT
-          fi
-
-      - name: Prepare app release metadata
-        shell: bash
-        run: |
-          mkdir -p release-metadata
-          cat > release-metadata/app-release-notes.md <<EOF
-          Channel: ${{ steps.release_info.outputs.channel }}
-          Version: ${{ steps.release_info.outputs.app_version }}
-          Commit: ${{ steps.release_info.outputs.short_sha }}
-          Built at: ${{ steps.release_info.outputs.timestamp }}
-          EOF
-
-          node - <<'EOF' > release-metadata/recent-commits.json
-          const { execFileSync } = require('node:child_process');
-          const lines = execFileSync('git', [
-            'log',
-            '-n',
-            '10',
-            '--date=iso-strict',
-            '--pretty=format:%H%x09%h%x09%s%x09%cI',
-            process.env.GITHUB_SHA,
-          ], { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
-          const commits = lines.map((line) => {
-            const [id, shortId, title, publishedAt] = line.split('\t');
-            return { id, short_id: shortId, title, published_at: publishedAt };
-          });
-          process.stdout.write(JSON.stringify(commits));
-          EOF
-
-          node scripts/generate-oss-manifest.mjs \
-            --product app \
-            --channel "${{ steps.release_info.outputs.channel }}" \
-            --tag "${{ steps.release_info.outputs.tag }}" \
-            --version "${{ steps.release_info.outputs.app_version }}" \
-            --commit "${{ steps.release_info.outputs.short_sha }}" \
-            --commit-title "${{ steps.release_info.outputs.commit_title }}" \
-            --published-at "${{ steps.release_info.outputs.timestamp }}" \
-            --base-url "${{ secrets.OSS_BASE_URL }}" \
-            --object-prefix "tx-5dr/app/${{ steps.release_info.outputs.tag }}" \
-            --oss-base-url "${{ secrets.OSS_BASE_URL }}" \
-            --oss-object-prefix "tx-5dr/app/${{ steps.release_info.outputs.tag }}" \
-            --github-base-url "https://github.com/${{ github.repository }}/releases/download" \
-            --github-object-prefix "${{ steps.release_info.outputs.tag }}" \
-            --assets-dir "publish-assets" \
-            --release-notes-file "release-metadata/app-release-notes.md" \
-            --recent-commits-json "$(cat release-metadata/recent-commits.json)" \
-            --output "release-assets/latest.json"
-
-      - name: Validate app manifest
-        shell: bash
-        run: |
-          node - <<'EOF'
-          const fs = require('node:fs');
-          const manifest = JSON.parse(fs.readFileSync('release-assets/latest.json', 'utf8'));
-          if (!manifest.version) throw new Error('app manifest missing version');
-          if (!manifest.commit_title) throw new Error('app manifest missing commit_title');
-          if (!Array.isArray(manifest.recent_commits) || manifest.recent_commits.length === 0 || manifest.recent_commits.length > 10) {
-            throw new Error('app manifest missing recent_commits');
-          }
-          if (manifest.recent_commits[0]?.short_id !== manifest.commit) {
-            throw new Error('app manifest recent_commits[0] does not match top-level commit');
-          }
-          if (manifest.recent_commits[0]?.title !== manifest.commit_title) {
-            throw new Error('app manifest recent_commits[0] does not match top-level commit_title');
-          }
-          if (!Array.isArray(manifest.assets) || manifest.assets.length === 0) {
-            throw new Error('app manifest missing assets');
-          }
-          const hasMacArmDmg = manifest.assets.some((asset) => asset.platform === 'macos' && asset.arch === 'arm64' && asset.package_type === 'dmg' && asset.url_cn && asset.url_global);
-          if (!hasMacArmDmg) throw new Error('app manifest missing macOS arm64 dmg with dual urls');
-          const forbiddenMsi = manifest.assets.find((asset) => asset.package_type === 'msi' || asset.name.endsWith('.msi'));
-          if (forbiddenMsi) throw new Error(`app manifest must not include MSI asset: ${forbiddenMsi.name}`);
-          const requiredAssets = [
-            ['windows', 'x64', 'exe'],
-            ['windows', 'x64', 'zip'],
-            ['windows', 'x64', '7z'],
-            ['macos', 'arm64', 'dmg'],
-            ['macos', 'arm64', 'zip'],
-            ['macos', 'x64', 'dmg'],
-            ['macos', 'x64', 'zip'],
-            ['linux', 'x64', 'AppImage'],
-            ['linux', 'x64', 'deb'],
-            ['linux', 'x64', 'rpm'],
-            ['linux', 'x64', 'zip'],
-            ['linux', 'arm64', 'AppImage'],
-            ['linux', 'arm64', 'deb'],
-            ['linux', 'arm64', 'rpm'],
-            ['linux', 'arm64', 'zip'],
-          ];
-          for (const [platform, arch, packageType] of requiredAssets) {
-            if (!manifest.assets.some((asset) => asset.platform === platform && asset.arch === arch && asset.package_type === packageType)) {
-              throw new Error(`app manifest missing ${platform}-${arch}-${packageType}`);
-            }
-          }
-          const autoAssets = manifest.assets.filter((asset) => asset.auto_update?.supported);
-          for (const asset of autoAssets) {
-            if (!asset.size || !asset.sha512 || !asset.auto_update.sha512 || !asset.auto_update.installerFamily || !asset.auto_update.blockMapSize || !Array.isArray(asset.auto_update.files) || asset.auto_update.files.length === 0) {
-              throw new Error(`app manifest missing auto_update metadata for ${asset.name}`);
-            }
-            for (const file of asset.auto_update.files) {
-              if (!file.sha512 || !file.size || !file.blockMapSize) {
-                throw new Error(`app manifest missing auto_update file metadata for ${asset.name}`);
-              }
-            }
-            if (!fs.existsSync(`release-assets/${asset.name}.blockmap`)) {
-              throw new Error(`app manifest missing blockmap asset for ${asset.name}`);
-            }
-          }
-          for (const asset of manifest.assets) {
-            if (!asset.url_cn || !asset.url_global) {
-              throw new Error(`app manifest missing dual urls for ${asset.name}`);
-            }
-          }
-          EOF
-
-      # Nightly Release
-      - name: Create or Update Nightly Release
-        if: github.event.inputs.version == ''
-        uses: ncipollo/release-action@v1
-        with:
-          tag: nightly-app
-          name: "Nightly Build — Desktop App"
-          body: |
-            ## TX-5DR Nightly Build — Desktop App 桌面应用
-
-            **Built at** （构建时间）: ${{ steps.release_info.outputs.timestamp }}
-            **Commit**: [${{ steps.release_info.outputs.short_sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
-            **Branch**: ${{ github.ref_name }}
-
-            ### 📦 Downloads 下载
-
-            #### Windows (x64)
-            - [**NSIS Installer**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-windows-x64-nsis.exe) （安装包）— recommended for installation and auto-update
-            - [**7z Archive**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-windows-x64.7z) （压缩包，推荐）— LZMA2 compression, ~100MB smaller than ZIP, requires [7-Zip](https://www.7-zip.org/)
-            - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-windows-x64.zip) （压缩包）— larger file size
-
-            #### macOS (ARM64 — Apple Silicon)
-            - [**DMG Installer**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-macos-arm64.dmg) （安装包）— recommended
-            - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-macos-arm64.zip) （压缩包）
-
-            #### macOS (x64 — Intel)
-            - [**DMG Installer**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-macos-x64.dmg) （安装包）— recommended
-            - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-macos-x64.zip) （压缩包）
-
-            #### Linux Desktop (x64) — Electron App
-            - [**DEB Package**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-linux-x64.deb) (Ubuntu/Debian)
-            - [**RPM Package**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-linux-x64.rpm) (Fedora/RHEL)
-            - [**AppImage**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-linux-x64.AppImage) — supports in-app auto-update
-            - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-linux-x64.zip) （压缩包）
-
-            #### Linux Desktop (ARM64) — Electron App
-            - [**DEB Package**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-linux-arm64.deb) (Ubuntu/Debian)
-            - [**RPM Package**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-linux-arm64.rpm) (Fedora/RHEL)
-            - [**AppImage**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-linux-arm64.AppImage) — supports in-app auto-update
-            - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/nightly-app/TX-5DR-nightly-linux-arm64.zip) （压缩包）
-
-            > Looking for **Linux Server** (headless, no Electron)? See [nightly-server](https://github.com/${{ github.repository }}/releases/tag/nightly-server).
-            > 寻找 **Linux 服务器版**（无桌面环境）？请查看 [nightly-server](https://github.com/${{ github.repository }}/releases/tag/nightly-server)。
-
-            ### ⚠️ Notice 注意事项
-            - This is a development build and may contain untested features. （开发版本，可能包含未经充分测试的功能）
-            - Automatically updated on every push to `main` / `develop`. （每次推送自动更新）
-
-            ### 🔧 System Requirements 系统要求
-            - Node.js >= 22.15.1 (bundled / 已内置)
-            - Windows 10+ / macOS 11+ / Ubuntu 20.04+ / Fedora 35+
-          allowUpdates: true
-          removeArtifacts: true
-          artifacts: "release-assets/*"
-          token: ${{ secrets.GITHUB_TOKEN }}
-          prerelease: true
-          makeLatest: false
-
-      # Official Release
-      - name: Create Official Release
-        if: github.event.inputs.version != ''
-        uses: ncipollo/release-action@v1
-        with:
-          tag: ${{ github.event.inputs.version }}
-          name: "TX-5DR ${{ github.event.inputs.version }}"
-          body: |
-            ## TX-5DR ${{ github.event.inputs.version }}
-
-            **Release Date** （发布日期）: ${{ steps.release_info.outputs.date }}
-            **Commit**: [${{ steps.release_info.outputs.short_sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
-
-            ### 🚀 What's New 新功能
-            - See [CHANGELOG](https://github.com/${{ github.repository }}/commits/main) for details.
-
-            ### 📦 Downloads 下载
-
-            #### Windows (x64)
-            - [**NSIS Installer**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-windows-x64-nsis.exe) （安装包）— recommended for installation and auto-update
-            - [**7z Archive**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-windows-x64.7z) （压缩包，推荐）— LZMA2 compression, ~100MB smaller than ZIP, requires [7-Zip](https://www.7-zip.org/)
-            - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-windows-x64.zip) （压缩包）— larger file size
-
-            #### macOS (ARM64 — Apple Silicon)
-            - [**DMG Installer**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-macos-arm64.dmg) （安装包）— recommended
-            - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-macos-arm64.zip) （压缩包）
-
-            #### macOS (x64 — Intel)
-            - [**DMG Installer**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-macos-x64.dmg) （安装包）— recommended
-            - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-macos-x64.zip) （压缩包）
-
-            #### Linux Desktop (x64) — Electron App
-            - [**DEB Package**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-linux-x64.deb) (Ubuntu/Debian)
-            - [**RPM Package**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-linux-x64.rpm) (Fedora/RHEL)
-            - [**AppImage**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-linux-x64.AppImage) — supports in-app auto-update
-            - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-linux-x64.zip) （压缩包）
-
-            #### Linux Desktop (ARM64) — Electron App
-            - [**DEB Package**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-linux-arm64.deb) (Ubuntu/Debian)
-            - [**RPM Package**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-linux-arm64.rpm) (Fedora/RHEL)
-            - [**AppImage**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-linux-arm64.AppImage) — supports in-app auto-update
-            - [**ZIP Archive**](https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/TX-5DR-${{ github.event.inputs.version }}-linux-arm64.zip) （压缩包）
-
-            ### 🔧 System Requirements 系统要求
-            - Node.js >= 22.15.1 (bundled / 已内置)
-            - Windows 10+ / macOS 11+ / Ubuntu 20.04+ / Fedora 35+
-
-            ---
-            Built at （构建于）: ${{ steps.release_info.outputs.timestamp }}
-          artifacts: "release-assets/*"
-          token: ${{ secrets.GITHUB_TOKEN }}
-          draft: false
-          prerelease: false
-          makeLatest: true
-
-      - name: Install ossutil
-        if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
-        run: bash scripts/install-ossutil.sh
-
-      - name: Configure ossutil
-        if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
-        shell: bash
-        run: |
-          oss_region="${OSS_REGION:-}"
-          oss_endpoint_host="${OSS_ENDPOINT#https://}"
-          oss_endpoint_host="${oss_endpoint_host#http://}"
-          oss_endpoint_host="${oss_endpoint_host%%/*}"
-
-          if [ -z "${oss_region}" ]; then
-            if [[ "${oss_endpoint_host}" =~ oss-([a-z0-9-]+)\.aliyuncs\.com$ ]]; then
-              oss_region="${BASH_REMATCH[1]}"
-            fi
-          fi
-
-          if [ -z "${oss_region}" ]; then
-            echo "Failed to determine OSS region from OSS_ENDPOINT=${OSS_ENDPOINT}" >&2
-            echo "Please configure the OSS_REGION GitHub secret, for example: cn-hangzhou" >&2
-            exit 1
-          fi
-
-          echo "Using OSS endpoint: ${OSS_ENDPOINT}"
-          echo "Using OSS region: ${oss_region}"
-          cat > "${RUNNER_TEMP}/.ossutilconfig" <<EOF
-          [Credentials]
-          language = EN
-          endpoint = ${OSS_ENDPOINT}
-          region = ${oss_region}
-          accessKeyID = ${OSS_ACCESS_KEY_ID}
-          accessKeySecret = ${OSS_ACCESS_KEY_SECRET}
-          EOF
-
-      - name: Generate OSS app manifest
-        if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
-        run: |
-          mkdir -p oss-metadata/app
-          node scripts/generate-oss-manifest.mjs \
-            --product app \
-            --channel "${{ steps.release_info.outputs.channel }}" \
-            --tag "${{ steps.release_info.outputs.tag }}" \
-            --version "${{ steps.release_info.outputs.app_version }}" \
-            --commit "${{ steps.release_info.outputs.short_sha }}" \
-            --commit-title "${{ steps.release_info.outputs.commit_title }}" \
-            --published-at "${{ steps.release_info.outputs.timestamp }}" \
-            --base-url "${OSS_BASE_URL}" \
-            --object-prefix "tx-5dr/app/${{ steps.release_info.outputs.tag }}" \
-            --oss-base-url "${OSS_BASE_URL}" \
-            --oss-object-prefix "tx-5dr/app/${{ steps.release_info.outputs.tag }}" \
-            --github-base-url "https://github.com/${{ github.repository }}/releases/download" \
-            --github-object-prefix "${{ steps.release_info.outputs.tag }}" \
-            --assets-dir "publish-assets" \
-            --release-notes-file "release-metadata/app-release-notes.md" \
-            --recent-commits-json "$(cat release-metadata/recent-commits.json)" \
-            --output "oss-metadata/app/latest.json"
-
-      - name: Validate OSS app manifest
-        if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
-        shell: bash
-        run: |
-          node - <<'EOF'
-          const fs = require('node:fs');
-          const manifest = JSON.parse(fs.readFileSync('oss-metadata/app/latest.json', 'utf8'));
-          if (!Array.isArray(manifest.recent_commits) || manifest.recent_commits.length === 0 || manifest.recent_commits.length > 10) {
-            throw new Error('oss app manifest missing recent_commits');
-          }
-          if (manifest.recent_commits[0]?.short_id !== manifest.commit) {
-            throw new Error('oss app manifest recent_commits[0] does not match top-level commit');
-          }
-          if (manifest.recent_commits[0]?.title !== manifest.commit_title) {
-            throw new Error('oss app manifest recent_commits[0] does not match top-level commit_title');
-          }
-          const forbiddenMsi = (manifest.assets || []).find((asset) => asset.package_type === 'msi' || asset.name.endsWith('.msi'));
-          if (forbiddenMsi) throw new Error(`oss app manifest must not include MSI asset: ${forbiddenMsi.name}`);
-          const autoAssets = (manifest.assets || []).filter((asset) => asset.auto_update?.supported);
-          for (const asset of autoAssets) {
-            if (!asset.size || !asset.sha512 || !asset.auto_update.sha512 || !asset.auto_update.installerFamily || !asset.auto_update.blockMapSize || !Array.isArray(asset.auto_update.files) || asset.auto_update.files.length === 0) {
-              throw new Error(`oss app manifest missing auto_update metadata for ${asset.name}`);
-            }
-            for (const file of asset.auto_update.files) {
-              if (!file.sha512 || !file.size || !file.blockMapSize) {
-                throw new Error(`oss app manifest missing auto_update file metadata for ${asset.name}`);
-              }
-            }
-            if (!fs.existsSync(`publish-assets/${asset.name}.blockmap`)) {
-              throw new Error(`oss app manifest missing blockmap asset for ${asset.name}`);
-            }
-          }
-          EOF
-
-      - name: Upload app assets to OSS
-        if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
-        run: |
-          for file in publish-assets/*; do
-            ossutil cp "$file" "oss://${OSS_BUCKET}/tx-5dr/app/${{ steps.release_info.outputs.tag }}/$(basename "$file")" --force -c "${RUNNER_TEMP}/.ossutilconfig"
-          done
-          ossutil cp "oss-metadata/app/latest.json" "oss://${OSS_BUCKET}/tx-5dr/app/${{ steps.release_info.outputs.tag }}/latest.json" --force -c "${RUNNER_TEMP}/.ossutilconfig"
-          ossutil cp "oss-metadata/app/latest.json" "oss://${OSS_BUCKET}/tx-5dr/app/${{ steps.release_info.outputs.channel_path }}/latest.json" --force -c "${RUNNER_TEMP}/.ossutilconfig"

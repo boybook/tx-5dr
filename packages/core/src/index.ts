@@ -45,3 +45,5 @@ export * from './callsign-filter/callsign-filter-rules.js';
 // 日志系统导出
 export * from './log/index.js';
 export * from './lotwStationLocation.js';
+
+export * from './updates.js';

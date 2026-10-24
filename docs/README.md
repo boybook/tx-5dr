@@ -7,6 +7,8 @@ installation and operation manuals are maintained in
 
 ## Architecture Contracts
 
+- [Release identity and update ownership](architecture/release-updates.md)
+
 - [Server startup and radio lifecycle](architecture/server-startup.md)
 - [Desktop startup readiness](architecture/desktop-startup.md)
 - [Radio parameter capabilities](architecture/radio-capabilities.md)

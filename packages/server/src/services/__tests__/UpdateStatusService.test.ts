@@ -12,7 +12,7 @@ afterEach(() => {
 });
 
 describe('UpdateStatusService', () => {
-  it('checks the Android runtime manifest when Android bridge flavor is active', async () => {
+  it('checks the Android runtime manifest and recognizes a newer build of the same commit', async () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), 'tx5dr-android-runtime-'));
     process.env = {
       ...originalEnv,
@@ -24,6 +24,7 @@ describe('UpdateStatusService', () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
       json: async () => ({
+        product: 'android-runtime', channel: 'nightly', tag: 'nightly-android-runtime', assets: [],
         version: '1.0.0-nightly.202605190001',
         commit: 'abcdef1234567890',
         commit_title: 'Android runtime nightly',
@@ -54,7 +55,7 @@ describe('UpdateStatusService', () => {
     expect(status.currentCommit).toBe('abcdef1');
     expect(status.currentPublishedAt).toBe('2026-05-18T12:00:00Z');
     expect(status.latestCommit).toBe('abcdef1234567890');
-    expect(status.updateAvailable).toBe(false);
+    expect(status.updateAvailable).toBe(true);
   });
 
   it('marks Android runtime nightly as outdated when the remote commit differs', async () => {
@@ -69,6 +70,7 @@ describe('UpdateStatusService', () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
       json: async () => ({
+        product: 'android-runtime', channel: 'nightly', tag: 'nightly-android-runtime', assets: [],
         version: '1.0.0-nightly.202605190001',
         commit: '1234567890abcdef',
         commit_title: 'Android runtime nightly',

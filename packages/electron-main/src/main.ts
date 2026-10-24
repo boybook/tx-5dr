@@ -1,3 +1,5 @@
+import { UpdatePreferencesSchema } from '@tx5dr/contracts';
+import { createUpdateBackup } from './updateBackup.js';
 import { app, BrowserWindow, ipcMain, shell, Tray, Menu, dialog, nativeTheme, powerSaveBlocker, session, globalShortcut, type WebContents } from 'electron';
 import log from 'electron-log/main';
 import { homedir, hostname as getHostname, networkInterfaces } from 'node:os';
@@ -301,6 +303,7 @@ let startupErrorState: StartupErrorPayload | null = null;
 const ELECTRON_SETTINGS_FILE = 'electron-settings.json';
 
 interface ElectronSettings {
+  updateChannel?: 'release' | 'nightly';
   closeBehavior: 'ask' | 'tray' | 'quit';
   desktopHttps?: PersistentDesktopHttpsConfig;
   remoteAccessPreset?: 'local' | 'lan' | 'public';
@@ -3561,9 +3564,22 @@ let relaunchAfterCleanup = false;
 let isInstallingDesktopUpdate = false;
 
 
+function assertUpdateSender(event: Electron.IpcMainInvokeEvent): void {
+  const owner = BrowserWindow.fromWebContents(event.sender);
+  if (!owner || event.senderFrame !== event.sender.mainFrame) throw new Error('update_sender_denied');
+  const url = new URL(event.senderFrame.url);
+  if (url.origin !== new URL(getWebUrl()).origin || url.pathname.includes('plugin-page')) {
+    throw new Error('update_sender_denied');
+  }
+}
+
 function getDesktopUpdateService(): DesktopUpdateService {
   if (!desktopUpdateService) {
     desktopUpdateService = new DesktopUpdateService({
+      getChannel: () => UpdatePreferencesSchema.parse({ channel: loadElectronSettings().updateChannel ?? BUILD_INFO.channel }).channel,
+      saveChannel: channel => {
+        if (!saveElectronSettings({ ...loadElectronSettings(), updateChannel: channel })) throw new Error('update_preferences_write_failed');
+      },
       prepareInstall: prepareForDesktopUpdateInstall,
       beforeQuitAndInstall: markDesktopUpdateInstallHandoff,
       onQuitAndInstallError: resetDesktopUpdateInstallHandoff,
@@ -3608,7 +3624,15 @@ async function prepareForDesktopUpdateInstall(): Promise<void> {
     let cleanupSucceeded = false;
 
     try {
+      if (serverProcess && !await prepareEmbeddedServerShutdown('desktop-update')) throw new Error('update_shutdown_not_safe');
       const childResults = await cleanup();
+      if (childResults.some(result => result.forced)) throw new Error('update_shutdown_forced');
+      const backupPath = await createUpdateBackup(
+        [getAppConfigDir(), getAppDataDir()],
+        path.join(path.dirname(getAppDataDir()), 'TX-5DR-update-backups'),
+        BUILD_INFO,
+      );
+      logger.info('Update backup completed', { backupPath });
       visualCloseMs = closeFrontendWindowsImmediately();
       hasCleanedUp = true;
       cleanupSucceeded = true;
@@ -4140,6 +4164,11 @@ function setupIpcHandlers() {
     return getDesktopUpdateService().getStatus();
   });
 
+  ipcMain.handle('updater:setChannel', async (event, request: unknown) => {
+    assertUpdateSender(event);
+    return getDesktopUpdateService().setChannel(request);
+  });
+
   ipcMain.handle('updater:check', async () => {
     return getDesktopUpdateService().checkForUpdates();
   });
@@ -4148,12 +4177,14 @@ function setupIpcHandlers() {
     await getDesktopUpdateService().openDownload(url);
   });
 
-  ipcMain.handle('updater:download', async () => {
-    return getDesktopUpdateService().download();
+  ipcMain.handle('updater:download', async (event, request: unknown) => {
+    assertUpdateSender(event);
+    return getDesktopUpdateService().download(request);
   });
 
-  ipcMain.handle('updater:installAndRestart', async () => {
-    return getDesktopUpdateService().installAndRestart();
+  ipcMain.handle('updater:installAndRestart', async (event, request: unknown) => {
+    assertUpdateSender(event);
+    return getDesktopUpdateService().installAndRestart(request);
   });
 
   ipcMain.handle('https:getStatus', async () => {

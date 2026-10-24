@@ -6618,6 +6618,8 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@tx5dr/electron-main@workspace:packages/electron-main"
   dependencies:
+    "@tx5dr/contracts": "workspace:*"
+    "@tx5dr/core": "workspace:*"
     "@tx5dr/electron-preload": "workspace:*"
     "@tx5dr/server": "workspace:*"
     "@tx5dr/shared-config": "workspace:*"

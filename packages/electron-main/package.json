@@ -13,6 +13,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@tx5dr/contracts": "workspace:*",
+    "@tx5dr/core": "workspace:*",
     "@tx5dr/server": "workspace:*",
     "electron-log": "^5.4.3",
     "electron-updater": "6.8.3",

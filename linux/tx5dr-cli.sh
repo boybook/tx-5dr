@@ -143,117 +143,9 @@ confirm_same_nightly_update() {
 }
 
 cmd_update() {
-    local force=false
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --force|-f) force=true ;;
-            *) log_error "Unknown update option: $1"; return 1 ;;
-        esac
-        shift
-    done
-
-    detect_os
-    local current_ver="unknown"
-    [[ -f /usr/share/tx5dr/version ]] && current_ver=$(cat /usr/share/tx5dr/version)
-    local current_sha=""
-    current_sha=$(read_local_build_info_value "commitShort" 2>/dev/null || true)
-    [[ -z "$current_sha" ]] && current_sha=$(read_local_build_info_value "commit" 2>/dev/null | cut -c1-7 || true)
-
-    echo "$(msg CHECKING_UPDATE)"
-
-    local pkg_arch="$ARCH"
-    local pkg_ext="deb"
-    [[ "$(os_family)" == "rhel" ]] && pkg_ext="rpm"
-    local asset_name="TX-5DR-nightly-server-linux-${pkg_arch}.${pkg_ext}"
-    local fallback_url
-    fallback_url=$(get_github_release_asset_url "nightly-server" "$asset_name")
-
-    local manifest_json=""
-    local download_url=""
-    local package_sha256=""
-    local remote_version="nightly"
-    local remote_sha="unknown"
-    local remote_date="unknown"
-    local remote_title=""
-    local preferred_source="github"
-
-    if should_prefer_oss_download; then
-        preferred_source="oss"
-        log_info "Detected mainland China or OSS override. Preferring OSS mirror."
-    fi
-
-    if manifest_json=$(fetch_server_manifest_from_source "$preferred_source" 2>/dev/null); then
-        download_url=$(get_server_manifest_package_url_for_source "$manifest_json" "$pkg_arch" "$pkg_ext" "$preferred_source" 2>/dev/null || true)
-        package_sha256=$(get_server_manifest_package_sha256 "$manifest_json" "$pkg_arch" "$pkg_ext" 2>/dev/null || true)
-        remote_version=$(get_server_manifest_version "$manifest_json" 2>/dev/null || true)
-        remote_sha=$(get_server_manifest_commit "$manifest_json" 2>/dev/null || true)
-        remote_date=$(get_server_manifest_published_at "$manifest_json" 2>/dev/null || true)
-        remote_date="${remote_date%%T*}"
-        remote_title=$(get_server_manifest_commit_title "$manifest_json" 2>/dev/null || true)
-
-        if [[ -z "$download_url" ]]; then
-            local fallback_source="oss"
-            [[ "$preferred_source" == "oss" ]] && fallback_source="github"
-            download_url=$(get_server_manifest_package_url_for_source "$manifest_json" "$pkg_arch" "$pkg_ext" "$fallback_source" 2>/dev/null || true)
-        fi
-    else
-        log_warn "Release manifest unavailable, falling back to direct GitHub release asset."
-    fi
-
-    if [[ -z "$download_url" ]]; then
-        package_sha256=""
-        download_url="$fallback_url"
-    fi
-
-    local remote_label="${remote_version:-nightly}"
-    if [[ "$remote_label" == "nightly" && ( -n "${remote_sha:-}" || -n "${remote_date:-}" ) ]]; then
-        remote_label="nightly (${remote_sha:-unknown}, ${remote_date:-unknown})"
-    fi
-    log_info "$(printf "$(msg UPDATE_AVAILABLE)" "$current_ver" "$remote_label")"
-    [[ -n "$remote_title" ]] && log_info "Latest summary: $remote_title"
-
-    local same_nightly=false
-    if [[ "${remote_version:-}" == *"-nightly."* || "${remote_label}" == nightly* ]]; then
-        if [[ -n "${remote_sha:-}" && "${remote_sha}" != "unknown" && -n "${current_sha:-}" ]]; then
-            [[ "${remote_sha}" == "${current_sha}" || "${remote_sha:0:7}" == "${current_sha:0:7}" ]] && same_nightly=true
-        elif [[ -n "${remote_version:-}" && "${remote_version}" == "$current_ver" ]]; then
-            same_nightly=true
-        fi
-    fi
-
-    if [[ "$same_nightly" == "true" && "$force" != "true" ]]; then
-        confirm_same_nightly_update "$current_ver" "$remote_label" || return 0
-    fi
-
-    local tmp_pkg="/tmp/${asset_name}"
-    echo "$(printf "$(msg DOWNLOADING)" "$asset_name")"
-    if ! curl -fSL --progress-bar -o "$tmp_pkg" "$download_url"; then
-        log_warn "Primary download failed, falling back to GitHub release..."
-        if ! curl -fSL --progress-bar -o "$tmp_pkg" "$fallback_url"; then
-            log_error "$(msg UPDATE_FAILED)"
-            rm -f "$tmp_pkg"
-            return 1
-        fi
-        package_sha256=""
-    fi
-
-    if [[ -n "$package_sha256" ]] && command -v sha256sum &>/dev/null; then
-        if ! printf "%s  %s\n" "$package_sha256" "$tmp_pkg" | sha256sum -c - >/dev/null 2>&1; then
-            log_warn "Package checksum mismatch, falling back to GitHub release..."
-            rm -f "$tmp_pkg"
-            if ! curl -fSL --progress-bar -o "$tmp_pkg" "$fallback_url"; then
-                log_error "$(msg UPDATE_FAILED)"
-                return 1
-            fi
-        fi
-    fi
-
-    sudo bash /usr/share/tx5dr/install.sh "$tmp_pkg"
-    local rc=$?
-    rm -f "$tmp_pkg"
-
-    [[ $rc -eq 0 ]] && log_info "$(msg UPDATE_DONE)"
-    return $rc
+    ensure_nodejs_ready || return 1
+    export TX5DR_CONFIG_DIR="$CONFIG_DIR" TX5DR_DATA_DIR="$DATA_DIR" TX5DR_DOWNLOAD_BASE_URL
+    node /usr/share/tx5dr/packages/server/dist/scripts/update-cli.js "$@"
 }
 
 cmd_doctor_fix_internal() {
@@ -318,7 +210,7 @@ cmd_help() {
     echo "  status   Show service status dashboard"
     echo "  logs     Follow service logs (--nginx / --all)"
     echo "  token    Show admin token (--reset to regenerate)"
-    echo "  update   Download and install latest nightly build (--force to reinstall same nightly)"
+    echo "  update   Update selected channel (--channel release|nightly, --version VERSION, --yes, --allow-downgrade, --force)"
     echo "  doctor   Run full environment diagnostics (--fix to auto-repair)"
     echo "  ssl      Show SSL certificate status (renew to regenerate)"
     echo "  enable   Enable auto-start on boot"

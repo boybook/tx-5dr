@@ -725,7 +725,24 @@
       "auto_update_semver_not_newer": "アップデーターはパッケージを更新バージョンとして受け入れませんでした。必要に応じて手動でダウンロードしてください。",
       "update_install_not_completed": "前回の更新が完了していないようです。再試行するか、手動ダウンロードを使用できます。"
     },
-    "updateTargetAndroidRuntime": "Android Runtime"
+    "updateTargetAndroidRuntime": "Android Runtime",
+    "updateTargetChannel": "更新チャンネル",
+    "updateStableRecommended": "正式版（推奨）",
+    "updateChannelHelp": "チャンネルの選択では確認のみ行います。実行中のバージョンはインストール後に変わります。",
+    "updateNightlyWarning": "Nightly は十分にテストされていない機能を含む場合があります。",
+    "updateChannelEmpty": "このチャンネルにはまだ公開版がありません。選択を保持して後で再確認できます。",
+    "updateDowngradeWarning": "移行先は古いバージョンのため設定やプラグインデータを読めない可能性があります。バックアップ後に強制切替します。復元すると以降の変更が失われます。",
+    "updateConfirm": "現在：{{current}}、移行先：{{target}}。ダウンロードしますか？",
+    "updateInstallConfirm": "無線機とサービスを停止し、データをバックアップしてインストール・再起動しますか？バックアップに失敗すると中止します。",
+    "updateDiscardDownload": "チャンネルを変更するとダウンロード済み更新を破棄します。続行しますか？",
+    "updateLinuxCommand": "サーバーの端末で実行してください。インストール前にバックアップと確認を行います：",
+    "updateDockerCommand": "Compose のイメージを以下に変更し pull と up -d を実行します。先に停止しデータボリュームをバックアップしてください：",
+    "updateCopyCommand": "コピー",
+    "updateAndroidNative": "Android 本体の更新画面でチャンネルを選んでインストールしてください。APK とランタイムは別々に更新します。",
+    "updateOpenAndroid": "Android 更新画面を開く",
+    "updateStableMigration": "正式版が公開されました。正式版を選択して確認・インストールできます。自動では切り替えません。",
+    "updateMigrationDismiss": "今は切り替えない",
+    "updateRestartCurrent": "現在インストール済みのバージョンを再起動"
   },
   "freqPresets": {
     "title": "周波数プリセット管理",
