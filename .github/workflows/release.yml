@@ -41,7 +41,7 @@ jobs:
           PUBLISH_REQUEST: ${{ github.event_name == 'push' || inputs.publish }}
           EVENT_NAME: ${{ github.event_name }}
         run: node scripts/resolve-release-identity.mjs >> "$GITHUB_OUTPUT"
-      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev libpulse-dev libudev-dev libusb-1.0-0-dev portaudio19-dev
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev libpulse-dev libudev-dev libusb-1.0-0-dev portaudio19-dev strace
       - run: corepack enable && yarn install --immutable
       - run: yarn check:versions && yarn check:i18n
       - run: yarn build
@@ -49,7 +49,14 @@ jobs:
       - name: Test browser and shared workspaces
         run: yarn test --concurrency=1 --filter='!@tx5dr/server'
       - name: Test native server directly
-        run: yarn workspace @tx5dr/server test
+        run: strace -f --seccomp-bpf -e trace=%process,kill,tgkill,tkill -e signal=HUP -o "$RUNNER_TEMP/server-signal-trace.log" yarn workspace @tx5dr/server test
+      - name: Preserve native test signal diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-signal-diagnostics
+          path: ${{ runner.temp }}/server-signal-trace.log
+          if-no-files-found: ignore
       - run: node --test scripts/tests/release-policy.test.mjs
   electron:
     needs: verify
