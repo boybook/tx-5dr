@@ -446,19 +446,6 @@ jobs:
         if: matrix.platform == 'win32'
         run: node --expose-gc scripts/tests/windows-audio-lifecycle.mjs
 
-      - name: Enable Windows native crash diagnostics
-        if: matrix.platform == 'win32'
-        shell: pwsh
-        run: |
-          $dumpDir = Join-Path $env:RUNNER_TEMP 'tx5dr-crash-dumps'
-          New-Item -ItemType Directory -Force $dumpDir | Out-Null
-          Invoke-WebRequest https://download.sysinternals.com/files/Procdump.zip -OutFile "$env:RUNNER_TEMP/procdump.zip"
-          Expand-Archive "$env:RUNNER_TEMP/procdump.zip" "$env:RUNNER_TEMP/procdump"
-          $exe = "$env:RUNNER_TEMP/procdump/procdump64.exe"
-          if ((Get-AuthenticodeSignature $exe).Status -ne 'Valid') { throw 'Invalid ProcDump signature' }
-          "TX5DR_SMOKE_DEBUGGER=$exe" >> $env:GITHUB_ENV
-          "TX5DR_SMOKE_DUMPS=$dumpDir" >> $env:GITHUB_ENV
-
       - name: Verify auto-update package contents
         shell: bash
         run: |
@@ -589,22 +576,6 @@ jobs:
           ')
 
           echo "✅ electron-builder package content verified: $RESOURCES_DIR"
-
-      - name: Report Windows native crash
-        if: failure() && matrix.platform == 'win32'
-        shell: pwsh
-        run: |
-          Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 1000,1001; StartTime = (Get-Date).AddMinutes(-15) } -ErrorAction SilentlyContinue |
-            Select-Object TimeCreated, Message | Format-List
-
-      - name: Save Windows native crash evidence
-        if: failure() && matrix.platform == 'win32'
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-native-crash
-          path: ${{ runner.temp }}/tx5dr-crash-dumps
-          if-no-files-found: ignore
-          retention-days: 3
 
       - name: Validate macOS signing and notarization
         if: matrix.platform == 'darwin' && !inputs.verify_only
