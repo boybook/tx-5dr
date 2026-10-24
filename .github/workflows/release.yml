@@ -18,7 +18,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: tx5dr-release-${{ startsWith(github.ref, 'refs/tags/') && 'release' || github.ref }}
+  group: tx5dr-build-${{ github.ref }}-${{ inputs.ref || github.sha }}
   cancel-in-progress: false
 jobs:
   verify:
