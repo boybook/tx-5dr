@@ -9,7 +9,7 @@ Installed channel and subscribed channel are separate facts. Selecting a channel
 Owners:
 
 - Electron main owns settings, downloads, install handoff and backup after embedded-server shutdown. Renderer IPC is limited to the application's top-level local pages. The embedded Server does not own desktop update preferences.
-- Linux Server and its CLI share `update-preferences.json` through the same Node implementation. The web API only changes preferences. The administrator runs the privileged CLI locally. CLI writes preserve configuration ownership.
+- Linux Server and its CLI share `update-preferences.json` through the same Node implementation. The web API only changes preferences. The administrator runs the privileged CLI locally. CLI writes preserve configuration ownership. The CLI owns SemVer approval; RPM applies that confirmed target with `--oldpackage` because native package ordering differs from SemVer.
 - Android owns runtime preferences and installation in the native shell. `android-update-state.json` is an explicit read-only projection to the Server. WebView can navigate to native updates only from the local top-level application page. External browsers cannot invoke native installation. APK updates preserve package/signing identity and require increasing versionCode independently of runtime channel.
 - Docker preferences choose the proposed target only. An operator changes the actual container image by immutable digest and preserves the data volume. No Docker socket is exposed to the application.
 

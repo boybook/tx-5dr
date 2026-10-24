@@ -7,7 +7,7 @@ index 0d29cad104cc40e79c67897054af96417a1ba409..3b4dc5924f077f378a751ed6a0d81a24
  		"docs": "typedoc index.d.ts --hideGenerator --name Audify.js",
  		"rebuild": "cmake-js compile",
 -		"install": "prebuild-install -r napi || npm run rebuild",
-+		"install": "node -e \"process.platform==='win32'&&process.exit(1)\" && prebuild-install -r napi || npm run rebuild",
++		"install": "node -e \"process.platform!=='darwin'&&process.exit(1)\" && prebuild-install -r napi || npm run rebuild",
  		"deploy": "np --yolo",
  		"build-binaries": "run-script-os",
  		"build-binaries:win32": "node ./node_modules/prebuild/bin.js --backend cmake-js --include-regex \"^.*\\.(node|dylib|dll|so(\\.[0-9])?)$\" -r napi --all --verbose -u %GITHUB_TOKEN%",

@@ -32,3 +32,9 @@ package, including `tci-client-node/controls` and `tci-client-node/testing`, bef
 relying on source-level tests. CI uses immutable installs and Yarn 4 configuration
 such as `YARN_HTTP_TIMEOUT`; dependency errors must not trigger lockfile rewrites
 or obsolete dependency repair scripts.
+
+The patched `audify` dependency builds from source on Windows and Linux. Linux
+server, Android runtime and desktop packages build on Ubuntu 22.04, so the audio
+binary uses that supported C++ runtime baseline. Docker uses the same pinned
+Node/Debian image in both stages. Packaged startup checks must load the audio
+module; registry prebuild availability is not evidence of runtime compatibility.

@@ -87,7 +87,7 @@ Verify service health and the installed version before resuming operation.
       await setUpdatePreferences({ channel });
       await fs.chown(path.join(config, 'update-preferences.json'), owner.uid, owner.gid);
       if (packageType === 'deb') execFileSync('dpkg', ['-i', packagePath], { stdio: 'inherit' });
-      else execFileSync('rpm', ['-Uvh', ...(downgrade ? ['--oldpackage'] : []), packagePath], { stdio: 'inherit' });
+      else execFileSync('rpm', ['-Uvh', '--oldpackage', packagePath], { stdio: 'inherit' });
       const installed = JSON.parse(await fs.readFile('/usr/share/tx5dr/packages/server/dist/generated/buildInfo.json', 'utf8'));
       if (installed.version !== manifest.version || installed.channel !== channel || !installed.commit.startsWith(manifest.commit)) throw new Error('Installed package identity does not match confirmed target');
       execFileSync('systemctl', ['start', 'tx5dr'], { stdio: 'inherit' });
