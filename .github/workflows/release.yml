@@ -46,7 +46,10 @@ jobs:
       - run: yarn check:versions && yarn check:i18n
       - run: yarn build
       - run: yarn lint
-      - run: yarn test --concurrency=1
+      - name: Test browser and shared workspaces
+        run: yarn test --concurrency=1 --filter='!@tx5dr/server'
+      - name: Test native server directly
+        run: yarn workspace @tx5dr/server test
       - run: node --test scripts/tests/release-policy.test.mjs
   electron:
     needs: verify

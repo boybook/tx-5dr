@@ -42,6 +42,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: ${{ !inputs.verify_only }}
           tags: ${{ secrets.DOCKER_HUB_USERNAME || 'boybook' }}/tx-5dr:candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          cache-from: type=registry,ref=${{ secrets.DOCKER_HUB_USERNAME || 'boybook' }}/tx-5dr:buildcache
+          cache-to: ${{ !inputs.verify_only && format('type=registry,ref={0}/tx-5dr:buildcache,mode=max', secrets.DOCKER_HUB_USERNAME) || '' }}
           build-args: |
             BUILD_DATE=${{ steps.identity.outputs.date }}
             BUILD_STAMP=${{ steps.identity.outputs.stamp }}
