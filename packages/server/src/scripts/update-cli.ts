@@ -7,7 +7,7 @@ import { pipeline } from 'node:stream/promises';
 import { createWriteStream } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 import { UpdatePreferencesSchema } from '@tx5dr/contracts';
-import { compareUpdateVersions, fetchChannelManifest } from '@tx5dr/core';
+import { compareUpdateVersions, EmptyReleaseChannelError, fetchChannelManifest } from '@tx5dr/core';
 import { getUpdatePreferences, setUpdatePreferences } from '../services/UpdatePreferences.js';
 import { tx5drPaths } from '../utils/app-paths.js';
 import { SERVER_BUILD_INFO } from '../generated/buildInfo.js';
@@ -23,7 +23,14 @@ async function main() {
   const base = (process.env.TX5DR_DOWNLOAD_BASE_URL || 'https://dl.tx5dr.com').replace(/\/$/, '');
   const version = option('--version');
   if (version && !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) throw new Error('Invalid version');
-  const manifest = (await fetchChannelManifest('server', channel, base, version)).manifest;
+  const manifest = (await fetchChannelManifest('server', channel, base, version).catch(error => {
+    if (error instanceof EmptyReleaseChannelError) {
+      throw new Error(version
+        ? `Server version ${version} is not published in the ${channel} channel.`
+        : `No Server version is published in the ${channel} channel yet. Your current installation is unchanged.`);
+    }
+    throw error;
+  })).manifest;
   if (manifest.product !== 'server' || manifest.channel !== channel || (version && manifest.version !== version)) throw new Error('Manifest does not match requested target');
   const downgrade = compareUpdateVersions(manifest.version, SERVER_BUILD_INFO.version) < 0;
   process.stdout.write(`${SERVER_BUILD_INFO.version} (${SERVER_BUILD_INFO.channel}) -> ${manifest.version} (${channel})\n`);
