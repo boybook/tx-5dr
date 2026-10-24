@@ -22,7 +22,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       sha: ${{ steps.identity.outputs.sha }}
       version: ${{ steps.identity.outputs.version }}
@@ -46,7 +46,7 @@ jobs:
       - run: yarn check:versions && yarn check:i18n
       - run: yarn build
       - run: yarn lint
-      - run: yarn test
+      - run: yarn test --concurrency=1
       - run: node --test scripts/tests/release-policy.test.mjs
   electron:
     needs: verify
@@ -83,7 +83,7 @@ jobs:
   publish:
     needs: [verify, electron, server, android, docker]
     if: needs.verify.outputs.publish == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     concurrency:
