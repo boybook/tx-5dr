@@ -40,3 +40,9 @@ Debian installer performs runtime-library preparation before starting the app.
 Testing an unpacked artifact on an older, unprepared runner is not equivalent
 to testing that installation flow. Windows audify retains its source-build
 policy for the existing WASAPI patch.
+
+The Windows audify patch releases the WASAPI device enumerator before COM
+uninitialization. Reversing that order can unload `MMDevApi.dll` before its
+interface is released during garbage collection, crashing even without an
+open audio stream. Windows CI exercises repeated enumeration and collection
+as well as full packaged server startup.

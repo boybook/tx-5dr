@@ -442,6 +442,10 @@ jobs:
             package_with_retry yarn make:autoupdate
           fi
 
+      - name: Verify WASAPI device discovery cleanup
+        if: matrix.platform == 'win32'
+        run: node --expose-gc scripts/tests/windows-audio-lifecycle.mjs
+
       - name: Enable Windows native crash diagnostics
         if: matrix.platform == 'win32'
         shell: pwsh

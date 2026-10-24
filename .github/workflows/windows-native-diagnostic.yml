@@ -17,6 +17,8 @@ jobs:
           python-version: '3.11'
       - shell: bash
         run: corepack enable && yarn install --immutable && yarn build
+      - name: Verify WASAPI device discovery cleanup
+        run: node --expose-gc scripts/tests/windows-audio-lifecycle.mjs
       - name: Capture native exception
         shell: pwsh
         run: |
