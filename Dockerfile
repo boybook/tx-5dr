@@ -1,6 +1,6 @@
 # TX-5DR Docker Image - Multi-Architecture Support
 # 使用多阶段构建来减小最终镜像大小
-FROM node:22.15.1-bookworm-slim AS builder
+FROM node:22-trixie-slim AS builder
 
 # 设置环境变量
 ENV YARN_VERSION=4.9.1
@@ -21,7 +21,6 @@ RUN echo "Building for platform: $(uname -m)" && \
 # 安装构建依赖
 RUN apt-get update && apt-get install -y \
     build-essential \
-    cmake \
     python3 \
     python3-dev \
     pkg-config \
@@ -106,13 +105,13 @@ RUN yarn cache clean && \
     packages/*/node_modules/.cache
 
 # 运行时镜像
-FROM node:22.15.1-bookworm-slim
+FROM node:22-trixie-slim
 
 # 设置环境变量
 ENV DEBIAN_FRONTEND=noninteractive
 ENV NODE_ENV=production
 
-# 运行共享安装脚本（--docker 模式）修复 GLIBCXX 等兼容性问题
+# Prepare native runtime dependencies through the shared installer.
 COPY linux/lib/ /tmp/tx5dr-linux/lib/
 COPY linux/install.sh /tmp/tx5dr-linux/install.sh
 RUN bash /tmp/tx5dr-linux/install.sh --docker
