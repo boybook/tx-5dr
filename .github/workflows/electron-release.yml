@@ -448,10 +448,12 @@ jobs:
         run: |
           $dumpDir = Join-Path $env:RUNNER_TEMP 'tx5dr-crash-dumps'
           New-Item -ItemType Directory -Force $dumpDir | Out-Null
-          $key = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\node.exe'
-          New-Item -Force $key | Out-Null
-          New-ItemProperty $key -Name DumpFolder -PropertyType ExpandString -Value $dumpDir -Force | Out-Null
-          New-ItemProperty $key -Name DumpType -PropertyType DWord -Value 1 -Force | Out-Null
+          Invoke-WebRequest https://download.sysinternals.com/files/Procdump.zip -OutFile "$env:RUNNER_TEMP/procdump.zip"
+          Expand-Archive "$env:RUNNER_TEMP/procdump.zip" "$env:RUNNER_TEMP/procdump"
+          $exe = "$env:RUNNER_TEMP/procdump/procdump64.exe"
+          if ((Get-AuthenticodeSignature $exe).Status -ne 'Valid') { throw 'Invalid ProcDump signature' }
+          "TX5DR_SMOKE_DEBUGGER=$exe" >> $env:GITHUB_ENV
+          "TX5DR_SMOKE_DUMPS=$dumpDir" >> $env:GITHUB_ENV
 
       - name: Verify auto-update package contents
         shell: bash

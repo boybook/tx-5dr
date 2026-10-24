@@ -22,7 +22,11 @@ const listener = net.createServer(); listener.listen(0, '127.0.0.1'); await once
 const port = listener.address().port; await new Promise(resolve => listener.close(resolve));
 const token = crypto.randomBytes(32).toString('hex');
 let output = '';
-const child = spawn(node, [path.join(root, 'packages/server/dist/index.js')], {
+const serverArgs = [path.join(root, 'packages/server/dist/index.js')];
+const debuggerPath = process.env.TX5DR_SMOKE_DEBUGGER;
+const child = spawn(debuggerPath || node, debuggerPath
+  ? ['-accepteula', '-e', '-x', process.env.TX5DR_SMOKE_DUMPS, node, ...serverArgs]
+  : serverArgs, {
   cwd: path.join(root, 'packages/server/dist'), env: { ...runtimeEnv, NODE_ENV: 'production', PORT: String(port), HOST: '127.0.0.1',
     TX5DR_CONFIG_DIR: path.join(temporary, 'config'), TX5DR_DATA_DIR: path.join(temporary, 'data'),
     TX5DR_CACHE_DIR: path.join(temporary, 'cache'), TX5DR_LOGS_DIR: path.join(temporary, 'logs'),
