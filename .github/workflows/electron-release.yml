@@ -442,6 +442,17 @@ jobs:
             package_with_retry yarn make:autoupdate
           fi
 
+      - name: Enable Windows native crash diagnostics
+        if: matrix.platform == 'win32'
+        shell: pwsh
+        run: |
+          $dumpDir = Join-Path $env:RUNNER_TEMP 'tx5dr-crash-dumps'
+          New-Item -ItemType Directory -Force $dumpDir | Out-Null
+          $key = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\node.exe'
+          New-Item -Force $key | Out-Null
+          New-ItemProperty $key -Name DumpFolder -PropertyType ExpandString -Value $dumpDir -Force | Out-Null
+          New-ItemProperty $key -Name DumpType -PropertyType DWord -Value 1 -Force | Out-Null
+
       - name: Verify auto-update package contents
         shell: bash
         run: |
@@ -572,6 +583,22 @@ jobs:
           ')
 
           echo "✅ electron-builder package content verified: $RESOURCES_DIR"
+
+      - name: Report Windows native crash
+        if: failure() && matrix.platform == 'win32'
+        shell: pwsh
+        run: |
+          Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 1000,1001; StartTime = (Get-Date).AddMinutes(-15) } -ErrorAction SilentlyContinue |
+            Select-Object TimeCreated, Message | Format-List
+
+      - name: Save Windows native crash evidence
+        if: failure() && matrix.platform == 'win32'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-native-crash
+          path: ${{ runner.temp }}/tx5dr-crash-dumps
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Validate macOS signing and notarization
         if: matrix.platform == 'darwin' && !inputs.verify_only
