@@ -135,10 +135,10 @@ for (const file of uploadFiles) {
     if (!(await fs.readFile(file)).equals(await fs.readFile(path.join(downloaded, name)))) throw new Error(`Immutable asset conflict: ${name}`);
   } else run('gh', ['release', 'upload', tag, file, '--repo', repo]);
 }
-// `gh api` passes this path directly to GitHub. A literal `+` is accepted in
-// release tag names; percent-encoding it makes the REST endpoint look for a
-// different tag instead of the draft we just created.
-const githubRelease = JSON.parse(run('gh', ['api', `repos/${repo}/releases/tags/${tag}`]));
+// `gh release` resolves tag names containing `+` correctly. The REST
+// `releases/tags/:tag` endpoint treats that character inconsistently when it is
+// passed through `gh api`, so use the CLI's resolved release view here.
+const githubRelease = JSON.parse(run('gh', ['release', 'view', tag, '--repo', repo, '--json', 'assets']));
 for (const file of uploadFiles) {
   const asset = githubRelease.assets.find(item => item.name === path.basename(file));
   const expectedHash = await sha256(createReadStream(file));
