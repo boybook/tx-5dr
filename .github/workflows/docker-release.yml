@@ -54,7 +54,12 @@ jobs:
       - name: Smoke both image architectures
         if: ${{ !inputs.verify_only }}
         env:
-          IMAGE: ${{ secrets.DOCKER_HUB_USERNAME }}/tx-5dr@${{ steps.build.outputs.digest }}
+          # The unique candidate tag points to the index created by this build.
+          # Some hosted Docker daemons reject `docker run` against a multi-arch
+          # index digest with "cannot overwrite digest" before the container
+          # starts, so smoke the exact candidate tag and record the immutable
+          # build digest separately below.
+          IMAGE: ${{ secrets.DOCKER_HUB_USERNAME }}/tx-5dr:candidate-${{ github.run_id }}-${{ github.run_attempt }}
           SOURCE_SHA: ${{ inputs.source_ref }}
         run: |
           set -euo pipefail
