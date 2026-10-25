@@ -30,6 +30,7 @@ import {
 } from './audioDeviceOptions';
 import {
   formatChannelText,
+  formatDeviceDetail,
   formatDeviceText,
   getAudioDeviceCategory,
   getAudioDeviceStatusBadges,
@@ -473,41 +474,47 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
       ?? null;
   }
 
-  const renderDeviceItems = (options: AudioDeviceSelectOption[]) => options.map((option) => (
-    <SelectItem
-      key={option.key}
-      textValue={option.device ? formatDeviceText(t, option.device) : `${option.deviceName} (${t('audio.deviceUnavailableShort')})`}
-    >
-      <div className="flex flex-col">
-        <span className="flex items-center gap-2">
-          {option.device ? formatDeviceText(t, option.device) : option.deviceName}
-          {option.device && (
-            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-default-100 text-default-600 dark:bg-default-800 dark:text-default-300">
-              {t(`audio.deviceCategory.${getAudioDeviceCategory(option.device)}`)}
-            </span>
+  const renderDeviceItems = (options: AudioDeviceSelectOption[]) => options.map((option) => {
+    const deviceDetail = formatDeviceDetail(option.device);
+    return (
+      <SelectItem
+        key={option.key}
+        textValue={option.device ? formatDeviceText(t, option.device) : `${option.deviceName} (${t('audio.deviceUnavailableShort')})`}
+      >
+        <div className="flex flex-col">
+          <span className="flex items-center gap-2">
+            {option.device ? formatDeviceText(t, option.device) : option.deviceName}
+            {option.device && (
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-default-100 text-default-600 dark:bg-default-800 dark:text-default-300">
+                {t(`audio.deviceCategory.${getAudioDeviceCategory(option.device)}`)}
+              </span>
+            )}
+            {option.isMissing && (
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-warning-100 text-warning-700 dark:bg-warning-900 dark:text-warning-300">
+                {t('audio.deviceUnavailableShort')}
+              </span>
+            )}
+            {option.device && getAudioDeviceStatusBadges(option.device).map((badge) => (
+              <span key={badge.key} className={getStatusBadgeClassName(badge.tone)}>
+                {t(`audio.deviceStatus.${badge.key}`)}
+              </span>
+            ))}
+          </span>
+          <span className="text-xs text-default-400">
+            {option.device
+              ? `${formatChannelText(t, option.device.channels)}, ${formatHertz(option.device.sampleRate)}`
+              : t('audio.deviceMissingPreservedShort')}
+          </span>
+          {deviceDetail && (
+            <span className="text-xs text-default-400">{deviceDetail}</span>
           )}
-          {option.isMissing && (
-            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-warning-100 text-warning-700 dark:bg-warning-900 dark:text-warning-300">
-              {t('audio.deviceUnavailableShort')}
-            </span>
+          {option.device?.failureReason && (
+            <span className="text-xs text-danger-500">{option.device.failureReason}</span>
           )}
-          {option.device && getAudioDeviceStatusBadges(option.device).map((badge) => (
-            <span key={badge.key} className={getStatusBadgeClassName(badge.tone)}>
-              {t(`audio.deviceStatus.${badge.key}`)}
-            </span>
-          ))}
-        </span>
-        <span className="text-xs text-default-400">
-          {option.device
-            ? `${formatChannelText(t, option.device.channels)}, ${formatHertz(option.device.sampleRate)}`
-            : t('audio.deviceMissingPreservedShort')}
-        </span>
-        {option.device?.failureReason && (
-          <span className="text-xs text-danger-500">{option.device.failureReason}</span>
-        )}
-      </div>
-    </SelectItem>
-  ));
+        </div>
+      </SelectItem>
+    );
+  });
 
   const renderDirectionSection = (direction: Direction) => {
     const isInput = direction === 'input';
