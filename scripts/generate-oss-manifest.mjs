@@ -54,7 +54,7 @@ function ensureAbsoluteUrl(value) {
 }
 
 function joinUrl(base, suffix) {
-  return `${trimSlash(base)}/${suffix.replace(/^\/+/, '')}`;
+  return `${trimSlash(base)}/${suffix.replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/')}`;
 }
 
 function normalizeObjectPrefix(value) {
@@ -316,8 +316,7 @@ async function main() {
         manifest[`latest_sha256_${asset.arch}_${asset.package_type}`] = asset.sha256;
       }
       if (asset.name === 'install-online.sh') {
-        const stableUrl = joinUrl(baseUrl, 'tx-5dr/server/latest/install-online.sh');
-        manifest.latest_url_install_online = stableUrl;
+        manifest.latest_url_install_online = asset.url_oss || asset.url;
         manifest.latest_sha256_install_online = asset.sha256;
       }
     }

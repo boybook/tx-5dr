@@ -135,9 +135,7 @@ for (const file of uploadFiles) {
     if (!(await fs.readFile(file)).equals(await fs.readFile(path.join(downloaded, name)))) throw new Error(`Immutable asset conflict: ${name}`);
   } else run('gh', ['release', 'upload', tag, file, '--repo', repo]);
 }
-// `gh release` resolves tag names containing `+` correctly. The REST
-// `releases/tags/:tag` endpoint treats that character inconsistently when it is
-// passed through `gh api`, so use the CLI's resolved release view here.
+// Resolve the draft through the release CLI before its tag is published.
 const githubRelease = JSON.parse(run('gh', ['release', 'view', tag, '--repo', repo, '--json', 'assets']));
 for (const file of uploadFiles) {
   const asset = githubRelease.assets.find(item => item.name === path.basename(file));
@@ -157,14 +155,15 @@ for (const [product, manifest] of Object.entries(products)) {
     const name = path.basename(file);
     const asset = manifest.assets.find(item => item.name === name) ?? { name, sha256: await sha256(createReadStream(file)) };
     const object = `tx-5dr/${product}/builds/${version}/${asset.name}`;
+    const objectUrl = `${base}/${object.split('/').map(encodeURIComponent).join('/')}`;
     // A previously uploaded object's content is checked before any write.
-    const remote = await fetch(`${base}/${object}`);
+    const remote = await fetch(objectUrl);
     if (remote.ok) {
       const hash = await sha256(remote.body);
       if (hash !== asset.sha256) throw new Error(`Immutable OSS conflict: ${object}`);
     } else if (remote.status === 404) oss('cp', path.join(staging, product, asset.name), `oss://${bucket}/${object}`);
     else throw new Error(`OSS preflight HTTP ${remote.status}`);
-    const verify = await fetch(`${base}/${object}`);
+    const verify = await fetch(objectUrl);
     if (!verify.ok || await sha256(verify.body) !== asset.sha256) throw new Error(`CDN verification failed: ${object}`);
   }
   oss('cp', path.join(staging, `${product}-manifest.json`), `oss://${bucket}/tx-5dr/${product}/builds/${version}/latest.json`, '--force');
