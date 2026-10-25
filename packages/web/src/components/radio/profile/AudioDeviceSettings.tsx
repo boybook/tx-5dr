@@ -143,6 +143,30 @@ export function getSelectedAudioDeviceKey(
     : '';
 }
 
+export function findSelectedAudioDeviceOption(
+  options: AudioDeviceSelectOption[],
+  selection: {
+    routeKey?: string;
+    hardwareId?: string;
+    deviceId?: string;
+    deviceName?: string;
+  },
+): AudioDeviceSelectOption | undefined {
+  if (selection.routeKey) {
+    return options.find((option) => option.routeKey === selection.routeKey);
+  }
+  if (selection.hardwareId) {
+    return options.find((option) => option.device?.hardwareId === selection.hardwareId);
+  }
+  if (selection.deviceId) {
+    return options.find((option) => option.device?.id === selection.deviceId);
+  }
+  if (selection.deviceName) {
+    return options.find((option) => option.deviceName === selection.deviceName);
+  }
+  return undefined;
+}
+
 export function resolveUniqueRouteKey(devices: AudioDevice[], deviceName: string): string {
   const matchingRouteKeys = devices
     .filter((device) => device.name === deviceName && device.routeKey)
@@ -460,16 +484,24 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
   function getEffectiveDevice(direction: Direction): AudioDevice | null {
     const selectedName = direction === 'input' ? selectedInputDeviceName : selectedOutputDeviceName;
     const selectedRouteKey = direction === 'input' ? selectedInputRouteKey : selectedOutputRouteKey;
+    const selectedDeviceId = direction === 'input' ? selectedInputDeviceId : selectedOutputDeviceId;
+    const selectedHardwareId = direction === 'input' ? selectedInputHardwareId : selectedOutputHardwareId;
     const devices = direction === 'input' ? inputDevices : outputDevices;
     const resolution = direction === 'input' ? deviceResolution?.input : deviceResolution?.output;
     const resolutionMatchesSelection = selectedRouteKey
       ? resolution?.configuredRouteKey === selectedRouteKey
-      : (resolution?.configuredDeviceName ?? '') === selectedName;
+      : selectedHardwareId
+        ? resolution?.configuredHardwareId === selectedHardwareId
+        : selectedDeviceId
+          ? resolution?.configuredDeviceId === selectedDeviceId
+          : (resolution?.configuredDeviceName ?? '') === selectedName;
     if (resolutionMatchesSelection && resolution?.status === 'missing') {
       return null;
     }
     return (resolutionMatchesSelection ? resolution?.effectiveDevice : undefined)
       ?? (selectedRouteKey ? devices.find((device) => device.routeKey === selectedRouteKey) : undefined)
+      ?? (selectedHardwareId ? devices.find((device) => device.hardwareId === selectedHardwareId) : undefined)
+      ?? (selectedDeviceId ? devices.find((device) => device.id === selectedDeviceId) : undefined)
       ?? devices.find((device) => device.name === selectedName)
       ?? null;
   }
@@ -535,13 +567,12 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
     const selectedDeviceId = isInput ? selectedInputDeviceId : selectedOutputDeviceId;
     const selectedHardwareId = isInput ? selectedInputHardwareId : selectedOutputHardwareId;
     const displayOptions = buildAudioDeviceSelectOptions(direction, devices, selectedName, resolution, selectedRouteKey);
-    const selectedOption = selectedRouteKey
-      ? displayOptions.find((option) => option.routeKey === selectedRouteKey)
-      : displayOptions.find((option) => (
-          (selectedHardwareId && option.device?.hardwareId === selectedHardwareId)
-          || (selectedDeviceId && option.device?.id === selectedDeviceId)
-          || option.deviceName === selectedName
-        ));
+    const selectedOption = findSelectedAudioDeviceOption(displayOptions, {
+      routeKey: selectedRouteKey,
+      hardwareId: selectedHardwareId,
+      deviceId: selectedDeviceId,
+      deviceName: selectedName,
+    });
     const sampleOptions = deriveSampleRateOptions(effectiveDevice, sampleRate);
     const bufferOptions = deriveBufferSizeOptions(effectiveDevice?.capabilities?.bufferSizes ?? bufferSizes, bufferSize);
     const sampleRateConfigurable = effectiveDevice

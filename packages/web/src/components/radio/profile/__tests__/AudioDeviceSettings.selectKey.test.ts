@@ -3,6 +3,7 @@ import type { AudioDevice, AudioDeviceResolution } from '@tx5dr/contracts';
 import {
   audioSettingsEqual,
   buildAudioDeviceSelectOptions,
+  findSelectedAudioDeviceOption,
   getDeviceNameFromSelectKey,
   getSelectedAudioDeviceKey,
   makeAudioDeviceSelectKey,
@@ -275,5 +276,26 @@ describe('AudioDeviceSettings select keys', () => {
       'input::usb:1-1',
       'input::usb:1-2',
     ]);
+
+    expect(findSelectedAudioDeviceOption(options, {
+      deviceName: 'USB Audio CODEC',
+      hardwareId: 'usb:1-2',
+    })?.device?.hardwareId).toBe('usb:1-2');
+  });
+
+  it('does not fall back to the first same-named device before checking the device ID', () => {
+    const options = buildAudioDeviceSelectOptions(
+      'output',
+      [
+        { ...builtInInput, type: 'output', id: 'output-3', name: 'USB Audio CODEC' },
+        { ...builtInInput, type: 'output', id: 'output-5', name: 'USB Audio CODEC' },
+      ],
+      'USB Audio CODEC',
+    );
+
+    expect(findSelectedAudioDeviceOption(options, {
+      deviceName: 'USB Audio CODEC',
+      deviceId: 'output-5',
+    })?.device?.id).toBe('output-5');
   });
 });
