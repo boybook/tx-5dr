@@ -652,17 +652,27 @@ export const VoiceFrequencyControl: React.FC<VoiceFrequencyControlProps> = ({ pr
   // Handle radio mode change
   const handleRadioModeChange = async (mode: string) => {
     if (!canSetFrequency) return;
+    const previousRadioMode = currentRadioMode;
     setCurrentRadioMode(mode);
     if (presetMode === 'VOICE' && !modeWriteWarning) {
       connection.state.radioService?.setVoiceRadioMode(mode);
     } else {
-      await setRadioFrequencyWithIntent({
-        frequency: currentFrequency,
-        mode: presetMode,
-        band: currentPresetSelection.band,
-        description: currentPresetSelection.label,
-        radioMode: mode,
-      });
+      try {
+        const response = await setRadioFrequencyWithIntent({
+          frequency: currentFrequency,
+          mode: presetMode,
+          band: currentPresetSelection.band,
+          description: currentPresetSelection.label,
+          radioMode: mode,
+        });
+        setCurrentRadioMode(response.radioMode || previousRadioMode);
+      } catch (error) {
+        setCurrentRadioMode(previousRadioMode);
+        logger.error('Failed to set voice radio mode:', error);
+        if (error instanceof ApiError) {
+          showErrorToast({ userMessage: error.userMessage, suggestions: error.suggestions, severity: error.severity, code: error.code });
+        }
+      }
     }
   };
 
