@@ -1,0 +1,62 @@
+name: Retry verified formal publication
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Completed formal release run whose product jobs all passed
+        required: true
+        type: string
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: tx5dr-channel-publish
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.15.1'
+      - name: Verify original run and retain publication tooling
+        id: identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ORIGINAL_RUN: ${{ inputs.run_id }}
+        run: |
+          node scripts/verify-publication-retry.mjs >> "$GITHUB_OUTPUT"
+          node --test scripts/tests/release-http.test.mjs scripts/tests/publication-retry.test.mjs
+          mkdir "$RUNNER_TEMP/publication-tools"
+          cp scripts/publish-release.mjs scripts/release-http.mjs "$RUNNER_TEMP/publication-tools/"
+      - name: Check out immutable product source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.identity.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.run_id }}
+          pattern: tx*
+          path: release-inputs
+      - run: bash scripts/install-ossutil.sh
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+      - name: Resume publication using verified original artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.identity.outputs.tag }}
+          SOURCE_SHA: ${{ steps.identity.outputs.sha }}
+          OSS_ACCESS_KEY_ID: ${{ secrets.ALIYUN_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.ALIYUN_ACCESS_KEY_SECRET }}
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
+          OSS_BASE_URL: ${{ secrets.OSS_BASE_URL }}
+        run: |
+          cp "$RUNNER_TEMP/publication-tools/"*.mjs scripts/
+          node scripts/publish-release.mjs

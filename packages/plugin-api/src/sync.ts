@@ -30,6 +30,8 @@
  * results, details and progress payloads must remain JSON-compatible.
  */
 export interface LogbookSyncProvider {
+  /** Optional read-only state projection. Must not start or advance synchronization. */
+  getStatus?(callsign: string): Promise<import('@tx5dr/contracts').SyncStatus | null>;
   /** Stable service identifier (e.g. 'lotw', 'qrz', 'wavelog'). */
   readonly id: string;
 
@@ -127,6 +129,13 @@ export interface SyncAction {
    * `bridge.invoke()` to trigger the actual sync.
    */
   pageId?: string;
+  /**
+   * Optional string parameters for a page action. The Host binds resource and
+   * authentication fields itself; callsign, operatorId, launchId, credentials
+   * and underscore-prefixed keys are reserved. Each user click receives a
+   * stable Host launchId across iframe reloads; plugins own start idempotency.
+   */
+  pageParams?: Record<string, string>;
   /**
    * When set (and `pageId` is not), clicking this action directly triggers
    * the corresponding provider method.

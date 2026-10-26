@@ -48,7 +48,7 @@ import { evaluateAutomaticTargetEligibility } from './AutoTargetEligibility.js';
 import type { PluginEventBusOwner } from './PluginEventBusHost.js';
 import { createLogger } from '../utils/logger.js';
 import type { LoadedPlugin, PluginManagerDeps } from './types.js';
-import { snapshotPluginData } from './plugin-data-boundary.js';
+import { markDetachedPluginData, snapshotPluginData } from './plugin-data-boundary.js';
 import { SERVER_BUILD_INFO } from '../generated/buildInfo.js';
 
 type HostHamlibModule = {
@@ -1045,17 +1045,30 @@ export class PluginContextFactory {
         return logBook;
       };
 
-      const buildQuery = (filter?: QSOQueryFilter) => ({
-        callsign: filter?.callsign,
-        timeRange: filter?.timeRange,
-        frequencyRange: filter?.frequencyRange,
-        mode: filter?.mode,
-        band: filter?.band,
-        qslStatus: filter?.qslStatus,
-        limit: filter?.limit,
-        offset: filter?.offset,
-        orderDirection: filter?.orderDirection,
-      });
+      const buildQuery = (filter?: QSOQueryFilter) => {
+        const ids = filter?.ids;
+        if (ids !== undefined && (!Array.isArray(ids) || ids.length > 1000)) {
+          throw new TypeError('ids must contain at most 1000 non-empty record IDs');
+        }
+        const selectedIds = ids === undefined ? undefined : new Set<string>();
+        if (ids) for (let index = 0; index < ids.length; index++) {
+          const id = ids[index];
+          if (typeof id !== 'string' || !id.trim()) throw new TypeError('ids must contain at most 1000 non-empty record IDs');
+          selectedIds!.add(id);
+        }
+        return {
+          ids: selectedIds === undefined ? undefined : [...selectedIds],
+          callsign: filter?.callsign,
+          timeRange: filter?.timeRange,
+          frequencyRange: filter?.frequencyRange,
+          mode: filter?.mode,
+          band: filter?.band,
+          qslStatus: filter?.qslStatus,
+          limit: filter?.limit,
+          offset: filter?.offset,
+          orderDirection: filter?.orderDirection,
+        };
+      };
 
       const toLogBookStatistics = async (logBook: LogBookInstance | null): Promise<LogBookStatistics | null> => {
         if (!logBook) {
@@ -1147,7 +1160,7 @@ export class PluginContextFactory {
         async readQsoSnapshot(filter?: QSOQueryFilter) {
           const logBook = getRequiredLogBook();
           const result = await logBook.provider.readQsoSnapshot(buildQuery(filter));
-          return snapshotPluginData(result, 'structured');
+          return markDetachedPluginData(snapshotPluginData(result, 'structured'));
         },
         async countQSOs(filter?: QSOQueryFilter) {
           const logBook = getExistingLogBook();

@@ -91,6 +91,8 @@ export class LogbookOperationError extends Error {
  * 日志查询选项
  */
 export interface LogQueryOptions {
+  /** Exact IDs selected through the record index, intersected with other filters. */
+  ids?: readonly string[];
   /**
    * 呼号（支持模糊匹配）
    */
@@ -131,6 +133,11 @@ export interface LogQueryOptions {
    * DXCC 状态筛选
    */
   dxccStatus?: 'deleted';
+
+  /**
+   * 只保留 DXCC 实体待复核（没能可靠解析出实体）的记录
+   */
+  dxccNeedsReview?: true;
 
   /**
    * QSL 流程筛选

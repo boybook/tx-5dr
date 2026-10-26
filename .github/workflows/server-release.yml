@@ -1,19 +1,20 @@
 name: Build and Release Linux Server
 
 on:
-  push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
-  workflow_dispatch:
+  workflow_call:
     inputs:
       version:
-        description: 'Release version (e.g., v1.0.0, leave empty for nightly)'
-        required: false
+        type: string
         default: ''
+      source_ref:
+        type: string
+        required: true
+      verify_only:
+        type: boolean
+        default: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-server-linux:
@@ -22,11 +23,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             arch: amd64
             artifact_name: tx5dr-server-linux-amd64
 
-          - os: ubuntu-22.04-arm
+          - os: ubuntu-24.04-arm
             arch: arm64
             artifact_name: tx5dr-server-linux-arm64
 
@@ -37,6 +38,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.source_ref }}
           fetch-depth: 20
 
       - name: Setup Node.js
@@ -63,25 +65,25 @@ jobs:
         run: sudo gem install fpm --no-document
 
       - name: Install dependencies
-        run: yarn install
+        run: yarn install --immutable
 
       - name: Prepare server build metadata
         env:
-          RELEASE_VERSION: ${{ github.event.inputs.version }}
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
           yarn check:versions
-          COMMIT_STAMP=$(git show -s --date=format-local:%Y%m%d%H%M --format=%cd "${{ github.sha }}")
+          COMMIT_STAMP=$(git show -s --date=format-local:%Y%m%d%H%M --format=%cd "${{ inputs.source_ref }}")
           if [ -z "$RELEASE_VERSION" ]; then
             node scripts/prepare-server-build-info.mjs \
               --channel nightly \
-              --commit "${{ github.sha }}" \
+              --commit "${{ inputs.source_ref }}" \
               --build-stamp "$COMMIT_STAMP" \
               --distribution linux-service
           else
             node scripts/prepare-server-build-info.mjs \
               --channel release \
               --version "${RELEASE_VERSION#v}" \
-              --commit "${{ github.sha }}" \
+              --commit "${{ inputs.source_ref }}" \
               --build-stamp "$COMMIT_STAMP" \
               --distribution linux-service
           fi
@@ -111,6 +113,7 @@ jobs:
           dpkg-deb -x "$DEB_FILE" "$EXTRACT_DIR"
           APP_ROOT="$EXTRACT_DIR/usr/share/tx5dr"
           export NODE_PATH="$APP_ROOT/node_modules"
+          SOURCE_SHA="${{ inputs.source_ref }}" node scripts/smoke-packaged-server.mjs "$APP_ROOT"
           (cd "$APP_ROOT/packages/server/dist/scripts" && node -e '
             const { PNG } = require("pngjs");
             if (typeof PNG.sync.read !== "function") throw new Error("pngjs unavailable");
@@ -135,7 +138,7 @@ jobs:
 
       - name: Prepare artifacts
         run: |
-          VERSION="${{ github.event.inputs.version }}"
+          VERSION="${{ inputs.version }}"
           ARCH="${{ matrix.arch }}"
           mkdir -p release-artifacts
 
@@ -163,393 +166,3 @@ jobs:
           name: ${{ matrix.artifact_name }}
           path: release-artifacts/*
           retention-days: 30
-
-  create-release:
-    needs: [build-server-linux]
-    runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
-    env:
-      OSS_ACCESS_KEY_ID: ${{ secrets.ALIYUN_ACCESS_KEY_ID }}
-      OSS_ACCESS_KEY_SECRET: ${{ secrets.ALIYUN_ACCESS_KEY_SECRET }}
-      OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
-      OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
-      OSS_BASE_URL: ${{ secrets.OSS_BASE_URL }}
-      OSS_REGION: ${{ secrets.OSS_REGION }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 20
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist/
-
-      - name: Build install-online.sh
-        env:
-          TX5DR_DOWNLOAD_BASE_URL: ${{ secrets.OSS_BASE_URL }}
-        run: |
-          bash scripts/build-install-script.sh
-          cp dist/install-online.sh release-assets/ 2>/dev/null || true
-
-      - name: Prepare release assets
-        run: |
-          mkdir -p publish-assets
-          mkdir -p release-assets
-          find dist/ -type f \( -name "*.deb" -o -name "*.rpm" \) -exec cp {} publish-assets/ \;
-          # install-online.sh was already copied above
-          cp dist/install-online.sh publish-assets/ 2>/dev/null || true
-          find publish-assets/ -type f -exec cp {} release-assets/ \;
-          ls -lh release-assets/
-
-      - name: Generate release info
-        id: release_info
-        env:
-          TZ: UTC
-        run: |
-          echo "timestamp=$(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
-          echo "short_sha=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
-          echo "commit_title=$(git show -s --format=%s "${{ github.sha }}")" >> $GITHUB_OUTPUT
-          echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
-          COMMIT_STAMP=$(git show -s --date=format-local:%Y%m%d%H%M --format=%cd "${{ github.sha }}")
-          if [ -z "${{ github.event.inputs.version }}" ]; then
-            echo "tag=nightly-server" >> $GITHUB_OUTPUT
-            HOST_VERSION=$(node scripts/host-version.mjs --channel nightly --build-stamp "$COMMIT_STAMP" --commit "${{ github.sha }}")
-            echo "version=${HOST_VERSION}" >> $GITHUB_OUTPUT
-            echo "channel=nightly" >> $GITHUB_OUTPUT
-            echo "channel_path=nightly" >> $GITHUB_OUTPUT
-          else
-            VERSION_NO_V="${{ github.event.inputs.version }}"
-            echo "tag=${{ github.event.inputs.version }}-server" >> $GITHUB_OUTPUT
-            echo "version=${VERSION_NO_V#v}" >> $GITHUB_OUTPUT
-            echo "channel=release" >> $GITHUB_OUTPUT
-            echo "channel_path=release" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Prepare server release metadata
-        run: |
-          mkdir -p release-metadata
-          cat > release-metadata/server-release-notes.md <<EOF
-          Channel: ${{ steps.release_info.outputs.channel }}
-          Version: ${{ steps.release_info.outputs.version }}
-          Commit: ${{ steps.release_info.outputs.short_sha }}
-          Built at: ${{ steps.release_info.outputs.timestamp }}
-          EOF
-
-          node - <<'EOF' > release-metadata/recent-commits.json
-          const { execFileSync } = require('node:child_process');
-          const lines = execFileSync('git', [
-            'log',
-            '-n',
-            '10',
-            '--date=iso-strict',
-            '--pretty=format:%H%x09%h%x09%s%x09%cI',
-            process.env.GITHUB_SHA,
-          ], { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
-          const commits = lines.map((line) => {
-            const [id, shortId, title, publishedAt] = line.split('\t');
-            return { id, short_id: shortId, title, published_at: publishedAt };
-          });
-          process.stdout.write(JSON.stringify(commits));
-          EOF
-
-          node scripts/generate-oss-manifest.mjs \
-            --product server \
-            --channel "${{ steps.release_info.outputs.channel }}" \
-            --tag "${{ steps.release_info.outputs.tag }}" \
-            --version "${{ steps.release_info.outputs.version }}" \
-            --commit "${{ steps.release_info.outputs.short_sha }}" \
-            --commit-title "${{ steps.release_info.outputs.commit_title }}" \
-            --published-at "${{ steps.release_info.outputs.timestamp }}" \
-            --base-url "${{ secrets.OSS_BASE_URL }}" \
-            --object-prefix "tx-5dr/server/${{ steps.release_info.outputs.tag }}" \
-            --oss-base-url "${{ secrets.OSS_BASE_URL }}" \
-            --oss-object-prefix "tx-5dr/server/${{ steps.release_info.outputs.tag }}" \
-            --github-base-url "https://github.com/${{ github.repository }}/releases/download" \
-            --github-object-prefix "${{ steps.release_info.outputs.tag }}" \
-            --assets-dir "publish-assets" \
-            --release-notes-file "release-metadata/server-release-notes.md" \
-            --recent-commits-json "$(cat release-metadata/recent-commits.json)" \
-            --output "release-assets/latest.json"
-
-      - name: Validate server manifest
-        shell: bash
-        run: |
-          node - <<'EOF'
-          const fs = require('node:fs');
-          const manifest = JSON.parse(fs.readFileSync('release-assets/latest.json', 'utf8'));
-          if (!manifest.version) throw new Error('server manifest missing version');
-          if (!manifest.commit_title) throw new Error('server manifest missing commit_title');
-          if (!Array.isArray(manifest.recent_commits) || manifest.recent_commits.length === 0 || manifest.recent_commits.length > 10) {
-            throw new Error('server manifest missing recent_commits');
-          }
-          if (manifest.recent_commits[0]?.short_id !== manifest.commit) {
-            throw new Error('server manifest recent_commits[0] does not match top-level commit');
-          }
-          if (manifest.recent_commits[0]?.title !== manifest.commit_title) {
-            throw new Error('server manifest recent_commits[0] does not match top-level commit_title');
-          }
-          if (!Array.isArray(manifest.assets) || manifest.assets.length === 0) {
-            throw new Error('server manifest missing assets');
-          }
-          const hasDeb = manifest.assets.some((asset) => asset.platform === 'linux' && asset.package_type === 'deb' && asset.url_cn && asset.url_global);
-          const hasRpm = manifest.assets.some((asset) => asset.platform === 'linux' && asset.package_type === 'rpm' && asset.url_cn && asset.url_global);
-          if (!hasDeb || !hasRpm) throw new Error('server manifest missing linux packages with dual urls');
-          EOF
-
-      # Nightly Release
-      - name: Create or Update Nightly Release
-        if: github.event.inputs.version == ''
-        uses: ncipollo/release-action@v1
-        with:
-          tag: nightly-server
-          name: "Nightly Build — Linux Server"
-          body: |
-            ## TX-5DR Nightly Build — Linux Server 服务器版
-
-            **Built at** （构建时间）: ${{ steps.release_info.outputs.timestamp }}
-            **Commit**: [${{ steps.release_info.outputs.short_sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
-            **Branch**: ${{ github.ref_name }}
-
-            ### 📦 Downloads 下载
-
-            #### Linux Server (x64)
-            - **DEB Package** (Ubuntu/Debian): `TX-5DR-nightly-server-linux-amd64.deb`
-            - **RPM Package** (Fedora/RHEL): `TX-5DR-nightly-server-linux-amd64.rpm`
-
-            #### Linux Server (ARM64)
-            - **DEB Package** (Ubuntu/Debian): `TX-5DR-nightly-server-linux-arm64.deb`
-            - **RPM Package** (Fedora/RHEL): `TX-5DR-nightly-server-linux-arm64.rpm`
-
-            ---
-
-            ### 🚀 Quick Install 一键安装
-
-            ```bash
-            curl -fsSL https://github.com/${{ github.repository }}/releases/download/nightly-server/install-online.sh | sudo bash
-            ```
-
-            ### 📖 Manual Install 手动安装
-
-            ```bash
-            curl -fsSL https://deb.nodesource.com/setup_22.x | sudo bash -
-            sudo apt install -y nodejs nginx
-            curl -fSL -O https://github.com/${{ github.repository }}/releases/download/nightly-server/TX-5DR-nightly-server-linux-amd64.deb
-            sudo dpkg -i --force-depends TX-5DR-nightly-server-linux-amd64.deb
-            sudo bash /usr/share/tx5dr/install.sh
-            tx5dr start
-            ```
-
-            ### 🛠 Linux Server Commands 指令与用法
-
-            | Command 命令 | Usage 用法 | Description 说明 |
-            |---|---|---|
-            | `tx5dr start` | `tx5dr start` | Start server and verify startup; prints Web UI URL / 启动服务并校验启动结果，同时输出访问地址 |
-            | `tx5dr stop` | `tx5dr stop` | Stop TX-5DR server / 停止服务 |
-            | `tx5dr restart` | `tx5dr restart` | Restart TX-5DR server / 重启服务 |
-            | `tx5dr status` | `tx5dr status` | Show dashboard for server, nginx, rtc-data-audio UDP, token, and config paths / 显示服务、nginx、rtc-data-audio UDP、令牌和配置路径 |
-            | `tx5dr logs` | `tx5dr logs` | Follow TX-5DR logs / 跟踪 TX-5DR 日志 |
-            | `tx5dr logs --nginx` | `tx5dr logs --nginx` | Follow nginx error log / 跟踪 nginx 错误日志 |
-            | `tx5dr logs --all` | `tx5dr logs --all` | Follow TX-5DR + nginx logs / 同时跟踪 TX-5DR 和 nginx |
-            | `tx5dr token` | `tx5dr token` | Show admin token and login URL / 显示管理员令牌和登录地址 |
-            | `tx5dr token --reset` | `tx5dr token --reset` | Regenerate admin token / 重建管理员令牌 |
-            | `tx5dr doctor` | `tx5dr doctor` | Run full environment diagnostics / 执行完整环境诊断 |
-            | `tx5dr update` | `tx5dr update` | Download and install latest nightly server build / 下载并安装最新 nightly 服务器版 |
-            | `tx5dr enable` | `tx5dr enable` | Enable auto-start on boot / 开机自动启动 |
-            | `tx5dr disable` | `tx5dr disable` | Disable auto-start on boot / 关闭开机自启 |
-            | `tx5dr version` | `tx5dr version` | Show installed version / 显示当前安装版本 |
-
-            ### 🧩 Service Layout 服务关系
-            Linux Server is not a single standalone process. The installer sets up `tx5dr` (backend with embedded rtc-data-audio on UDP 50110) and `nginx` (public reverse proxy / HTTPS).
-            Linux 服务器版并不是单个独立进程。安装脚本会自动安装并编排 `tx5dr`（后端，内置 UDP 50110 上的 rtc-data-audio）以及 `nginx`（对外反向代理 / HTTPS）。
-
-            ### 🔒 SSL Notice SSL 提示
-            Voice features (browser microphone) require HTTPS. Configure SSL in `/etc/nginx/conf.d/tx5dr.conf`.
-            语音通联功能需要 HTTPS。请在 `/etc/nginx/conf.d/tx5dr.conf` 中配置 SSL。
-
-            ### ⚠️ Notice 注意事项
-            - This is a development build. （开发版本，可能包含未经充分测试的功能）
-            - Automatically updated on every push to `main` / `develop`. （每次推送自动更新）
-
-            ### 🔧 System Requirements 系统要求
-            - Debian 12+ / Ubuntu 22.04+ (Debian 12 recommended / 推荐 Debian 12)
-            - Node.js 22+ (auto-installed via `install.sh` / 通过安装脚本自动安装)
-            - nginx (auto-installed / 自动安装)
-
-            > Looking for the **Desktop App** (Windows/macOS/Linux with GUI)? See [nightly-app](https://github.com/${{ github.repository }}/releases/tag/nightly-app).
-            > 寻找**桌面应用**（Windows/macOS/Linux 图形界面）？请查看 [nightly-app](https://github.com/${{ github.repository }}/releases/tag/nightly-app)。
-          allowUpdates: true
-          removeArtifacts: true
-          artifacts: "release-assets/*"
-          token: ${{ secrets.GITHUB_TOKEN }}
-          prerelease: true
-          makeLatest: false
-
-      # Official Release
-      - name: Create Official Release
-        if: github.event.inputs.version != ''
-        uses: ncipollo/release-action@v1
-        with:
-          tag: ${{ github.event.inputs.version }}-server
-          name: "TX-5DR Server ${{ github.event.inputs.version }}"
-          body: |
-            ## TX-5DR Server ${{ github.event.inputs.version }}
-
-            **Release Date** （发布日期）: ${{ steps.release_info.outputs.date }}
-            **Commit**: [${{ steps.release_info.outputs.short_sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
-
-            ### 📦 Downloads 下载
-
-            #### Linux Server (x64)
-            - **DEB Package**: `TX-5DR-${{ github.event.inputs.version }}-server-linux-amd64.deb`
-            - **RPM Package**: `TX-5DR-${{ github.event.inputs.version }}-server-linux-amd64.rpm`
-
-            #### Linux Server (ARM64)
-            - **DEB Package**: `TX-5DR-${{ github.event.inputs.version }}-server-linux-arm64.deb`
-            - **RPM Package**: `TX-5DR-${{ github.event.inputs.version }}-server-linux-arm64.rpm`
-
-            ### 🚀 Quick Install 一键安装
-
-            ```bash
-            curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}-server/install-online.sh | sudo bash
-            ```
-
-            ### 📖 Manual Install 手动安装
-
-            ```bash
-            curl -fSL -O https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}-server/TX-5DR-${{ github.event.inputs.version }}-server-linux-amd64.deb
-            sudo dpkg -i --force-depends TX-5DR-${{ github.event.inputs.version }}-server-linux-amd64.deb
-            sudo bash /usr/share/tx5dr/install.sh
-            tx5dr start
-            ```
-
-            ### 🛠 Linux Server Commands 指令与用法
-
-            | Command 命令 | Usage 用法 | Description 说明 |
-            |---|---|---|
-            | `tx5dr start` | `tx5dr start` | Start server and verify startup; prints Web UI URL / 启动服务并校验启动结果，同时输出访问地址 |
-            | `tx5dr stop` | `tx5dr stop` | Stop TX-5DR server / 停止服务 |
-            | `tx5dr restart` | `tx5dr restart` | Restart TX-5DR server / 重启服务 |
-            | `tx5dr status` | `tx5dr status` | Show dashboard for server, nginx, rtc-data-audio UDP, token, and config paths / 显示服务、nginx、rtc-data-audio UDP、令牌和配置路径 |
-            | `tx5dr logs` | `tx5dr logs` | Follow TX-5DR logs / 跟踪 TX-5DR 日志 |
-            | `tx5dr logs --nginx` | `tx5dr logs --nginx` | Follow nginx error log / 跟踪 nginx 错误日志 |
-            | `tx5dr logs --all` | `tx5dr logs --all` | Follow TX-5DR + nginx logs / 同时跟踪 TX-5DR 和 nginx |
-            | `tx5dr token` | `tx5dr token` | Show admin token and login URL / 显示管理员令牌和登录地址 |
-            | `tx5dr token --reset` | `tx5dr token --reset` | Regenerate admin token / 重建管理员令牌 |
-            | `tx5dr doctor` | `tx5dr doctor` | Run full environment diagnostics / 执行完整环境诊断 |
-            | `tx5dr update` | `tx5dr update` | Download and install latest nightly server build / 下载并安装最新 nightly 服务器版 |
-            | `tx5dr enable` | `tx5dr enable` | Enable auto-start on boot / 开机自动启动 |
-            | `tx5dr disable` | `tx5dr disable` | Disable auto-start on boot / 关闭开机自启 |
-            | `tx5dr version` | `tx5dr version` | Show installed version / 显示当前安装版本 |
-
-            ### 🧩 Service Layout 服务关系
-            Linux Server is not a single standalone process. The installer sets up `tx5dr` (backend with embedded rtc-data-audio on UDP 50110) and `nginx` (public reverse proxy / HTTPS).
-            Linux 服务器版并不是单个独立进程。安装脚本会自动安装并编排 `tx5dr`（后端，内置 UDP 50110 上的 rtc-data-audio）以及 `nginx`（对外反向代理 / HTTPS）。
-
-            ### 🔧 System Requirements 系统要求
-            - Debian 12+ / Ubuntu 22.04+, Node.js 22+, nginx
-
-            ---
-            Built at （构建于）: ${{ steps.release_info.outputs.timestamp }}
-          artifacts: "release-assets/*"
-          token: ${{ secrets.GITHUB_TOKEN }}
-          draft: false
-          prerelease: false
-          makeLatest: false
-
-      - name: Install ossutil
-        if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
-        run: bash scripts/install-ossutil.sh
-
-      - name: Configure ossutil
-        if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
-        shell: bash
-        run: |
-          oss_region="${OSS_REGION:-}"
-          oss_endpoint_host="${OSS_ENDPOINT#https://}"
-          oss_endpoint_host="${oss_endpoint_host#http://}"
-          oss_endpoint_host="${oss_endpoint_host%%/*}"
-
-          if [ -z "${oss_region}" ]; then
-            if [[ "${oss_endpoint_host}" =~ oss-([a-z0-9-]+)\.aliyuncs\.com$ ]]; then
-              oss_region="${BASH_REMATCH[1]}"
-            fi
-          fi
-
-          if [ -z "${oss_region}" ]; then
-            echo "Failed to determine OSS region from OSS_ENDPOINT=${OSS_ENDPOINT}" >&2
-            echo "Please configure the OSS_REGION GitHub secret, for example: cn-hangzhou" >&2
-            exit 1
-          fi
-
-          echo "Using OSS endpoint: ${OSS_ENDPOINT}"
-          echo "Using OSS region: ${oss_region}"
-          cat > "${RUNNER_TEMP}/.ossutilconfig" <<EOF
-          [Credentials]
-          language = EN
-          endpoint = ${OSS_ENDPOINT}
-          region = ${oss_region}
-          accessKeyID = ${OSS_ACCESS_KEY_ID}
-          accessKeySecret = ${OSS_ACCESS_KEY_SECRET}
-          EOF
-
-      - name: Generate OSS server manifest
-        if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
-        run: |
-          mkdir -p oss-metadata/server
-          node scripts/generate-oss-manifest.mjs \
-            --product server \
-            --channel "${{ steps.release_info.outputs.channel }}" \
-            --tag "${{ steps.release_info.outputs.tag }}" \
-            --version "${{ steps.release_info.outputs.version }}" \
-            --commit "${{ steps.release_info.outputs.short_sha }}" \
-            --commit-title "${{ steps.release_info.outputs.commit_title }}" \
-            --published-at "${{ steps.release_info.outputs.timestamp }}" \
-            --base-url "${OSS_BASE_URL}" \
-            --object-prefix "tx-5dr/server/${{ steps.release_info.outputs.tag }}" \
-            --oss-base-url "${OSS_BASE_URL}" \
-            --oss-object-prefix "tx-5dr/server/${{ steps.release_info.outputs.tag }}" \
-            --github-base-url "https://github.com/${{ github.repository }}/releases/download" \
-            --github-object-prefix "${{ steps.release_info.outputs.tag }}" \
-            --assets-dir "publish-assets" \
-            --release-notes-file "release-metadata/server-release-notes.md" \
-            --recent-commits-json "$(cat release-metadata/recent-commits.json)" \
-            --output "oss-metadata/server/latest.json"
-
-      - name: Validate OSS server manifest
-        if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
-        shell: bash
-        run: |
-          node - <<'EOF'
-          const fs = require('node:fs');
-          const manifest = JSON.parse(fs.readFileSync('oss-metadata/server/latest.json', 'utf8'));
-          if (!Array.isArray(manifest.recent_commits) || manifest.recent_commits.length === 0 || manifest.recent_commits.length > 10) {
-            throw new Error('oss server manifest missing recent_commits');
-          }
-          if (manifest.recent_commits[0]?.short_id !== manifest.commit) {
-            throw new Error('oss server manifest recent_commits[0] does not match top-level commit');
-          }
-          if (manifest.recent_commits[0]?.title !== manifest.commit_title) {
-            throw new Error('oss server manifest recent_commits[0] does not match top-level commit_title');
-          }
-          EOF
-
-      - name: Upload server assets to OSS
-        if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
-        run: |
-          for file in publish-assets/*; do
-            ossutil cp "$file" "oss://${OSS_BUCKET}/tx-5dr/server/${{ steps.release_info.outputs.tag }}/$(basename "$file")" --force -c "${RUNNER_TEMP}/.ossutilconfig"
-          done
-          ossutil cp "oss-metadata/server/latest.json" "oss://${OSS_BUCKET}/tx-5dr/server/${{ steps.release_info.outputs.tag }}/latest.json" --force -c "${RUNNER_TEMP}/.ossutilconfig"
-          ossutil cp "oss-metadata/server/latest.json" "oss://${OSS_BUCKET}/tx-5dr/server/${{ steps.release_info.outputs.channel_path }}/latest.json" --force -c "${RUNNER_TEMP}/.ossutilconfig"
-          ossutil cp "oss-metadata/server/latest.json" "oss://${OSS_BUCKET}/tx-5dr/server/latest.json" --force -c "${RUNNER_TEMP}/.ossutilconfig"
-          if [ -f "publish-assets/install-online.sh" ]; then
-            ossutil cp "publish-assets/install-online.sh" "oss://${OSS_BUCKET}/tx-5dr/server/latest/install-online.sh" --force -c "${RUNNER_TEMP}/.ossutilconfig"
-          fi

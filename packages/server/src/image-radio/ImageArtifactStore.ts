@@ -5,43 +5,15 @@ import path from 'node:path';
 import { ImageArtifactSchema, type ImageArtifact, type ImageFamily, type ImagePixelFormat, type ImageFaxCalibration } from '@tx5dr/contracts';
 import { PNG } from 'pngjs';
 
-import { SafeFileWriter, loadJsonWithRecovery } from '../utils/persistence/index.js';
+import { SafeFileWriter } from '../utils/persistence/index.js';
 import { createLogger } from '../utils/logger.js';
+
+import { ImageRecordStore } from './ImageRecordStore.js';
+import { PersistedArtifactSchema } from './ImagePersistenceSchema.js';
 
 const logger = createLogger('ImageArtifactStore');
 const DEFAULT_QUOTA_BYTES = 1024 * 1024 * 1024;
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-
-interface ArtifactIndex { artifacts: ImageArtifact[] }
-
-function migrateLegacyFaxCalibrationSources(value: unknown): { value: unknown; migrated: boolean } {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return { value, migrated: false };
-  const record = value as { artifacts?: unknown };
-  if (!Array.isArray(record.artifacts)) return { value, migrated: false };
-
-  let migrated = false;
-  const artifacts = record.artifacts.map((artifact) => {
-    if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) return artifact;
-    const calibration = (artifact as { faxCalibration?: unknown }).faxCalibration;
-    if (!calibration || typeof calibration !== 'object' || Array.isArray(calibration)) return artifact;
-    const autoPoints = (calibration as { autoPoints?: unknown }).autoPoints;
-    if (!Array.isArray(autoPoints)) return artifact;
-
-    let artifactMigrated = false;
-    const migratedPoints = autoPoints.map((point) => {
-      if (!point || typeof point !== 'object' || Array.isArray(point)
-        || (point as { source?: unknown }).source !== 'deadSector') return point;
-      migrated = true;
-      artifactMigrated = true;
-      return { ...point, source: 'imageContent' };
-    });
-
-    if (!artifactMigrated) return artifact;
-    return { ...artifact, faxCalibration: { ...calibration, autoPoints: migratedPoints } };
-  });
-
-  return migrated ? { value: { ...record, artifacts }, migrated: true } : { value, migrated: false };
-}
 
 export interface SaveArtifactInput {
   family: ImageFamily;
@@ -64,39 +36,19 @@ export interface SaveArtifactInput {
 
 export class ImageArtifactStore {
   private readonly writer = new SafeFileWriter({ backups: 3 });
-  private readonly artifacts = new Map<string, ImageArtifact>();
+  readonly persistence: ImageRecordStore<ImageArtifact>;
+  private get artifacts() { return this.persistence.values; }
   private readonly indexPath: string;
   private readonly imageDir: string;
-  private initialized = false;
   private removalListener?: (artifactId: string) => Promise<void>;
 
   constructor(private readonly baseDir: string, private readonly quotaBytes = DEFAULT_QUOTA_BYTES) {
     this.indexPath = path.join(baseDir, 'index.json');
     this.imageDir = path.join(baseDir, 'images');
+    this.persistence = new ImageRecordStore(this.indexPath, 'artifacts', 'artifacts', PersistedArtifactSchema, item => item.id);
   }
 
-  async initialize(): Promise<void> {
-    if (this.initialized) return;
-    await fs.mkdir(this.imageDir, { recursive: true });
-    let migratedLegacyCalibration = false;
-    const loaded = await loadJsonWithRecovery<ArtifactIndex>(this.indexPath, {
-      defaultValue: () => ({ artifacts: [] }),
-      validate: (value) => {
-        const migration = migrateLegacyFaxCalibrationSources(value);
-        migratedLegacyCalibration ||= migration.migrated;
-        const record = migration.value as { artifacts?: unknown };
-        return { artifacts: ImageArtifactSchema.array().parse(record?.artifacts ?? []) };
-      },
-      writer: this.writer,
-    });
-    if (migratedLegacyCalibration) {
-      await this.writer.writeFile(this.indexPath, `${JSON.stringify(loaded.value, null, 2)}\n`);
-      logger.info('Migrated legacy fax calibration sources in image artifact index');
-    }
-    for (const artifact of loaded.value.artifacts) this.artifacts.set(artifact.id, artifact);
-    this.initialized = true;
-    await this.enforceQuota();
-  }
+  initialize(): Promise<void> { return this.persistence.initialize(); }
 
   list(options: { family?: ImageFamily; direction?: 'rx' | 'tx'; operatorId?: string; limit?: number; offset?: number } = {}): ImageArtifact[] {
     const offset = Math.max(0, options.offset ?? 0);
@@ -163,7 +115,7 @@ export class ImageArtifactStore {
     }
     const encoded = await encodePng(png);
     const id = randomUUID();
-    const artifact: ImageArtifact = {
+    const artifact = ImageArtifactSchema.parse({
       id,
       family: input.family,
       direction: input.direction,
@@ -184,10 +136,9 @@ export class ImageArtifactStore {
       createdAt: Date.now(),
       imageUrl: `/api/image-radio/artifacts/${id}/image`,
       faxCalibration: input.faxCalibration,
-    };
+    });
     await this.writer.writeFile(this.imagePath(id), encoded, { backups: 0 });
-    this.artifacts.set(id, artifact);
-    await this.persistIndex();
+    await this.persistence.transaction(records => records.set(id, artifact));
     await this.enforceQuota();
     return artifact;
   }
@@ -223,63 +174,68 @@ export class ImageArtifactStore {
   }
 
   async setPinned(id: string, pinned: boolean): Promise<ImageArtifact> {
-    const current = this.artifacts.get(id);
-    if (!current) throw new Error('IMAGE_ARTIFACT_NOT_FOUND');
-    const updated = { ...current, pinned };
-    this.artifacts.set(id, updated);
-    await this.persistIndex();
-    return updated;
+    return this.persistence.transaction(records => {
+      const current = records.get(id);
+      if (!current) throw new Error('IMAGE_ARTIFACT_NOT_FOUND');
+      const updated = { ...current, pinned };
+      records.set(id, updated);
+      return updated;
+    });
   }
 
   async linkQso(id: string, qsoId: string): Promise<ImageArtifact> {
-    const current = this.artifacts.get(id);
-    if (!current) throw new Error('IMAGE_ARTIFACT_NOT_FOUND');
-    const updated = { ...current, qsoId };
-    this.artifacts.set(id, updated);
-    await this.persistIndex();
-    return updated;
+    return this.persistence.transaction(records => {
+      const current = records.get(id);
+      if (!current) throw new Error('IMAGE_ARTIFACT_NOT_FOUND');
+      const updated = ImageArtifactSchema.parse({ ...current, qsoId });
+      records.set(id, updated);
+      return updated;
+    });
   }
 
   async delete(id: string): Promise<ImageArtifact> {
-    await this.initialize();
-    const artifact = this.artifacts.get(id);
-    if (!artifact) throw new Error('IMAGE_ARTIFACT_NOT_FOUND');
-    await fs.unlink(this.imagePath(id));
-    this.artifacts.delete(id);
-    await this.persistIndex();
+    const artifact = await this.persistence.transaction(records => {
+      const current = records.get(id);
+      if (!current) throw new Error('IMAGE_ARTIFACT_NOT_FOUND');
+      records.delete(id);
+      return current;
+    });
+    await fs.unlink(this.imagePath(id)).catch(error => {
+      logger.warn('Failed to remove unreferenced image', { code: error.code });
+    });
     await this.removalListener?.(id);
     return artifact;
   }
 
   private imagePath(id: string): string { return path.join(this.imageDir, `${id}.png`); }
 
-  private async persistIndex(): Promise<void> {
-    await this.writer.writeFile(this.indexPath, `${JSON.stringify({ artifacts: [...this.artifacts.values()] }, null, 2)}\n`);
+  private async enforceQuota(): Promise<void> {
+    const removed = await this.persistence.transaction(async records => {
+      const sizes = new Map<string, number>();
+      let total = 0;
+      for (const artifact of records.values()) {
+        let size = 0;
+        try { size = (await fs.stat(this.imagePath(artifact.id))).size; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+        sizes.set(artifact.id, size);
+        total += size;
+      }
+      const removed: string[] = [];
+      const candidates = [...records.values()].filter(item => !item.pinned && !item.qsoId).sort((a, b) => a.createdAt - b.createdAt);
+      for (const artifact of candidates) {
+        if (total <= this.quotaBytes) break;
+        records.delete(artifact.id);
+        total -= sizes.get(artifact.id) ?? 0;
+        removed.push(artifact.id);
+      }
+      return removed;
+    });
+    for (const id of removed) {
+      await fs.unlink(this.imagePath(id)).catch(error => logger.warn('Failed to remove evicted image', { code: error.code }));
+      await this.removalListener?.(id).catch(error => logger.warn('Failed to reconcile evicted image history', { error: error instanceof Error ? error.name : 'unknown' }));
+    }
   }
 
-  private async enforceQuota(): Promise<void> {
-    const candidates = [...this.artifacts.values()].filter((item) => !item.pinned && !item.qsoId).sort((a, b) => a.createdAt - b.createdAt);
-    let total = 0;
-    const sizes = new Map<string, number>();
-    for (const artifact of this.artifacts.values()) {
-      const size = (await fs.stat(this.imagePath(artifact.id)).catch(() => null))?.size ?? 0;
-      sizes.set(artifact.id, size);
-      total += size;
-    }
-    let changed = false;
-    for (const artifact of candidates) {
-      if (total <= this.quotaBytes) break;
-      await fs.unlink(this.imagePath(artifact.id)).catch(() => undefined);
-      total -= sizes.get(artifact.id) ?? 0;
-      this.artifacts.delete(artifact.id);
-      await this.removalListener?.(artifact.id).catch((error) => {
-        logger.error('Failed to remove image history for evicted artifact', { artifactId: artifact.id, error: error instanceof Error ? error.message : String(error) });
-      });
-      changed = true;
-      logger.info('Removed old image artifact to enforce quota', { artifactId: artifact.id });
-    }
-    if (changed) await this.persistIndex();
-  }
 }
 
 function encodePng(png: PNG): Promise<Buffer> {

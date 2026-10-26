@@ -62,7 +62,7 @@ tx5dr_online_install_missing_package() {
     local _source _manifest_json _install_ok
     local -a _sources
 
-    log_info "Resolving latest nightly package..."
+    log_info "Resolving selected channel package..."
     _dl_family=$(os_family)
     _fallback_tag="nightly-server"
     if [[ "$_dl_family" == "rhel" ]]; then
@@ -89,6 +89,9 @@ tx5dr_online_install_missing_package() {
 
     for _source in "${_sources[@]}"; do
         if _manifest_json=$(fetch_server_manifest_from_source "$_source" 2>/dev/null); then
+            if ! python3 -c 'import json,sys,os; m=json.loads(sys.argv[1]); assert m["product"]=="server" and m["channel"]==os.environ.get("TX5DR_UPDATE_CHANNEL","nightly"); assert m.get("schema_version",1)==1; v=os.environ.get("TX5DR_UPDATE_VERSION",""); assert not v or m["version"]==v; assert all(a.get("size",0)>0 and len(a.get("sha256",""))==64 for a in m["assets"])' "$_manifest_json"; then
+                continue
+            fi
             _resolved_url=$(get_server_manifest_package_url_for_source "$_manifest_json" "${ARCH}" "$_pkg_ext" "$_source" 2>/dev/null || true)
             _resolved_sha=$(get_server_manifest_package_sha256 "$_manifest_json" "${ARCH}" "$_pkg_ext" 2>/dev/null || true)
             if [[ -n "$_resolved_url" ]]; then
@@ -97,29 +100,18 @@ tx5dr_online_install_missing_package() {
         fi
         log_warn "${_source} manifest unavailable or missing ${ARCH}/${_pkg_ext}; trying next source..."
     done
-    [[ -n "$_resolved_url" ]] || _resolved_url="$_fallback_url"
+    [[ -n "$_resolved_url" && -n "$_resolved_sha" ]] || { log_error "No verified package in selected channel"; exit 1; }
 
     _tmp_dir=$(mktemp -d)
     trap 'rm -rf "$_tmp_dir"' RETURN
     PKG_FILE="$_tmp_dir/$_asset_name"
 
-    if ! tx5dr_download_package "$_resolved_url" "$_resolved_sha" "$PKG_FILE"; then
-        if [[ "$_resolved_url" != "$_fallback_url" ]]; then
-            log_warn "Primary download failed; falling back to GitHub release asset..."
-            tx5dr_download_package "$_fallback_url" "" "$PKG_FILE" || {
-                log_error "Download failed: $_fallback_url"
-                log_error "You can manually download and pass the package path as argument."
-                exit 1
-            }
-        else
-            log_error "Download failed: $_resolved_url"
-            log_error "You can manually download and pass the package path as argument."
-            exit 1
-        fi
-    fi
+    tx5dr_download_package "$_resolved_url" "$_resolved_sha" "$PKG_FILE" || {
+        log_error "Selected package download or checksum failed. Retry without changing the target."; exit 1;
+    }
 
     log_ok "Downloaded: $PKG_FILE"
-    $IS_UPGRADE && systemctl stop tx5dr 2>/dev/null || true
+    if $IS_UPGRADE; then log_error "Use tx5dr update --channel $TX5DR_UPDATE_CHANNEL for existing installations"; exit 1; fi
 
     _install_ok=false
     if [[ "$_dl_family" == "rhel" ]]; then
@@ -214,7 +206,7 @@ if ! grep -q '^tx5dr_online_install_missing_package()' "$OUTPUT"; then
     echo "ERROR: generated installer is missing online download hook" >&2
     exit 1
 fi
-if ! grep -q 'Resolving latest nightly package' "$OUTPUT"; then
+if ! grep -q 'Resolving selected channel package' "$OUTPUT"; then
     echo "ERROR: generated installer is missing nightly package resolver" >&2
     exit 1
 fi

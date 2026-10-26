@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import type { QSORecord } from '@tx5dr/contracts';
 import type { LogbookSyncProvider, SyncUploadOptions, SyncUploadResult } from '@tx5dr/plugin-api';
 import { LogbookSyncHost, type LogbookSyncProviderOwner } from '../LogbookSyncHost.js';
+import { resolvePluginPaths } from '../paths.js';
 
 function createQso(id: string): QSORecord {
   return {
@@ -70,6 +74,21 @@ function createOwner(generation = 1): LogbookSyncProviderOwner & { active: boole
 }
 
 describe('LogbookSyncHost', () => {
+  it('validates neutral page actions and projects declared dialog sizes by value', () => {
+    const host = new LogbookSyncHost(); const provider = createProvider();
+    Object.assign(provider, { actions: [{ id: 'run', label: 'Run', pageId: 'progress', pageParams: { intent: 'start' } }] });
+    host.register('generic-fixture', provider, createOwner(), [{ id: 'progress', title: 'Progress', entry: 'progress.html', dialogSize: '3xl', accessScope: 'admin', resourceBinding: 'none' }]);
+    const info = host.getProviderInfo(provider.id)!;
+    expect(info.pageDialogSizes).toEqual({ progress: '3xl' });
+    info.actions![0]!.pageParams!.intent = 'inspect';
+    expect(host.getProviderInfo(provider.id)!.actions![0]!.pageParams!.intent).toBe('start');
+    provider.actions![0]!.pageParams = { callsign: 'override' };
+    const invalidHost = new LogbookSyncHost();
+    const invalidProvider = { ...createProvider(), id: 'invalid', actions: [{ id: 'run', label: 'Run', pageId: 'progress', pageParams: { callsign: 'override' } }] };
+    invalidHost.register('bad-fixture', invalidProvider, createOwner());
+    // One malformed action is dropped; it must not reject the provider or the plugin load.
+    expect(invalidHost.getProviderInfo('invalid')!.actions).toEqual([]);
+  });
   it('returns structured failures when a provider is not registered', async () => {
     const host = new LogbookSyncHost();
 
@@ -108,6 +127,142 @@ describe('LogbookSyncHost', () => {
       trigger: 'auto',
       records: [qso],
     });
+  });
+
+  it('passes a retrospective batch to the enabled provider once', async () => {
+    const host = new LogbookSyncHost();
+    const provider = createProvider();
+    host.register('wavelog-sync', provider, createOwner());
+    const first = createQso('review-1');
+    const second = createQso('review-2');
+
+    await expect(host.onQSOsComplete('BG5DRB', [first, second])).resolves.toBe(true);
+    await flushAsyncWork();
+
+    expect(provider.upload).toHaveBeenCalledWith('BG5DRB', {
+      trigger: 'auto', records: [first, second],
+    });
+  });
+
+  it('serializes a replacement provider behind an in-flight upload across a reload', async () => {
+    const host = new LogbookSyncHost();
+    const gate = deferred<void>();
+    const started: string[] = [];
+    const first = createProvider(async () => {
+      started.push('first');
+      await gate.promise;
+      return { uploaded: 1, skipped: 0, failed: 0 };
+    });
+    const firstOwner = createOwner(1);
+    host.register('wavelog-sync', first, firstOwner);
+
+    host.onQSOComplete('BG5DRB', createQso('reload-1'));
+    await flushAsyncWork();
+    expect(started).toEqual(['first']);
+
+    firstOwner.active = false;
+    host.unregisterByPlugin('wavelog-sync', 1);
+    const second = createProvider(async () => {
+      started.push('second');
+      return { uploaded: 1, skipped: 0, failed: 0 };
+    });
+    host.register('wavelog-sync', second, createOwner(2));
+    host.onQSOComplete('BG5DRB', createQso('reload-2'));
+    await flushAsyncWork();
+
+    // The replacement must not POST while the retired generation is still uploading.
+    expect(started).toEqual(['first']);
+    gate.resolve();
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    expect(started).toEqual(['first', 'second']);
+    expect(second.upload).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a QSO as not queued when a provider cannot be evaluated', async () => {
+    const host = new LogbookSyncHost();
+    const owner = createOwner();
+    host.register('wavelog-sync', createProvider(), owner);
+    owner.active = false;
+    await expect(host.onQSOsComplete('BG5DRB', [createQso('lost')])).resolves.toBe(false);
+  });
+
+  it('normalizes the callsign so one logbook keeps a single upload queue', async () => {
+    const host = new LogbookSyncHost();
+    const gate = deferred<void>();
+    const provider = createProvider(async (_callsign, options) => {
+      await gate.promise;
+      return { uploaded: options?.records?.length ?? 0, skipped: 0, failed: 0 };
+    });
+    host.register('wavelog-sync', provider, createOwner());
+    void host.onQSOsComplete('bg5drb', [createQso('norm-1')]);
+    await flushAsyncWork();
+    void host.onQSOsComplete('BG5DRB', [createQso('norm-2')]);
+    await flushAsyncWork();
+    // A separate queue key for the other spelling would start a second concurrent upload.
+    expect(provider.upload).toHaveBeenCalledTimes(1);
+    gate.resolve();
+    await flushAsyncWork();
+    await flushAsyncWork();
+  });
+
+  it('bounds the auto-upload backlog and drops the oldest records', async () => {
+    const host = new LogbookSyncHost();
+    const provider = createProvider(async (_callsign, options) => ({
+      uploaded: options?.records?.length ?? 0, skipped: 0, failed: 0,
+    }));
+    host.register('wavelog-sync', provider, createOwner());
+    const records = Array.from({ length: 1_001 }, (_, index) => createQso(`cap-${index}`));
+    await host.onQSOsComplete('BG5DRB', records);
+    const uploadedIds = () => provider.upload.mock.calls
+      .flatMap(call => ((call[1]?.records ?? []) as QSORecord[]).map(record => record.id));
+    for (let i = 0; i < 50 && uploadedIds().length < 1_000; i++) await flushAsyncWork();
+    expect(uploadedIds()).toHaveLength(1_000);
+    expect(uploadedIds()).not.toContain('cap-0');
+  });
+
+  it('rejects a second plugin that claims an active provider id', async () => {
+    const host = new LogbookSyncHost();
+    host.register('plugin-a', createProvider(), createOwner(1));
+    expect(() => host.register('plugin-b', createProvider(), createOwner(2))).toThrow(/already owned/);
+  });
+
+  it('drops a previous owner backlog when another plugin reuses the provider id', async () => {
+    const host = new LogbookSyncHost();
+    const gate = deferred<void>();
+    const first = createProvider(async (_callsign, options) => {
+      await gate.promise;
+      return { uploaded: options?.records?.length ?? 0, skipped: 0, failed: 0 };
+    });
+    const firstOwner = createOwner(1);
+    host.register('plugin-a', first, firstOwner);
+    host.onQSOsComplete('BG5DRB', [createQso('old-backlog')]);
+    await flushAsyncWork();
+    firstOwner.active = false;
+    host.unregisterByPlugin('plugin-a', 1);
+    const second = createProvider();
+    host.register('plugin-b', second, createOwner(2));
+    gate.resolve();
+    await flushAsyncWork();
+    await flushAsyncWork();
+    expect(second.upload).not.toHaveBeenCalled();
+  });
+
+  it('starts with an empty queue when the persisted queue is unreadable', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tx5dr-sync-queue-'));
+    const queuePath = path.join(resolvePluginPaths(dir).pluginDataDir, 'logbook-sync-auto-queue.json');
+    try {
+      await fs.mkdir(path.dirname(queuePath), { recursive: true });
+      await fs.writeFile(queuePath, '{not-json');
+      const host = new LogbookSyncHost();
+      await expect(host.initialize(dir)).resolves.toBeUndefined();
+      const entries = await fs.readdir(path.dirname(queuePath));
+      expect(entries.some(name => name.includes('.corrupt-'))).toBe(true);
+      await host.shutdown();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('audits structured auto-upload failures returned without rejection', async () => {
@@ -292,5 +447,34 @@ describe('LogbookSyncHost', () => {
 
     await expect(result).resolves.toMatchObject({ downloaded: 0 });
     expect(observedSince).toBe(1);
+  });
+});
+
+describe('provider-owned status projection', () => {
+  const status = { operationId: 'generic-operation', revision: 1, operation: 'full_sync' as const, state: 'paused' as const,
+    stage: 'downloading' as const, startedAt: 1, updatedAt: 2, processed: 0, downloaded: 0, imported: 0, updated: 0,
+    uploaded: 0, skipped: 0, failed: 0, conflicts: 0, rejected: 0, resumable: true, errors: [] };
+  it('validates and detaches status without uploading, downloading or exposing hidden providers', async () => {
+    const host = new LogbookSyncHost(); const provider = { ...createProvider(), id: 'generic', getStatus: vi.fn(async () => status) };
+    host.register('generic-plugin', provider, createOwner());
+    const result = await host.getStatuses('BG5DRB', ['generic']);
+    expect(result.generic).toEqual({ supported: true, available: true, status });
+    result.generic!.status!.downloaded = 50;
+    expect(status.downloaded).toBe(0); expect(provider.upload).not.toHaveBeenCalled(); expect(provider.download).not.toHaveBeenCalled();
+    expect(await host.getStatuses('BG5DRB', [])).toEqual({});
+  });
+  it('keeps old providers compatible and exposes invalid state as unavailable', async () => {
+    const host = new LogbookSyncHost(); const old = createProvider(); host.register('old', old, createOwner());
+    expect((await host.getStatuses('BG5DRB', [old.id]))[old.id]).toEqual({ supported: false, available: true, status: null });
+    const invalid = { ...createProvider(), id: 'generic', getStatus: vi.fn(async () => ({ ...status, token: 'must-not-cross-boundary' })) };
+    host.register('generic', invalid, createOwner());
+    expect((await host.getStatuses('BG5DRB', ['generic'])).generic).toEqual({ supported: true, available: false, status: null });
+  });
+  it('discards a projection whose plugin was unloaded while it was being read', async () => {
+    const pending = deferred<typeof status>(); const host = new LogbookSyncHost(); const owner = createOwner();
+    const provider = { ...createProvider(), id: 'generic', getStatus: () => pending.promise };
+    host.register('generic', provider, owner); const result = host.getStatuses('BG5DRB', ['generic']);
+    owner.active = false; pending.resolve(status);
+    expect((await result).generic?.available).toBe(false);
   });
 });

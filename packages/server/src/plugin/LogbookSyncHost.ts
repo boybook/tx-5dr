@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { promises as fs } from 'node:fs';
 
 import type {
   LogbookSyncProvider,
@@ -10,14 +11,24 @@ import type {
   SyncDownloadResult,
   SyncDownloadOptions,
 } from '@tx5dr/plugin-api';
-import { createSyncFailure } from '@tx5dr/plugin-api';
-import { QSORecordSchema, type QSORecord } from '@tx5dr/contracts';
+import { createSyncFailure, normalizeCallsign } from '@tx5dr/plugin-api';
+import { QSORecordSchema, SyncStatusSchema, SyncActionSchema, type PluginUIPageDescriptor, type SyncStatusProjection, type QSORecord } from '@tx5dr/contracts';
 import { createLogger } from '../utils/logger.js';
 import { JsonFileStore, PersistenceCoordinator } from '../utils/persistence/index.js';
 import { resolvePluginPaths } from './paths.js';
 import { snapshotPluginData } from './plugin-data-boundary.js';
 
 const logger = createLogger('LogbookSyncHost');
+
+/** Bounds the optional auto-upload backlog so one broken provider cannot grow it forever. */
+const MAX_PENDING_RECORDS_PER_KEY = 1_000;
+const MAX_PENDING_BYTES_PER_KEY = 4 * 1024 * 1024;
+
+function pendingRecordBytes(records: Iterable<QSORecord>): number {
+  let total = 0;
+  for (const record of records) total += Buffer.byteLength(JSON.stringify(record));
+  return total;
+}
 
 interface RegisteredProvider {
   pluginName: string;
@@ -35,7 +46,7 @@ interface PendingAutoUpload {
 export interface LogbookSyncProviderOwner {
   generation: number;
   isCurrent(): boolean;
-  invoke<T>(operation: string, callback: () => T | Promise<T>): Promise<T>;
+  invoke<T>(operation: string, callback: () => T | Promise<T>, options?: { timeoutMs: number; abortGraceMs?: number }): Promise<T>;
   invokeSync<T>(operation: string, callback: () => T): T;
 }
 
@@ -51,6 +62,8 @@ export interface LogbookSyncProviderInfo {
   settingsPageId: string;
   accessScope?: 'admin' | 'operator';
   actions?: SyncAction[];
+  statusSupported?: boolean;
+  pageDialogSizes?: Record<string, 'md' | 'lg' | '3xl'>;
 }
 
 /**
@@ -70,6 +83,8 @@ export class LogbookSyncHost {
   private uploadQueueTails = new Map<string, Promise<void>>();
   /** Coalesces auto-uploaded QSOs while another upload is already queued/running. */
   private pendingAutoRecords = new Map<string, Map<string, QSORecord>>();
+  /** Plugin that currently owns each provider id's queued backlog. */
+  private pendingOwners = new Map<string, string>();
   /** Marks keys that already have an auto-drain job queued or running. */
   private scheduledAutoDrains = new Set<string>();
   private pendingQueueStore: JsonFileStore<PendingAutoUpload[]> | null = null;
@@ -80,7 +95,7 @@ export class LogbookSyncHost {
   async initialize(dataDir: string): Promise<void> {
     if (this.pendingQueueStore) return;
     const queuePath = path.join(resolvePluginPaths(dataDir).pluginDataDir, 'logbook-sync-auto-queue.json');
-    const store = new JsonFileStore<PendingAutoUpload[]>(queuePath, {
+    const createStore = () => new JsonFileStore<PendingAutoUpload[]>(queuePath, {
       defaultValue: () => [],
       validate: (value) => {
         if (!Array.isArray(value)) throw new Error('logbook sync queue must be an array');
@@ -101,7 +116,27 @@ export class LogbookSyncHost {
       backups: 3,
       createIfMissing: true,
     });
-    await store.load();
+    let store = createStore();
+    try {
+      await store.load();
+    } catch (error) {
+      // An optional auto-upload backlog must never keep the engine from starting.
+      logger.error('Auto-upload queue is unreadable; quarantining it and starting empty', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      try { await fs.rename(queuePath, `${queuePath}.corrupt-${Date.now()}`); } catch { /* best effort */ }
+      store = createStore();
+      try {
+        await store.load();
+      } catch (retryError) {
+        logger.error('Auto-upload queue is still unreadable; running without persistence', {
+          error: retryError instanceof Error ? retryError.message : String(retryError),
+        });
+        this.pendingQueueStore = null;
+        this.pendingQueueReady = false;
+        return;
+      }
+    }
     this.pendingQueueStore = store;
     this.pendingQueueReady = true;
     this.unregisterPendingQueuePersistence = PersistenceCoordinator.getInstance().register({
@@ -116,9 +151,40 @@ export class LogbookSyncHost {
         if (record && typeof record.id === 'string') records.set(record.id, snapshotPluginData(record, 'structured'));
       }
       if (records.size > 0) this.pendingAutoRecords.set(key, records);
+      this.enforcePendingLimits(key, item.providerId, item.callsign);
     }
     for (const [id, entry] of this.providers) {
       this.resumePendingForProvider(id, entry);
+    }
+  }
+
+  /** Caps one provider's backlog; the oldest queued QSO is evicted first. */
+  private enforcePendingLimits(key: string, providerId: string, callsign: string): void {
+    const records = this.pendingAutoRecords.get(key);
+    if (!records) return;
+    let dropped = 0;
+    while (records.size > MAX_PENDING_RECORDS_PER_KEY) {
+      records.delete(records.keys().next().value!); dropped += 1;
+    }
+    if (pendingRecordBytes(records.values()) > MAX_PENDING_BYTES_PER_KEY) {
+      while (records.size > 0 && pendingRecordBytes(records.values()) > MAX_PENDING_BYTES_PER_KEY) {
+        records.delete(records.keys().next().value!); dropped += 1;
+      }
+    }
+    if (!dropped) return;
+    logger.warn('Auto-upload queue reached its bound; oldest records were dropped', {
+      providerId, callsign, dropped, remaining: records.size,
+    });
+    if (records.size === 0) this.pendingAutoRecords.delete(key);
+  }
+
+  /** Stops a different plugin that reuses this provider id from inheriting its backlog. */
+  private dropPendingForProvider(providerId: string): void {
+    for (const key of [...this.pendingAutoRecords.keys()]) {
+      if (key.startsWith(`${providerId}\0`)) this.pendingAutoRecords.delete(key);
+    }
+    for (const key of [...this.activeUploads.keys()]) {
+      if (key.startsWith(`${providerId}\0`)) this.activeUploads.delete(key);
     }
   }
 
@@ -131,7 +197,8 @@ export class LogbookSyncHost {
   }
 
   private static uploadKey(providerId: string, callsign: string): string {
-    return `${providerId}\0${callsign}`;
+    // Normalize here so one logbook never splits into several serialization domains.
+    return `${providerId}\0${normalizeCallsign(callsign)}`;
   }
 
   /**
@@ -142,14 +209,38 @@ export class LogbookSyncHost {
     pluginName: string,
     provider: LogbookSyncProvider,
     owner: LogbookSyncProviderOwner,
+    pages: readonly PluginUIPageDescriptor[] = [],
   ): void {
-    if (this.providers.has(provider.id)) {
-      logger.warn('Overwriting existing sync provider', {
+    const existing = this.providers.get(provider.id);
+    if (existing) {
+      if (existing.pluginName !== pluginName && this.isCurrent(existing)) {
+        throw new Error(`Sync provider id "${provider.id}" is already owned by plugin "${existing.pluginName}"`);
+      }
+      if (existing.pluginName !== pluginName) {
+        logger.warn('Sync provider id was reused by another plugin', {
+          id: provider.id,
+          previousPlugin: existing.pluginName,
+          newPlugin: pluginName,
+        });
+      } else {
+        logger.warn('Overwriting existing sync provider', {
+          id: provider.id,
+          previousPlugin: existing.pluginName,
+          newPlugin: pluginName,
+        });
+      }
+    }
+    // Queue ownership survives unload, so a different plugin never inherits a backlog.
+    const pendingOwner = this.pendingOwners.get(provider.id);
+    if (pendingOwner !== undefined && pendingOwner !== pluginName) {
+      logger.warn('Sync provider id was reused by another plugin; dropping its backlog', {
         id: provider.id,
-        previousPlugin: this.providers.get(provider.id)!.pluginName,
+        previousPlugin: pendingOwner,
         newPlugin: pluginName,
       });
+      this.dropPendingForProvider(provider.id);
     }
+    this.pendingOwners.set(provider.id, pluginName);
     const entry: RegisteredProvider = {
       pluginName,
       provider,
@@ -162,7 +253,9 @@ export class LogbookSyncHost {
         color: provider.color,
         settingsPageId: provider.settingsPageId,
         accessScope: provider.accessScope ?? 'admin',
-        actions: provider.actions ? structuredClone(provider.actions) : undefined,
+        actions: this.validatedActions(provider.actions, pluginName, provider.id),
+        ...(pages.some(page => page.dialogSize) ? { pageDialogSizes: Object.fromEntries(pages.filter(page => page.dialogSize).map(page => [page.id, page.dialogSize!])) } : {}),
+        ...(provider.getStatus ? { statusSupported: true } : {}),
       },
     };
     this.providers.set(provider.id, entry);
@@ -174,6 +267,23 @@ export class LogbookSyncHost {
     });
   }
 
+  /** One malformed action must not reject the whole provider or plugin load. */
+  private validatedActions(actions: SyncAction[] | undefined, pluginName: string, providerId: string): SyncAction[] | undefined {
+    if (!actions) return undefined;
+    const valid: SyncAction[] = [];
+    for (const action of actions) {
+      const parsed = SyncActionSchema.safeParse(action);
+      if (parsed.success) { valid.push(parsed.data); continue; }
+      logger.warn('Dropping invalid sync provider action', {
+        providerId,
+        pluginName,
+        action: (action as { id?: unknown })?.id,
+        error: parsed.error.issues[0]?.message,
+      });
+    }
+    return valid;
+  }
+
   /**
    * Unregisters all providers from a specific plugin. Called during plugin
    * unload/reload.
@@ -183,14 +293,8 @@ export class LogbookSyncHost {
       if (entry.pluginName === pluginName
           && (generation === undefined || entry.owner.generation === generation)) {
         this.providers.delete(id);
-        // Clean up any active upload entries for this provider to avoid dangling references.
-        for (const key of this.activeUploads.keys()) {
-          if (key.startsWith(`${id}\0`)) {
-            this.activeUploads.delete(key);
-            this.uploadQueueTails.delete(key);
-            this.scheduledAutoDrains.delete(key);
-          }
-        }
+        // In-flight work keeps its queue tail and drain marker: the next generation
+        // must serialize behind it instead of starting a second concurrent upload.
         logger.info('Logbook sync provider unregistered', { id, pluginName });
       }
     }
@@ -209,11 +313,12 @@ export class LogbookSyncHost {
     entry: RegisteredProvider,
     operation: string,
     callback: () => T | Promise<T>,
+    options?: { timeoutMs: number; abortGraceMs?: number },
   ): Promise<T> {
     if (!this.isCurrent(entry)) {
       throw new Error('PLUGIN_INVOCATION_EXPIRED: logbook sync provider is no longer active');
     }
-    const result = await entry.owner.invoke(`logbook-sync:${operation}`, callback);
+    const result = await entry.owner.invoke(`logbook-sync:${operation}`, callback, options);
     if (!this.isCurrent(entry)) {
       throw new Error('PLUGIN_INVOCATION_EXPIRED: stale logbook sync result discarded');
     }
@@ -242,6 +347,30 @@ export class LogbookSyncHost {
   getProviderInfo(providerId: string): LogbookSyncProviderInfo | null {
     const entry = this.providers.get(providerId);
     return entry ? this.toProviderInfo(entry) : null;
+  }
+
+  /** Projects provider-owned state; no queueing, persistence or sync policy lives here. */
+  async getStatuses(callsign: string, visibleProviderIds: readonly string[]): Promise<Record<string, SyncStatusProjection>> {
+    const entries = await Promise.all(visibleProviderIds.map(async id => {
+      const entry = this.providers.get(id);
+      if (!entry) return [id, { supported: false, available: false, status: null }] as const;
+      if (!entry.provider.getStatus) return [id, { supported: false, available: true, status: null }] as const;
+      try {
+        // A stale read is unavailable; slow storage must not quarantine the sync plugin.
+        const value = await this.invoke(entry, 'status', () => entry.provider.getStatus!(callsign), { timeoutMs: 2000, abortGraceMs: -1 });
+        if (value === null) return [id, { supported: true, available: false, status: null }] as const;
+        return [id, { supported: true, available: true, status: SyncStatusSchema.parse(value) }] as const;
+      } catch (error) {
+        logger.warn('Logbook sync status is unavailable', {
+          providerId: id,
+          pluginName: entry.pluginName,
+          callsign,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return [id, { supported: true, available: false, status: null }] as const;
+      }
+    }));
+    return Object.fromEntries(entries);
   }
 
   /** Tests the connection for a specific provider and callsign. */
@@ -362,11 +491,17 @@ export class LogbookSyncHost {
    * buffered and drained in the next serialized auto batch.
    */
   onQSOComplete(callsign: string, qsoRecord: QSORecord): Promise<void> {
-    return this.onQSOCompleteAsync(callsign, qsoRecord);
+    return this.onQSOCompleteAsync(callsign, [qsoRecord]).then(() => undefined);
   }
 
-  private async onQSOCompleteAsync(callsign: string, qsoRecord: QSORecord): Promise<void> {
+  /** Persist one auto-upload batch before any provider starts sending it. */
+  onQSOsComplete(callsign: string, records: readonly QSORecord[]): Promise<boolean> {
+    return this.onQSOCompleteAsync(callsign, records);
+  }
+
+  private async onQSOCompleteAsync(callsign: string, records: readonly QSORecord[]): Promise<boolean> {
     let changed = false;
+    let evaluated = true;
     for (const [id, entry] of this.providers) {
       const { provider, pluginName } = entry;
       try {
@@ -376,10 +511,16 @@ export class LogbookSyncHost {
 
         const key = LogbookSyncHost.uploadKey(id, callsign);
         const queuedRecords = this.pendingAutoRecords.get(key) ?? new Map<string, QSORecord>();
-        queuedRecords.set(qsoRecord.id, snapshotPluginData(qsoRecord, 'structured'));
+        for (const record of records) {
+          queuedRecords.set(record.id, snapshotPluginData(record, 'structured'));
+        }
         this.pendingAutoRecords.set(key, queuedRecords);
+        this.pendingOwners.set(id, pluginName);
+        this.enforcePendingLimits(key, id, callsign);
         changed = true;
       } catch (err) {
+        // We could not decide whether this provider wants the QSO, so do not report it as queued.
+        evaluated = false;
         logger.warn('Auto-upload check failed', {
           providerId: id,
           pluginName,
@@ -387,10 +528,12 @@ export class LogbookSyncHost {
         });
       }
     }
-    if (!changed || !await this.persistPendingQueue()) return;
+    if (!changed) return evaluated;
+    if (!await this.persistPendingQueue()) return false;
     for (const [id, entry] of this.providers) {
       this.resumePendingForProvider(id, entry);
     }
+    return true;
   }
 
   private resumePendingForProvider(providerId: string, entry: RegisteredProvider): void {
@@ -533,8 +676,11 @@ export class LogbookSyncHost {
     }).finally(() => {
       this.scheduledAutoDrains.delete(key);
       const remainingRecords = this.pendingAutoRecords.get(key);
-      if (drainedSuccessfully && remainingRecords && remainingRecords.size > 0 && this.isCurrent(entry)) {
-        this.scheduleAutoDrain(key, entry, callsign);
+      // A reload replaces the entry while its predecessor may still be uploading.
+      // The replacement owns the remaining queue once this tail has settled.
+      const current = this.providers.get(entry.info.id);
+      if (remainingRecords && remainingRecords.size > 0 && current && (drainedSuccessfully || current !== entry)) {
+        this.scheduleAutoDrain(key, current, callsign);
       } else if (!this.pendingQueueStore) {
         this.pendingAutoRecords.delete(key);
       }

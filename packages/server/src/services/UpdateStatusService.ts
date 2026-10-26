@@ -1,31 +1,19 @@
+import { fetchChannelManifest, EmptyReleaseChannelError, releaseIdentity, updateOperation } from '@tx5dr/core';
+import { getUpdatePreferences } from './UpdatePreferences.js';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { SystemUpdateStatus, PluginDistribution } from '@tx5dr/contracts';
-import { SystemUpdateStatusSchema } from '@tx5dr/contracts';
+import { UpdatePreferencesSchema, SystemUpdateStatusSchema } from '@tx5dr/contracts';
 import { SERVER_BUILD_INFO } from '../generated/buildInfo.js';
 import { tx5drPaths } from '../utils/app-paths.js';
 import { resolveRuntimeDistribution } from '../utils/runtime-distribution.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('UpdateStatusService');
-const DEFAULT_OSS_BASE_URL = 'https://tx5dr.oss-cn-hangzhou.aliyuncs.com';
 const WEBSITE_URL = 'https://tx5dr.com';
-
 type UpdateChannel = 'release' | 'nightly';
 type UpdateTarget = 'linux-server' | 'docker' | 'android-runtime';
-
-interface ReleaseManifest {
-  product?: string;
-  channel?: string;
-  tag?: string;
-  version?: string;
-  commit?: string;
-  commit_title?: string;
-  published_at?: string;
-  release_notes?: string;
-  docker_digest?: string;
-}
 
 interface LocalBuildInfo {
   channel: UpdateChannel;
@@ -33,13 +21,6 @@ interface LocalBuildInfo {
   commit: string | null;
   publishedAt: string | null;
   digest: string | null;
-}
-
-function normalizeUrl(value: string): string {
-  const trimmed = value.trim();
-  if (/^https?:\/\//i.test(trimmed)) return trimmed.replace(/\/+$/, '');
-  if (trimmed.startsWith('//')) return `https:${trimmed}`.replace(/\/+$/, '');
-  return `https://${trimmed.replace(/^\/+/, '')}`.replace(/\/+$/, '');
 }
 
 function normalizeVersion(value: string | null | undefined): string {
@@ -52,15 +33,6 @@ function normalizeCommit(value: string | null | undefined): string | null {
   return trimmed;
 }
 
-function commitsMatch(left: string | null | undefined, right: string | null | undefined): boolean {
-  const normalizedLeft = normalizeCommit(left)?.toLowerCase();
-  const normalizedRight = normalizeCommit(right)?.toLowerCase();
-  if (!normalizedLeft || !normalizedRight) return false;
-  if (normalizedLeft === normalizedRight) return true;
-  if (Math.min(normalizedLeft.length, normalizedRight.length) < 7) return false;
-  return normalizedLeft.startsWith(normalizedRight) || normalizedRight.startsWith(normalizedLeft);
-}
-
 function normalizeDigest(value: string | null | undefined): string | null {
   const trimmed = (value || '').trim();
   return trimmed || null;
@@ -69,25 +41,6 @@ function normalizeDigest(value: string | null | undefined): string | null {
 function normalizePublishedAt(value: string | null | undefined): string | null {
   const trimmed = (value || '').trim();
   return trimmed && trimmed !== 'development' ? trimmed : null;
-}
-
-async function fetchJson<T>(url: string, timeoutMs = 8000): Promise<T> {
-  const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
-  if (!response.ok) {
-    throw new Error(`request_failed:${response.status}`);
-  }
-  return response.json() as Promise<T>;
-}
-
-function manifestUrl(target: UpdateTarget, channel: UpdateChannel): string {
-  const base = normalizeUrl(process.env.TX5DR_DOWNLOAD_BASE_URL || DEFAULT_OSS_BASE_URL);
-  if (target === 'docker') {
-    return `${base}/tx-5dr/docker/latest.json`;
-  }
-  if (target === 'android-runtime') {
-    return `${base}/tx-5dr/android-runtime/${channel}/latest.json`;
-  }
-  return `${base}/tx-5dr/server/${channel}/latest.json`;
 }
 
 async function readInstalledVersionFallback(): Promise<string | null> {
@@ -129,63 +82,37 @@ function resolveTarget(distribution: PluginDistribution): UpdateTarget {
   return 'linux-server';
 }
 
-function remoteIdentity(target: UpdateTarget, channel: UpdateChannel, manifest: ReleaseManifest): string | null {
-  if (target === 'docker') {
-    return normalizeDigest(manifest.docker_digest) || normalizeCommit(manifest.commit) || normalizeVersion(manifest.version) || null;
-  }
-  if (channel === 'nightly') {
-    return normalizeCommit(manifest.commit) || normalizeVersion(manifest.version) || null;
-  }
-  return normalizeVersion(manifest.version) || null;
-}
-
-function localIdentity(target: UpdateTarget, channel: UpdateChannel, local: LocalBuildInfo): string | null {
-  if (target === 'docker') {
-    return local.digest || local.commit || normalizeVersion(local.version) || null;
-  }
-  if (channel === 'nightly') {
-    return local.commit || normalizeVersion(local.version) || null;
-  }
-  return normalizeVersion(local.version) || null;
-}
-
-function isUpdateAvailable(target: UpdateTarget, channel: UpdateChannel, local: LocalBuildInfo, manifest: ReleaseManifest): boolean {
-  if (target === 'docker') {
-    const latestDigest = normalizeDigest(manifest.docker_digest);
-    if (latestDigest && local.digest) {
-      return latestDigest !== local.digest;
-    }
-
-    const latestCommit = normalizeCommit(manifest.commit);
-    if (latestCommit && local.commit) {
-      return !commitsMatch(latestCommit, local.commit);
-    }
-  }
-
-  if (channel === 'nightly') {
-    const latestCommit = normalizeCommit(manifest.commit);
-    if (latestCommit && local.commit) {
-      return !commitsMatch(latestCommit, local.commit);
-    }
-  }
-
-  const remote = remoteIdentity(target, channel, manifest);
-  const current = localIdentity(target, channel, local);
-  if (!remote || !current) return false;
-  return remote !== current;
-}
-
 export async function getSystemUpdateStatus(): Promise<SystemUpdateStatus> {
   const distribution = await resolveDistribution();
   const target = resolveTarget(distribution);
   const local = await getLocalBuildInfo(distribution);
 
+  let targetChannel = local.channel;
   try {
-    const manifest = await fetchJson<ReleaseManifest>(manifestUrl(target, local.channel));
+    if (distribution === 'android-bridge') {
+      // Native shell owns this projection; remote browsers never mutate it.
+      try {
+        const projection = UpdatePreferencesSchema.parse(JSON.parse(await readFile(path.join(await tx5drPaths.getDataDir(), 'android-update-state.json'), 'utf8')));
+        targetChannel = projection.channel;
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    } else if (distribution !== 'electron') {
+      targetChannel = (await getUpdatePreferences()).channel;
+    }
+    const product = target === 'linux-server' ? 'server' : target;
+    const { manifest, source } = await fetchChannelManifest(product, targetChannel, process.env.TX5DR_DOWNLOAD_BASE_URL || 'https://dl.tx5dr.com');
+    let stableAvailable = false;
+    if (local.channel === 'nightly' && targetChannel === 'nightly') {
+      try { await fetchChannelManifest(product, 'release', process.env.TX5DR_DOWNLOAD_BASE_URL || 'https://dl.tx5dr.com'); stableAvailable = true; } catch { /* Optional migration discovery. */ }
+    }
     const latestVersion = normalizeVersion(manifest.version) || null;
     const latestCommit = normalizeCommit(manifest.commit);
     const latestDigest = normalizeDigest(manifest.docker_digest);
-    const identity = remoteIdentity(target, local.channel, manifest);
+    const identity = releaseIdentity(manifest);
+    const operation = updateOperation({ channel: local.channel, version: local.version, commit: local.commit }, manifest);
+    const installCommand = distribution === 'linux-service'
+      ? `sudo tx5dr update --channel ${targetChannel} --version ${manifest.version}${operation === 'downgrade' ? ' --allow-downgrade' : ''}`
+      : target === 'docker' && manifest.docker_image && manifest.docker_digest
+        ? `${manifest.docker_image}@${manifest.docker_digest}` : null;
     const status: SystemUpdateStatus = {
       target,
       distribution,
@@ -200,10 +127,16 @@ export async function getSystemUpdateStatus(): Promise<SystemUpdateStatus> {
       latestCommitTitle: manifest.commit_title?.trim() || null,
       publishedAt: manifest.published_at?.trim() || null,
       releaseNotes: manifest.release_notes?.trim() || null,
-      updateAvailable: isUpdateAvailable(target, local.channel, local, manifest),
+      updateAvailable: operation !== 'none',
+      stableAvailable,
+      currentChannel: local.channel, targetChannel, operation,
+      availability: operation === 'none' ? 'up-to-date' : 'available',
+      channelEditable: distribution !== 'android-bridge' && distribution !== 'electron',
+      installCommand,
+      compatibilityWarnings: operation === 'downgrade' ? ['downgrade_data_compatibility'] : [],
       identity,
       websiteUrl: WEBSITE_URL,
-      metadataSource: 'oss',
+      metadataSource: source,
       errorMessage: null,
     };
     return SystemUpdateStatusSchema.parse(status);
@@ -218,6 +151,10 @@ export async function getSystemUpdateStatus(): Promise<SystemUpdateStatus> {
       currentCommit: local.commit,
       currentPublishedAt: local.publishedAt,
       currentDigest: local.digest,
+      currentChannel: local.channel, targetChannel,
+      channelEditable: distribution !== 'android-bridge' && distribution !== 'electron',
+      availability: error instanceof EmptyReleaseChannelError ? 'empty' : 'error',
+      operation: 'none',
       latestVersion: null,
       latestCommit: null,
       latestDigest: null,
@@ -228,7 +165,7 @@ export async function getSystemUpdateStatus(): Promise<SystemUpdateStatus> {
       identity: null,
       websiteUrl: WEBSITE_URL,
       metadataSource: null,
-      errorMessage: message,
+      errorMessage: error instanceof EmptyReleaseChannelError ? null : message,
     });
   }
 }

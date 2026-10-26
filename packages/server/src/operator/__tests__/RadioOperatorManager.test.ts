@@ -56,6 +56,7 @@ function createManager(options: {
   callsign?: string | null;
   activeSlotPacks?: SlotPack[];
   storedRecords?: Array<{ slotPack: SlotPack }>;
+  retainedSinceMs?: number;
   clockNow?: number;
   encodeQueue?: { push: ReturnType<typeof vi.fn> };
   getRadioFrequency?: () => Promise<number | null>;
@@ -69,6 +70,7 @@ function createManager(options: {
     getActiveSlotPacks: vi.fn(() => options.activeSlotPacks ?? []),
     readStoredRecords: vi.fn(async () => options.storedRecords ?? []),
     getFrequencyContext: vi.fn(() => undefined),
+    getRetainedSinceMs: vi.fn(() => options.retainedSinceMs ?? 0),
   };
   const encodeQueue = options.encodeQueue ?? { push: vi.fn() };
   const clockSource = {
@@ -146,6 +148,7 @@ async function invokeRecordQSO(manager: RadioOperatorManager, payload: {
   qsoLifecycleId?: string;
   qsoLifecycleEpoch?: number;
   qsoRuntimeGeneration?: number;
+  startedAt?: number;
   qsoRecord: QSORecord;
   persistencePolicy?: QSOPersistencePolicy;
   destination?: { kind: 'plugin-session'; sessionId: string };
@@ -1549,6 +1552,212 @@ describe('RadioOperatorManager automatic QSO logging', () => {
       comment: 'FT8  Sent: -02  Rcvd: -15',
     });
     expect(provider.addQSO.mock.calls[0]?.[0]?.messageHistory).toContain('BG5FRH RW9HSB +03');
+  });
+
+  it('reconstructs history from the whole contact attempt instead of the completion slot', async () => {
+    const base = Date.parse('2026-07-23T09:00:00.000Z');
+    const slot = MODES.FT8.slotMs;
+    const completionAt = base + 6 * slot;
+    const provider = {
+      addQSO: vi.fn(async (record: QSORecord) => record),
+      updateQSO: vi.fn(),
+      getLastQSOWithCallsign: vi.fn().mockResolvedValue(null),
+      getStatistics: vi.fn().mockResolvedValue({ totalQSOs: 1 }),
+    };
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider },
+      callsign: 'BG5JKZ',
+      activeSlotPacks: [
+        // A previous contact with the same station, before this attempt began.
+        buildSlotPack(`ft8-${base - 8 * slot}`, base - 8 * slot, [{
+          message: 'VE6TL BG5JKZ RR73',
+          snr: -999,
+          dt: 0,
+          freq: 2723,
+          confidence: 1,
+          operatorId: 'op1',
+        }]),
+        buildSlotPack(`ft8-${base}`, base, [{
+          message: 'CQ VE6TL DO21',
+          snr: -12,
+          dt: 0.2,
+          freq: 2722,
+          confidence: 1,
+        }]),
+        // Unrelated traffic visible in the same window.
+        buildSlotPack(`ft8-${base + slot}`, base + slot, [{
+          message: 'EX7CQ VE6TL D021',
+          snr: -12,
+          dt: 0.2,
+          freq: 2722,
+          confidence: 1,
+        }]),
+        // Our report, sent several slots before the peer acknowledged it.
+        buildSlotPack(`ft8-${base + 2 * slot}`, base + 2 * slot, [{
+          message: 'VE6TL BG5JKZ -12',
+          snr: -999,
+          dt: 0,
+          freq: 2723,
+          confidence: 1,
+          operatorId: 'op1',
+        }]),
+        buildSlotPack(`ft8-${base + 5 * slot}`, base + 5 * slot, [{
+          message: 'BG5JKZ VE6TL R-12',
+          snr: -14,
+          dt: 0.2,
+          freq: 2723,
+          confidence: 1,
+        }]),
+        buildSlotPack(`ft8-${base + 6 * slot}`, base + 6 * slot, [{
+          message: 'VE6TL BG5JKZ RR73',
+          snr: -999,
+          dt: 0,
+          freq: 2723,
+          confidence: 1,
+          operatorId: 'op1',
+        }]),
+      ],
+      storedRecords: [],
+    });
+    attachQSOHookSpy(manager);
+
+    await invokeRecordQSO(manager, {
+      operatorId: 'op1',
+      startedAt: base,
+      qsoRecord: {
+        id: 'temp-attempt-window',
+        callsign: 'VE6TL',
+        frequency: 14_074_000,
+        mode: 'FT8',
+        // ADIF TIME_ON is the moment the contact was established.
+        startTime: completionAt,
+        endTime: completionAt,
+        reportSent: '-12',
+        reportReceived: '-12',
+        messageHistory: [],
+        myCallsign: 'BG5JKZ',
+      },
+    });
+
+    expect(provider.addQSO).toHaveBeenCalledOnce();
+    expect(provider.addQSO.mock.calls[0]?.[0]?.messageHistory).toEqual([
+      'CQ VE6TL DO21',
+      'VE6TL BG5JKZ -12',
+      'BG5JKZ VE6TL R-12',
+      'VE6TL BG5JKZ RR73',
+    ]);
+    expect(provider.addQSO.mock.calls[0]?.[0]).toMatchObject({
+      reportSent: '-12',
+      reportReceived: '-12',
+    });
+  });
+
+  it('does not read the persisted daily log when the attempt started inside the retained cache', async () => {
+    const base = Date.parse('2026-07-23T10:00:00.000Z');
+    const slot = MODES.FT8.slotMs;
+    const provider = {
+      addQSO: vi.fn(async (record: QSORecord) => record),
+      updateQSO: vi.fn(),
+      getLastQSOWithCallsign: vi.fn().mockResolvedValue(null),
+      getStatistics: vi.fn().mockResolvedValue({ totalQSOs: 1 }),
+    };
+    const { manager, slotPackManager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider },
+      callsign: 'BG5JKZ',
+      // The cache is complete from the attempt anchor onward; only the one-slot
+      // safety margin precedes it.
+      retainedSinceMs: base,
+      activeSlotPacks: [
+        buildSlotPack(`ft8-${base}`, base, [
+          { message: 'CQ VE6TL DO21', snr: -12, dt: 0.2, freq: 2722, confidence: 1 },
+          {
+            message: 'VE6TL BG5JKZ -12',
+            snr: -999, dt: 0, freq: 2723, confidence: 1, operatorId: 'op1',
+          },
+        ]),
+        buildSlotPack(`ft8-${base + slot}`, base + slot, [
+          { message: 'BG5JKZ VE6TL R-12', snr: -14, dt: 0.2, freq: 2723, confidence: 1 },
+        ]),
+      ],
+      storedRecords: [],
+    });
+    attachQSOHookSpy(manager);
+
+    await invokeRecordQSO(manager, {
+      operatorId: 'op1',
+      startedAt: base,
+      qsoRecord: {
+        id: 'temp-retained-window',
+        callsign: 'VE6TL',
+        frequency: 14_074_000,
+        mode: 'FT8',
+        startTime: base + 2 * slot,
+        endTime: base + 2 * slot,
+        reportSent: '-12',
+        reportReceived: '-12',
+        messageHistory: [],
+        myCallsign: 'BG5JKZ',
+      },
+    });
+
+    expect(slotPackManager.readStoredRecords).not.toHaveBeenCalled();
+    expect(provider.addQSO.mock.calls[0]?.[0]?.messageHistory).toEqual([
+      'CQ VE6TL DO21',
+      'VE6TL BG5JKZ -12',
+      'BG5JKZ VE6TL R-12',
+    ]);
+  });
+
+  it('falls back to the persisted daily log when the attempt predates the retained cache', async () => {
+    const base = Date.parse('2026-07-23T11:00:00.000Z');
+    const slot = MODES.FT8.slotMs;
+    const provider = {
+      addQSO: vi.fn(async (record: QSORecord) => record),
+      updateQSO: vi.fn(),
+      getLastQSOWithCallsign: vi.fn().mockResolvedValue(null),
+      getStatistics: vi.fn().mockResolvedValue({ totalQSOs: 1 }),
+    };
+    const { manager, slotPackManager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider },
+      callsign: 'BG5JKZ',
+      // The attempt anchor is before the cache origin, so the early frames only
+      // exist in the persisted log.
+      retainedSinceMs: base + 5 * slot,
+      activeSlotPacks: [
+        buildSlotPack(`ft8-${base + 5 * slot}`, base + 5 * slot, [
+          { message: 'BG5JKZ VE6TL R-12', snr: -14, dt: 0.2, freq: 2723, confidence: 1 },
+        ]),
+      ],
+      storedRecords: [{
+        slotPack: buildSlotPack(`ft8-${base}`, base, [
+          { message: 'CQ VE6TL DO21', snr: -12, dt: 0.2, freq: 2722, confidence: 1 },
+        ]),
+      }],
+    });
+    attachQSOHookSpy(manager);
+
+    await invokeRecordQSO(manager, {
+      operatorId: 'op1',
+      startedAt: base,
+      qsoRecord: {
+        id: 'temp-persisted-window',
+        callsign: 'VE6TL',
+        frequency: 14_074_000,
+        mode: 'FT8',
+        startTime: base + 6 * slot,
+        endTime: base + 6 * slot,
+        reportSent: '-12',
+        reportReceived: '-12',
+        messageHistory: [],
+        myCallsign: 'BG5JKZ',
+      },
+    });
+
+    expect(slotPackManager.readStoredRecords).toHaveBeenCalledOnce();
+    expect(provider.addQSO.mock.calls[0]?.[0]?.messageHistory).toEqual([
+      'CQ VE6TL DO21',
+      'BG5JKZ VE6TL R-12',
+    ]);
   });
 
   it('preserves a legitimate bare zero report when no air history is available', async () => {

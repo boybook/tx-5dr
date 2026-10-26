@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useI18n } from '../../../_shared/ui/useI18n';
 import { useAutoResize } from '../../../_shared/ui/useAutoResize';
 import { resolveSelectedStationId } from './stationSelection';
+import { App as SyncApp } from '../sync/App';
 import './App.css';
 
 interface Station {
@@ -12,6 +13,12 @@ interface Station {
   station_gridsquare?: string;
 }
 
+/** Launch correlation IDs are not credentials; keep working on plain http origins. */
+function createLaunchId(): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
+  return `sync-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 const I18N: Record<string, Record<string, string>> = {
   zh: {
     connectionTitle: 'WaveLog 连接设置',
@@ -19,6 +26,8 @@ const I18N: Record<string, Record<string, string>> = {
     urlPlaceholder: 'https://your-wavelog.example.com',
     apiKeyLabel: 'API 密钥',
     apiKeyPlaceholder: '输入 WaveLog API 密钥',
+    savedKey: '已保存密钥；留空保留原值',
+    protocol: 'API 版本',
     testBtn: '测试连接',
     testing: '测试中...',
     stationLabel: '电台配置',
@@ -35,6 +44,7 @@ const I18N: Record<string, Record<string, string>> = {
     connected: '连接成功',
     connectionFailed: '连接失败',
     lastSync: '上次同步',
+    advanced: '高级操作', reconcile: '重新对账',
   },
   ja: {
     connectionTitle: '接続設定',
@@ -42,6 +52,8 @@ const I18N: Record<string, Record<string, string>> = {
     urlPlaceholder: 'https://your-wavelog.example.com',
     apiKeyLabel: 'APIキー',
     apiKeyPlaceholder: 'WaveLog APIキーを入力してください',
+    savedKey: '保存済みキー：空欄で保持',
+    protocol: 'API バージョン',
     testBtn: '接続テスト',
     testing: 'テスト中...',
     stationLabel: '無線機設定',
@@ -58,6 +70,7 @@ const I18N: Record<string, Record<string, string>> = {
     connected: '接続成功',
     connectionFailed: '接続失敗',
     lastSync: '前回同期',
+    advanced: '詳細操作', reconcile: '再照合',
   },
   en: {
     connectionTitle: 'WaveLog Connection',
@@ -65,6 +78,8 @@ const I18N: Record<string, Record<string, string>> = {
     urlPlaceholder: 'https://your-wavelog.example.com',
     apiKeyLabel: 'API Key',
     apiKeyPlaceholder: 'Enter WaveLog API key',
+    savedKey: 'Saved credential; leave blank to keep',
+    protocol: 'API version',
     testBtn: 'Test Connection',
     testing: 'Testing...',
     stationLabel: 'Station Profile',
@@ -81,6 +96,7 @@ const I18N: Record<string, Record<string, string>> = {
     connected: 'Connected',
     connectionFailed: 'Connection failed',
     lastSync: 'Last sync',
+    advanced: 'Advanced', reconcile: 'Reconcile',
   },
 };
 
@@ -88,11 +104,13 @@ export function App() {
   const t = useI18n(I18N);
   const callsign = window.tx5dr.params.callsign ?? '';
 
+  const [reconcileEntry, setReconcileEntry] = useState<{ intent: string; operation: string; launchId: string } | null>(null);
   const [url, setUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [stations, setStations] = useState<Station[]>([]);
   const [stationId, setStationId] = useState('');
-  const [radioName, setRadioName] = useState('TX5DR');
+  const [hasApiKey, setHasApiKey] = useState(false);
+  const [apiVersion, setApiVersion] = useState<'v1' | 'v2'>('v2');
   const [autoUpload, setAutoUpload] = useState(true);
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
 
@@ -108,23 +126,24 @@ export function App() {
   useEffect(() => {
     const bridge = window.tx5dr;
 
+    bridge.invoke('getSyncStatus').then((status: any) => {
+      if (status?.lastSuccessAt) setLastSyncTime(new Date(status.lastSuccessAt).toLocaleString());
+    }).catch(() => {});
+
     bridge.invoke('getConfig', { callsign }).then((config: any) => {
       if (!config) return;
       setUrl(config.url || '');
-      setApiKey(config.apiKey || '');
-      setRadioName(config.radioName || 'TX5DR');
+      setHasApiKey(!!config.hasApiKey);
+      setApiVersion(config.apiVersion || 'v1');
       setAutoUpload(!!config.autoUploadQSO);
 
-      if (config.lastSyncTime) {
-        setLastSyncTime(new Date(config.lastSyncTime).toLocaleString());
-      }
-
       // If we have url+apiKey, try to fetch stations
-      if (config.url && config.apiKey) {
+      if (config.url && config.hasApiKey) {
         bridge.invoke('getStations', {
           callsign,
           url: config.url,
-          apiKey: config.apiKey,
+          apiKey: '',
+          apiVersion: config.apiVersion,
         }).then((result: any) => {
           if (result?.stations) {
             setStations(result.stations);
@@ -149,7 +168,7 @@ export function App() {
   const handleTest = useCallback(() => {
     const trimmedUrl = url.trim();
     const trimmedKey = apiKey.trim();
-    if (!trimmedUrl || !trimmedKey) return;
+    if (!trimmedUrl || (!trimmedKey && !hasApiKey)) return;
 
     setTesting(true);
     setTestStatus(null);
@@ -158,6 +177,7 @@ export function App() {
       callsign,
       url: trimmedUrl,
       apiKey: trimmedKey,
+      apiVersion,
     }).then((result: any) => {
       setTesting(false);
       if (result.success) {
@@ -179,14 +199,14 @@ export function App() {
         text: err.message || t('connectionFailed'),
       });
     });
-  }, [url, apiKey, callsign, stationId, t]);
+  }, [url, apiKey, apiVersion, hasApiKey, callsign, stationId, t]);
 
   // Save config
   const handleSave = useCallback(() => {
     const trimmedUrl = url.trim();
     const trimmedKey = apiKey.trim();
     const trimmedStation = stationId.trim();
-    if (!trimmedUrl || !trimmedKey || !trimmedStation) {
+    if (!trimmedUrl || (!trimmedKey && !hasApiKey) || !trimmedStation) {
       setSaveStatus({ type: 'danger', text: t('missingRequired') });
       return;
     }
@@ -200,7 +220,7 @@ export function App() {
         url: trimmedUrl,
         apiKey: trimmedKey,
         stationId: trimmedStation,
-        radioName: radioName.trim() || 'TX5DR',
+        apiVersion,
         autoUploadQSO: autoUpload,
       },
     }).then(() => {
@@ -219,7 +239,7 @@ export function App() {
         text: `${t('saveFailed')}: ${err.message || ''}`,
       });
     });
-  }, [callsign, url, apiKey, stationId, radioName, autoUpload, t]);
+  }, [callsign, url, apiKey, stationId, apiVersion, hasApiKey, autoUpload, t]);
 
   // Build station option label
   const stationLabel = (s: Station) => {
@@ -229,14 +249,16 @@ export function App() {
     return label;
   };
 
+  if (reconcileEntry) return <SyncApp entry={reconcileEntry} />;
   return (
     <div className="container">
       {/* Connection section */}
-      <div className="section-title">{t('connectionTitle')}</div>
+      <div className="tx5dr-heading">{t('connectionTitle')}</div>
 
-      <div className="form-group">
-        <label>{t('urlLabel')}</label>
+      <div className="tx5dr-field">
+        <label className="tx5dr-label" htmlFor="url">{t('urlLabel')}</label>
         <input
+          id="url" className="tx5dr-input"
           type="url"
           placeholder={t('urlPlaceholder')}
           value={url}
@@ -249,14 +271,16 @@ export function App() {
         />
       </div>
 
-      <div className="form-group">
-        <label>{t('apiKeyLabel')}</label>
+      <div className="tx5dr-field">
+        <label className="tx5dr-label" htmlFor="apiKey">{t('apiKeyLabel')}</label>
         <input
+          id="apiKey" className="tx5dr-input"
           type="password"
-          placeholder={t('apiKeyPlaceholder')}
+          placeholder={t(hasApiKey ? 'savedKey' : 'apiKeyPlaceholder')}
           value={apiKey}
           onChange={e => {
             setApiKey(e.target.value);
+            if (e.target.value.trim()) setApiVersion(e.target.value.trim().startsWith('wl2_') ? 'v2' : 'v1');
             setStations([]);
             setStationId('');
             setTestStatus(null);
@@ -264,25 +288,26 @@ export function App() {
         />
       </div>
 
-      <div className="btn-row">
+      <div className="tx5dr-actions">
         <button
-          className="btn btn-secondary"
-          disabled={testing || !url.trim() || !apiKey.trim()}
+          className="tx5dr-button"
+          disabled={testing || !url.trim() || (!apiKey.trim() && !hasApiKey)}
           onClick={handleTest}
         >
-          {testing && <span className="spinner" />}
+          {testing && <span className="tx5dr-spinner" />}
           <span>{testing ? t('testing') : t('testBtn')}</span>
         </button>
         {testStatus && (
-          <span className={`chip chip-${testStatus.type}`}>
+          <span className={`tx5dr-chip tx5dr-chip--${testStatus.type}`}>
             {testStatus.text}
           </span>
         )}
       </div>
 
-      <div className="form-group" style={{ marginTop: 'var(--tx5dr-spacing-md)' }}>
-        <label>{t('stationLabel')}</label>
+      <div className="tx5dr-field" style={{ marginTop: 'var(--tx5dr-spacing-md)' }}>
+        <label className="tx5dr-label" htmlFor="station">{t('stationLabel')}</label>
         <select
+          id="station" className="tx5dr-input"
           value={stationId}
           onChange={e => setStationId(e.target.value)}
         >
@@ -298,53 +323,48 @@ export function App() {
         </select>
       </div>
 
-      <div className="form-group">
-        <label>{t('radioNameLabel')}</label>
-        <input
-          type="text"
-          value={radioName}
-          onChange={e => setRadioName(e.target.value)}
-        />
+      <div className="tx5dr-field">
+        <label className="tx5dr-label" htmlFor="protocol">{t('protocol')}</label>
+        <select id="protocol" className="tx5dr-input" value={apiVersion} onChange={e => { setApiVersion(e.target.value as 'v1' | 'v2'); setStations([]); setStationId(''); }}>
+          <option value="v1">v1</option>
+          <option value="v2">v2</option>
+        </select>
       </div>
 
-      <hr className="section-divider" />
+      <hr className="tx5dr-divider" />
 
       {/* Sync section */}
-      <div className="section-title">{t('syncTitle')}</div>
+      <div className="tx5dr-heading">{t('syncTitle')}</div>
 
       <div className="toggle-row">
         <div>
           <div className="toggle-label">{t('autoUpload')}</div>
           <div className="toggle-desc">{t('autoUploadDesc')}</div>
         </div>
-        <label className="switch">
-          <input
-            type="checkbox"
-            checked={autoUpload}
-            onChange={e => setAutoUpload(e.target.checked)}
-          />
-          <span className="slider" />
-        </label>
+        <input className="tx5dr-switch" type="checkbox" aria-label={t('autoUpload')} checked={autoUpload} onChange={e => setAutoUpload(e.target.checked)} />
       </div>
 
-      <hr className="section-divider" />
+      <hr className="tx5dr-divider" />
 
       {/* Save */}
-      <div className="btn-row">
+      <div className="tx5dr-actions">
         <button
-          className="btn btn-primary"
+          className="tx5dr-button tx5dr-button--primary"
           disabled={saving}
           onClick={handleSave}
         >
           <span>{saving ? t('saving') : t('saveBtn')}</span>
         </button>
         {saveStatus && (
-          <span className={`chip chip-${saveStatus.type}`}>
+          <span className={`tx5dr-chip tx5dr-chip--${saveStatus.type}`}>
             {saveStatus.text}
           </span>
         )}
       </div>
 
+      <details className="advanced-actions"><summary>{t('advanced')}</summary>
+        <button className="tx5dr-button" onClick={() => setReconcileEntry({ intent: 'start', operation: 'reconcile', launchId: createLaunchId() })}>{t('reconcile')}</button>
+      </details>
       {lastSyncTime && (
         <div className="status-row">
           {t('lastSync')}: {lastSyncTime}

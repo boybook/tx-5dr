@@ -1,6 +1,6 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Alert, Button, Chip } from '@heroui/react';
+import { Alert, Button, Chip, Switch } from '@heroui/react';
 import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faKeyboard, faRotateLeft, faTrash } from '@fortawesome/free-solid-svg-icons';
@@ -9,14 +9,20 @@ import {
   createShortcutBindingFromKeyboardEvent,
   DEFAULT_SHORTCUT_CONFIG,
   dispatchShortcutConfigChanged,
+  dispatchShortcutTogglesChanged,
   findShortcutConflicts,
   formatShortcutBinding,
   getShortcutConfig,
+  getShortcutToggles,
   isModifierOnlyShortcutEvent,
   normalizeShortcutConfig,
+  normalizeShortcutToggles,
   saveShortcutConfig,
+  saveShortcutToggles,
+  shortcutTogglesEqual,
   type ShortcutActionId,
   type ShortcutConfig,
+  type ShortcutToggles,
 } from '../../utils/shortcutPreferences';
 import { createLogger } from '../../utils/logger';
 
@@ -87,6 +93,8 @@ export const ShortcutSettings = forwardRef<ShortcutSettingsRef, ShortcutSettings
     const isElectron = Boolean(window.electronAPI?.shortcuts);
     const [draftConfig, setDraftConfig] = useState<ShortcutConfig>(() => getShortcutConfig());
     const [originalConfig, setOriginalConfig] = useState<ShortcutConfig>(() => getShortcutConfig());
+    const [draftToggles, setDraftToggles] = useState<ShortcutToggles>(() => getShortcutToggles());
+    const [originalToggles, setOriginalToggles] = useState<ShortcutToggles>(() => getShortcutToggles());
     const [recordingActionId, setRecordingActionId] = useState<ShortcutActionId | null>(null);
     const [errorMessage, setErrorMessage] = useState<string>('');
     const [failedRegistrations, setFailedRegistrations] = useState<Array<{ actionId: ShortcutActionId; accelerator: string; reason: string }>>([]);
@@ -97,12 +105,18 @@ export const ShortcutSettings = forwardRef<ShortcutSettingsRef, ShortcutSettings
 
       const load = async () => {
         try {
-          const loaded = isElectron && window.electronAPI?.shortcuts
-            ? normalizeShortcutConfig(await window.electronAPI.shortcuts.getConfig())
+          const electronShortcuts = window.electronAPI?.shortcuts;
+          const loadedConfig = electronShortcuts
+            ? normalizeShortcutConfig(await electronShortcuts.getConfig())
             : getShortcutConfig();
+          const loadedToggles = electronShortcuts
+            ? normalizeShortcutToggles(await electronShortcuts.getToggles())
+            : getShortcutToggles();
           if (cancelled) return;
-          setDraftConfig(loaded);
-          setOriginalConfig(loaded);
+          setDraftConfig(loadedConfig);
+          setOriginalConfig(loadedConfig);
+          setDraftToggles(loadedToggles);
+          setOriginalToggles(loadedToggles);
         } catch (error) {
           logger.warn('Failed to load shortcut settings', error);
         }
@@ -116,7 +130,8 @@ export const ShortcutSettings = forwardRef<ShortcutSettingsRef, ShortcutSettings
 
     const hasUnsavedChanges = useCallback(() => (
       !configsEqual(draftConfig, originalConfig)
-    ), [draftConfig, originalConfig]);
+      || !shortcutTogglesEqual(draftToggles, originalToggles)
+    ), [draftConfig, draftToggles, originalConfig, originalToggles]);
 
     useEffect(() => {
       onUnsavedChanges?.(hasUnsavedChanges());
@@ -138,13 +153,18 @@ export const ShortcutSettings = forwardRef<ShortcutSettingsRef, ShortcutSettings
 
       try {
         const normalized = normalizeShortcutConfig(draftConfig);
+        const normalizedToggles = normalizeShortcutToggles(draftToggles);
         if (isElectron && window.electronAPI?.shortcuts) {
+          await window.electronAPI.shortcuts.setToggles(normalizedToggles);
           const status = await window.electronAPI.shortcuts.setConfig(normalized);
           const nextConfig = normalizeShortcutConfig(status.config);
           setDraftConfig(nextConfig);
           setOriginalConfig(nextConfig);
+          setDraftToggles(normalizedToggles);
+          setOriginalToggles(normalizedToggles);
           setFailedRegistrations(status.failed);
           dispatchShortcutConfigChanged(nextConfig);
+          dispatchShortcutTogglesChanged(normalizedToggles);
 
           if (status.failed.length > 0) {
             addToast({
@@ -157,8 +177,11 @@ export const ShortcutSettings = forwardRef<ShortcutSettingsRef, ShortcutSettings
           }
         } else {
           const nextConfig = saveShortcutConfig(normalized);
+          saveShortcutToggles(normalizedToggles);
           setDraftConfig(nextConfig);
           setOriginalConfig(nextConfig);
+          setDraftToggles(normalizedToggles);
+          setOriginalToggles(normalizedToggles);
           addToast({ title: t('shortcuts.saveSuccess'), color: 'success' });
         }
       } catch (error) {
@@ -169,7 +192,7 @@ export const ShortcutSettings = forwardRef<ShortcutSettingsRef, ShortcutSettings
       } finally {
         setIsSaving(false);
       }
-    }, [draftConfig, isElectron, t]);
+    }, [draftConfig, draftToggles, isElectron, t]);
 
     useImperativeHandle(ref, () => ({
       hasUnsavedChanges,
@@ -272,6 +295,12 @@ export const ShortcutSettings = forwardRef<ShortcutSettingsRef, ShortcutSettings
       updateAction(actionId, createDisabledShortcutBinding());
     }, [updateAction]);
 
+    const updateToggles = useCallback((update: Partial<ShortcutToggles>) => {
+      setDraftToggles(prev => normalizeShortcutToggles({ ...prev, ...update }));
+      setErrorMessage('');
+      setFailedRegistrations([]);
+    }, []);
+
     return (
       <div className="space-y-4">
         <div className="space-y-1">
@@ -307,6 +336,43 @@ export const ShortcutSettings = forwardRef<ShortcutSettingsRef, ShortcutSettings
             </div>
           </Alert>
         )}
+
+        <div className="overflow-hidden rounded-medium border border-divider bg-content1">
+          <div className="divide-y divide-divider">
+            <div className="flex flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0 space-y-0.5">
+                <div className="text-sm font-medium text-default-900">{t('shortcuts.masterEnabled')}</div>
+                <div className="text-xs leading-5 text-default-500">{t('shortcuts.masterEnabledDescription')}</div>
+              </div>
+              <Switch
+                size="sm"
+                color="primary"
+                className="shrink-0"
+                aria-label={t('shortcuts.masterEnabled')}
+                isDisabled={isSaving}
+                isSelected={draftToggles.enabled}
+                onValueChange={(isSelected) => updateToggles({ enabled: isSelected })}
+              />
+            </div>
+            <div className="flex flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0 space-y-0.5">
+                <div className="text-sm font-medium text-default-900">{t('shortcuts.globalEnabled')}</div>
+                <div className="text-xs leading-5 text-default-500">
+                  {isElectron ? t('shortcuts.globalEnabledDescription') : t('shortcuts.globalEnabledBrowserDescription')}
+                </div>
+              </div>
+              <Switch
+                size="sm"
+                color="primary"
+                className="shrink-0"
+                aria-label={t('shortcuts.globalEnabled')}
+                isDisabled={isSaving || !isElectron || !draftToggles.enabled}
+                isSelected={draftToggles.globalEnabled}
+                onValueChange={(isSelected) => updateToggles({ globalEnabled: isSelected })}
+              />
+            </div>
+          </div>
+        </div>
 
         <div className="overflow-hidden rounded-medium border border-divider bg-content1">
           <div className="divide-y divide-divider">

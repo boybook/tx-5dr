@@ -3,8 +3,10 @@ import { createLogger } from './logger';
 const logger = createLogger('ShortcutPreferences');
 
 const STORAGE_KEY = 'tx5dr_shortcut_config_v1';
+const TOGGLES_STORAGE_KEY = 'tx5dr_shortcut_toggles_v1';
 
 export const SHORTCUT_CONFIG_CHANGED_EVENT = 'tx5drShortcutConfigChanged';
+export const SHORTCUT_TOGGLES_CHANGED_EVENT = 'tx5drShortcutTogglesChanged';
 
 export const SHORTCUT_ACTION_IDS = [
   'toggle-current-operator-tx',
@@ -319,4 +321,75 @@ export function isTypingShortcutTarget(target: EventTarget | null): boolean {
 
 export function isKnownShortcutActionId(value: unknown): value is ShortcutActionId {
   return isShortcutActionId(value);
+}
+
+export interface ShortcutToggles {
+  enabled: boolean;
+  globalEnabled: boolean;
+}
+
+export type ShortcutTransport = 'disabled' | 'window' | 'electron-global';
+
+export const DEFAULT_SHORTCUT_TOGGLES: ShortcutToggles = {
+  enabled: true,
+  globalEnabled: true,
+};
+
+export function normalizeShortcutToggles(value: unknown): ShortcutToggles {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { ...DEFAULT_SHORTCUT_TOGGLES };
+  }
+
+  const raw = value as Partial<ShortcutToggles>;
+  return {
+    enabled: raw.enabled !== false,
+    globalEnabled: raw.globalEnabled !== false,
+  };
+}
+
+export function shortcutTogglesEqual(left: ShortcutToggles, right: ShortcutToggles): boolean {
+  return left.enabled === right.enabled && left.globalEnabled === right.globalEnabled;
+}
+
+export function getShortcutToggles(): ShortcutToggles {
+  const storage = getStorage();
+  if (!storage) return { ...DEFAULT_SHORTCUT_TOGGLES };
+
+  try {
+    const raw = storage.getItem(TOGGLES_STORAGE_KEY);
+    if (!raw) return { ...DEFAULT_SHORTCUT_TOGGLES };
+    return normalizeShortcutToggles(JSON.parse(raw));
+  } catch (error) {
+    logger.warn('Failed to read shortcut toggles', error);
+    return { ...DEFAULT_SHORTCUT_TOGGLES };
+  }
+}
+
+export function saveShortcutToggles(toggles: ShortcutToggles): ShortcutToggles {
+  const normalized = normalizeShortcutToggles(toggles);
+  const storage = getStorage();
+
+  if (storage) {
+    try {
+      storage.setItem(TOGGLES_STORAGE_KEY, JSON.stringify(normalized));
+    } catch (error) {
+      logger.error('Failed to save shortcut toggles', error);
+    }
+  }
+
+  dispatchShortcutTogglesChanged(normalized);
+  return normalized;
+}
+
+export function dispatchShortcutTogglesChanged(toggles: ShortcutToggles): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent<ShortcutToggles>(SHORTCUT_TOGGLES_CHANGED_EVENT, { detail: toggles }));
+}
+
+export function resolveShortcutTransport(
+  toggles: ShortcutToggles,
+  supportsGlobalShortcuts: boolean,
+): ShortcutTransport {
+  if (!toggles.enabled) return 'disabled';
+  return supportsGlobalShortcuts && toggles.globalEnabled ? 'electron-global' : 'window';
 }

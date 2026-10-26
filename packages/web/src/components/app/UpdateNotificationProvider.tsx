@@ -48,9 +48,9 @@ interface UpdateNotificationContextValue {
 
 const UpdateNotificationContext = createContext<UpdateNotificationContextValue | null>(null);
 
-function getSeenKey(status: Pick<SystemUpdateStatus, 'target' | 'identity'>): string | null {
+function getSeenKey(status: Pick<SystemUpdateStatus, 'target' | 'identity' | 'targetChannel' | 'channel'>): string | null {
   if (!status.identity) return null;
-  return `${SEEN_PREFIX}:${status.target}:${status.identity}`;
+  return `${SEEN_PREFIX}:${status.target}:${status.targetChannel ?? status.channel}:${status.identity}`;
 }
 
 function isSeen(status: SystemUpdateStatus): boolean {
@@ -125,7 +125,9 @@ export function UpdateNotificationProvider({ children }: { children: React.React
 
   const isUnreadUpdateAvailable = useMemo(() => {
     void seenNonce;
-    return Boolean(status?.updateAvailable && status.identity && !isSeen(status));
+    let stableUnread = false;
+    try { stableUnread = Boolean(status?.stableAvailable && localStorage.getItem('tx5dr-stable-migration-dismissed') !== '1'); } catch { /* unavailable */ }
+    return stableUnread || Boolean(status?.updateAvailable && status.identity && !isSeen(status));
   }, [status, seenNonce]);
 
   const value = useMemo<UpdateNotificationContextValue>(() => ({

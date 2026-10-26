@@ -666,6 +666,7 @@ export const plugin = definePlugin({
         title: 'settingsPage',
         accessScope: 'admin',
         resourceBinding: 'none',
+        styles: 'standard',
       },
     ],
   },
@@ -765,6 +766,7 @@ export const plugin = definePlugin({
         title: 'settingsPage',
         accessScope: 'admin',
         resourceBinding: 'none',
+        styles: 'standard',
       },
     ],
   },
@@ -939,17 +941,17 @@ function generateVanillaUIHtml(config: PluginConfig): string {
     <h2 class="title">${config.name} Settings</h2>
 
     <div class="section">
-      <label class="label">Message</label>
-      <input type="text" class="input" id="messageInput" placeholder="Enter a message">
+      <label class="tx5dr-label">Message</label>
+      <input type="text" class="tx5dr-input" id="messageInput" placeholder="Enter a message">
     </div>
 
     <div class="section">
-      <button class="btn btn-primary" id="saveBtn">Save</button>
-      <span class="status" id="status"></span>
+      <button class="tx5dr-button tx5dr-button--primary" id="saveBtn">Save</button>
+      <span class="tx5dr-muted" id="status"></span>
     </div>
 
     <div class="section">
-      <p class="text-secondary" id="currentValue"></p>
+      <p class="tx5dr-muted" id="currentValue"></p>
     </div>
   </div>
   <script src="settings.js"></script>
@@ -1018,90 +1020,11 @@ function generateVanillaUIJs(): string {
 }
 
 function generateUICss(): string {
-  return `/* Plugin UI styles — using TX-5DR Design Tokens */
-.container {
-  padding: var(--tx5dr-spacing-lg);
-  font-family: var(--tx5dr-font);
-  color: var(--tx5dr-text);
-}
-
-.title {
-  font-size: var(--tx5dr-font-size-lg);
-  font-weight: 600;
-  margin-bottom: var(--tx5dr-spacing-lg);
-}
-
-.section {
-  margin-bottom: var(--tx5dr-spacing-md);
-  display: flex;
-  align-items: center;
-  gap: var(--tx5dr-spacing-sm);
-}
-
-.label {
-  font-size: var(--tx5dr-font-size-sm);
-  color: var(--tx5dr-text-secondary);
-  min-width: 70px;
-}
-
-.input {
-  flex: 1;
-  padding: var(--tx5dr-spacing-sm) var(--tx5dr-spacing-md);
-  background: var(--tx5dr-bg-content);
-  border: 1px solid var(--tx5dr-border);
-  border-radius: var(--tx5dr-radius-sm);
-  color: var(--tx5dr-text);
-  font-size: var(--tx5dr-font-size-md);
-  font-family: var(--tx5dr-font);
-  outline: none;
-  transition: border-color 0.2s;
-}
-
-.input:focus {
-  border-color: var(--tx5dr-primary);
-  box-shadow: 0 0 0 2px var(--tx5dr-focus-ring);
-}
-
-.btn {
-  padding: var(--tx5dr-spacing-sm) var(--tx5dr-spacing-lg);
-  border: 1px solid var(--tx5dr-border);
-  border-radius: var(--tx5dr-radius-sm);
-  background: var(--tx5dr-bg-content);
-  color: var(--tx5dr-text);
-  font-size: var(--tx5dr-font-size-sm);
-  font-family: var(--tx5dr-font);
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.btn:hover {
-  background: var(--tx5dr-bg-hover);
-}
-
-.btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.btn-primary {
-  background: var(--tx5dr-primary);
-  border-color: var(--tx5dr-primary);
-  color: #fff;
-}
-
-.btn-primary:hover {
-  background: var(--tx5dr-primary-hover);
-}
-
-.status {
-  font-size: var(--tx5dr-font-size-sm);
-  color: var(--tx5dr-text-secondary);
-}
-
-.text-secondary {
-  font-size: var(--tx5dr-font-size-sm);
-  color: var(--tx5dr-text-secondary);
-}
+  return `/* Business layout only; controls are supplied by the Host's standard styles. */
+.container { padding:var(--tx5dr-spacing-lg); }
+.title { margin-bottom:var(--tx5dr-spacing-lg); }
+.section { margin-bottom:var(--tx5dr-spacing-md); display:flex; align-items:center; flex-wrap:wrap; gap:var(--tx5dr-spacing-sm); }
+.section .tx5dr-input { flex:1; min-width:140px; }
 `;
 }
 
@@ -1238,9 +1161,9 @@ export function App() {
       <h2 className="title">${config.name} Settings</h2>
 
       <div className="section">
-        <label className="label">Message</label>
+        <label className="tx5dr-label">Message</label>
         <input
-          className="input"
+          className="tx5dr-input"
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           placeholder="Enter a message"
@@ -1249,15 +1172,15 @@ export function App() {
       </div>
 
       <div className="section">
-        <button className="btn btn-primary" onClick={handleSave}>
+        <button className="tx5dr-button tx5dr-button--primary" onClick={handleSave}>
           Save
         </button>
-        {status && <span className="status">{status}</span>}
+        {status && <span className="tx5dr-muted">{status}</span>}
       </div>
 
       {saved && (
         <div className="section">
-          <p className="text-secondary">Current: {saved}</p>
+          <p className="tx5dr-muted">Current: {saved}</p>
         </div>
       )}
     </div>
@@ -1330,9 +1253,9 @@ async function handleSave() {
     <h2 class="title">${config.name} Settings</h2>
 
     <div class="section">
-      <label class="label">Message</label>
+      <label class="tx5dr-label">Message</label>
       <input
-        class="input"
+        class="tx5dr-input"
         v-model="message"
         placeholder="Enter a message"
         @keydown.enter="handleSave"
@@ -1340,12 +1263,12 @@ async function handleSave() {
     </div>
 
     <div class="section">
-      <button class="btn btn-primary" @click="handleSave">Save</button>
-      <span v-if="status" class="status">{{ status }}</span>
+      <button class="tx5dr-button tx5dr-button--primary" @click="handleSave">Save</button>
+      <span v-if="status" class="tx5dr-muted">{{ status }}</span>
     </div>
 
     <div v-if="saved" class="section">
-      <p class="text-secondary">Current: {{ saved }}</p>
+      <p class="tx5dr-muted">Current: {{ saved }}</p>
     </div>
   </div>
 </template>

@@ -1,0 +1,7 @@
+.sync-content { padding:var(--tx5dr-spacing-lg); }
+.sync-phase { font-weight:500; margin-block-end:var(--tx5dr-spacing-sm); }
+.sync-counts { display:grid; grid-template-columns:repeat(auto-fit,minmax(90px,1fr)); gap:var(--tx5dr-spacing-md); margin-block:var(--tx5dr-spacing-lg); }
+.sync-counts strong { display:block; font-size:var(--tx5dr-font-size-lg); font-variant-numeric:tabular-nums; }
+.sync-close-hint { flex:1; }
+.sync-content .tx5dr-feedback { margin-block:var(--tx5dr-spacing-sm); }
+.sync-content .tx5dr-progress { margin-block:var(--tx5dr-spacing-md); }

@@ -1,6 +1,6 @@
 {
   "name": "@tx5dr/electron-main",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "commonjs",
   "description": "TX-5DR Ham Radio FT8 Application",
   "author": "BG5DRB",
@@ -13,6 +13,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@tx5dr/contracts": "workspace:*",
+    "@tx5dr/core": "workspace:*",
     "@tx5dr/server": "workspace:*",
     "electron-log": "^5.4.3",
     "electron-updater": "6.8.3",

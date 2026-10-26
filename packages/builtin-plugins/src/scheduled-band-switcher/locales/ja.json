@@ -11,6 +11,8 @@
   "autoTuneAfterSwitchEnabledDesc": "周波数切替が成功した後、接続中の無線機が対応している場合は、チューナーをオンにして 1 回チューニングします。",
   "bandScheduleEntries": "周波数時間表",
   "bandScheduleEntriesDesc": "ローカル時刻を使います。曜日は daily、mon-fri、sat,sun、または 1-5（1=月曜、7=日曜）で指定できます。周波数の単位は MHz です。",
+  "keepScheduleFrequency": "設定周波数を維持",
+  "keepScheduleFrequencyDesc": "有効にすると、時間帯の設定周波数から外れた場合に自動で戻します。無効の場合は各時間帯の開始時に一度だけ切り替え、その後は操作者が自由に周波数を変更できます。",
   "entryEnabled": "有効",
   "entryDays": "曜日",
   "entryDaysDesc": "例: daily、mon-fri、sat,sun、1-5。",
