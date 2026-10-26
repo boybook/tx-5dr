@@ -101,6 +101,11 @@ function toRigctlVfo(raw: string): RigctlVfo {
   }
 }
 
+function isUnsupportedVfoOperation(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /not supported by this radio|unsupported command|feature not available|not implemented/i.test(message);
+}
+
 export class RadioControllerAdapter implements RadioController {
   private pttLeaseId: string | null = null;
 
@@ -299,6 +304,8 @@ export class RadioControllerAdapter implements RadioController {
     try {
       return toRigctlVfo(await conn.getVfo());
     } catch (error) {
+      // Hamlib exposes the method even when the selected model cannot use it.
+      if (isUnsupportedVfoOperation(error)) return 'VFOA';
       if (error instanceof RigctldProtocolError) throw error;
       throw new RigctldProtocolError(RigErr.EIO, (error as Error).message);
     }
@@ -318,6 +325,10 @@ export class RadioControllerAdapter implements RadioController {
     try {
       await conn.setVfo(vfo);
     } catch (error) {
+      if (isUnsupportedVfoOperation(error)) {
+        if (vfo === 'VFOA') return;
+        throw new RigctldProtocolError(RigErr.ENIMPL, `active radio connection cannot switch to ${vfo}`);
+      }
       if (error instanceof RigctldProtocolError) throw error;
       throw new RigctldProtocolError(RigErr.EIO, (error as Error).message);
     }

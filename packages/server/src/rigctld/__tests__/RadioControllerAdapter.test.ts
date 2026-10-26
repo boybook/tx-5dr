@@ -2,6 +2,35 @@ import { describe, expect, it, vi } from 'vitest';
 import { RadioControllerAdapter } from '../RadioControllerAdapter.js';
 
 describe('RadioControllerAdapter', () => {
+  it('preserves the single-VFO handshake when a Hamlib model reports VFO operations unsupported', async () => {
+    const radioManager = {
+      isConnected: vi.fn(() => true),
+      getCurrentConnection: vi.fn(() => ({
+        getVfo: vi.fn().mockRejectedValue(new Error('Optional radio operation unavailable (getVfo): Feature not available')),
+        setVfo: vi.fn().mockRejectedValue(new Error('Feature not available')),
+      })),
+    };
+    const adapter = new RadioControllerAdapter(radioManager as any, {} as any);
+
+    await expect(adapter.getVFO()).resolves.toBe('VFOA');
+    await expect(adapter.setVFO('VFOA')).resolves.toBeUndefined();
+    await expect(adapter.setVFO('VFOB')).rejects.toMatchObject({ code: -11 });
+  });
+
+  it.each(['Communication timed out', 'Protocol error'])('does not hide VFO communication failures: %s', async (message) => {
+    const radioManager = {
+      isConnected: vi.fn(() => true),
+      getCurrentConnection: vi.fn(() => ({
+        getVfo: vi.fn().mockRejectedValue(new Error(message)),
+        setVfo: vi.fn().mockRejectedValue(new Error(message)),
+      })),
+    };
+    const adapter = new RadioControllerAdapter(radioManager as any, {} as any);
+
+    await expect(adapter.getVFO()).rejects.toMatchObject({ code: -5 });
+    await expect(adapter.setVFO('VFOA')).rejects.toMatchObject({ code: -5 });
+  });
+
   it('reports the physical VFO-B through the active connection', async () => {
     const getVfo = vi.fn().mockResolvedValue('VFOB');
     const radioManager = {
