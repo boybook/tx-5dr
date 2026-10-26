@@ -629,6 +629,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
             : []}
           onSelectionChange={(keys) => {
             const selected = Array.from(keys)[0] as string;
+            if (!selected) return;
             const option = displayOptions.find((item) => item.key === selected);
             setSelectedName(option?.deviceName ?? '');
             setSelectedRouteKey(option?.routeKey ?? '');
