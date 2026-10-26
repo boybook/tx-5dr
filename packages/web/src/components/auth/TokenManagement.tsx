@@ -38,6 +38,7 @@ import {
 } from '@tx5dr/contracts';
 import type { TokenInfo, CreateTokenRequest, NetworkInfo, PermissionGrant, PresetFrequency, UpdateTokenRequest } from '@tx5dr/contracts';
 import { useOperators } from '../../store/radioStore';
+import { formatFrequencyMHz } from '../../utils/frequencyMHz';
 
 const ROLE_COLORS: Record<string, 'default' | 'primary' | 'warning'> = {
   viewer: 'default',
@@ -48,7 +49,7 @@ const CUSTOM_BAND = 'custom';
 const CUSTOM_RANGE_BAND = 'custom';
 const FREQUENCY_RANGE_BAND_OPTIONS = Object.entries(FREQUENCY_PERMISSION_BAND_RANGES).map(([key, range]) => ({
   key,
-  label: `${key} ${(range.minFrequency / 1_000_000).toFixed(3)}-${(range.maxFrequency / 1_000_000).toFixed(3)} MHz`,
+  label: `${key} ${formatFrequencyMHz(range.minFrequency)}-${formatFrequencyMHz(range.maxFrequency)} MHz`,
   range,
 }));
 
@@ -1113,7 +1114,7 @@ export function TokenManagement() {
                                   >
                                     {frequencyPresets.map((preset) => (
                                       <Checkbox key={String(preset.frequency)} value={String(preset.frequency)}>
-                                        <span className="text-xs">{preset.description || `${(preset.frequency / 1e6).toFixed(3)} MHz`} — {formatBandLabel(preset.band)} {preset.mode}</span>
+                                        <span className="text-xs">{preset.description || `${formatFrequencyMHz(preset.frequency)} MHz`} — {formatBandLabel(preset.band)} {preset.mode}</span>
                                       </Checkbox>
                                     ))}
                                   </CheckboxGroup>

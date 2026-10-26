@@ -77,6 +77,7 @@ import { ResourceManager } from './utils/ResourceManager.js';
 import { initializePSKReporterService } from './services/PSKReporterService.js';
 import { createLogger } from './utils/logger.js';
 import { bootstrapCoordinator } from './services/BootstrapCoordinator.js';
+import { formatFrequencyMHz } from './utils/frequencyMHz.js';
 
 const logger = createLogger('DigitalRadioEngine');
 
@@ -2061,7 +2062,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   ): Promise<OperatingStateSyncResult> {
     const configManager = ConfigManager.getInstance();
     const description = preset.description
-      || `${(preset.frequency / 1000000).toFixed(3)} MHz${preset.band ? ` ${preset.band}` : ''}`;
+      || `${formatFrequencyMHz(preset.frequency)} MHz${preset.band ? ` ${preset.band}` : ''}`;
     const radioConnected = this.radioManager.isConnected();
     const activeRadioConfig = configManager.getRadioConfig();
     const radioModeResolution = resolveFrequencyRadioMode({
@@ -2201,7 +2202,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
           frequency: currentFrequency,
           mode: targetMode.name,
           band,
-          description: `${(currentFrequency / 1_000_000).toFixed(3)} MHz`,
+          description: `${formatFrequencyMHz(currentFrequency)} MHz`,
           radioConnected: true,
           confirmation: result.frequencyConfirmed === false ? 'mismatch' : 'confirmed',
           ...(result.observedFrequency !== undefined ? { observedFrequency: result.observedFrequency } : {}),
@@ -2214,7 +2215,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
             frequency: currentFrequency,
             mode: targetMode.name,
             band,
-            description: `${(currentFrequency / 1_000_000).toFixed(3)} MHz`,
+            description: `${formatFrequencyMHz(currentFrequency)} MHz`,
           });
         }
         return result.frequencyConfirmed === false || result.modeConfirmed === false || result.modeError
@@ -2280,7 +2281,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         timeout: 5000,
         key: 'repeaterDuplexUnsupported',
         params: {
-          frequency: (frequency / 1_000_000).toFixed(3),
+          frequency: formatFrequencyMHz(frequency),
           reason: result.message || '',
         },
       });
@@ -2307,7 +2308,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         timeout: 5000,
         key: 'toneSquelchUnsupported',
         params: {
-          frequency: (frequency / 1_000_000).toFixed(3),
+          frequency: formatFrequencyMHz(frequency),
           reason: result.message || '',
         },
       });
@@ -2580,7 +2581,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         tolerateModeFailure: true,
       }, expectedConnectionGeneration);
       const band = saved?.band || this.resolveBandLabel(targetFrequency);
-      const description = saved?.description || `${(targetFrequency / 1_000_000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`;
+      const description = saved?.description || `${formatFrequencyMHz(targetFrequency)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`;
       this.emitProgramFrequencyState({
         frequency: targetFrequency,
         mode: mode.name,
@@ -2688,7 +2689,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       }, expectedConnectionGeneration);
 
       if (lastVoice && !applyResult.frequencyApplied) {
-        logger.warn(`Failed to restore last voice frequency: ${(targetFrequency / 1000000).toFixed(3)} MHz`);
+        logger.warn(`Failed to restore last voice frequency: ${formatFrequencyMHz(lastVoice.frequency)} MHz`);
         return { status: 'failed', detail: 'frequency write was not confirmed' };
       }
 
@@ -2708,7 +2709,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       }, targetFrequency, supportsFmOptions && (lastVoice?.toneMode === 'ctcss' || lastVoice?.toneMode === 'dcs'));
 
       const band = lastVoice?.band || this.resolveBandLabel(targetFrequency);
-      const description = lastVoice?.description || `${(targetFrequency / 1000000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`;
+      const description = lastVoice?.description || `${formatFrequencyMHz(targetFrequency)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`;
       this.emitProgramFrequencyState({
         frequency: targetFrequency,
         mode: 'VOICE',
@@ -2767,7 +2768,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       }
       targetFrequency = currentFreq;
       targetRadioMode = 'CW';
-      logger.info(`No saved CW frequency, switching radio to CW mode on current frequency: ${(currentFreq / 1000000).toFixed(3)} MHz`);
+      logger.info(`No saved CW frequency, switching radio to CW mode on current frequency: ${formatFrequencyMHz(currentFreq)} MHz`);
     }
 
     try {
@@ -2780,7 +2781,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       }, expectedConnectionGeneration);
 
       if (lastCW?.frequency && !applyResult.frequencyApplied) {
-        logger.warn(`Failed to restore CW frequency: ${(targetFrequency / 1000000).toFixed(3)} MHz`);
+        logger.warn(`Failed to restore CW frequency: ${formatFrequencyMHz(targetFrequency)} MHz`);
         return { status: 'failed', detail: 'frequency write was not confirmed' };
       }
 
@@ -2792,7 +2793,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       }
 
       const band = this.resolveBandLabel(targetFrequency);
-      const description = `${(targetFrequency / 1000000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`;
+      const description = `${formatFrequencyMHz(targetFrequency)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`;
       this.emitProgramFrequencyState({
         frequency: targetFrequency,
         mode: 'CW',
