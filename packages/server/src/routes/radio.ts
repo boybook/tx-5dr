@@ -931,7 +931,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
     return reply.send({
       success: true,
       frequency,
-      radioMode: effectiveRadioMode,
+      radioMode: applyResult.modeError ? lastFrequency?.radioMode : effectiveRadioMode,
       repeaterShift: repeaterDuplexToApply?.repeaterShift,
       repeaterOffsetHz: repeaterDuplexToApply?.repeaterOffsetHz,
       toneMode: toneSquelchToApply?.toneMode,
@@ -939,7 +939,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
       dcsCode: toneSquelchToApply?.dcsCode,
       message: applyResult.frequencyConfirmed === false
         ? 'Frequency write sent but physical readback did not confirm the target'
-        : effectiveRadioMode ? `Frequency and mode set successfully (${effectiveRadioMode})` : 'Frequency set successfully',
+        : effectiveRadioMode && !applyResult.modeError ? `Frequency and mode set successfully (${effectiveRadioMode})` : 'Frequency set successfully',
       confirmation: applyResult.frequencyConfirmed === false ? 'mismatch' : 'confirmed',
       ...(applyResult.observedFrequency !== undefined ? { observedFrequency: applyResult.observedFrequency } : {}),
       ...(applyResult.operationId ? { operationId: applyResult.operationId } : {}),
