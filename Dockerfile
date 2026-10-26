@@ -93,6 +93,10 @@ FROM builder-base AS build-production
 RUN echo "Removing development dependencies ..." && \
     yarn workspaces focus --production @tx5dr/server
 
+RUN node -e "const a=require('audify'); const e=new a.OpusEncoder(48000,1,a.OpusApplication.OPUS_APPLICATION_RESTRICTED_LOWDELAY); const d=new a.OpusDecoder(48000,1); const p=e.encode(Buffer.alloc(960*2),960); d.decode(p,960); console.log('audify Opus runtime ok');" \
+    && node -e "import('wsjtx-lib').then(()=>console.log('wsjtx-lib runtime ok'))" \
+    && node -e "const {PNG}=require('pngjs'); if(typeof PNG.sync.read!=='function') throw new Error('pngjs unavailable'); const r=require('rasterwave-node'); if(r.sstvModes().length!==31) throw new Error('rasterwave mode catalog incomplete'); Promise.all([new r.SstvDecoder(12000,{outputMode:'continuousPaper',fallbackMode:'robot36',queueCapacitySamples:24000},()=>{}).dispose(),new r.FaxDecoder(12000,{outputMode:'continuousPaper',continuousAuto:true,queueCapacitySamples:24000},()=>{}).dispose()]).then(()=>console.log('Image Radio runtime ok')).catch(e=>{console.error(e);process.exit(1)});"
+
 FROM builder-base AS builder
 
 # 复制源代码
@@ -115,6 +119,9 @@ RUN node scripts/check-version-consistency.mjs && \
 RUN echo "Building application for $(uname -m)..." && \
     TX5DR_CLUBLOG_API_KEY="$TX5DR_CLUBLOG_API_KEY" yarn exec turbo run build \
     --filter=@tx5dr/server --filter=@tx5dr/web --filter=@tx5dr/client-tools
+
+RUN test -f resources/models/deepcw/model.onnx \
+    && test -f resources/models/deepcw/model.onnx.json
 
 # 运行时镜像
 FROM node:22-trixie-slim
@@ -178,34 +185,24 @@ COPY --from=builder --parents \
 COPY --from=build-production --parents \
     /app/./node_modules \
     ./
-RUN test -f resources/models/deepcw/model.onnx \
-    && test -f resources/models/deepcw/model.onnx.json
 
-RUN node -e "const a=require('audify'); const e=new a.OpusEncoder(48000,1,a.OpusApplication.OPUS_APPLICATION_RESTRICTED_LOWDELAY); const d=new a.OpusDecoder(48000,1); const p=e.encode(Buffer.alloc(960*2),960); d.decode(p,960); console.log('audify Opus runtime ok');" \
-    && node -e "import('wsjtx-lib').then(()=>console.log('wsjtx-lib runtime ok'))" \
-    && node -e "const {PNG}=require('pngjs'); if(typeof PNG.sync.read!=='function') throw new Error('pngjs unavailable'); const r=require('rasterwave-node'); if(r.sstvModes().length!==31) throw new Error('rasterwave mode catalog incomplete'); Promise.all([new r.SstvDecoder(12000,{outputMode:'continuousPaper',fallbackMode:'robot36',queueCapacitySamples:24000},()=>{}).dispose(),new r.FaxDecoder(12000,{outputMode:'continuousPaper',continuousAuto:true,queueCapacitySamples:24000},()=>{}).dispose()]).then(()=>console.log('Image Radio runtime ok')).catch(e=>{console.error(e);process.exit(1)});"
-
-# Nginx configuration: shared template + Docker-specific wrapper
-COPY docker/nginx-wrapper.conf /etc/nginx/nginx.conf
-COPY linux/nginx-site.conf /tmp/nginx-site.conf.template
-RUN sed -e 's|%%LISTEN_PORT%%|80|g' \
+# Copy the following configuration and scripts for runtime setup
+# - Nginx configuration: shared template + Docker-specific wrapper
+# - Supervisor configuration
+# - entrypoint script
+RUN --mount=dst=/tmp/ctx,source=. \
+    cp /tmp/ctx/docker/nginx-wrapper.conf /etc/nginx/nginx.conf && \
+    sed -e 's|%%LISTEN_PORT%%|80|g' \
         -e 's|%%WEB_ROOT%%|/app/packages/web/dist|g' \
         -e 's|%%API_HOST%%|127.0.0.1:4000|g' \
-        /tmp/nginx-site.conf.template > /etc/nginx/conf.d/tx5dr.conf \
-    && rm /tmp/nginx-site.conf.template
+        /tmp/ctx/linux/nginx-site.conf > /etc/nginx/conf.d/tx5dr.conf && \
+    cp /tmp/ctx/docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf && \
+    cp /tmp/ctx/docker/entrypoint.sh /entrypoint.sh && \
+    chmod +x /entrypoint.sh
 
-# Supervisor configuration
-COPY docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
-
-# 复制entrypoint脚本
-COPY docker/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-
-# 创建数据目录
-RUN mkdir -p /app/data/config /app/data/plugins /app/data/logs /app/data/cache /app/data/realtime
-
-# 设置权限
-RUN chown -R www-data:www-data /app/data && \
+# 创建数据目录并设置权限
+RUN mkdir -p /app/data/config /app/data/plugins /app/data/logs /app/data/cache /app/data/realtime && \
+    chown -R www-data:www-data /app/data && \
     chmod -R 755 /app/data
 
 # 暴露端口
