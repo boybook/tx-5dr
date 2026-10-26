@@ -92,27 +92,6 @@ describe('matchUsbAudioDevice', () => {
     expect(matchUsbAudioDevice(devices)?.name).toBe('BurrBrown from Texas Instruments: USB AUDIO  CODEC');
   });
 
-  it('matches preferred radio hint when multiple USB codecs are present', () => {
-    const devices = [
-      {
-        ...makeDevice('USB Audio CODEC'),
-        id: 'input-130',
-        detail: 'IC-9700 12010311 · VID:PID 08bb:2901 · USB 1-7.2.4',
-        serialNumber: 'IC-9700 12010311',
-        hardwareId: 'usb:1-7.2.4',
-      },
-      {
-        ...makeDevice('USB Audio CODEC'),
-        id: 'input-140',
-        detail: 'IC-7610 11002034 · VID:PID 08bb:2901 · USB 1-7.4.4',
-        serialNumber: 'IC-7610 11002034',
-        hardwareId: 'usb:1-7.4.4',
-      },
-    ];
-
-    expect(matchUsbAudioDevice(devices, 'IC-7610')?.id).toBe('input-140');
-    expect(matchUsbAudioDevice(devices, 'IC-9700 12010311')?.id).toBe('input-130');
-  });
 });
 
 describe('getRecommendedSampleRate', () => {

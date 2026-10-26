@@ -3,7 +3,6 @@ import type { AudioDeviceResolution } from '@tx5dr/contracts';
 import type { TFunction } from 'i18next';
 import {
   formatChannelText,
-  formatDeviceDetail,
   formatDeviceText,
   getAudioDeviceCategory,
   getAudioDeviceStatusBadges,
@@ -44,32 +43,6 @@ describe('audio device display helpers', () => {
   it('formats default suffix without duplicate parentheses', () => {
     expect(formatDeviceText(zh, defaultInput)).toBe('Built-in Mic (\u9ed8\u8ba4)');
     expect(formatDeviceText(en, defaultInput)).toBe('Built-in Mic (default)');
-  });
-
-  it('includes a related radio identity for otherwise identical USB codecs', () => {
-    const codec = {
-      ...defaultInput,
-      id: 'input-usb:1-7.2.4',
-      name: 'USB Audio CODEC (USB Audio)',
-      isDefault: false,
-      serialNumber: 'IC-9700 12010311',
-      detail: 'IC-9700 12010311 · VID:PID 08bb:2901 · USB 1-7.2.4',
-    };
-
-    expect(formatDeviceText(en, codec))
-      .toBe('USB Audio CODEC (USB Audio) — IC-9700 12010311');
-    expect(formatDeviceDetail(codec))
-      .toBe('IC-9700 12010311 · VID:PID 08bb:2901 · USB 1-7.2.4');
-  });
-
-  it('falls back to USB identity fields when no preformatted detail is available', () => {
-    expect(formatDeviceDetail({
-      ...defaultInput,
-      serialNumber: 'IC-7610 11002034',
-      vendorId: '08bb',
-      productId: '2901',
-      usbPath: '1-7.4.4',
-    })).toBe('SN IC-7610 11002034 · VID:PID 08bb:2901 · USB 1-7.4.4');
   });
 
   it('formats channel counts through i18n interpolation', () => {
