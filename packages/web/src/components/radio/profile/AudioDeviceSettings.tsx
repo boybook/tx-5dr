@@ -623,6 +623,7 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
         <Select
           label={isInput ? t('audio.inputDevice') : t('audio.outputDevice')}
           placeholder={isInput ? t('audio.inputDevicePlaceholder') : t('audio.outputDevicePlaceholder')}
+          disableAnimation
           selectedKeys={selectedName || selectedRouteKey
             ? [selectedOption?.key ?? getSelectedAudioDeviceKey(direction, selectedName, selectedRouteKey)]
             : []}
