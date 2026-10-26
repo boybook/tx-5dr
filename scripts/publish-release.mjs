@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { resolveHostVersion } from './host-version.mjs';
 import { validateReleaseVersion } from './resolve-release-identity.mjs';
+import { readReleaseResource } from './release-http.mjs';
 
 async function sha256(stream) {
   const hash = crypto.createHash('sha256');
@@ -157,14 +158,13 @@ for (const [product, manifest] of Object.entries(products)) {
     const object = `tx-5dr/${product}/builds/${version}/${asset.name}`;
     const objectUrl = `${base}/${object.split('/').map(encodeURIComponent).join('/')}`;
     // A previously uploaded object's content is checked before any write.
-    const remote = await fetch(objectUrl);
-    if (remote.ok) {
-      const hash = await sha256(remote.body);
-      if (hash !== asset.sha256) throw new Error(`Immutable OSS conflict: ${object}`);
+    const remote = await readReleaseResource(objectUrl);
+    if (remote.status === 200) {
+      if (remote.sha256 !== asset.sha256) throw new Error(`Immutable OSS conflict: ${object}`);
     } else if (remote.status === 404) oss('cp', path.join(staging, product, asset.name), `oss://${bucket}/${object}`);
     else throw new Error(`OSS preflight HTTP ${remote.status}`);
-    const verify = await fetch(objectUrl);
-    if (!verify.ok || await sha256(verify.body) !== asset.sha256) throw new Error(`CDN verification failed: ${object}`);
+    const verify = await readReleaseResource(objectUrl);
+    if (verify.status !== 200 || verify.sha256 !== asset.sha256) throw new Error(`CDN verification failed: ${object}`);
   }
   oss('cp', path.join(staging, `${product}-manifest.json`), `oss://${bucket}/tx-5dr/${product}/builds/${version}/latest.json`, '--force');
 }
@@ -211,8 +211,8 @@ for (const [product, manifest] of Object.entries(products)) {
 }
 oss('cp', path.join(staging, 'catalog.json'), `oss://${bucket}/tx-5dr/${channel}/catalog.json`, '--force');
 for (const product of Object.keys(products)) {
-  const response = await fetch(`${base}/tx-5dr/${product}/${channel}/latest.json`);
-  if (!response.ok || (await response.json()).commit !== sha) throw new Error(`Live channel verification failed: ${product}`);
+  const response = await readReleaseResource(`${base}/tx-5dr/${product}/${channel}/latest.json`, 'json');
+  if (response.status !== 200 || response.value.commit !== sha) throw new Error(`Live channel verification failed: ${product}`);
 }
 await fs.rm(config);
 process.stdout.write(`Published ${version} from ${sha}; GitHub, assets and channel metadata verified.\n`);

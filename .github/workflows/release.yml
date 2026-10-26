@@ -50,7 +50,7 @@ jobs:
         run: yarn test --concurrency=1 --filter='!@tx5dr/server'
       - name: Test native server directly
         run: yarn workspace @tx5dr/server test
-      - run: node --test scripts/tests/release-policy.test.mjs
+      - run: node --test scripts/tests/release-policy.test.mjs scripts/tests/release-http.test.mjs scripts/tests/publication-retry.test.mjs
   electron:
     needs: verify
     uses: ./.github/workflows/electron-release.yml

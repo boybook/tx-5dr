@@ -4,6 +4,15 @@ The root package version is the Host version source. Plugin SDK and Android APK 
 
 Immutable assets live below `tx-5dr/<product>/builds/<version>/`. Versioned manifests carry full source SHA, channel, product, version, assets and integrity metadata. Missing `schema_version` identifies the legacy decoder. Consumers validate the requested product and channel. CDN failure can fall back to GitHub for the same channel, never another channel. The stable website catalog is committed last. A GitHub Release alone is not distribution success.
 
+Publication recovery may use corrected publishing tooling with the original
+immutable source and artifacts. The manual recovery workflow accepts only a
+completed formal tag run from this repository whose source and every required
+product job passed. It fetches that run's artifacts and source; tag identity,
+asset equality, checksum, platform completeness and channel promotion checks
+still apply. It never rebuilds binaries or changes an existing tag. CDN reads
+close each connection because synchronous upload commands block socket event
+processing; only transport failures receive three bounded attempts.
+
 Installed channel and subscribed channel are separate facts. Selecting a channel persists a preference and checks its manifest; it never installs. A prepared update binds the exact version, commit, URLs and checksums. Changing channels invalidates pending work. Cross-channel downgrades require explicit confirmation and a successful backup; same-channel checks do not recommend older versions. Data compatibility and third-party plugin compatibility are not implied by SemVer.
 
 Owners:
