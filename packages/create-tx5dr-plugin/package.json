@@ -23,7 +23,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "smoke:ft8-contest": "node scripts/ft8-contest-smoke.mjs"
+    "smoke:ft8-contest": "node scripts/ft8-contest-smoke.mjs",
+    "smoke:ui": "yarn build && node ../plugin-api/scripts/packed-consumer-smoke.mjs --ui-scaffolds"
   },
   "dependencies": {
     "@tx5dr/plugin-api": "^2.5.0"

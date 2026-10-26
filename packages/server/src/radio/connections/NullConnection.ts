@@ -18,8 +18,10 @@ import type {
   SetRadioModeOptions,
 } from './IRadioConnection.js';
 import { RadioConnectionType, RadioConnectionState } from './IRadioConnection.js';
+import { PttHardware } from '../PttHardware.js';
 
 export class NullConnection extends EventEmitter<IRadioConnectionEvents> implements IRadioConnection {
+  private pttHardware: PttHardware | null = null;
   getType(): RadioConnectionType {
     return RadioConnectionType.NONE;
   }
@@ -32,14 +34,20 @@ export class NullConnection extends EventEmitter<IRadioConnectionEvents> impleme
     return true;
   }
 
-  async connect(_config: RadioConnectionConfig): Promise<void> {
-    // no-op, 立即成功
+  async connect(config: RadioConnectionConfig): Promise<void> {
+    if (config.type === 'none' && (config.pttMethod === 'dtr' || config.pttMethod === 'rts')) {
+      const path = config.pttPort;
+      if (!path) throw new Error('PTT port is required for DTR/RTS in no-radio mode');
+      this.pttHardware = new PttHardware(path, config.pttMethod);
+      await this.pttHardware.open();
+    }
     this.emit('stateChanged', RadioConnectionState.CONNECTED);
     this.emit('connected');
   }
 
   async disconnect(_reason?: string): Promise<void> {
-    // no-op
+    await this.pttHardware?.close();
+    this.pttHardware = null;
   }
 
   isCriticalOperationActive(): boolean {
@@ -54,8 +62,8 @@ export class NullConnection extends EventEmitter<IRadioConnectionEvents> impleme
     return 0;
   }
 
-  async setPTT(_enabled: boolean): Promise<void> {
-    // no-op
+  async setPTT(enabled: boolean): Promise<void> {
+    await this.pttHardware?.set(enabled);
   }
 
   async setMode(_mode: string, _bandwidth?: RadioModeBandwidth, _options?: SetRadioModeOptions): Promise<void> {

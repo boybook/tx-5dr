@@ -294,6 +294,8 @@ export const LogBookQSOQueryOptionsSchema = z.object({
   band: z.string().optional(),
   mode: z.string().optional(),
   dxccStatus: z.enum(['deleted']).optional(),
+  /** 只看 DXCC 实体待复核（未能可靠解析出实体）的记录；查询串传 "true"，解析为布尔值 */
+  dxccNeedsReview: z.enum(['true']).optional().transform(value => (value === 'true' ? (true as const) : undefined)),
   qslFlow: z.enum(['two_way_confirmed', 'not_two_way_confirmed']).optional(),
   /** 排除的模式列表，逗号分隔，如 "FT8,FT4" */
   excludeModes: z.string().optional(),
@@ -378,6 +380,8 @@ export const LogBookExportOptionsSchema = z.object({
   band: z.string().optional(),
   mode: z.string().optional(),
   dxccStatus: z.enum(['deleted']).optional(),
+  /** 只看 DXCC 实体待复核（未能可靠解析出实体）的记录；查询串传 "true"，解析为布尔值 */
+  dxccNeedsReview: z.enum(['true']).optional().transform(value => (value === 'true' ? (true as const) : undefined)),
   qslFlow: z.enum(['two_way_confirmed', 'not_two_way_confirmed']).optional(),
   /** 排除的模式列表，逗号分隔，如 "FT8,FT4" */
   excludeModes: z.string().optional(),

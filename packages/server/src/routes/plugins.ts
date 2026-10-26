@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { promises as fs } from 'fs';
 import path from 'path';
+import { createRequire } from 'node:module';
 import type { PluginUIInstanceTarget } from '@tx5dr/plugin-api';
 import { createSyncFailure, errorToSyncFailure } from '@tx5dr/plugin-api';
 import type {
@@ -29,6 +30,7 @@ import { ScopedPluginFileStoreProvider } from '../plugin/ScopedPluginFileStorePr
 import { PluginStorageProvider } from '../plugin/PluginStorageProvider.js';
 import { PluginFileStoreProvider } from '../plugin/PluginFileStoreProvider.js';
 import { assertRealPathInside, resolveSafeRelativePath } from '../plugin/path-security.js';
+import { getPluginThemeCss } from '@tx5dr/plugin-api';
 import { getPluginBridgeSdkScript } from '../plugin/bridge-sdk.js';
 import {
   type PluginPageBoundResource,
@@ -882,6 +884,16 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
     return reply.send(engine.pluginManager.logbookSyncHost.getProviders(scope));
   });
 
+  fastify.get<{ Querystring: { callsign?: string } }>('/sync-providers/status', async (req, reply) => {
+    const callsign = req.query.callsign?.trim();
+    if (!callsign) return reply.status(400).send({ error: 'callsign query parameter is required' });
+    const user = await requireCallsignBindingAccess(fastify, req, reply, callsign);
+    if (!user) return;
+    const host = engine.pluginManager.logbookSyncHost;
+    const visible = host.getProviders(user.role === UserRole.ADMIN ? 'admin' : 'operator');
+    return reply.send({ providers: await host.getStatuses(callsign, visible.map(provider => provider.id)) });
+  });
+
   fastify.get<{ Querystring: { callsign?: string } }>('/sync-providers/configured', async (req, reply) => {
     const callsign = (req.query as Record<string, string>).callsign ?? '';
     if (!callsign) {
@@ -1072,101 +1084,16 @@ function getMimeType(filePath: string): string {
 
 // ===== CSS design tokens =====
 
-function generateCSSTokens(theme: 'dark' | 'light'): string {
-  const dark = theme === 'dark';
-  return `/* TX-5DR Plugin Design Tokens — auto-generated */
-:root {
-  --tx5dr-bg: ${dark ? '#18181b' : '#ffffff'};
-  --tx5dr-bg-content: ${dark ? '#27272a' : '#f4f4f5'};
-  --tx5dr-bg-hover: ${dark ? '#3f3f46' : '#e4e4e7'};
-  --tx5dr-text: ${dark ? '#fafafa' : '#18181b'};
-  --tx5dr-text-secondary: ${dark ? '#a1a1aa' : '#71717a'};
-  --tx5dr-primary: #006FEE;
-  --tx5dr-primary-hover: #005bc4;
-  --tx5dr-primary-soft: color-mix(in srgb, var(--tx5dr-primary) 14%, transparent);
-  --tx5dr-primary-soft-hover: color-mix(in srgb, var(--tx5dr-primary) 22%, transparent);
-  --tx5dr-primary-foreground: #ffffff;
-  --tx5dr-success: #17c964;
-  --tx5dr-success-hover: #12a150;
-  --tx5dr-success-soft: color-mix(in srgb, var(--tx5dr-success) 14%, transparent);
-  --tx5dr-success-soft-hover: color-mix(in srgb, var(--tx5dr-success) 22%, transparent);
-  --tx5dr-success-foreground: #052e16;
-  --tx5dr-warning: #f5a524;
-  --tx5dr-warning-hover: #c4841d;
-  --tx5dr-warning-soft: color-mix(in srgb, var(--tx5dr-warning) 14%, transparent);
-  --tx5dr-warning-soft-hover: color-mix(in srgb, var(--tx5dr-warning) 22%, transparent);
-  --tx5dr-warning-foreground: #3b2500;
-  --tx5dr-danger: #f31260;
-  --tx5dr-danger-hover: #c20e4d;
-  --tx5dr-danger-soft: color-mix(in srgb, var(--tx5dr-danger) 14%, transparent);
-  --tx5dr-danger-soft-hover: color-mix(in srgb, var(--tx5dr-danger) 22%, transparent);
-  --tx5dr-danger-foreground: #ffffff;
-  --tx5dr-border: ${dark ? '#3f3f46' : '#d4d4d8'};
-  --tx5dr-focus-ring: rgba(0, 111, 238, 0.4);
-  --tx5dr-radius-sm: 8px;
-  --tx5dr-radius-md: 12px;
-  --tx5dr-radius-lg: 16px;
-  --tx5dr-radius-full: 9999px;
-  --tx5dr-spacing-xs: 4px;
-  --tx5dr-spacing-sm: 8px;
-  --tx5dr-spacing-md: 12px;
-  --tx5dr-spacing-lg: 16px;
-  --tx5dr-spacing-xl: 24px;
-  --tx5dr-font: 'Inter', system-ui, -apple-system, sans-serif;
-  --tx5dr-font-mono: 'JetBrains Mono', ui-monospace, monospace;
-  --tx5dr-font-size-sm: 13px;
-  --tx5dr-font-size-md: 14px;
-  --tx5dr-font-size-lg: 16px;
-  --tx5dr-control-height-xs: 24px;
-  --tx5dr-control-height-sm: 32px;
-  --tx5dr-control-height-md: 40px;
-  --tx5dr-control-height-lg: 48px;
-  --tx5dr-control-padding-x-xs: 8px;
-  --tx5dr-control-padding-x-sm: 12px;
-  --tx5dr-control-padding-x-md: 16px;
-  --tx5dr-control-padding-x-lg: 20px;
-  --tx5dr-control-font-size-xs: 11px;
-  --tx5dr-control-font-size-sm: 13px;
-  --tx5dr-control-font-size-md: 14px;
-  --tx5dr-control-font-size-lg: 16px;
-  --tx5dr-control-font-weight: 600;
-  --tx5dr-control-bg: var(--tx5dr-bg-content);
-  --tx5dr-control-bg-hover: var(--tx5dr-bg-hover);
-  --tx5dr-control-border: var(--tx5dr-border);
-  --tx5dr-control-text: var(--tx5dr-text);
-  --tx5dr-control-disabled-opacity: 0.55;
-  --tx5dr-control-transition: 140ms ease;
-  --tx5dr-chip-height: 24px;
-  --tx5dr-chip-padding-x: 9px;
-  --tx5dr-chip-font-size: 11px;
-  --tx5dr-chip-font-weight: 600;
-  --tx5dr-table-header-bg: var(--tx5dr-bg-content);
-  --tx5dr-table-row-hover: color-mix(in srgb, var(--tx5dr-bg-hover) 45%, transparent);
-  --tx5dr-table-divider: var(--tx5dr-border);
-  --tx5dr-alert-padding: 10px 12px;
-  --tx5dr-shadow-sm: 0 1px 2px color-mix(in srgb, var(--tx5dr-text) 8%, transparent);
-  --tx5dr-shadow-md: 0 4px 14px color-mix(in srgb, var(--tx5dr-text) 12%, transparent);
-}
-*, *::before, *::after { box-sizing: border-box; margin: 0; }
-html, body {
-  font-family: var(--tx5dr-font);
-  font-size: var(--tx5dr-font-size-md);
-  color: var(--tx5dr-text);
-  background: var(--tx5dr-bg);
-  line-height: 1.5;
-}
-`;
-}
-
 // ===== Safe path resolution =====
 
 // ===== Token injection into HTML =====
 
+const UI_LINK = '<link rel="stylesheet" href="/api/plugins/_bridge/ui.css">';
 const TOKEN_LINK = '<link rel="stylesheet" href="/api/plugins/_bridge/tokens.css">';
 const BRIDGE_SCRIPT = '<script src="/api/plugins/_bridge/bridge.js"></' + 'script>';
 
-function injectIntoHTML(html: string, bootstrapScript?: string): string {
-  const injection = [TOKEN_LINK, bootstrapScript, BRIDGE_SCRIPT]
+function injectIntoHTML(html: string, bootstrapScript?: string, standardStyles = false): string {
+  const injection = [TOKEN_LINK, standardStyles ? UI_LINK : undefined, bootstrapScript, BRIDGE_SCRIPT]
     .filter((value): value is string => Boolean(value))
     .join('\n');
   const headClose = html.indexOf('</head>');
@@ -1370,7 +1297,22 @@ function registerPluginUIRoutes(fastify: FastifyInstance, engine: DigitalRadioEn
   // GET /api/plugins/_bridge/tokens.css
   fastify.get('/_bridge/tokens.css', async (req: FastifyRequest, reply: FastifyReply) => {
     const theme = (req.query as Record<string, string>).theme === 'light' ? 'light' : 'dark';
-    return reply.type('text/css; charset=utf-8').send(generateCSSTokens(theme));
+    return reply.type('text/css; charset=utf-8').send(getPluginThemeCss(theme));
+  });
+
+  // Read once: the file is small, immutable for the process, and may be absent in
+  // trimmed deployments, which must degrade to unstyled rather than a 500.
+  let pluginUiCss: Promise<string> | null = null;
+  fastify.get('/_bridge/ui.css', async (_req, reply) => {
+    pluginUiCss ??= fs.readFile(createRequire(import.meta.url).resolve('@tx5dr/plugin-api/ui.css'), 'utf8')
+      .catch((error: unknown) => {
+        logger.warn('Plugin UI stylesheet is unavailable', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return '';
+      });
+    const css = await pluginUiCss;
+    return reply.type('text/css; charset=utf-8').status(css ? 200 : 404).send(css || '/* stylesheet unavailable */');
   });
 
   // GET /api/plugins/_bridge/bridge.js
@@ -1482,7 +1424,7 @@ function registerPluginUIRoutes(fastify: FastifyInstance, engine: DigitalRadioEn
 
         // Auto-inject tokens.css and bridge.js into HTML files
         if (mime.startsWith('text/html')) {
-          return reply.type(mime).send(injectIntoHTML(content.toString('utf-8'), bootstrapScript));
+          return reply.type(mime).send(injectIntoHTML(content.toString('utf-8'), bootstrapScript, declaredPage?.styles === 'standard'));
         }
 
         return reply.type(mime).send(content);

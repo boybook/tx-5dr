@@ -218,12 +218,16 @@ export interface ApplyOperatingStateRequest {
 export interface ApplyOperatingStateResult {
   frequencyApplied: boolean;
   modeApplied: boolean;
+  /** Concrete physical VFO bound to the complete operating-state transaction. */
+  targetVfo?: string;
   /** Whether the requested frequency was confirmed by a physical readback. */
   frequencyConfirmed?: boolean;
   /** Most recent physical frequency observation used for confirmation. */
   observedFrequency?: number;
   /** Whether the requested radio mode was confirmed by a physical readback. */
   modeConfirmed?: boolean;
+  /** Most recent physical mode observation used for confirmation. */
+  observedMode?: string;
   /** Correlates the result with the public operating-state event. */
   operationId?: string;
   modeError?: Error;

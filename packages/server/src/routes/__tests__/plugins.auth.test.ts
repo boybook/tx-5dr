@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { UserRole, type PluginSystemSnapshot } from '@tx5dr/contracts';
+import type { LogbookSyncProviderInfo } from '../../plugin/LogbookSyncHost.js';
 
 const snapshot: PluginSystemSnapshot = {
   state: 'ready',
@@ -43,8 +44,9 @@ const logbookSyncHost = {
   download: vi.fn(),
   getUploadPreflight: vi.fn(),
   testConnection: vi.fn(),
-  getProviders: vi.fn(() => []),
+  getProviders: vi.fn((): LogbookSyncProviderInfo[] => []),
   getConfiguredStatus: vi.fn(() => ({})),
+  getStatuses: vi.fn(async () => ({})),
 };
 
 vi.mock('../../DigitalRadioEngine.js', () => ({
@@ -53,6 +55,7 @@ vi.mock('../../DigitalRadioEngine.js', () => ({
       pluginManager: {
         getSnapshot,
         getLoadedPlugin,
+        createPluginPageSession: () => ({ sessionId: 'fixture-page-session' }),
         setOperatorPluginPaused,
         pauseActiveTransmitControlPlugins,
         resumeTransmitControlPlugins,
@@ -106,6 +109,21 @@ vi.mock('../../auth/AuthManager.js', () => {
 });
 
 describe('pluginRoutes auth', () => {
+  it('serves the SDK control stylesheet and only injects it into opted-in pages', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-style-route-')); tempDirs.push(root);
+    await mkdir(join(root, 'ui'));
+    await writeFile(join(root, 'ui/page.html'), '<html><head></head><body>Fixture</body></html>');
+    for (const standard of [false, true]) {
+      getLoadedPlugin.mockReturnValue({ dirPath: root, definition: { name: 'generic-fixture', instanceScope: 'global', ui: { dir: 'ui', pages: [{ id: 'page', entry: 'page.html', accessScope: 'admin', ...(standard ? { styles: 'standard' } : {}) }] } } });
+      const response = await fastify.inject({ method: 'GET', url: '/api/plugins/generic-fixture/ui/page.html', headers: { 'x-role': UserRole.ADMIN } });
+      expect(response.statusCode).toBe(200);
+      expect(response.body.includes('/_bridge/ui.css')).toBe(standard);
+      expect(response.body).toContain('/_bridge/tokens.css');
+    }
+    const css = await fastify.inject({ method: 'GET', url: '/api/plugins/_bridge/ui.css' });
+    expect(css.statusCode).toBe(200); expect(css.body).toContain('.tx5dr-button');
+  });
+
   let fastify: ReturnType<typeof Fastify>;
   const tempDirs: string[] = [];
 
@@ -128,6 +146,7 @@ describe('pluginRoutes auth', () => {
     logbookSyncHost.testConnection.mockReset();
     logbookSyncHost.getProviders.mockReset().mockReturnValue([]);
     logbookSyncHost.getConfiguredStatus.mockReset().mockReturnValue({});
+    logbookSyncHost.getStatuses.mockReset().mockResolvedValue({});
     const { pluginRoutes } = await import('../plugins.js');
     fastify = Fastify();
     fastify.decorateRequest('authUser', null);
@@ -161,6 +180,15 @@ describe('pluginRoutes auth', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual(snapshot);
     expect(getSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('projects only visible provider statuses and keeps viewers out', async () => {
+    logbookSyncHost.getProviders.mockReturnValue([{ id: 'generic', pluginName: 'generic-plugin', displayName: 'Generic', settingsPageId: 'settings', accessScope: 'operator' }]);
+    const allowed = await fastify.inject({ method: 'GET', url: '/api/plugins/sync-providers/status?callsign=BG5DRB', headers: { 'x-role': UserRole.ADMIN } });
+    expect(allowed.statusCode).toBe(200);
+    expect(logbookSyncHost.getStatuses).toHaveBeenCalledWith('BG5DRB', ['generic']);
+    const denied = await fastify.inject({ method: 'GET', url: '/api/plugins/sync-providers/status?callsign=BG5DRB', headers: { 'x-role': UserRole.VIEWER } });
+    expect(denied.statusCode).toBe(403); expect(logbookSyncHost.getStatuses).toHaveBeenCalledTimes(1);
   });
 
   it('allows an operator to switch only their own strategy', async () => {

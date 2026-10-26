@@ -3,7 +3,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { HOST_BASE_VERSION, resolveHostVersion } from './host-version.mjs';
+import { normalizeHostBaseVersion, resolveHostVersion } from './host-version.mjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -29,7 +29,7 @@ function assertVersion(actual, expected, label) {
 
 const rootPackage = await readPackage('.');
 const hostVersion = rootPackage.version;
-assertVersion(hostVersion, HOST_BASE_VERSION, 'TX-5DR Host base');
+assertVersion(hostVersion, normalizeHostBaseVersion(hostVersion), 'TX-5DR Host base');
 assertVersion(
   resolveHostVersion({
     sourceVersion: hostVersion,
@@ -37,7 +37,7 @@ assertVersion(
     buildStamp: '202608311200',
     commit: 'abcdef1234567890',
   }),
-  '1.0.0-nightly.202608311200+gabcdef1',
+  `${hostVersion}-nightly.202608311200+gabcdef1`,
   'TX-5DR nightly version policy',
 );
 const hostPackages = [

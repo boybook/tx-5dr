@@ -725,7 +725,24 @@
       "auto_update_semver_not_newer": "The updater did not accept this package as a newer version. Use the manual download if needed.",
       "update_install_not_completed": "The previous update did not appear to finish. You can retry or use the manual download."
     },
-    "updateTargetAndroidRuntime": "Android Runtime"
+    "updateTargetAndroidRuntime": "Android Runtime",
+    "updateTargetChannel": "Update channel",
+    "updateStableRecommended": "Stable (recommended)",
+    "updateChannelHelp": "Selecting a channel only checks its releases. The running version changes after installation.",
+    "updateNightlyWarning": "Nightly builds may contain features that have not been fully tested.",
+    "updateChannelEmpty": "No release is available in this channel. Keep your selection and check again later.",
+    "updateDowngradeWarning": "The target is older and may not read existing settings or plugin data. Installation creates a backup; confirming forces the switch. Restoring a backup discards later changes.",
+    "updateConfirm": "Current: {{current}}; target: {{target}}. Download this version?",
+    "updateInstallConfirm": "Stop the radio and service, back up user data, then install and restart? Installation stops if backup fails.",
+    "updateDiscardDownload": "Changing channels discards the downloaded update. Continue?",
+    "updateLinuxCommand": "Run this command on the server. Installation backs up data and asks for confirmation:",
+    "updateDockerCommand": "Set the Compose image to this immutable reference, then pull and up -d. Stop the service and back up the data volume first:",
+    "updateCopyCommand": "Copy",
+    "updateAndroidNative": "Choose a channel and install on the Android host’s native update screen. APK and runtime updates are separate.",
+    "updateOpenAndroid": "Open Android updates",
+    "updateStableMigration": "A stable release is available. Select Stable to review and install it; your channel will not change automatically.",
+    "updateMigrationDismiss": "Not now",
+    "updateRestartCurrent": "Restart the currently installed version"
   },
   "freqPresets": {
     "title": "Frequency Preset Management",

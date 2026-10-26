@@ -461,6 +461,10 @@ export type PluginUIPanelContributionGroup = z.infer<typeof PluginUIPanelContrib
  * any host component via `<PluginIframeHost pluginName={...} pageId={...} />`.
  */
 export const PluginUIPageDescriptorSchema = z.object({
+  /** Opt in to the Host's namespaced control styles. Existing pages stay unchanged. */
+  styles: z.literal('standard').optional(),
+  /** Host modal size; does not affect standalone pages. */
+  dialogSize: z.enum(['md', 'lg', '3xl']).optional(),
   /** Unique page identifier within the plugin (e.g. 'settings', 'dashboard'). */
   id: z.string(),
   /** Display title (i18n key or literal text). */

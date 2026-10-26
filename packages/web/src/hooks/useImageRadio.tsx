@@ -1,3 +1,4 @@
+import { createLogger } from '../utils/logger';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { api } from '@tx5dr/core';
@@ -6,6 +7,8 @@ import type { FaxCalibrationCommandResult, ImageFaxCalibration, ImagePaperBounda
 import { useConnection, useCurrentOperatorId, useRadioModeState } from '../store/radioStore';
 import { decodeImageRowBase64, ImagePaperRowStore } from '../components/image-radio/ImagePaperRowStore';
 import { createClientId } from '../utils/clientId';
+
+const logger = createLogger('ImageRadio');
 
 interface ImageRadioReceiveContextValue {
   session: ImageSessionSummary | null;
@@ -72,8 +75,10 @@ export function ImageRadioProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshTemplates = useCallback(async (operatorId?: string) => {
-    const result = await api.getImageTemplates(operatorId);
-    if (result.success) setTemplates(result.templates);
+    try {
+      const result = await api.getImageTemplates(operatorId);
+      if (result.success) setTemplates(result.templates);
+    } catch { logger.warn('Failed to load image templates'); }
   }, []);
 
   const configureReceive = useCallback(async (profile: ImageReceiveProfile) => {
@@ -111,8 +116,15 @@ export function ImageRadioProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (radioMode.engineMode !== 'image') return;
-    void api.getImageRadioStatus().then((result) => applyStatus(result.status));
-    void api.getImageRadioModes().then((result) => setModes(result.modes));
+    let disposed = false;
+    void api.getImageRadioStatus().then(async result => {
+      if (disposed) return;
+      applyStatus(result.status);
+      if (result.status?.persistence?.available === false) { setModes([]); return; }
+      const modes = await api.getImageRadioModes();
+      if (!disposed) setModes(modes.modes);
+    }).catch(() => { if (!disposed) logger.warn('Failed to load image radio status or modes'); });
+    return () => { disposed = true; };
   }, [applyStatus, radioMode.engineMode]);
 
   useEffect(() => {

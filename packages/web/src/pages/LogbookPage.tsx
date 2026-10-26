@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { HeroUIProvider } from '@heroui/react';
+import { ToastProvider } from '@heroui/toast';
 import { configureApi, configureAuthToken, api } from '@tx5dr/core';
 import { getApiBaseUrl, isElectron } from '../utils/config';
 import { useTheme } from '../hooks/useTheme';
@@ -313,6 +314,7 @@ const LogbookPage: React.FC = () => {
 
   return (
     <HeroUIProvider>
+      <ToastProvider placement="top-center" toastOffset={60} />
       <AuthProvider>
         <LogbookAuthGate />
       </AuthProvider>

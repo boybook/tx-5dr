@@ -9,6 +9,8 @@ ENV NODE_ENV=production
 ARG VCS_REF=development
 ARG BUILD_DATE=development
 ARG BUILD_STAMP=docker
+ARG TX5DR_BUILD_CHANNEL=nightly
+ARG TX5DR_RELEASE_VERSION=
 ARG TX5DR_CLUBLOG_API_KEY=
 
 # 显示构建信息
@@ -99,7 +101,7 @@ RUN node scripts/generate-ico.js || true
 # 生成服务端构建元数据
 RUN node scripts/check-version-consistency.mjs && \
     node scripts/prepare-server-build-info.mjs \
-    --channel nightly \
+    --channel "${TX5DR_BUILD_CHANNEL}" ${TX5DR_RELEASE_VERSION:+--version "$TX5DR_RELEASE_VERSION"} \
     --commit "${VCS_REF}" \
     --build-timestamp "${BUILD_DATE}" \
     --build-stamp "${BUILD_STAMP}" \
@@ -116,9 +118,9 @@ FROM node:22-trixie-slim
 ENV DEBIAN_FRONTEND=noninteractive
 ENV NODE_ENV=production
 
-# 运行共享安装脚本（--docker 模式）修复 GLIBCXX 等兼容性问题
+# Prepare native runtime dependencies through the shared installer.
 RUN --mount=dst=/tmp/tx5dr-linux,source=linux \
- bash /tmp/tx5dr-linux/install.sh --docker
+    bash /tmp/tx5dr-linux/install.sh --docker
 
 # 安装运行时依赖
 RUN apt-get update && apt-get install -y \

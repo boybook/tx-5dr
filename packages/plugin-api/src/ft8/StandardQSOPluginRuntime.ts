@@ -4,6 +4,7 @@ import type { PluginLogger } from '../helpers.js';
 import type {
     QSOContext,
     ParsedFT8Message,
+    FT8Message,
     FT8MessageCQ,
     FT8MessageCall,
     FT8MessageSignalReport,
@@ -567,7 +568,9 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 // Always take the report from the air message. A prior UI/default
                 // sentinel of 0 must not block updating to the real value.
                 strategy.context.reportReceived = msg.report;
-                strategy.context.reportSent = msgRogerReport.snr;
+                // The report we sent in TX2 is already a physical fact; the SNR we
+                // decode for this acknowledgement must not replace it.
+                strategy.adoptDecodedReportSent(msgRogerReport.snr);
                 // 记录或更新实际通联频率 (基础频率 + 对方信号的频率偏移)
                 // 只有当基础频率有效时（大于1MHz）才计算actualFrequency
                 if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
@@ -594,7 +597,7 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 const msg = msgSignalReport.message as FT8MessageSignalReport;
                 strategy.logger.debug('TX2: fallback - received SIGNAL_REPORT instead of ROGER_REPORT, treating as confirmation, moving to TX4');
                 strategy.context.reportReceived = msg.report;
-                strategy.context.reportSent = msgSignalReport.snr;
+                strategy.adoptDecodedReportSent(msgSignalReport.snr);
                 // 记录或更新实际通联频率
                 if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
                     strategy.context.actualFrequency = strategy.context.config.frequency + msgSignalReport.df;
@@ -707,8 +710,9 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 strategy.logger.debug(`TX3: fallback - received repeated SIGNAL_REPORT (SNR: ${msgSignalReport.snr}dB), updating report`);
 
                 strategy.context.reportReceived = msg.report;
-                // 更新我方准备发送的报告（使用最新的SNR）
-                strategy.context.reportSent = msgSignalReport.snr;
+                // The R-report already on the air owns the sent value; this repeat
+                // only refreshes what we believe the peer measured.
+                strategy.adoptDecodedReportSent(msgSignalReport.snr);
 
                 // 更新实际通联频率
                 if (strategy.context.config.frequency && strategy.context.config.frequency > 1000000) {
@@ -1044,6 +1048,7 @@ interface StandardQSOCheckpoint {
     pendingQSOCompletion?: {
         record: QSORecord;
         lifecycleEpoch: number;
+        startedAt: number;
     };
     qsoLifecycleEpoch: number;
     post73RetryContext?: Post73RetryContext;
@@ -1071,6 +1076,13 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
     private tx5ReceiptBaseline = 0;
     private physicalReceiptSequence = 0;
     private lastTx5Receipt?: { sequence: number; lifecycleEpoch: number; recordId?: string };
+    // Physical facts are deliberately outside speculative checkpoints: a report
+    // that already reached the air is not undone by a discarded decision.
+    private lastReportTransmission?: {
+        report: number;
+        lifecycleEpoch: number;
+        targetCallsign: string;
+    };
     // Host facts are deliberately outside speculative checkpoints. Keeping the
     // latest settlement is sufficient: the Host never restores an accepted,
     // retired lifecycle after a later contact has durably completed.
@@ -1079,6 +1091,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
     private pendingQSOCompletion?: {
         record: QSORecord;
         lifecycleEpoch: number;
+        startedAt: number;
     };
     private qsoLifecycleEpoch = 0;
     private speculativeDecisionDepth = 0;
@@ -1224,6 +1237,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         const frequency = (this.context.actualFrequency && this.context.actualFrequency > 1_000_000)
             ? this.context.actualFrequency
             : (this.context.config.frequency || 0);
+        const transmittedReport = this.getTransmittedReportSent();
         const record: QSORecord = {
             id: randomUUID(),
             callsign: this.context.targetCallsign,
@@ -1235,7 +1249,11 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
             // qsoStartTime is only the beginning of the calling attempt.
             startTime: now,
             endTime: now,
-            reportSent: this.context.reportSent?.toString(),
+            // A report that reached the air is the logged fact; the context is
+            // only a fallback for contacts that completed without one.
+            reportSent: transmittedReport !== undefined
+                ? FT8MessageParser.generateSignalReport(transmittedReport)
+                : this.context.reportSent?.toString(),
             reportReceived: this.context.reportReceived?.toString(),
             messageHistory: [],
             comment: undefined,
@@ -1246,6 +1264,9 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         this.pendingQSOCompletion = {
             record,
             lifecycleEpoch: this.qsoLifecycleEpoch,
+            // The Host scopes message-history reconstruction to the whole
+            // contact attempt, not just the slot where the contact completed.
+            startedAt: this.qsoStartTime ?? now,
         };
     }
 
@@ -1253,6 +1274,9 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         this.qsoLifecycleEpoch += 1;
         this.completedQSORecord = undefined;
         this.pendingQSOCompletion = undefined;
+        // The next state entry establishes a fresh attempt start. Never let a
+        // previous contact's start time widen this contact's history window.
+        this.qsoStartTime = undefined;
         this.clearPost73RetryContext('new QSO lifecycle');
         this.logger.debug('Started QSO lifecycle', {
             epoch: this.qsoLifecycleEpoch,
@@ -1367,6 +1391,72 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         if (this.state === 'TX5' && transmission === this.slots.TX5) {
             this.tx5TransmissionQueued = true;
         }
+        this.captureTransmittedReport(transmission);
+    }
+
+    /**
+     * Freeze the report carried by a physically transmitted frame. Once the
+     * report is on the air it is the only authority for `reportSent`; a later
+     * decode SNR describes how well we hear the peer, not what we told them.
+     */
+    private captureTransmittedReport(transmission: string): void {
+        const targetCallsign = this.context.targetCallsign;
+        if (!targetCallsign) {
+            return;
+        }
+        let parsed: FT8Message;
+        try {
+            parsed = FT8MessageParser.parseMessage(transmission);
+        } catch (error) {
+            this.logger.debug('Ignoring unparseable transmitted frame', {
+                transmission,
+                error: String(error),
+            });
+            return;
+        }
+        if (parsed.type !== FT8MessageType.SIGNAL_REPORT
+            && parsed.type !== FT8MessageType.ROGER_REPORT) {
+            return;
+        }
+        if (typeof parsed.report !== 'number' || !Number.isFinite(parsed.report)) {
+            return;
+        }
+        if (!callsignMatches(parsed.senderCallsign, this.operator.config.myCallsign)
+            || !callsignMatches(parsed.targetCallsign, targetCallsign)) {
+            return;
+        }
+        this.lastReportTransmission = {
+            report: parsed.report,
+            lifecycleEpoch: this.qsoLifecycleEpoch,
+            targetCallsign,
+        };
+        this.context.reportSent = parsed.report;
+    }
+
+    /** Whether a report for the current contact has physically reached the air. */
+    private hasTransmittedReport(): boolean {
+        const fact = this.lastReportTransmission;
+        return fact !== undefined
+            && fact.lifecycleEpoch === this.qsoLifecycleEpoch
+            && callsignMatches(fact.targetCallsign, this.context.targetCallsign);
+    }
+
+    /** The report carried by the current contact's last transmitted report frame. */
+    private getTransmittedReportSent(): number | undefined {
+        return this.hasTransmittedReport() ? this.lastReportTransmission?.report : undefined;
+    }
+
+    /**
+     * Adopt a decoder SNR as the report we are about to send. Before a report
+     * is transmitted this is the best available estimate; afterwards the
+     * transmitted value is authoritative and must not drift with the peer's
+     * acknowledgement decode.
+     */
+    public adoptDecodedReportSent(snr: number): void {
+        if (this.hasTransmittedReport()) {
+            return;
+        }
+        this.context.reportSent = snr;
     }
 
     getInitialOutboundCallState(): SlotsIndex {
@@ -1404,6 +1494,9 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
             return true;
         }
         this.beginQsoWithTarget(callsign, 'manual requestCall with decoded message');
+        // A manual call starts from a specific air frame; anchor the attempt at
+        // that slot even when the reply state has no entry hook (TX3-TX5).
+        this.qsoStartTime = lastMessage.slotInfo.startMs;
         this.context.reportSent = lastMessage.message.snr;
         const msg = FT8MessageParser.parseMessage(lastMessage.message.message);
         const parsedMessage: ParsedFT8Message = {
@@ -1504,6 +1597,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
             pendingQSOCompletion: this.pendingQSOCompletion ? {
                 lifecycleEpoch: this.pendingQSOCompletion.lifecycleEpoch,
                 record: { ...this.pendingQSOCompletion.record },
+                startedAt: this.pendingQSOCompletion.startedAt,
             } : undefined,
             qsoLifecycleEpoch: this.qsoLifecycleEpoch,
             post73RetryContext: this.post73RetryContext ? { ...this.post73RetryContext } : undefined,
@@ -1541,6 +1635,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         this.pendingQSOCompletion = state.pendingQSOCompletion ? {
             lifecycleEpoch: state.pendingQSOCompletion.lifecycleEpoch,
             record: { ...state.pendingQSOCompletion.record },
+            startedAt: state.pendingQSOCompletion.startedAt,
         } : undefined;
         this.qsoLifecycleEpoch = state.qsoLifecycleEpoch;
         this.post73RetryContext = state.post73RetryContext ? { ...state.post73RetryContext } : undefined;
@@ -1569,6 +1664,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
                 ? {
                     lifecycleEpoch: this.pendingQSOCompletion.lifecycleEpoch,
                     record: { ...this.pendingQSOCompletion.record },
+                    startedAt: this.pendingQSOCompletion.startedAt,
                 }
                 : undefined;
             this.pendingQSOCompletion = undefined;

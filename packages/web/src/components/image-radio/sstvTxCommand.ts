@@ -1,6 +1,7 @@
 export function sstvTxErrorTranslationKey(errorCode?: string): string {
   const keys: Record<string, string> = {
     PHYSICAL_TX_BUSY: 'txBusy',
+    IMAGE_PERSISTENCE_UNAVAILABLE: 'persistence.unavailable',
     IMAGE_TX_TARGET_CHANGED: 'txTargetChanged',
     IMAGE_TX_PLAYBACK_FAILED: 'txPlaybackFailed',
     IMAGE_FREQUENCY_CHANGED: 'txFrequencyChanged',

@@ -25,7 +25,8 @@ export function ImageRightLayout() {
   const isFax = radioMode.currentMode?.name === 'FAX';
   const [selectedTab, setSelectedTab] = useState<'history' | 'transmit'>('history');
   const [qsoCollapsed, setQsoCollapsed] = useState(true);
-  const { txStatus } = useImageRadioControls();
+  const { txStatus, status } = useImageRadioControls();
+  const imageAvailable = status !== null && status.persistence?.available !== false;
   const voiceCaptureController = useVoiceCaptureController(connection.state.radioService, radioMode.engineMode);
 
   useEffect(() => {
@@ -50,6 +51,7 @@ export function ImageRightLayout() {
         >
           <Tabs
             aria-label="Image radio"
+            isDisabled={!imageAvailable}
             variant="underlined"
             selectedKey={selectedTab}
             onSelectionChange={(key) => setSelectedTab(key as 'history' | 'transmit')}
@@ -73,11 +75,11 @@ export function ImageRightLayout() {
       </div>
       <div className="min-h-0 flex-1 px-2 md:px-5">
         <div className={selectedTab === 'history' || isFax ? 'h-full' : 'hidden'}>
-          <ImageHistoryTimeline />
+          {imageAvailable && <ImageHistoryTimeline />}
         </div>
         {!isFax ? (
           <div className={selectedTab === 'transmit' ? 'h-full' : 'hidden'}>
-            <SstvComposer />
+            {imageAvailable && <SstvComposer />}
           </div>
         ) : null}
       </div>
@@ -90,7 +92,9 @@ export function ImageRightLayout() {
             defaultReport="595"
             titleOverride="SSTV QSO"
             onCreateComplete={(qso) => {
-              if (txStatus?.phase === 'completed' && txStatus.historyId) void api.updateImageHistoryRecord(txStatus.historyId, { qsoId: qso.id });
+              if (imageAvailable && txStatus?.phase === 'completed' && txStatus.historyId) {
+                void api.updateImageHistoryRecord(txStatus.historyId, { qsoId: qso.id }).catch(() => undefined);
+              }
             }}
           />
         </div>

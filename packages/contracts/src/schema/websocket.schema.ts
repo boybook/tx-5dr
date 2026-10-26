@@ -2291,6 +2291,8 @@ export interface DigitalRadioEngineEvents {
     qsoLifecycleId?: string;
     qsoLifecycleEpoch?: number;
     qsoRuntimeGeneration?: number;
+    /** Attempt start from the strategy; anchors message-history reconstruction. */
+    startedAt?: number;
     qsoRecord: z.infer<typeof QSORecordSchema>;
     persistencePolicy?: z.infer<typeof QSOPersistencePolicySchema>;
     destination?:

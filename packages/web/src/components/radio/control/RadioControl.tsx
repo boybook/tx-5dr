@@ -55,6 +55,13 @@ import {
   type MonitorPlaybackBufferProfile,
 } from '../../../audio/monitorPlaybackBufferPreference';
 import { enumerateVoiceInputDevices, getVoiceInputDeviceId, saveVoiceInputDeviceId, type VoiceInputDevice } from '../../../audio/audioRuntime';
+import {
+  SOFTWARE_SQUELCH_PREFERENCES,
+  loadSoftwareSquelchPreference,
+  saveSoftwareSquelchPreference,
+  isSoftwareSquelchEffective,
+  type SoftwareSquelchPreference,
+} from '../../../audio/softwareSquelchPreference';
 
 const logger = createLogger('RadioControl');
 
@@ -713,6 +720,7 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   const audioMonitor = useAudioMonitorPlayback({ scope: 'radio' });
   const isAudioMonitorDisabledForIf = !isAudioMonitorAvailableForInputSignal(activeProfile?.audio?.inputSignalType);
   const [monitorVolume, setMonitorVolume] = useState(1.0); // 监听音量（线性增益）
+  const [softwareSquelchPreference, setSoftwareSquelchPreference] = useState<SoftwareSquelchPreference>(() => loadSoftwareSquelchPreference()); // 软件静噪（仅语音模式监听生效）
   const [hasActivatedMonitorPlayback, setHasActivatedMonitorPlayback] = useState(false);
   const [monitorAudioCodecPreference, setMonitorAudioCodecPreference] = useState<RealtimeAudioCodecPreference>(() => loadRealtimeAudioCodecPreference());
   const monitorWheelPixelRemainderRef = React.useRef(0);
@@ -1434,6 +1442,23 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
     }
   }, [t]);
 
+  const getSoftwareSquelchPreferenceLabel = React.useCallback((preference: SoftwareSquelchPreference): string => {
+    switch (preference) {
+      case 'on':
+        return t('monitor.softwareSquelchOn');
+      case 'off':
+        return t('monitor.softwareSquelchOff');
+      case 'auto':
+      default:
+        return t('monitor.softwareSquelchAuto');
+    }
+  }, [t]);
+
+  const handleSoftwareSquelchPreferenceChange = React.useCallback((preference: SoftwareSquelchPreference) => {
+    setSoftwareSquelchPreference(preference);
+    saveSoftwareSquelchPreference(preference);
+  }, []);
+
   const selectedMonitorBufferProfile = audioMonitor.playbackBufferPreference.profile;
   const monitorCustomBufferMs = audioMonitor.playbackBufferPreference.profile === 'custom'
     ? audioMonitor.playbackBufferPreference.customTargetBufferMs
@@ -1822,16 +1847,20 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
   };
 
   // Voice monitor mute: TX has priority, then software squelch gates output gain.
+  // Software squelch only applies when the preference is effective for the current
+  // radio mode (auto = FM-like modes only; SSB DCD is unreliable and would mute
+  // monitor audio permanently).
   useEffect(() => {
     const localVoiceTxActive = voiceCaptureController?.isPTTActive ?? false;
     const voiceKeyerTxActive = voicePttLock?.locked && isVoiceKeyerLockHolder(voicePttLock.lockedBy);
     const isTransmitting = pttStatus.isTransmitting || localVoiceTxActive;
+    const softwareSquelchEnabled = isSoftwareSquelchEffective(softwareSquelchPreference, radioMode.currentRadioMode);
     const shouldMute = radioMode.engineMode === 'voice'
       && !voiceKeyerTxActive
-      && (isTransmitting || (squelchStatus.supported && squelchStatus.open === false));
+      && (isTransmitting || (softwareSquelchEnabled && squelchStatus.supported && squelchStatus.open === false));
     const targetDb = shouldMute ? -60 : gainToDb(monitorVolume);
     audioMonitor.setVolume(targetDb);
-  }, [audioMonitor, pttStatus.isTransmitting, voiceCaptureController?.isPTTActive, voicePttLock?.locked, voicePttLock?.lockedBy, radioMode.engineMode, monitorVolume, squelchStatus]);
+  }, [audioMonitor, pttStatus.isTransmitting, voiceCaptureController?.isPTTActive, voicePttLock?.locked, voicePttLock?.lockedBy, radioMode.engineMode, radioMode.currentRadioMode, monitorVolume, squelchStatus, softwareSquelchPreference]);
 
   // The provider owns the WebSocket subscription. Derive the custom option
   // from the canonical operating-state snapshot so layout remounts cannot
@@ -2190,6 +2219,48 @@ export const RadioControl: React.FC<RadioControlProps> = ({ onOpenRadioSettings,
                                   />
                                 )}
                               </div>
+
+                              {radioMode.engineMode === 'voice' && (
+                                <div className="space-y-1 pt-1 border-t border-divider">
+                                  <div className="inline-flex items-center gap-1 text-default-500">
+                                    {t('monitor.softwareSquelch')}
+                                    <Tooltip
+                                      size="sm"
+                                      placement="top"
+                                      content={t('monitor.softwareSquelchHelp')}
+                                      classNames={{ content: 'max-w-56 whitespace-normal text-xs leading-snug' }}
+                                    >
+                                      <span
+                                        className="inline-flex h-3.5 w-3.5 cursor-help items-center justify-center text-default-400"
+                                        aria-label={t('monitor.softwareSquelchHelp')}
+                                      >
+                                        <FontAwesomeIcon icon={faCircleInfo} className="text-[11px]" />
+                                      </span>
+                                    </Tooltip>
+                                  </div>
+                                  <Tabs
+                                    size="sm"
+                                    fullWidth
+                                    selectedKey={softwareSquelchPreference}
+                                    onSelectionChange={(key) => handleSoftwareSquelchPreferenceChange(key as SoftwareSquelchPreference)}
+                                    isDisabled={!squelchStatus.supported}
+                                    aria-label={t('monitor.softwareSquelch')}
+                                    classNames={{
+                                      tabList: 'gap-1 p-0.5',
+                                      tab: 'h-6 px-1 text-[11px]',
+                                    }}
+                                  >
+                                    {SOFTWARE_SQUELCH_PREFERENCES.map((preference) => (
+                                      <Tab key={preference} title={getSoftwareSquelchPreferenceLabel(preference)} />
+                                    ))}
+                                  </Tabs>
+                                  {!squelchStatus.supported && (
+                                    <div className="text-[11px] text-warning text-center">
+                                      {t('monitor.softwareSquelchUnsupported')}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                             </>
                           )}
 

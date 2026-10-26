@@ -208,6 +208,10 @@ export function convertQSOToADIF(qso: QSORecord, options?: {
     const dateStr = formatADIFDate(new Date(qso.lotwQslReceivedDate));
     adifFields.push(adifField('lotw_qslrdate', dateStr));
   }
+  if (qso.qrzQslSent) adifFields.push(adifField('qrzcom_qso_upload_status', qso.qrzQslSent));
+  if (qso.qrzQslReceived) adifFields.push(adifField('qrzcom_qso_download_status', qso.qrzQslReceived));
+  if (qso.qrzQslSentDate) adifFields.push(adifField('qrzcom_qso_upload_date', formatADIFDate(new Date(qso.qrzQslSentDate))));
+  if (qso.qrzQslReceivedDate) adifFields.push(adifField('qrzcom_qso_download_date', formatADIFDate(new Date(qso.qrzQslReceivedDate))));
   if (qso.dxccStatus) {
     adifFields.push(adifField('app_tx5dr_dxcc_status', qso.dxccStatus));
   }
@@ -284,7 +288,7 @@ export function parseADIFFields(recordStr: string): Record<string, string> {
  * @param recordStr Single ADIF record string
  * @param source Source identifier (used for ID generation)
  */
-export function parseADIFRecord(recordStr: string, source: string = 'adif'): QSORecord | null {
+export function parseADIFRecord(recordStr: string, source: string = 'adif', options?: { resolveDxcc?: boolean }): QSORecord | null {
   const fields = parseADIFFields(recordStr);
 
   if (!fields.call || !fields.qso_date || !fields.time_on) {
@@ -418,13 +422,28 @@ export function parseADIFRecord(recordStr: string, source: string = 'adif'): QSO
       } catch { /* ignore parse error */ }
     }
 
+    // Standard QRZ ADIF fields, plus the older QRZ logbook confirmation extension.
+    const qrzSent = fields.qrzcom_qso_upload_status?.toUpperCase();
+    if (qrzSent === 'Y' || qrzSent === 'N') record.qrzQslSent = qrzSent;
+    const qrzReceived = fields.qrzcom_qso_download_status?.toUpperCase();
+    if (qrzReceived === 'Y' || qrzReceived === 'N') record.qrzQslReceived = qrzReceived;
+    for (const [field, target] of [
+      ['qrzcom_qso_upload_date', 'qrzQslSentDate'],
+      ['qrzcom_qso_download_date', 'qrzQslReceivedDate'],
+    ] as const) {
+      if (fields[field]) {
+        try { record[target] = new Date(parseADIFDateTime(fields[field], '000000')).getTime(); }
+        catch { /* Invalid optional dates do not invalidate the QSO. */ }
+      }
+    }
+
     // QRZ QSL status
     const qrzStatus = fields.app_qrzlog_status?.toUpperCase();
     if (qrzStatus === 'C' || qrzStatus === 'Y') {
       record.qrzQslReceived = 'Y';
     }
 
-    if (record.dxccSource !== 'manual_override') {
+    if (options?.resolveDxcc !== false && record.dxccSource !== 'manual_override') {
       const resolution = resolveDXCCEntity(record.callsign, record.startTime);
       if (resolution.entity) {
         record.dxccId = resolution.entity.entityCode;
@@ -465,7 +484,7 @@ export function parseADIFRecord(recordStr: string, source: string = 'adif'): QSO
  * @param adifContent Complete ADIF file content
  * @param source Source identifier
  */
-export function parseADIFContent(adifContent: string, source: string = 'adif'): QSORecord[] {
+export function parseADIFContent(adifContent: string, source: string = 'adif', options?: { resolveDxcc?: boolean }): QSORecord[] {
   const records: QSORecord[] = [];
 
   try {
@@ -475,7 +494,7 @@ export function parseADIFContent(adifContent: string, source: string = 'adif'): 
     const recordStrings = body.split(/<eor>/i).filter(r => r.trim().length > 0);
 
     for (const recordStr of recordStrings) {
-      const qso = parseADIFRecord(recordStr, source);
+      const qso = parseADIFRecord(recordStr, source, options);
       if (qso) {
         records.push(qso);
       }

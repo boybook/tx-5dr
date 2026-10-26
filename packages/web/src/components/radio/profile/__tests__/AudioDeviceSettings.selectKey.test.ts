@@ -3,6 +3,7 @@ import type { AudioDevice, AudioDeviceResolution } from '@tx5dr/contracts';
 import {
   audioSettingsEqual,
   buildAudioDeviceSelectOptions,
+  findSelectedAudioDeviceOption,
   getDeviceNameFromSelectKey,
   getSelectedAudioDeviceKey,
   makeAudioDeviceSelectKey,
@@ -25,6 +26,63 @@ const missingResolution = (deviceName: string): AudioDeviceResolution => ({
   configuredDevice: null,
   effectiveDevice: null,
   status: 'missing',
+});
+
+describe('audio device identity matching', () => {
+  const codec: AudioDevice = { ...builtInInput, name: 'USB Audio CODEC', id: 'input-7' };
+  const buildOptions = (devices: AudioDevice[]) => buildAudioDeviceSelectOptions('input', devices, codec.name);
+
+  it('prefers hardware identity over an earlier same-name or numeric-ID match', () => {
+    const options = buildOptions([
+      { ...codec, id: 'input-3', hardwareId: 'usb:1-1' },
+      { ...codec, hardwareId: 'usb:1-2' },
+    ]);
+    expect(findSelectedAudioDeviceOption(options, {
+      hardwareId: 'usb:1-2', deviceId: 'input-3', deviceName: codec.name,
+    })?.device?.id).toBe(codec.id);
+  });
+
+  it('falls back from an absent hardware identity to a matching ID and name', () => {
+    const options = buildOptions([{ ...codec, id: 'input-3' }, codec]);
+    expect(findSelectedAudioDeviceOption(options, {
+      hardwareId: 'usb:old-port', deviceId: codec.id, deviceName: codec.name,
+    })?.device?.id).toBe(codec.id);
+  });
+
+  it.each([undefined, 'usb:old-port'])('falls back to a unique name after re-enumeration (hardwareId=%s)', (hardwareId) => {
+    const options = buildOptions([{ ...codec, hardwareId: 'usb:new-port' }]);
+    expect(findSelectedAudioDeviceOption(options, {
+      hardwareId, deviceId: 'input-3', deviceName: codec.name,
+    })?.device?.id).toBe(codec.id);
+  });
+
+  it.each([true, false])('rejects a numeric ID reassigned to another name (codec first=%s)', (codecFirst) => {
+    const unrelated = { ...codec, id: 'input-3', name: 'Built-in Mic' };
+    const options = buildOptions(codecFirst ? [codec, unrelated] : [unrelated, codec]);
+    expect(findSelectedAudioDeviceOption(options, {
+      deviceId: unrelated.id, deviceName: codec.name,
+    })?.device?.id).toBe(codec.id);
+  });
+
+  it('does not guess between same-named endpoints when saved identities are absent', () => {
+    const options = buildOptions([codec, { ...codec, id: 'input-8' }]);
+    expect(findSelectedAudioDeviceOption(options, {
+      hardwareId: 'usb:old-port', deviceId: 'input-3', deviceName: codec.name,
+    })).toBeUndefined();
+  });
+
+  it('does not fall back from an explicit missing route to a matching name or ID', () => {
+    expect(findSelectedAudioDeviceOption(buildOptions([codec]), {
+      routeKey: 'android:wired-headset:input', deviceId: codec.id, deviceName: codec.name,
+    })).toBeUndefined();
+  });
+
+  it('preserves an unavailable device by name when the route key is empty', () => {
+    const options = buildAudioDeviceSelectOptions('input', [], codec.name, missingResolution(codec.name), '');
+    const selected = findSelectedAudioDeviceOption(options, { deviceId: codec.id, deviceName: codec.name });
+    expect(selected).toMatchObject({ key: `input::${codec.name}`, isMissing: true });
+    expect(getSelectedAudioDeviceKey('input', codec.name, '')).toBe(selected?.key);
+  });
 });
 
 describe('AudioDeviceSettings select keys', () => {

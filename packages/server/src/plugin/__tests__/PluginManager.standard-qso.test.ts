@@ -1712,7 +1712,7 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
-  it('does not wake a stopped operator for direct calls by default', async () => {
+  it.each(['-12', 'R-05', 'RRR', 'RR73'])('does not wake a stopped operator for direct %s by default', async (report) => {
     const { operator, pluginManager } = await createRuntimeHarness({
       startOperator: false,
       myCallsign: 'BG7XTV',
@@ -1720,7 +1720,7 @@ describe('PluginManager standard-qso late re-decision', () => {
     });
 
     await (pluginManager as any).handleSlotStart(createSlotInfo(30_000), createSlotPack(createSlotInfo(15_000), [{
-      message: 'BG7XTV JA1AAA -12',
+      message: `BG7XTV JA1AAA ${report}`,
       snr: -18,
       freq: 1300,
     }]));
@@ -1786,7 +1786,51 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
-  it('does not wake a stopped operator for worked direct callers when duplicates are disabled', async () => {
+  it.each([
+    { report: 'R-05', expectedSlot: 'TX4', expectedReply: 'RR73' },
+    { report: 'RRR', expectedSlot: 'TX5', expectedReply: '73' },
+    { report: 'RR73', expectedSlot: 'TX5', expectedReply: '73' },
+  ])('wakes a stopped idle operator for direct $report in both decision paths', async ({ report, expectedSlot, expectedReply }) => {
+    for (const source of ['slot-start', 'late-decode'] as const) {
+      const { eventEmitter, operator, pluginManager } = await createRuntimeHarness({
+        startOperator: false,
+        myCallsign: 'BG7XTV',
+        myGrid: 'OL32',
+        autoReplyToDirectCallWhenStopped: true,
+        replyToWorkedStations: true,
+        hasWorkedCallsign: true,
+      });
+      const transmissions: string[] = [];
+      eventEmitter.on('requestTransmit', ({ transmission }) => transmissions.push(transmission));
+      const pack = createSlotPack(createSlotInfo(15_000), [{
+        message: `BG7XTV JA1AAA ${report}`,
+        snr: -7,
+        freq: 1300,
+      }]);
+
+      if (source === 'slot-start') {
+        await (pluginManager as any).handleSlotStart(createSlotInfo(30_000), pack);
+      } else {
+        expect(await pluginManager.reDecideOperator(operator.config.id, pack)).toBe(true);
+      }
+
+      const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
+      expect(operator.isTransmitting).toBe(true);
+      expect(operator.getTransmitCycles()).toEqual([0]);
+      expect(status.currentSlot).toBe(expectedSlot);
+      expect(status.context?.targetCallsign).toBe('JA1AAA');
+      if (report === 'R-05') {
+        expect(status.context?.reportReceived).toBe(-5);
+      }
+      expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe(`JA1AAA BG7XTV ${expectedReply}`);
+      (pluginManager as any).handleEncodeStart(createSlotInfo(30_000));
+      expect(transmissions).toEqual([`JA1AAA BG7XTV ${expectedReply}`]);
+
+      await pluginManager.shutdown();
+    }
+  });
+
+  it.each(['PM95', 'R-05', 'RRR', 'RR73'])('does not wake a stopped operator for worked direct %s when duplicates are disabled', async (report) => {
     const { operator, pluginManager } = await createRuntimeHarness({
       startOperator: false,
       myCallsign: 'BG7XTV',
@@ -1797,12 +1841,7 @@ describe('PluginManager standard-qso late re-decision', () => {
     });
 
     await (pluginManager as any).handleSlotStart(createSlotInfo(30_000), createSlotPack(createSlotInfo(15_000), [{
-      message: FT8MessageParser.generateMessage({
-        type: FT8MessageType.CALL,
-        senderCallsign: 'JA1AAA',
-        targetCallsign: 'BG7XTV',
-        grid: 'PM95',
-      }),
+      message: `BG7XTV JA1AAA ${report}`,
       snr: -8,
       freq: 1502,
     }]));
@@ -1814,7 +1853,7 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
-  it('does not wake a stopped non-idle operator for direct calls', async () => {
+  it.each(['-12', 'R-05', 'RRR', 'RR73'])('does not wake a stopped non-idle operator for direct %s', async (report) => {
     const { operator, pluginManager } = await createRuntimeHarness({
       startOperator: false,
       myCallsign: 'BG7XTV',
@@ -1825,7 +1864,7 @@ describe('PluginManager standard-qso late re-decision', () => {
     setRuntimeState(pluginManager, operator.config.id, 'TX2');
 
     await (pluginManager as any).handleSlotStart(createSlotInfo(30_000), createSlotPack(createSlotInfo(15_000), [{
-      message: 'BG7XTV JA1AAA -12',
+      message: `BG7XTV JA1AAA ${report}`,
       snr: -18,
       freq: 1300,
     }]));
@@ -1838,7 +1877,7 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
-  it('does not wake a stopped operator when another same-callsign operator is working the direct caller', async () => {
+  it.each(['PM95', 'R-05', 'RRR', 'RR73'])('does not wake a stopped operator for direct %s when another same-callsign operator is working the caller', async (report) => {
     const { operators, pluginManager } = await createMultiOperatorRuntimeHarness({
       autoReplyToDirectCallWhenStopped: true,
     });
@@ -1852,12 +1891,7 @@ describe('PluginManager standard-qso late re-decision', () => {
     setRuntimeState(pluginManager, activeOperator.config.id, 'TX2');
 
     await (pluginManager as any).handleSlotStart(createSlotInfo(30_000), createSlotPack(createSlotInfo(15_000), [{
-      message: FT8MessageParser.generateMessage({
-        type: FT8MessageType.CALL,
-        senderCallsign: 'JA1AAA',
-        targetCallsign: 'BG4IAJ',
-        grid: 'PM95',
-      }),
+      message: `BG4IAJ JA1AAA ${report}`,
       snr: -8,
       freq: 1502,
     }]));
@@ -1865,6 +1899,30 @@ describe('PluginManager standard-qso late re-decision', () => {
     expect(stoppedOperator.isTransmitting).toBe(false);
     expect(pluginManager.getOperatorRuntimeStatus(stoppedOperator.config.id).currentSlot).toBe('TX6');
     expect(pluginManager.getOperatorRuntimeStatus(stoppedOperator.config.id).context?.targetCallsign).toBeUndefined();
+
+    await pluginManager.shutdown();
+  });
+
+  it.each([
+    'BG7XTV JA1AAA 73',
+    'BG5DRB JA1AAA R-05',
+    'BG5DRB JA1AAA RRR',
+    'BG5DRB JA1AAA RR73',
+  ])('does not wake a stopped operator for %s without a reply addressed to it', async (message) => {
+    const { operator, pluginManager } = await createRuntimeHarness({
+      startOperator: false,
+      myCallsign: 'BG7XTV',
+      autoReplyToDirectCallWhenStopped: true,
+      replyToWorkedStations: true,
+    });
+    const pack = createSlotPack(createSlotInfo(15_000), [{ message, snr: -7, freq: 1300 }]);
+
+    await (pluginManager as any).handleSlotStart(createSlotInfo(30_000), pack);
+    expect(await pluginManager.reDecideOperator(operator.config.id, pack)).toBe(false);
+    expect(operator.isTransmitting).toBe(false);
+    const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);
+    expect(status.currentSlot).toBe('TX6');
+    expect(status.context?.targetCallsign).toBeUndefined();
 
     await pluginManager.shutdown();
   });
@@ -3435,6 +3493,54 @@ describe('PluginManager standard-qso late re-decision', () => {
     await pluginManager.shutdown();
   });
 
+  it('logs the report sent at TX2 when skipTx1 is enabled and the acknowledgement decodes weaker', async () => {
+    let recorded: RecordQSORequest | undefined;
+    const { operator, pluginManager } = await createRuntimeHarness({
+      myCallsign: 'BG5JKZ',
+      myGrid: 'PM01',
+      autoReplyToCQ: true,
+      skipTx1: true,
+      recordQSOHandler: (request) => {
+        recorded = request;
+        request.resolve?.(request.qsoRecord);
+      },
+    });
+
+    const sourceSlot = createSlotInfo(45_000);
+    await (pluginManager as any).handleSlotStart(sourceSlot, createSlotPack(sourceSlot, [{
+      message: 'CQ VE6TL DO21',
+      snr: -12,
+      freq: 2722,
+    }]));
+
+    // skipTx1 answers with the report measured from the CQ, not with a grid.
+    const reportTransmission = getCurrentTransmission(pluginManager, operator.config.id);
+    expect(reportTransmission).toBe('VE6TL BG5JKZ -12');
+    // RadioOperatorManager reports terminal physical success before the next slot.
+    pluginManager.notifyTransmissionQueued(operator.config.id, reportTransmission!);
+
+    const acknowledgementSlot = createSlotInfo(90_000);
+    await (pluginManager as any).handleSlotStart(acknowledgementSlot, createSlotPack(acknowledgementSlot, [{
+      message: 'BG5JKZ VE6TL R-12',
+      snr: -14,
+      freq: 2723,
+    }]));
+
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX4');
+    await vi.waitFor(() => expect(recorded).toBeDefined());
+    expect(recorded?.qsoRecord).toMatchObject({
+      callsign: 'VE6TL',
+      reportSent: '-12',
+      reportReceived: '-12',
+    });
+    // The completion effect carries the attempt start so the Host can rebuild
+    // the whole contact history rather than the completion slot only.
+    expect(recorded?.startedAt).toEqual(expect.any(Number));
+    expect(recorded!.startedAt!).toBeLessThanOrEqual(recorded!.qsoRecord.startTime);
+
+    await pluginManager.shutdown();
+  });
+
   it('auto-replies to CQ when the callsign is only worked on another band by default', async () => {
     const hasWorkedSpy = vi.fn((_callsign: string, options?: { anyBand?: boolean }) => options?.anyBand === true);
     const { operator, pluginManager } = await createRuntimeHarness({
@@ -4441,6 +4547,7 @@ describe('PluginManager standard-qso late re-decision', () => {
     await (pluginManager as any).handleSlotStart(createSlotInfo(30_000), createSlotPack(createSlotInfo(15_000), [
       { message: 'BG7XTV <...> RR73', snr: -8, freq: 1502 },
       { message: 'BG7XTV <...> -01', snr: -10, freq: 1502 },
+      { message: 'BG7XTV <...> R-05', snr: -7, freq: 1502 },
     ]));
 
     const status = pluginManager.getOperatorRuntimeStatus(operator.config.id);

@@ -132,6 +132,7 @@ export const lotwSyncPlugin = definePlugin({
       },
       {
         id: 'upload-wizard',
+        dialogSize: '3xl',
         title: 'LoTW Upload',
         entry: 'upload-wizard.html',
         accessScope: 'operator',

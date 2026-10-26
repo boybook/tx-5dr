@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => ({
   getTxPreferences: vi.fn(),
   saveTxPreferences: vi.fn(),
   importSstv: vi.fn(),
+  persistenceAvailable: true,
   txTarget: 'radio' as 'radio' | 'local',
 }));
 
@@ -57,7 +58,7 @@ vi.mock('../../DigitalRadioEngine.js', () => ({
       }),
       getImageTemplateStore: () => ({ referencesArtifact: () => false }),
       getSstvTxPreferenceStore: () => ({ get: mocks.getTxPreferences, save: mocks.saveTxPreferences }),
-      getImageRadioService: () => ({ getSstvTxTarget: () => mocks.txTarget }),
+      getImageRadioService: () => ({ getSstvTxTarget: () => mocks.txTarget, getStatus: () => ({ persistence: { available: mocks.persistenceAvailable, stores: [] } }) }),
     }),
   },
 }));
@@ -70,6 +71,7 @@ describe('image radio history authorization', () => {
   let app: ReturnType<typeof Fastify>;
 
   beforeEach(async () => {
+    mocks.persistenceAvailable = true;
     mocks.txTarget = 'radio';
     mocks.importSstv.mockReset().mockImplementation(async (input) => ({ artifact: { ...artifacts.get('tx-image'), frequency: input.frequency } }));
     mocks.list.mockReset().mockImplementation((options: { direction: string; txOperatorId?: string }) => ({
@@ -98,6 +100,22 @@ describe('image radio history authorization', () => {
 
   afterEach(async () => {
     await app.close();
+  });
+
+  it('keeps status and unrelated routes available while refusing image operations', async () => {
+    mocks.persistenceAvailable = false;
+    app.get('/health', async () => ({ ok: true }));
+    expect((await app.inject('/health')).statusCode).toBe(200);
+    const status = await app.inject('/api/image-radio/status');
+    expect(status.statusCode).toBe(200);
+    expect(status.json().status.persistence.available).toBe(false);
+    const response = await app.inject('/api/image-radio/history');
+    expect(response.statusCode).toBe(503);
+    expect(response.json().error.code).toBe('IMAGE_PERSISTENCE_UNAVAILABLE');
+    expect(mocks.list).not.toHaveBeenCalled();
+    const write = await app.inject({ method: 'PUT', url: '/api/image-radio/sstv-tx-preferences/op-a', headers: { 'x-role': UserRole.ADMIN }, payload: {} });
+    expect(write.statusCode).toBe(503);
+    expect(mocks.saveTxPreferences).not.toHaveBeenCalled();
   });
 
   it('projects a public all-history request to received records only', async () => {

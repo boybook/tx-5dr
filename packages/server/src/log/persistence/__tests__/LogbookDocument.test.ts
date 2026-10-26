@@ -7,6 +7,7 @@ import { encodeAdifRecord, getLastAdifFieldValue, scanAdifBuffer } from '../Adif
 import {
   BufferLogbookSourceAdapter,
   LogbookDocument,
+  projectLogbookRecords,
   type LogbookRewritePart,
 } from '../LogbookDocument.js';
 
@@ -33,6 +34,24 @@ function materializeParts(parts: readonly LogbookRewritePart[], source: Buffer):
 }
 
 describe('LogbookDocument loading and indexes', () => {
+  it('slices rewrite preparation and projection installation without changing bytes or runtime IDs', async () => {
+    const source = Buffer.from('<EOH>\n' + Array.from({ length: 2000 }, (_, i) => rawRecord('K1ABC', '010203', '14.074000', `<APP_TX5DR_ID:${String(i).length}>${i}`)).join('\n'));
+    const original = LogbookDocument.fromScan(scanAdifBuffer(source));
+    const mutation = { type: 'replace' as const, id: '1999', qso: { ...original.getQso('1999')!, notes: 'sent status patch' } };
+    let ticks = 0; const timer = setInterval(() => ticks++, 1);
+    try {
+      const asynchronous = await original.prepareRewriteAsync([mutation]);
+      const synchronous = original.prepareRewrite([mutation]);
+      expect(materializeParts(asynchronous.rewriteParts, source)).toEqual(materializeParts(synchronous.rewriteParts, source));
+      const scan = scanAdifBuffer(materializeParts(asynchronous.rewriteParts, source));
+      const document = await LogbookDocument.fromScanAsync(scan, projectLogbookRecords(scan.records));
+      expect(document.getQsoRecords().map(record => record.id)).toEqual(LogbookDocument.fromScan(scan).getQsoRecords().map(record => record.id));
+      expect(document.getQso('1999')?.notes).toBe('sent status patch');
+      expect(original.getQso('1999')?.notes).toBeUndefined();
+      expect(ticks).toBeGreaterThan(0);
+    } finally { clearInterval(timer); }
+  });
+
   it('builds from worker scan DTOs without retaining or materializing the source file', () => {
     const first = rawRecord('BG2AA', '010203');
     const second = rawRecord('BG2BB', '010303');

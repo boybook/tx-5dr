@@ -8,7 +8,6 @@ const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 const ROOT_PACKAGE_PATH = path.join(PROJECT_ROOT, 'package.json');
 const SEMANTIC_VERSION_PATTERN = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
-export const HOST_BASE_VERSION = '1.0.0';
 
 function parseArgs(argv) {
   const args = {};

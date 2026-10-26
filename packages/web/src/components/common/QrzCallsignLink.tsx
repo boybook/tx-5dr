@@ -23,7 +23,7 @@ export function isValidQrzCallsign(callsign: string | null | undefined): boolean
 export function buildQrzCallsignUrl(callsign: string | null | undefined): string | null {
   const normalized = normalizeQrzCallsign(callsign);
   if (!isValidQrzCallsign(normalized)) return null;
-  return `${QRZ_CALLSIGN_BASE_URL}${encodeURIComponent(normalized)}`;
+  return `${QRZ_CALLSIGN_BASE_URL}${normalized}`;
 }
 
 export interface QrzCallsignLinkProps {

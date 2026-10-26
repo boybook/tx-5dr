@@ -625,6 +625,7 @@ export async function createServer() {
     digitalRadioEngine.operatorManager.qsoCompletions.stopAccepting();
     PersistenceCoordinator.getInstance().blockNewMutations();
 
+    let engineStopError: string | undefined;
     try {
       if (digitalRadioEngine.getStatus().isRunning) {
         await Promise.race([
@@ -638,6 +639,7 @@ export async function createServer() {
         ]);
       }
     } catch (error) {
+      engineStopError = error instanceof Error ? error.message : String(error);
       fastify.log.warn({ error }, 'engine stop failed during internal prepare-shutdown');
     }
 
@@ -664,7 +666,8 @@ export async function createServer() {
     const errors = logbookCloseError
       ? [{ name: 'logbooks', error: logbookCloseError }, ...flushResult.errors]
       : flushResult.errors;
-    const success = logbookCloseError === undefined && flushResult.ok;
+    if (engineStopError) errors.unshift({ name: 'engine', error: engineStopError });
+    const success = engineStopError === undefined && logbookCloseError === undefined && flushResult.ok;
     return reply.code(success ? 200 : 500).send({
       success,
       errors,

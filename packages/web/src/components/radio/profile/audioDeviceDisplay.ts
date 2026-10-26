@@ -14,7 +14,11 @@ export function formatDeviceDefaultSuffix(t: TFunction, isDefault: boolean): str
 }
 
 export function formatDeviceText(t: TFunction, device: AudioDevice): string {
-  return `${device.name}${formatDeviceDefaultSuffix(t, device.isDefault)}`;
+  const identity = device.serialNumber?.trim();
+  const identitySuffix = identity && !device.name.toLowerCase().includes(identity.toLowerCase())
+    ? ` — ${identity}`
+    : '';
+  return `${device.name}${identitySuffix}${formatDeviceDefaultSuffix(t, device.isDefault)}`;
 }
 
 export function formatDeviceDetail(device: AudioDevice | null | undefined): string | null {

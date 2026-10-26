@@ -1,3 +1,7 @@
+import { uploadAutomaticBatches } from '../_shared/auto-upload-batches.js';
+import { UploadAcceptance } from '../_shared/upload-acceptance.js';
+import { currentUploadRecords } from '../_shared/current-upload-records.js';
+import { SyncOperationGate, SyncBusyError, busyUpload, busyDownload } from '../_shared/sync-operation-gate.js';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // LoTWSyncProvider — certificate parsing and HTTP response handling requires any
 
@@ -575,6 +579,7 @@ function isSkippableUploadIssue(issue: LoTWUploadIssue): boolean {
  * for QSO upload (TQ8 format with RSA-SHA1 signing) and download.
  */
 export class LoTWSyncProvider implements LogbookSyncProvider {
+  private readonly operationGate = new SyncOperationGate();
   private static readonly reportRequestQueues = new Map<string, Promise<unknown>>();
   private static readonly lastReportRequestAt = new Map<string, number>();
 
@@ -588,7 +593,8 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     { id: 'upload', label: 'Upload', icon: 'upload', pageId: 'upload-wizard' },
   ];
 
-  constructor(private ctx: PluginContext) {}
+  private readonly acceptance: UploadAcceptance;
+  constructor(private ctx: PluginContext) { this.acceptance = new UploadAcceptance(ctx.store.global, 'lotw'); }
 
   // ========== Config helpers ==========
 
@@ -608,6 +614,10 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
 
   /** Write per-callsign config to KVStore (synchronous write, async flush). */
   setConfig(callsign: string, config: LoTWPluginConfig): void {
+    this.operationGate.assertIdle(callsign);
+    this.writeConfig(callsign, config);
+  }
+  private writeConfig(callsign: string, config: LoTWPluginConfig): void {
     this.ctx.store.global.set(this.configKey(callsign), config);
   }
 
@@ -664,7 +674,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
       return false;
     }
 
-    this.setConfig(normalizedCallsign, {
+    this.writeConfig(normalizedCallsign, {
       ...base,
       uploadLocation: nextLocation,
     });
@@ -678,6 +688,9 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
    * Parses PKCS#12, extracts callsign/DXCC/dates, and stores as JSON via ctx.files.
    */
   async importCertificate(callsign: string, fileBuffer: Buffer): Promise<LoTWCertificateImportResult> {
+    return this.operationGate.run(callsign, () => this.importCertificateImpl(callsign, fileBuffer));
+  }
+  private async importCertificateImpl(callsign: string, fileBuffer: Buffer): Promise<LoTWCertificateImportResult> {
     let p12: forge.pkcs12.Pkcs12Pfx;
 
     try {
@@ -781,6 +794,9 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
 
   /** Delete a certificate by ID. */
   async deleteCertificate(callsign: string, certId: string): Promise<boolean> {
+    return this.operationGate.run(callsign, () => this.deleteCertificateImpl(callsign, certId));
+  }
+  private async deleteCertificateImpl(callsign: string, certId: string): Promise<boolean> {
     const inventory = await this.listCertificateInventory(callsign);
     const entry = inventory.find((item) => item.canonicalId === certId || item.storedId === certId);
     const filePath = entry?.filePath ?? this.getCertificateFilePath(callsign, certId);
@@ -977,6 +993,12 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
   }
 
   async upload(callsign: string, options?: SyncUploadOptions): Promise<SyncUploadResult> {
+    try { return await this.operationGate.run(callsign, () => options?.trigger === 'auto' && options.records && options.records.length > 100
+      ? uploadAutomaticBatches(options.records, records => this.uploadImpl(callsign, { ...options, records }))
+      : this.uploadImpl(callsign, options), options?.trigger === 'auto'); }
+    catch (error) { if (error instanceof SyncBusyError) return busyUpload(this.id); throw error; }
+  }
+  private async uploadImpl(callsign: string, options?: SyncUploadOptions): Promise<SyncUploadResult> {
     const config = this.getConfig(callsign);
     if (!config) {
       return {
@@ -991,6 +1013,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
       };
     }
     const logbook = this.ctx.logbook.forCallsign(callsign);
+    await this.acceptance.repair(callsign, logbook, options?.trigger === 'auto');
     this.emitUploadProgress(options, {
       stage: 'preparing',
       callsign,
@@ -998,7 +1021,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
     });
 
     const pendingQsos = options?.records
-      ? options.records.filter((qso) => isUploadCandidate(qso, options))
+      ? (await currentUploadRecords(logbook, options.records, options.trigger !== 'auto')).filter((qso) => isUploadCandidate(qso, options))
       : await this.queryPendingQsos(logbook, options);
 
     if (pendingQsos.length === 0) {
@@ -1108,6 +1131,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
         for (const qso of batch.qsos) {
           acceptedQsoDates.set(qso.id, accepted.acceptedAt);
         }
+        await this.acceptance.remember(callsign, acceptedQsoDates);
         this.ctx.log.info('LoTW upload batch accepted', {
           callsign,
           batchIndex: batchIndex + 1,
@@ -1193,12 +1217,13 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
             }
           }
           return { mutations, value: undefined };
-        });
+        }, 2, options?.trigger === 'auto' ? { ids: [...acceptedQsoDates.keys()] } : undefined);
         localStatusChanged = reconciled.batch.outcomes.some((outcome) => outcome.status === 'updated');
+        await this.acceptance.clear(callsign);
       } catch (err) {
         updateFailed = acceptedQsoDates.size;
         failures.push(this.createFailure('lotw_update_qsl_status_failed', err instanceof Error ? err.message : 'Failed to update QSL sent status', {
-          source: 'logbook',
+          source: 'logbook', retryable: true,
           operation: 'upload',
         }));
         this.ctx.log.warn('Failed to update LoTW sent status batch', {
@@ -1213,7 +1238,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
 
     // Update lastUploadTime
     if (submitted > 0) {
-      this.setConfig(callsign, { ...config, lastUploadTime: Date.now() });
+      this.writeConfig(callsign, { ...config, lastUploadTime: Date.now() });
     }
 
     const uploaded = Math.max(0, acceptedQsoDates.size - updateFailed);
@@ -1566,6 +1591,10 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
   }
 
   async download(callsign: string, options?: SyncDownloadOptions): Promise<SyncDownloadResult> {
+    try { return await this.operationGate.run(callsign, () => this.downloadImpl(callsign, options)); }
+    catch (error) { if (error instanceof SyncBusyError) return busyDownload(this.id); throw error; }
+  }
+  private async downloadImpl(callsign: string, options?: SyncDownloadOptions): Promise<SyncDownloadResult> {
     const config = this.getConfig(callsign);
     if (!config?.username || !config?.password) {
       return {
@@ -1659,7 +1688,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
             const failure = this.createFailure(
               'lotw_download_logbook_failed',
               error instanceof Error ? error.message : 'Failed to commit downloaded LoTW window',
-              { source: 'logbook', operation: 'download', detail: `range=${range}` },
+              { source: 'logbook', retryable: true, operation: 'download', detail: `range=${range}` },
             );
             failures.push(failure);
             counters.failureCount = failures.length;
@@ -1745,7 +1774,7 @@ export class LoTWSyncProvider implements LogbookSyncProvider {
 
       // Update lastDownloadTime and notify
       if (failures.length === 0) {
-        this.setConfig(callsign, { ...config, lastDownloadTime: Date.now() });
+        this.writeConfig(callsign, { ...config, lastDownloadTime: Date.now() });
       }
       if (counters.updated > 0 || counters.imported > 0) {
         await logbook.notifyUpdated();

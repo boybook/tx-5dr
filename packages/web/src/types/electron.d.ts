@@ -1,5 +1,6 @@
+import type { UpdateSelection } from '@tx5dr/contracts';
 import type { DesktopHttpsMode, DesktopHttpsStatus } from '@tx5dr/contracts';
-import type { ShortcutConfig, ShortcutActionId } from '../utils/shortcutPreferences';
+import type { ShortcutConfig, ShortcutActionId, ShortcutToggles } from '../utils/shortcutPreferences';
 import type { VoicePttShortcutPreset } from '../utils/voicePttShortcutPreferences';
 
 export type DesktopUpdateSource = 'oss' | 'github';
@@ -60,7 +61,7 @@ export interface DesktopDownloadProgress {
   bytesPerSecond: number;
 }
 
-export interface DesktopUpdateStatus {
+export interface DesktopUpdateStatus extends UpdateSelection {
   channel: 'release' | 'nightly';
   currentVersion: string;
   currentCommit: string | null;
@@ -182,8 +183,9 @@ interface ElectronAPI {
   updater?: {
     getStatus(): Promise<DesktopUpdateStatus>;
     check(): Promise<DesktopUpdateStatus>;
-    download(): Promise<DesktopUpdateStatus>;
-    installAndRestart(): Promise<DesktopUpdateStatus>;
+    setChannel(channel: 'release' | 'nightly'): Promise<DesktopUpdateStatus>;
+    download(request: { identity: string; allowDowngrade: boolean }): Promise<DesktopUpdateStatus>;
+    installAndRestart(request: { identity: string; allowDowngrade: boolean }): Promise<DesktopUpdateStatus>;
     openDownload(url?: string): Promise<void>;
     onStatus(callback: (status: DesktopUpdateStatus) => void): void;
     offStatus(callback: (status: DesktopUpdateStatus) => void): void;
@@ -212,6 +214,8 @@ interface ElectronAPI {
   shortcuts?: {
     getConfig(): Promise<ShortcutConfig>;
     setConfig(config: ShortcutConfig): Promise<ShortcutRegistrationStatus>;
+    getToggles(): Promise<ShortcutToggles>;
+    setToggles(toggles: ShortcutToggles): Promise<ShortcutRegistrationStatus>;
     register(config?: ShortcutConfig): Promise<ShortcutRegistrationStatus>;
     startRecording(actionId: ShortcutActionId): Promise<void>;
     stopRecording(): Promise<void>;

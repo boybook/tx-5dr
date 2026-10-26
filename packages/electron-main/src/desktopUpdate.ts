@@ -1,3 +1,6 @@
+import { fetchChannelManifest, EmptyReleaseChannelError, releaseIdentity, updateOperation } from '@tx5dr/core';
+import { UpdatePreferencesSchema, UpdateInstallRequestSchema, SystemUpdateStatusSchema, type UpdateSelection } from '@tx5dr/contracts';
+import { CancellationToken } from 'builder-util-runtime';
 import { app, shell } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,13 +16,12 @@ import { createLogger } from './utils/logger.js';
 
 const logger = createLogger('DesktopUpdate');
 
-const DEFAULT_OSS_BASE_URL = 'https://tx5dr.oss-cn-hangzhou.aliyuncs.com';
 const WEBSITE_URL = 'https://tx5dr.com';
 const RECENT_COMMITS_LIMIT = 10;
 const PENDING_UPDATE_FILE = 'pending-update-install.json';
 
 type UpdateChannel = 'release' | 'nightly';
-type UpdateSource = 'oss';
+type UpdateSource = 'oss' | 'github';
 export type DesktopUpdatePhase = 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'unsupported' | 'error';
 
 type AutoUpdateTarget = 'nsis' | 'mac-zip' | 'appimage';
@@ -98,7 +100,7 @@ export interface DesktopDownloadProgress {
   bytesPerSecond: number;
 }
 
-export interface DesktopUpdateStatus {
+export interface DesktopUpdateStatus extends UpdateSelection {
   channel: UpdateChannel;
   currentVersion: string;
   currentCommit: string | null;
@@ -132,6 +134,7 @@ export interface DesktopUpdateStatus {
 }
 
 interface PendingUpdateInstall {
+  channel?: UpdateChannel;
   identity: string;
   version: string | null;
   commit: string | null;
@@ -148,6 +151,8 @@ interface PreparedAutoUpdate {
 }
 
 interface DesktopUpdateServiceOptions {
+  getChannel?: () => UpdateChannel;
+  saveChannel?: (channel: UpdateChannel) => void;
   prepareInstall?: () => Promise<void>;
   beforeQuitAndInstall?: () => void;
   onQuitAndInstallError?: () => void;
@@ -182,49 +187,8 @@ class LatestJsonUpdateProvider extends Provider<UpdateInfo> {
   }
 }
 
-function trimSlash(value: string): string {
-  return value.replace(/\/+$/, '');
-}
-
-function normalizeUrl(value: string): string {
-  const trimmed = value.trim();
-  if (/^https?:\/\//i.test(trimmed)) {
-    return trimmed;
-  }
-  if (trimmed.startsWith('//')) {
-    return `https:${trimmed}`;
-  }
-  return `https://${trimmed.replace(/^\/+/, '')}`;
-}
-
-function joinUrl(base: string, suffix: string): string {
-  return `${trimSlash(base)}/${suffix.replace(/^\/+/, '')}`;
-}
-
 function normalizeVersion(value: string | null | undefined): string {
   return (value || '').trim().replace(/^v/i, '');
-}
-
-function parseVersionSegments(version: string): number[] {
-  return normalizeVersion(version)
-    .split('-')[0]
-    .split('+')[0]
-    .split('.')
-    .map((part) => Number.parseInt(part, 10))
-    .filter((value) => Number.isFinite(value));
-}
-
-function compareReleaseVersions(left: string, right: string): number {
-  const leftParts = parseVersionSegments(left);
-  const rightParts = parseVersionSegments(right);
-  const maxLength = Math.max(leftParts.length, rightParts.length);
-  for (let index = 0; index < maxLength; index += 1) {
-    const leftValue = leftParts[index] ?? 0;
-    const rightValue = rightParts[index] ?? 0;
-    if (leftValue > rightValue) return 1;
-    if (leftValue < rightValue) return -1;
-  }
-  return 0;
 }
 
 function currentIdentity(): string | null {
@@ -270,6 +234,7 @@ function writePendingUpdateInstall(status: DesktopUpdateStatus): void {
   if (!status.identity) return;
   const payload: PendingUpdateInstall = {
     identity: status.identity,
+    channel: status.targetChannel,
     version: status.latestVersion,
     commit: status.latestCommit,
     writtenAt: new Date().toISOString(),
@@ -285,7 +250,9 @@ function getInitialPendingState(): Pick<DesktopUpdateStatus, 'pendingInstallIden
   if (!pending) {
     return { pendingInstallIdentity: null, lastInstallFailed: false, phase: 'idle', errorMessage: null };
   }
-  if (pending.identity === currentIdentity()) {
+  if ((!pending.channel && pending.identity === currentIdentity()) ||
+      (pending.channel === BUILD_INFO.channel && pending.version === BUILD_INFO.version &&
+       (!pending.commit || BUILD_INFO.commit.startsWith(pending.commit) || pending.commit.startsWith(BUILD_INFO.commitShort)))) {
     clearPendingUpdateInstall();
     return { pendingInstallIdentity: null, lastInstallFailed: false, phase: 'idle', errorMessage: null };
   }
@@ -331,33 +298,6 @@ function createInitialStatus(): DesktopUpdateStatus {
     pendingInstallIdentity: pending.pendingInstallIdentity,
     lastInstallFailed: pending.lastInstallFailed,
   };
-}
-
-type FetchRequestInit = NonNullable<Parameters<typeof fetch>[1]>;
-
-function createRequestInit(timeoutMs = 5000, headers?: Record<string, string>): FetchRequestInit {
-  return {
-    headers,
-    signal: AbortSignal.timeout(timeoutMs),
-  };
-}
-
-async function fetchText(url: string, timeoutMs = 5000, headers?: Record<string, string>): Promise<string> {
-  const response = await fetch(url, createRequestInit(timeoutMs, headers));
-  if (!response.ok) {
-    throw new Error(`request_failed:${response.status}`);
-  }
-  return response.text();
-}
-
-async function fetchJson<T>(url: string, timeoutMs = 5000, headers?: Record<string, string>): Promise<T> {
-  const text = await fetchText(url, timeoutMs, headers);
-  return JSON.parse(text) as T;
-}
-
-function getOssManifestUrl(channel: UpdateChannel): string {
-  const baseUrl = normalizeUrl(process.env.TX5DR_DOWNLOAD_BASE_URL || DEFAULT_OSS_BASE_URL);
-  return joinUrl(baseUrl, `tx-5dr/app/${channel}/latest.json`);
 }
 
 function currentArch(): string {
@@ -472,39 +412,6 @@ function listDownloadOptions(manifest: DesktopUpdateManifest): DesktopDownloadOp
     .filter((asset): asset is DesktopDownloadOption => Boolean(asset));
 }
 
-function updateIdentityFromManifest(manifest: DesktopUpdateManifest): string | null {
-  const latestVersion = normalizeVersion(manifest.version);
-  const latestCommit = manifest.commit?.trim() || null;
-
-  if (BUILD_INFO.channel === 'nightly') {
-    return latestCommit || latestVersion || null;
-  }
-
-  return latestVersion || null;
-}
-
-function shouldUpdateFromManifest(manifest: DesktopUpdateManifest): boolean {
-  const latestVersion = normalizeVersion(manifest.version);
-  const currentVersion = normalizeVersion(BUILD_INFO.version);
-  const latestCommit = manifest.commit?.trim() || null;
-  const currentCommit = BUILD_INFO.commit === 'development' ? null : BUILD_INFO.commitShort;
-
-  if (BUILD_INFO.channel === 'nightly') {
-    if (latestCommit && currentCommit) {
-      return latestCommit !== currentCommit;
-    }
-    if (!latestVersion) {
-      return false;
-    }
-    return latestVersion !== currentVersion;
-  }
-
-  if (!latestVersion) {
-    return false;
-  }
-  return compareReleaseVersions(latestVersion, currentVersion) > 0;
-}
-
 function normalizeRecentCommits(manifest: DesktopUpdateManifest): DesktopUpdateRecentCommit[] {
   const entries = Array.isArray(manifest.recent_commits) ? manifest.recent_commits : [];
   const normalized = entries
@@ -554,7 +461,7 @@ function currentInstallerFamily(): InstallerFamily {
   }
   if (process.platform === 'win32') {
     if (process.env.TX5DR_INSTALLER_FAMILY === 'nsis') return 'nsis';
-    return fs.existsSync(path.join(process.resourcesPath || '', 'app-update.yml')) ? 'nsis' : 'unknown';
+    return fs.existsSync(path.join(path.dirname(app.getPath('exe')), 'Uninstall TX-5DR.exe')) ? 'nsis' : 'manual';
   }
   return 'unknown';
 }
@@ -683,8 +590,17 @@ export class DesktopUpdateService {
   private readonly onQuitAndInstallError?: () => void;
   private readonly onStatus?: (status: DesktopUpdateStatus) => void;
   private eventHandlersConfigured = false;
+  private generation = 0;
+  private changingChannel = false;
+  private downloadToken: CancellationToken | null = null;
+  private downloadTask: Promise<string[]> | null = null;
+  private readonly saveChannel?: (channel: UpdateChannel) => void;
 
   constructor(options: DesktopUpdateServiceOptions = {}) {
+    this.status.targetChannel = options.getChannel?.() ?? BUILD_INFO.channel;
+    this.status.currentChannel = BUILD_INFO.channel;
+    this.status.channelEditable = true;
+    this.saveChannel = options.saveChannel;
     this.prepareInstall = options.prepareInstall;
     this.beforeQuitAndInstall = options.beforeQuitAndInstall;
     this.onQuitAndInstallError = options.onQuitAndInstallError;
@@ -692,8 +608,24 @@ export class DesktopUpdateService {
     this.configureUpdater();
   }
 
+  async setChannel(input: unknown): Promise<DesktopUpdateStatus> {
+    const { channel } = UpdatePreferencesSchema.parse(input);
+    if (this.status.phase === 'installing' || this.changingChannel) throw new Error('update_busy');
+    this.changingChannel = true;
+    ++this.generation;
+    try {
+      this.downloadToken?.cancel();
+      await this.downloadTask?.catch(() => undefined);
+      this.saveChannel?.(channel);
+      this.preparedAutoUpdate = null;
+      this.setStatus({ ...createInitialStatus(), currentChannel: BUILD_INFO.channel, targetChannel: channel, channelEditable: true });
+    } finally { this.changingChannel = false; }
+    return this.checkForUpdates();
+  }
+
   getStatus(): DesktopUpdateStatus {
     this.refreshPendingInstallState();
+    SystemUpdateStatusSchema.parse(this.status);
     return {
       ...this.status,
       recentCommits: [...this.status.recentCommits],
@@ -715,6 +647,7 @@ export class DesktopUpdateService {
   }
 
   private refreshPendingInstallState(): void {
+    if (this.status.phase === 'installing') return;
     const pendingState = getInitialPendingState();
     const pendingChanged = pendingState.pendingInstallIdentity !== this.status.pendingInstallIdentity
       || pendingState.lastInstallFailed !== this.status.lastInstallFailed;
@@ -737,18 +670,22 @@ export class DesktopUpdateService {
     this.updater.logger = logger;
 
     this.updater.on('checking-for-update', () => {
+      if (this.changingChannel) return;
       this.setStatus({ checking: true, phase: 'checking', errorMessage: null });
     });
 
     this.updater.on('update-available', () => {
+      if (this.changingChannel) return;
       this.setStatus({ checking: false, phase: 'available', errorMessage: null });
     });
 
     this.updater.on('update-not-available', () => {
+      if (this.changingChannel) return;
       this.setStatus({ checking: false, phase: this.status.updateAvailable ? 'unsupported' : 'idle' });
     });
 
     this.updater.on('download-progress', (progress) => {
+      if (this.changingChannel) return;
       this.setStatus({
         phase: 'downloading',
         downloadProgress: toProgressInfo(progress),
@@ -757,6 +694,7 @@ export class DesktopUpdateService {
     });
 
     this.updater.on('update-downloaded', () => {
+      if (this.changingChannel) return;
       this.setStatus({
         phase: 'downloaded',
         downloaded: true,
@@ -766,6 +704,7 @@ export class DesktopUpdateService {
     });
 
     this.updater.on('error', (error) => {
+      if (this.changingChannel) return;
       const message = error instanceof Error ? error.message : String(error);
       logger.error('electron updater failed', error);
       this.setStatus({
@@ -778,6 +717,9 @@ export class DesktopUpdateService {
   }
 
   async checkForUpdates(): Promise<DesktopUpdateStatus> {
+    if (this.changingChannel || this.downloadTask || ['downloading', 'downloaded', 'installing'].includes(this.status.phase)) return this.getStatus();
+    const generation = ++this.generation;
+    const channel = this.status.targetChannel ?? BUILD_INFO.channel;
     this.preparedAutoUpdate = null;
     this.setStatus({
       checking: true,
@@ -788,18 +730,29 @@ export class DesktopUpdateService {
     });
 
     try {
-      const manifest = await fetchJson<DesktopUpdateManifest>(getOssManifestUrl(BUILD_INFO.channel), 8000);
+      const { manifest, source } = await fetchChannelManifest('app', channel, process.env.TX5DR_DOWNLOAD_BASE_URL || 'https://dl.tx5dr.com');
+      if (generation !== this.generation) return this.getStatus();
+      let stableAvailable = false;
+      if (BUILD_INFO.channel === 'nightly' && channel === 'nightly') {
+        try { await fetchChannelManifest('app', 'release', process.env.TX5DR_DOWNLOAD_BASE_URL || 'https://dl.tx5dr.com'); stableAvailable = true; } catch { /* Optional migration discovery. */ }
+        if (generation !== this.generation) return this.getStatus();
+      }
       const downloadOptions = listDownloadOptions(manifest);
       const recentCommits = normalizeRecentCommits(manifest);
       const downloadAsset = downloadOptions[0] || null;
-      const updateAvailable = shouldUpdateFromManifest(manifest);
-      const identity = updateIdentityFromManifest(manifest);
+      const operation = updateOperation({ channel: BUILD_INFO.channel, version: BUILD_INFO.version, commit: BUILD_INFO.commit }, manifest);
+      const updateAvailable = operation !== 'none';
+      const identity = releaseIdentity(manifest);
       const prepared = updateAvailable ? resolvePreparedAutoUpdate(manifest) : { update: null, reason: null };
       this.preparedAutoUpdate = prepared.update;
       const pendingState = getInitialPendingState();
 
       this.setStatus({
+        stableAvailable,
         channel: BUILD_INFO.channel,
+        currentChannel: BUILD_INFO.channel, targetChannel: channel, operation,
+        availability: updateAvailable ? 'available' : 'up-to-date',
+        compatibilityWarnings: operation === 'downgrade' ? ['downgrade_data_compatibility'] : [],
         currentVersion: BUILD_INFO.version,
         currentCommit: BUILD_INFO.commit === 'development' ? null : BUILD_INFO.commitShort,
         currentPublishedAt: BUILD_INFO.buildTimestamp === 'development' ? null : BUILD_INFO.buildTimestamp,
@@ -813,13 +766,13 @@ export class DesktopUpdateService {
         releaseNotes: manifest.release_notes || null,
         downloadUrl: prepared.update?.downloadUrl || downloadAsset?.url || null,
         downloadOptions,
-        metadataSource: 'oss',
+        metadataSource: source,
         downloadSource: prepared.update?.source || downloadAsset?.source || null,
         errorMessage: pendingState.errorMessage,
         target: 'electron-app',
         distribution: 'electron',
         identity,
-        websiteUrl: WEBSITE_URL,
+        websiteUrl: `${WEBSITE_URL}/?channel=${channel}#downloads`,
         phase: updateAvailable ? (prepared.update ? 'available' : 'unsupported') : pendingState.phase,
         autoUpdateSupported: Boolean(prepared.update),
         autoUpdateTarget: prepared.update?.target || null,
@@ -831,12 +784,9 @@ export class DesktopUpdateService {
         lastInstallFailed: pendingState.lastInstallFailed,
       });
 
-      if (this.preparedAutoUpdate) {
-        await this.prepareElectronUpdater(this.preparedAutoUpdate);
-      }
 
       logger.info('desktop update status refreshed', {
-        metadataSource: 'oss',
+        metadataSource: source,
         downloadSource: this.status.downloadSource,
         updateAvailable,
         autoUpdateSupported: this.status.autoUpdateSupported,
@@ -846,6 +796,7 @@ export class DesktopUpdateService {
       });
       return this.getStatus();
     } catch (error) {
+      if (generation !== this.generation) return this.getStatus();
       const message = error instanceof Error ? error.message : String(error);
       const pendingState = getInitialPendingState();
       if (pendingState.lastInstallFailed) {
@@ -862,8 +813,10 @@ export class DesktopUpdateService {
       }
       this.setStatus({
         checking: false,
-        phase: 'error',
-        errorMessage: message,
+        phase: error instanceof EmptyReleaseChannelError ? 'idle' : 'error',
+        availability: error instanceof EmptyReleaseChannelError ? 'empty' : 'error',
+        updateAvailable: false, latestVersion: null, identity: null, downloadOptions: [], downloadUrl: null,
+        errorMessage: error instanceof EmptyReleaseChannelError ? null : message,
       });
       logger.error('desktop update check failed', error);
       return this.getStatus();
@@ -888,11 +841,15 @@ export class DesktopUpdateService {
     return result;
   }
 
-  async download(): Promise<DesktopUpdateStatus> {
+  async download(input: unknown): Promise<DesktopUpdateStatus> {
+    const request = UpdateInstallRequestSchema.parse(input);
+    if (this.changingChannel || this.status.phase === 'installing') throw new Error('update_busy');
+    if (request.identity !== this.status.identity) throw new Error('update_target_changed');
+    if (this.status.operation === 'downgrade' && !request.allowDowngrade) throw new Error('update_downgrade_confirmation_required');
     if (this.status.phase === 'downloaded' || this.status.downloaded) {
       return this.getStatus();
     }
-    if (this.status.phase === 'downloading') {
+    if (this.downloadTask || this.status.phase === 'downloading') {
       return this.getStatus();
     }
     if (!this.status.updateAvailable) {
@@ -902,22 +859,57 @@ export class DesktopUpdateService {
       throw new Error(this.status.autoUpdateReason || 'auto_update_unsupported');
     }
 
+    this.updater.allowPrerelease = this.status.targetChannel === 'nightly';
+    this.updater.allowDowngrade = this.status.targetChannel !== BUILD_INFO.channel && request.allowDowngrade;
+    this.downloadToken = new CancellationToken();
+    const token = this.downloadToken;
     this.setStatus({ phase: 'downloading', errorMessage: null, downloadProgress: null });
+    const prepared = this.preparedAutoUpdate;
+    this.downloadTask = (async () => {
+      const result = await this.prepareElectronUpdater(prepared);
+      if (token.cancelled) throw new Error('update_cancelled');
+      if (!result?.isUpdateAvailable) throw new Error('auto_update_semver_not_newer');
+      this.setStatus({ phase: 'downloading' });
+      try { return await this.updater.downloadUpdate(token); }
+      catch (error) {
+        if (token.cancelled) throw error;
+        const alternate = prepared.asset.url_github || prepared.asset.url_global;
+        if (!alternate || alternate === prepared.downloadUrl || !alternate.startsWith('https://')) throw error;
+        const fallback = { ...prepared, source: 'github' as const, downloadUrl: alternate,
+          updateInfo: { ...prepared.updateInfo, files: prepared.updateInfo.files.map(file => ({ ...file,
+            url: new URL(new URL(file.url).pathname.split('/').pop()!, alternate).href,
+          })) },
+        };
+        // The same confirmed bytes and hashes are downloaded from the independent mirror.
+        await this.prepareElectronUpdater(fallback);
+        if (token.cancelled) throw new Error('update_cancelled');
+        this.preparedAutoUpdate = fallback;
+        this.setStatus({ phase: 'downloading', downloadSource: 'github', downloadUrl: alternate, errorMessage: null });
+        return this.updater.downloadUpdate(token);
+      }
+    })();
     try {
-      await this.updater.downloadUpdate();
+      await this.downloadTask;
       return this.getStatus();
     } catch (error) {
+      if (this.changingChannel) return this.getStatus();
       const message = error instanceof Error ? error.message : String(error);
-      this.setStatus({
+      if (!this.changingChannel) this.setStatus({
         phase: 'available',
         errorMessage: message,
         downloaded: false,
       });
       throw error;
+    } finally {
+      this.downloadTask = null;
+      this.downloadToken = null;
     }
   }
 
-  async installAndRestart(): Promise<DesktopUpdateStatus> {
+  async installAndRestart(input: unknown): Promise<DesktopUpdateStatus> {
+    const request = UpdateInstallRequestSchema.parse(input);
+    if (this.changingChannel || request.identity !== this.status.identity) throw new Error('update_target_changed');
+    if (this.status.operation === 'downgrade' && !request.allowDowngrade) throw new Error('update_downgrade_confirmation_required');
     if (!this.status.downloaded && this.status.phase !== 'downloaded') {
       throw new Error('update_not_downloaded');
     }

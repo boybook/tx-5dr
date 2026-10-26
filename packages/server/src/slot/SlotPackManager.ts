@@ -15,6 +15,7 @@ const EMPTY_SLOT_PACK_RETENTION_LIMIT = 4;
 
 export interface SlotPackManagerEvents {
   'slotPackUpdated': (slotPack: SlotPack) => void;
+  'slotPackReviewUpdated': (slotPack: SlotPack) => void;
   /**
    * 仅在 RX 解码结果写入（processDecodeResult）时触发，不在 TX echo
    * (addTransmissionFrame) 写入时触发。晚到解码重决策应订阅此事件，避免把
@@ -53,6 +54,8 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
   private decodeWindowCompletions = new Map<string, DecodeWindowCompletionState>();
   /** 上一次 clearInMemory() 的时间戳，用于过滤过时的解码结果 */
   private lastClearTimestamp = 0;
+  /** 本实例开始接收时隙包的时间，早于它的帧只可能存在于持久化日志中 */
+  private readonly createdAt = Date.now();
 
   constructor(options: SlotPackManagerOptions = {}) {
     super();
@@ -69,6 +72,16 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     this.decodeWindowCompletions.clear();
     this.lastSlotPack = null;
     this.lastClearTimestamp = Date.now();
+  }
+
+  /**
+   * Earliest timestamp for which this in-memory cache is complete. Frames from
+   * before it (a previous process or a cleared frequency) may still exist only
+   * in the persisted daily log, so callers must not treat the cache as a full
+   * history before this point.
+   */
+  getRetainedSinceMs(): number {
+    return Math.max(this.createdAt, this.lastClearTimestamp);
   }
 
   /**
@@ -334,8 +347,10 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
 
     const snapshot = this.snapshotSlotPack(slotPack);
 
+    const alreadyFinal = this.decodeWindowCompletions.get(slotId)?.persistedFinal === true;
     this.markDecodeWindowCompleted(slotId, result.windowIdx, true);
     this.persistFinalDecodeBatchIfComplete(slotId);
+    if (alreadyFinal) this.emit('slotPackReviewUpdated', snapshot);
 
     // 发出通用更新事件（给前端/PSKReporter/callsignTracker 等消费者）
     this.emit('slotPackUpdated', snapshot);
@@ -404,6 +419,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
 
     state.persistedFinal = true;
     const snapshot = this.snapshotSlotPack(slotPack);
+    this.emit('slotPackReviewUpdated', snapshot);
 
     if (this.persistenceEnabled) {
       this.persistence.store(snapshot, 'updated', this.currentMode.name).catch(error => {

@@ -64,6 +64,7 @@ export const clublogSyncPlugin = definePlugin({
       },
       {
         id: 'upload-wizard',
+        dialogSize: '3xl',
         title: 'Club Log Upload',
         entry: 'upload-wizard.html',
         accessScope: 'operator',
