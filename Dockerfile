@@ -65,6 +65,9 @@ COPY --parents \
     packages/client-tools/package.json \
     packages/contracts/package.json \
     packages/core/package.json \
+    packages/create-tx5dr-plugin/package.json \
+    packages/electron-main/package.json \
+    packages/electron-preload/package.json \
     packages/plugin-api/package.json \
     packages/rigctld-server/package.json \
     packages/server/package.json \
@@ -109,7 +112,8 @@ RUN node scripts/check-version-consistency.mjs && \
 
 # 构建应用
 RUN echo "Building application for $(uname -m)..." && \
-    TX5DR_CLUBLOG_API_KEY="$TX5DR_CLUBLOG_API_KEY" yarn build
+    TX5DR_CLUBLOG_API_KEY="$TX5DR_CLUBLOG_API_KEY" yarn exec turbo run build \
+    --filter=@tx5dr/server --filter=@tx5dr/web --filter=@tx5dr/client-tools
 
 # 运行时镜像
 FROM node:22-trixie-slim
@@ -158,6 +162,7 @@ WORKDIR /app
 COPY --from=builder --parents \
     --exclude=packages/*/src \
     --exclude=packages/*/test \
+    --exclude=packages/*/node_modules \
     /app/./packages \
     /app/./resources/models \
     /app/./resources/licenses \
@@ -168,6 +173,7 @@ COPY --from=builder --parents \
     ./
 COPY --from=build-production --parents \
     /app/./node_modules \
+    /app/./packages \
     ./
 RUN test -f resources/models/deepcw/model.onnx \
     && test -f resources/models/deepcw/model.onnx.json
