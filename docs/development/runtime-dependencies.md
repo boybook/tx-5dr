@@ -35,10 +35,10 @@ or obsolete dependency repair scripts.
 
 Packaged startup checks must use an environment meeting the distributed native
 libraries' requirements (currently GLIBC 2.38 and GLIBCXX 3.4.32). Linux build
-runners use Ubuntu 24.04; Android PRoot and Docker use Debian 13. The existing
-Debian installer performs runtime-library preparation before starting the app.
-Testing an unpacked artifact on an older, unprepared runner is not equivalent
-to testing that installation flow. Windows audify retains its source-build
+runners use Ubuntu 24.04; Android PRoot and Docker use Debian 13. Linux hosts
+must meet these runtime-library requirements before starting the app. The
+installer does not add a newer Debian repository to upgrade system libraries
+across distribution versions. Windows audify retains its source-build
 policy for the existing WASAPI patch.
 
 The Windows audify patch releases the WASAPI device enumerator before COM

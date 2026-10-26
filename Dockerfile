@@ -59,7 +59,8 @@ COPY .yarn/patches/ ./.yarn/patches/
 # 复制scripts目录（postinstall脚本需要）
 COPY scripts ./scripts/
 
-# 创建packages目录结构并复制package.json文件
+# Keep the complete workspace manifests for the immutable lockfile check.
+# Desktop and scaffold workspaces are not build targets or runtime contents.
 COPY --parents \
     packages/builtin-plugins/package.json \
     packages/client-tools/package.json \
@@ -95,7 +96,7 @@ RUN echo "Removing development dependencies ..." && \
 FROM builder-base AS builder
 
 # 复制源代码
-COPY --exclude=packages/electron-main --exclude=packages/electron-preload . .
+COPY --exclude=packages/electron-main --exclude=packages/electron-preload --exclude=packages/create-tx5dr-plugin . .
 COPY --parents packages/electron-main/assets/AppIcon.* .
 
 # 生成ICO文件（如果需要）
@@ -160,6 +161,9 @@ WORKDIR /app
 
 # 从构建阶段复制构建产物和必要文件
 COPY --from=builder --parents \
+    --exclude=packages/electron-main \
+    --exclude=packages/electron-preload \
+    --exclude=packages/create-tx5dr-plugin \
     --exclude=packages/*/src \
     --exclude=packages/*/test \
     --exclude=packages/*/node_modules \
@@ -173,7 +177,6 @@ COPY --from=builder --parents \
     ./
 COPY --from=build-production --parents \
     /app/./node_modules \
-    /app/./packages \
     ./
 RUN test -f resources/models/deepcw/model.onnx \
     && test -f resources/models/deepcw/model.onnx.json
