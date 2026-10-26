@@ -31,7 +31,11 @@ export class PttHardware {
 
   async set(enabled: boolean): Promise<void> {
     if (!this.port) return;
-    const signal = { [this.method]: enabled } as { dtr?: boolean; rts?: boolean };
+    // SerialPort defaults omitted control lines to high on every set().
+    const signal = {
+      dtr: this.method === 'dtr' && enabled,
+      rts: this.method === 'rts' && enabled,
+    };
     await new Promise<void>((resolve, reject) => this.port!.set(signal, error => error ? reject(error) : resolve()));
     this.active = enabled;
   }
