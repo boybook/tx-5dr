@@ -115,7 +115,7 @@ export function buildAudioDeviceSelectOptions(
       : null;
     const displayName = selectedName || resolvedOptionDevice?.name || selectedRouteKey || '';
     options.push({
-      key: makeAudioDeviceSelectKey(direction, selectedRouteKey ?? displayName),
+      key: makeAudioDeviceSelectKey(direction, selectedRouteKey || displayName),
       deviceName: displayName,
       routeKey: selectedRouteKey,
       device: resolvedOptionDevice,
@@ -139,7 +139,7 @@ export function getSelectedAudioDeviceKey(
   routeKey?: string,
 ): string {
   return deviceName || routeKey
-    ? makeAudioDeviceSelectKey(direction, routeKey ?? deviceName)
+    ? makeAudioDeviceSelectKey(direction, routeKey || deviceName)
     : '';
 }
 
@@ -156,13 +156,20 @@ export function findSelectedAudioDeviceOption(
     return options.find((option) => option.routeKey === selection.routeKey);
   }
   if (selection.hardwareId) {
-    return options.find((option) => option.device?.hardwareId === selection.hardwareId);
+    const byHardwareId = options.find((option) => option.device?.hardwareId === selection.hardwareId);
+    if (byHardwareId) return byHardwareId;
   }
   if (selection.deviceId) {
-    return options.find((option) => option.device?.id === selection.deviceId);
+    const byId = options.find((option) => option.device?.id === selection.deviceId);
+    // Numeric IDs can be reassigned after device re-enumeration.
+    if (byId && (!selection.deviceName || byId.deviceName === selection.deviceName)) {
+      return byId;
+    }
   }
   if (selection.deviceName) {
-    return options.find((option) => option.deviceName === selection.deviceName);
+    const byName = options.filter((option) => option.deviceName === selection.deviceName);
+    // Without a matching identity, never guess between same-named endpoints.
+    if (byName.length === 1) return byName[0];
   }
   return undefined;
 }
@@ -499,10 +506,15 @@ export const AudioDeviceSettings = forwardRef<AudioDeviceSettingsRef, AudioDevic
       return null;
     }
     return (resolutionMatchesSelection ? resolution?.effectiveDevice : undefined)
-      ?? (selectedRouteKey ? devices.find((device) => device.routeKey === selectedRouteKey) : undefined)
-      ?? (selectedHardwareId ? devices.find((device) => device.hardwareId === selectedHardwareId) : undefined)
-      ?? (selectedDeviceId ? devices.find((device) => device.id === selectedDeviceId) : undefined)
-      ?? devices.find((device) => device.name === selectedName)
+      ?? findSelectedAudioDeviceOption(
+        buildAudioDeviceSelectOptions(direction, devices, selectedName, undefined, selectedRouteKey),
+        {
+          routeKey: selectedRouteKey,
+          hardwareId: selectedHardwareId,
+          deviceId: selectedDeviceId,
+          deviceName: selectedName,
+        },
+      )?.device
       ?? null;
   }
 
