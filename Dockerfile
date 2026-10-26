@@ -203,7 +203,7 @@ RUN --mount=dst=/tmp/ctx,source=. \
 # 创建数据目录并设置权限
 RUN mkdir -p /app/data/config /app/data/plugins /app/data/logs /app/data/cache /app/data/realtime && \
     chown -R www-data:www-data /app/data && \
-    chmod -R 755 /app/data
+    chmod -R u+rwX,go+rX,go-w /app/data
 
 # 暴露端口
 EXPOSE 80
