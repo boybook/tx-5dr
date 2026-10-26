@@ -14,16 +14,24 @@ source "$LIB_DIR/checks.sh"
 
 MODE="install"
 DEB_FILE=""
-for arg in "$@"; do
-    case "$arg" in
+TX5DR_UPDATE_CHANNEL="${TX5DR_UPDATE_CHANNEL:-nightly}"
+TX5DR_UPDATE_VERSION="${TX5DR_UPDATE_VERSION:-}"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --channel) TX5DR_UPDATE_CHANNEL="${2:?Missing channel}"; shift ;;
+        --version) TX5DR_UPDATE_VERSION="${2:?Missing version}"; shift ;;
         --check-only) MODE="check" ;;
         --docker) MODE="docker" ;;
-        --no-live""kit|--with-live""kit)
-            log_warn "This option has been removed; realtime voice now uses rtc-data-audio with ws-compat fallback."
-            ;;
-        *.deb|*.rpm) DEB_FILE="$arg" ;;
+        *.deb|*.rpm) DEB_FILE="$1" ;;
+        *) log_error "Unknown option: $1"; exit 1 ;;
     esac
+    shift
 done
+case "$TX5DR_UPDATE_CHANNEL" in release|nightly) ;; *) log_error "Invalid channel"; exit 1 ;; esac
+if [[ -n "$TX5DR_UPDATE_VERSION" ]] && ! [[ "$TX5DR_UPDATE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][a-zA-Z0-9.+-]+)?$ ]]; then
+    log_error "Invalid version"; exit 1
+fi
+export TX5DR_UPDATE_CHANNEL TX5DR_UPDATE_VERSION
 
 detect_os
 load_config

@@ -1,0 +1,33 @@
+/* Opt-in iframe controls. Theme values are supplied by the Host tokens. */
+.tx5dr-button { display:inline-flex; align-items:center; justify-content:center; gap:var(--tx5dr-spacing-sm); min-height:var(--tx5dr-control-height-sm); padding:6px var(--tx5dr-control-padding-x-sm); border:1px solid var(--tx5dr-control-border); border-radius:var(--tx5dr-radius-sm); background:var(--tx5dr-control-bg); color:var(--tx5dr-control-text); font:inherit; font-weight:var(--tx5dr-control-font-weight); cursor:pointer; transition:background var(--tx5dr-control-transition); }
+.tx5dr-button:hover:not(:disabled) { background:var(--tx5dr-control-bg-hover); }
+.tx5dr-button--primary { background:var(--tx5dr-primary); color:var(--tx5dr-primary-foreground); border-color:transparent; }
+.tx5dr-button--primary:hover:not(:disabled) { background:var(--tx5dr-primary-hover); }
+.tx5dr-button--quiet { border-color:transparent; background:transparent; }
+.tx5dr-button:disabled,.tx5dr-input:disabled,.tx5dr-switch:disabled { opacity:var(--tx5dr-control-disabled-opacity); cursor:not-allowed; }
+.tx5dr-button:focus-visible,.tx5dr-input:focus-visible,.tx5dr-switch:focus-visible { outline:2px solid var(--tx5dr-focus-ring); outline-offset:2px; }
+.tx5dr-field { margin-block-end:var(--tx5dr-spacing-md); }
+.tx5dr-label { display:block; margin-block-end:var(--tx5dr-spacing-xs); color:var(--tx5dr-text-secondary); font-size:var(--tx5dr-font-size-sm); }
+.tx5dr-input { width:100%; min-height:var(--tx5dr-control-height-sm); padding:8px 12px; background:var(--tx5dr-control-bg); color:var(--tx5dr-text); border:1px solid var(--tx5dr-border); border-radius:var(--tx5dr-radius-sm); font:inherit; box-sizing:border-box; color-scheme:inherit; }
+.tx5dr-input[type=password] { font-family:var(--tx5dr-font-mono); }
+.tx5dr-actions { display:flex; align-items:center; flex-wrap:wrap; gap:var(--tx5dr-spacing-sm); margin-block-start:var(--tx5dr-spacing-md); }
+.tx5dr-heading { font-size:var(--tx5dr-font-size-lg); font-weight:600; margin-block-end:var(--tx5dr-spacing-md); }
+.tx5dr-divider { border:0; border-block-start:1px solid var(--tx5dr-border); margin-block:var(--tx5dr-spacing-lg); }
+.tx5dr-muted { color:var(--tx5dr-text-secondary); font-size:var(--tx5dr-font-size-sm); }
+.tx5dr-chip { display:inline-flex; align-items:center; min-height:var(--tx5dr-chip-height); padding:2px var(--tx5dr-chip-padding-x); border-radius:var(--tx5dr-radius-full); font-size:var(--tx5dr-chip-font-size); }
+.tx5dr-chip--success { background:var(--tx5dr-success-soft); color:var(--tx5dr-success); }
+.tx5dr-chip--danger { background:var(--tx5dr-danger-soft); color:var(--tx5dr-danger); }
+.tx5dr-feedback { padding:var(--tx5dr-alert-padding); background:var(--tx5dr-bg-content); border-radius:var(--tx5dr-radius-sm); overflow-wrap:anywhere; }
+.tx5dr-feedback--danger { color:var(--tx5dr-danger); }
+.tx5dr-progress { display:block; width:100%; height:6px; border:0; border-radius:var(--tx5dr-radius-full); overflow:hidden; appearance:none; background:var(--tx5dr-bg-hover); accent-color:var(--tx5dr-primary); }
+.tx5dr-progress::-webkit-progress-bar { background:var(--tx5dr-bg-hover); }
+.tx5dr-progress::-webkit-progress-value { background:var(--tx5dr-primary); }
+.tx5dr-progress::-moz-progress-bar { background:var(--tx5dr-primary); }
+.tx5dr-spinner { display:inline-block; width:16px; height:16px; border:2px solid var(--tx5dr-border); border-top-color:currentColor; border-radius:50%; animation:tx5dr-spin .8s linear infinite; }
+.tx5dr-switch { appearance:none; width:40px; height:24px; border:0; border-radius:var(--tx5dr-radius-full); background:var(--tx5dr-bg-hover); cursor:pointer; position:relative; flex-shrink:0; }
+.tx5dr-switch::after { content:''; position:absolute; inset:3px auto 3px 3px; width:18px; border-radius:50%; background:var(--tx5dr-primary-foreground); }
+.tx5dr-switch:checked { background:var(--tx5dr-primary); }
+.tx5dr-switch:checked::after { transform:translateX(16px); }
+@keyframes tx5dr-spin { to { transform:rotate(360deg); } }
+@media(pointer:coarse) { .tx5dr-button,.tx5dr-input { min-height:44px; } .tx5dr-input { font-size:16px; } .tx5dr-switch { margin-block:10px; } }
+@media(prefers-reduced-motion:reduce) { .tx5dr-spinner { animation:none; } .tx5dr-button { transition:none; } }

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { RuntimePluginContext } from '@tx5dr/plugin-api';
 import { PluginInvocationGuard } from '../PluginInvocationGuard.js';
-import { PluginDataBoundaryError } from '../plugin-data-boundary.js';
+import { markDetachedPluginData, snapshotPluginData, PluginDataBoundaryError } from '../plugin-data-boundary.js';
 import type { PluginInstance } from '../types.js';
 
 function createInstance(context: RuntimePluginContext): PluginInstance {
@@ -137,6 +137,20 @@ describe('PluginInvocationGuard', () => {
     expect(rawStore.get).toBe(rawGet);
   });
 
+  it('does not clone an already validated detached snapshot twice', async () => {
+    const stored = { revision: 'r1', records: [{ id: 'one' }] };
+    const raw = { logbook: { readQsoSnapshot: async () => markDetachedPluginData(snapshotPluginData(stored, 'structured')) } } as unknown as RuntimePluginContext;
+    const instance = createInstance(raw); const guard = new PluginInvocationGuard();
+    const ctx = guard.wrapContext(raw, instance);
+    const clone = vi.spyOn(globalThis, 'structuredClone');
+    try {
+      await guard.invoke(instance, 'snapshot', async () => {
+        const snapshot = await (ctx.logbook as { readQsoSnapshot(): Promise<typeof stored> }).readQsoSnapshot();
+        expect(snapshot).toEqual(stored); expect(snapshot).not.toBe(stored);
+        expect(clone).toHaveBeenCalledTimes(1);
+      });
+    } finally { clone.mockRestore(); }
+  });
   it('detaches ordinary data returned by a guarded host capability', async () => {
     const stored = { nested: { value: 1 } };
     const raw = {

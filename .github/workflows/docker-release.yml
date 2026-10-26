@@ -1,295 +1,92 @@
-name: Build and Release Docker Image
-
+name: Build Docker candidate
 on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
+  workflow_call:
     inputs:
-      tag:
-        description: 'Docker image tag (leave empty for auto-generated)'
-        required: false
+      version:
+        type: string
         default: ''
-
-permissions:
-  contents: write
-
-env:
-  DOCKER_IMAGE_NAME: tx-5dr
-  PLATFORMS: linux/amd64,linux/arm64
-
+      source_ref:
+        type: string
+        required: true
+      verify_only:
+        type: boolean
+        default: false
 jobs:
-  build-and-push:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
-    env:
-      OSS_ACCESS_KEY_ID: ${{ secrets.ALIYUN_ACCESS_KEY_ID }}
-      OSS_ACCESS_KEY_SECRET: ${{ secrets.ALIYUN_ACCESS_KEY_SECRET }}
-      OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
-      OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
-      OSS_BASE_URL: ${{ secrets.OSS_BASE_URL }}
-      OSS_REGION: ${{ secrets.OSS_REGION }}
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
         with:
-          node-version: '22'
-
-      - name: Generate image tags
-        id: tags
+          ref: ${{ inputs.source_ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.15.1'
+      - id: identity
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          # Docker Hub 用户名从 secrets 获取
-          DOCKER_USERNAME="${{ secrets.DOCKER_HUB_USERNAME }}"
-
-          # 如果用户名未设置，使用默认值（仅用于显示，不会推送）
-          if [ -z "$DOCKER_USERNAME" ]; then
-            echo "⚠️ Warning: DOCKER_HUB_USERNAME not set"
-            DOCKER_USERNAME="your-dockerhub-username"
-          fi
-
-          # 生成标签
-          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          COMMIT_STAMP=$(git show -s --date=format-local:%Y%m%d%H%M --format=%cd "${{ github.sha }}")
-          HOST_VERSION=$(node scripts/host-version.mjs --channel nightly --build-stamp "$COMMIT_STAMP" --commit "${{ github.sha }}")
-
-          # 基础标签
-          TAGS="${DOCKER_USERNAME}/${DOCKER_IMAGE_NAME}:latest"
-          TAGS="${TAGS},${DOCKER_USERNAME}/${DOCKER_IMAGE_NAME}:${SHORT_SHA}"
-
-          # 如果是手动触发且指定了标签
-          if [ -n "${{ github.event.inputs.tag }}" ]; then
-            TAGS="${TAGS},${DOCKER_USERNAME}/${DOCKER_IMAGE_NAME}:${{ github.event.inputs.tag }}"
-          fi
-
-          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
-          echo "docker_username=${DOCKER_USERNAME}" >> $GITHUB_OUTPUT
-          echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
-          echo "host_version=${HOST_VERSION}" >> $GITHUB_OUTPUT
-          echo "build_stamp=${COMMIT_STAMP}" >> $GITHUB_OUTPUT
-
-          echo "📦 Generated tags:"
-          echo "${TAGS}" | tr ',' '\n'
-
-      - name: Generate release info
-        id: release_info
-        run: |
-          echo "timestamp=$(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: linux/amd64,linux/arm64
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        with:
-          driver-opts: |
-            image=moby/buildkit:latest
-            network=host
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
+          echo "stamp=$(TZ=UTC git show -s --date=format-local:%Y%m%d%H%M --format=%cd HEAD)" >> "$GITHUB_OUTPUT"
+          echo "date=$(git show -s --format=%cI HEAD)" >> "$GITHUB_OUTPUT"
+          echo "channel=$([ -n "$VERSION" ] && echo release || echo nightly)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: ${{ !inputs.verify_only }}
         with:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
-
-      - name: Build and push Docker image
-        id: docker_build
-        uses: docker/build-push-action@v5
+      - uses: docker/build-push-action@v6
+        id: build
         with:
           context: .
-          platforms: ${{ env.PLATFORMS }}
-          push: true
-          tags: ${{ steps.tags.outputs.tags }}
-          cache-from: type=registry,ref=${{ steps.tags.outputs.docker_username }}/${{ env.DOCKER_IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ steps.tags.outputs.docker_username }}/${{ env.DOCKER_IMAGE_NAME }}:buildcache,mode=max
+          platforms: linux/amd64,linux/arm64
+          push: ${{ !inputs.verify_only }}
+          tags: ${{ secrets.DOCKER_HUB_USERNAME || 'boybook' }}/tx-5dr:candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          cache-from: type=registry,ref=${{ secrets.DOCKER_HUB_USERNAME || 'boybook' }}/tx-5dr:buildcache
+          cache-to: ${{ !inputs.verify_only && format('type=registry,ref={0}/tx-5dr:buildcache,mode=max', secrets.DOCKER_HUB_USERNAME) || '' }}
           build-args: |
-            BUILD_DATE=${{ github.event.head_commit.timestamp }}
-            VCS_REF=${{ github.sha }}
-            BUILD_STAMP=${{ steps.tags.outputs.build_stamp }}
+            BUILD_DATE=${{ steps.identity.outputs.date }}
+            BUILD_STAMP=${{ steps.identity.outputs.stamp }}
+            VCS_REF=${{ inputs.source_ref }}
+            TX5DR_BUILD_CHANNEL=${{ steps.identity.outputs.channel }}
+            TX5DR_RELEASE_VERSION=${{ inputs.version }}
             TX5DR_CLUBLOG_API_KEY=${{ secrets.CLUBLOG_API_KEY }}
-          labels: |
-            org.opencontainers.image.title=${{ env.DOCKER_IMAGE_NAME }}
-            org.opencontainers.image.description=TX-5DR Digital Radio System
-            org.opencontainers.image.url=https://github.com/${{ github.repository }}
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.version=${{ steps.tags.outputs.host_version }}
-            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
-            org.opencontainers.image.revision=${{ github.sha }}
-
-      - name: Update Docker Hub description
-        uses: peter-evans/dockerhub-description@v3
-        continue-on-error: true
+      - name: Smoke both image architectures
+        if: ${{ !inputs.verify_only }}
+        env:
+          # The unique candidate tag points to the index created by this build.
+          # Some hosted Docker daemons reject `docker run` against a multi-arch
+          # index digest with "cannot overwrite digest" before the container
+          # starts, so smoke the exact candidate tag and record the immutable
+          # build digest separately below.
+          IMAGE: ${{ secrets.DOCKER_HUB_USERNAME }}/tx-5dr:candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          SOURCE_SHA: ${{ inputs.source_ref }}
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            container=$(docker run -d --platform "linux/$arch" "$IMAGE")
+            trap 'docker rm -f "$container" >/dev/null' EXIT
+            healthy=false
+            for attempt in $(seq 1 45); do
+              if docker exec "$container" node -e 'fetch("http://127.0.0.1:4000/api/hello").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))'; then healthy=true; break; fi
+              sleep 2
+            done
+            if [[ "$healthy" != true ]]; then docker logs "$container"; exit 1; fi
+            docker exec -e EXPECTED_SHA="$SOURCE_SHA" "$container" node -e 'const info=require("/app/packages/server/dist/generated/buildInfo.json"); if(info.commit!==process.env.EXPECTED_SHA) process.exit(1)'
+            docker stop -t 45 "$container"
+            docker rm "$container"
+            trap - EXIT
+          done
+      - name: Record immutable image identity
+        if: ${{ !inputs.verify_only }}
+        env:
+          IMAGE: ${{ secrets.DOCKER_HUB_USERNAME }}/tx-5dr
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p docker-artifact
+          node -e 'require("fs").writeFileSync("docker-artifact/docker.json", JSON.stringify({image:process.env.IMAGE,digest:process.env.DIGEST}))'
+      - uses: actions/upload-artifact@v4
+        if: ${{ !inputs.verify_only }}
         with:
-          username: ${{ secrets.DOCKER_HUB_USERNAME }}
-          password: ${{ secrets.DOCKER_HUB_TOKEN }}
-          repository: ${{ steps.tags.outputs.docker_username }}/${{ env.DOCKER_IMAGE_NAME }}
-          readme-filepath: ./docker/README.md
-
-      - name: Build summary
-        run: |
-          echo "## 🎉 Docker 镜像构建成功" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📦 镜像信息" >> $GITHUB_STEP_SUMMARY
-          echo "- **仓库**: \`${{ steps.tags.outputs.docker_username }}/${{ env.DOCKER_IMAGE_NAME }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **架构**: \`linux/amd64, linux/arm64\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **提交**: \`${{ steps.tags.outputs.short_sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🏷️ 标签" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.tags.outputs.tags }}" | tr ',' '\n' >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🚀 使用方法" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "# 拉取最新镜像" >> $GITHUB_STEP_SUMMARY
-          echo "docker pull ${{ steps.tags.outputs.docker_username }}/${{ env.DOCKER_IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "# 运行容器" >> $GITHUB_STEP_SUMMARY
-          echo "docker run -d -p 8076:80 --name tx-5dr ${{ steps.tags.outputs.docker_username }}/${{ env.DOCKER_IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "# 或使用 docker-compose" >> $GITHUB_STEP_SUMMARY
-          echo "docker-compose up -d" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🔗 链接" >> $GITHUB_STEP_SUMMARY
-          echo "- [Docker Hub]( https://hub.docker.com/r/${{ steps.tags.outputs.docker_username }}/${{ env.DOCKER_IMAGE_NAME }})" >> $GITHUB_STEP_SUMMARY
-          echo "- [GitHub Repository](https://github.com/${{ github.repository }})" >> $GITHUB_STEP_SUMMARY
-
-      - name: Create or Update Nightly Docker Release
-        uses: ncipollo/release-action@v1
-        with:
-          tag: nightly-docker
-          name: "Nightly Build — Docker Image"
-          body: |
-            ## TX-5DR Nightly Build — Docker Image Docker 镜像
-
-            **Built at** （构建时间）: ${{ steps.release_info.outputs.timestamp }}
-            **Commit**: [${{ steps.tags.outputs.short_sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
-            **Image Digest**: `${{ steps.docker_build.outputs.digest }}`
-
-            ---
-
-            ### 🚀 Quick Start 快速启动
-
-            ```bash
-            # Pull image / 拉取镜像
-            docker pull ${{ steps.tags.outputs.docker_username }}/${{ env.DOCKER_IMAGE_NAME }}:latest
-
-            # Run / 启动
-            docker run -d -p 8076:80 --name tx-5dr \
-              ${{ steps.tags.outputs.docker_username }}/${{ env.DOCKER_IMAGE_NAME }}:latest
-
-            # View admin token / 查看管理员令牌
-            docker exec tx-5dr cat /app/data/config/.admin-token
-            ```
-
-            ### 📋 Docker Compose
-
-            ```yaml
-            version: '3.8'
-            services:
-              tx5dr:
-                image: ${{ steps.tags.outputs.docker_username }}/${{ env.DOCKER_IMAGE_NAME }}:latest
-                container_name: tx5dr
-                restart: unless-stopped
-                ports:
-                  - "8076:80"
-                volumes:
-                  - ./data/config:/app/data/config
-                  - ./data/logs:/app/data/logs
-                  - /dev/snd:/dev/snd:rw      # Audio devices / 音频设备
-                devices:
-                  - /dev/bus/usb:/dev/bus/usb:rwm  # USB devices / USB 设备
-                group_add:
-                  - audio
-            ```
-
-            ### 🔧 Environment Variables 环境变量
-
-            | Variable 变量 | Default 默认值 | Description 说明 |
-            |---|---|---|
-            | `PORT` | `4000` | Backend API port (internal) / 后端 API 端口（内部） |
-            | `TX5DR_CONFIG_DIR` | `/app/data/config` | Config directory / 配置目录 |
-            | `TX5DR_LOGS_DIR` | `/app/data/logs` | Log directory / 日志目录 |
-
-            ### 🏷️ Image Tags 镜像标签
-            - `latest` — always points to newest build / 始终指向最新构建
-            - `${{ steps.tags.outputs.short_sha }}` — pinned to this commit / 锁定到此提交
-
-            ### 📦 Architectures 支持架构
-            - `linux/amd64` (x86_64)
-            - `linux/arm64` (aarch64)
-
-            ### 🔗 Links 链接
-            - [Docker Hub](https://hub.docker.com/r/${{ steps.tags.outputs.docker_username }}/${{ env.DOCKER_IMAGE_NAME }})
-            - [Desktop App / 桌面应用](https://github.com/${{ github.repository }}/releases/tag/nightly-app)
-            - [Linux Server / 服务器版](https://github.com/${{ github.repository }}/releases/tag/nightly-server)
-          allowUpdates: true
-          artifacts: ""
-          token: ${{ secrets.GITHUB_TOKEN }}
-          prerelease: true
-          makeLatest: false
-
-      - name: Install ossutil
-        if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
-        run: bash scripts/install-ossutil.sh
-
-      - name: Configure ossutil
-        if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
-        shell: bash
-        run: |
-          oss_region="${OSS_REGION:-}"
-          oss_endpoint_host="${OSS_ENDPOINT#https://}"
-          oss_endpoint_host="${oss_endpoint_host#http://}"
-          oss_endpoint_host="${oss_endpoint_host%%/*}"
-
-          if [ -z "${oss_region}" ]; then
-            if [[ "${oss_endpoint_host}" =~ oss-([a-z0-9-]+)\.aliyuncs\.com$ ]]; then
-              oss_region="${BASH_REMATCH[1]}"
-            fi
-          fi
-
-          if [ -z "${oss_region}" ]; then
-            echo "Failed to determine OSS region from OSS_ENDPOINT=${OSS_ENDPOINT}" >&2
-            echo "Please configure the OSS_REGION GitHub secret, for example: cn-hangzhou" >&2
-            exit 1
-          fi
-
-          echo "Using OSS endpoint: ${OSS_ENDPOINT}"
-          echo "Using OSS region: ${oss_region}"
-          cat > "${RUNNER_TEMP}/.ossutilconfig" <<EOF
-          [Credentials]
-          language = EN
-          endpoint = ${OSS_ENDPOINT}
-          region = ${oss_region}
-          accessKeyID = ${OSS_ACCESS_KEY_ID}
-          accessKeySecret = ${OSS_ACCESS_KEY_SECRET}
-          EOF
-
-      - name: Generate OSS docker manifest
-        if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
-        run: |
-          node scripts/generate-oss-manifest.mjs \
-            --product docker \
-            --channel nightly \
-            --tag "nightly-docker" \
-            --version "${{ steps.tags.outputs.host_version }}" \
-            --commit "${{ steps.tags.outputs.short_sha }}" \
-            --published-at "${{ steps.release_info.outputs.timestamp }}" \
-            --base-url "${OSS_BASE_URL}" \
-            --object-prefix "tx-5dr/docker/nightly-docker" \
-            --output "oss-metadata/docker/latest.json" \
-            --docker-image "${{ steps.tags.outputs.docker_username }}/${{ env.DOCKER_IMAGE_NAME }}" \
-            --docker-tags "${{ steps.tags.outputs.tags }}" \
-            --docker-digest "${{ steps.docker_build.outputs.digest }}"
-
-      - name: Upload docker metadata to OSS
-        if: env.OSS_ACCESS_KEY_ID != '' && env.OSS_ACCESS_KEY_SECRET != '' && env.OSS_BUCKET != '' && env.OSS_ENDPOINT != '' && env.OSS_BASE_URL != ''
-        run: |
-          ossutil cp "oss-metadata/docker/latest.json" "oss://${OSS_BUCKET}/tx-5dr/docker/nightly-docker/latest.json" --force -c "${RUNNER_TEMP}/.ossutilconfig"
-          ossutil cp "oss-metadata/docker/latest.json" "oss://${OSS_BUCKET}/tx-5dr/docker/latest.json" --force -c "${RUNNER_TEMP}/.ossutilconfig"
+          name: tx5dr-docker
+          path: docker-artifact/docker.json

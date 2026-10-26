@@ -52,6 +52,9 @@ import { getLogbookWebSocketUrl } from '../../utils/config';
 import { isElectron } from '../../utils/config';
 import { showErrorToast } from '../../utils/errorToast';
 import { SyncConfigModal } from './SyncConfigModal';
+import { createSyncPresentation } from './syncPresentation';
+import { addToast } from '@heroui/toast';
+import { useSyncProviderStatuses } from './useSyncProviderStatuses';
 import { PluginIframeHost } from '../plugins/PluginIframeHost';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
@@ -71,6 +74,8 @@ import {
   shouldOpenLogbookRecovery,
   type PersistentLogbookWriteFailure,
 } from './logbookRecoveryPolicy';
+
+const presentationIsActive = (state: string) => ['running', 'waiting', 'pausing'].includes(state);
 
 const logger = createLogger('LogbookViewer');
 
@@ -96,6 +101,7 @@ interface QSOFilters {
   endDate?: string;
   qslStatus?: 'none' | 'confirmed' | 'uploaded';
   dxccStatus?: 'deleted';
+  dxccNeedsReview?: true;
   qslFlow?: 'two_way_confirmed' | 'not_two_way_confirmed';
 }
 
@@ -548,6 +554,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     description?: string;
     icon?: 'download' | 'upload' | 'sync';
     pageId?: string;
+    pageParams?: Record<string, string>;
     operation?: 'upload' | 'download' | 'full_sync';
   }
   interface SyncProviderInfo {
@@ -557,6 +564,8 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     color?: string;
     settingsPageId: string;
     actions?: SyncAction[];
+    statusSupported?: boolean;
+    pageDialogSizes?: Record<string, 'md' | 'lg' | '3xl'>;
   }
   interface SyncPreflightIssue {
     code: string;
@@ -594,6 +603,18 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   const [syncConfigured, setSyncConfigured] = useState<Record<string, boolean>>({});
   const [syncingProviders, setSyncingProviders] = useState<Record<string, boolean>>({});
   const [syncMessages, setSyncMessages] = useState<Record<string, { type: 'success' | 'error'; text: string }>>({});
+  const syncStatus = useSyncProviderStatuses(operatorCallsign || '');
+  const syncPresentation = useMemo(() => createSyncPresentation(operatorCallsign || ''), [operatorCallsign]);
+  const [, refreshPresentation] = useState(0);
+  useEffect(() => {
+    if (syncStatus.unavailable) { syncPresentation.connectionLost(); return; }
+    if (!syncStatus.updatedAt) return;
+    for (const notice of syncPresentation.observe(syncStatus.providers)) {
+      const provider = syncProviders.find(item => item.id === notice.providerId);
+      addToast({ title: `${provider?.displayName ?? notice.providerId} · ${t(`sync.providerStatus.${notice.status.state}`)}`,
+        color: notice.status.state === 'completed' ? 'success' : 'warning', timeout: 5000 });
+    }
+  }, [syncStatus.providers, syncStatus.unavailable, syncStatus.updatedAt, syncPresentation, syncProviders, t]);
 
   // 同步配置
   const [isSyncConfigOpen, setIsSyncConfigOpen] = useState(false);
@@ -604,7 +625,28 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     pluginName: string;
     pageId: string;
     title: string;
+    params: Record<string, string>;
+    size: 'md' | 'lg' | '3xl';
   } | null>(null);
+  const openSyncPage = (provider: SyncProviderInfo, pageId: string, title: string, pageParams: Record<string, string> = {}) => {
+    const launchId = createPrefixedClientId('sync');
+    if (pageParams.intent === 'start' || pageParams.intent === 'resume') syncPresentation.launched(provider.id, launchId);
+    setActionModal({ pluginName: provider.pluginName, pageId, title, size: provider.pageDialogSizes?.[pageId] ?? 'lg',
+      params: { ...pageParams, launchId, callsign: operatorCallsign || '' } });
+  };
+  useEffect(() => { syncStatus.refresh(); }, [actionModal, isSyncConfigOpen, syncStatus.refresh]);
+  const actionBodyRef = useRef<HTMLDivElement>(null);
+  const closeSyncPage = React.useCallback(() => {
+    setActionModal(null);
+    void refreshLogbookDataRef.current();
+  }, []);
+  useEffect(() => {
+    const body = actionBodyRef.current;
+    if (!body || !actionModal) return;
+    body.addEventListener('plugin-request-close', closeSyncPage);
+    return () => body.removeEventListener('plugin-request-close', closeSyncPage);
+  }, [actionModal, closeSyncPage]);
+
 
   const refreshSyncProviders = async (callsign: string) => {
     try {
@@ -969,7 +1011,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   const isWorkedFilterActive = isAllFiltersCleared;
   const isConfirmedFilterActive = filters.qslFlow === 'two_way_confirmed';
   const isDeletedFilterActive = filters.dxccStatus === 'deleted';
-  const isReviewFilterActive = filters.qslFlow === 'not_two_way_confirmed';
+  const isReviewFilterActive = filters.dxccNeedsReview === true;
   const isDxccBandBucketActive = (key: string) => filters.band === key;
   const isDxccModeBucketActive = (key: string) => filters.mode === key;
 
@@ -1171,6 +1213,11 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                 size="sm"
                 ariaLabel={t('qso.callsignInfo', { callsign: qso.callsign })}
               />
+              {qso.dxccNeedsReview && (
+                <Chip size="sm" variant="flat" color="danger" className="h-4">
+                  {t('editQso.reviewBadge')}
+                </Chip>
+              )}
             </div>
             {(qso.dxccEntity || qso.dxccId) && (
               <div className="flex flex-wrap items-center gap-1 text-xs text-default-500">
@@ -1475,7 +1522,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
               </button>
               <button
                 type="button"
-                onClick={() => applyDxccPresetFilters({ qslFlow: 'not_two_way_confirmed' })}
+                onClick={() => applyDxccPresetFilters({ dxccNeedsReview: true })}
                 className={getMetricCardClassName(isReviewFilterActive)}
               >
                 <p className="text-[11px] uppercase tracking-[0.18em] text-slate-300/70">{t('stats.dxccReview')}</p>
@@ -1593,7 +1640,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
             </button>
             <button
               type="button"
-              onClick={() => applyDxccPresetFilters({ qslFlow: 'not_two_way_confirmed' })}
+              onClick={() => applyDxccPresetFilters({ dxccNeedsReview: true })}
               className={`rounded-xl border px-3 py-3 text-left transition-colors ${isReviewFilterActive ? 'border-primary/20 bg-primary/12 text-primary' : 'border-default-200 bg-white/70 dark:bg-default-100/10'}`}
             >
               <p className="text-xs text-default-500">{t('stats.dxccReview')}</p>
@@ -1750,25 +1797,49 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
               variant="flat"
               size="sm"
               endContent={<FontAwesomeIcon icon={faChevronDown} className="text-default-400 text-xs hidden md:inline" />}
-              color={filters.dxccStatus ? "primary" : "default"}
+              color={filters.dxccStatus || filters.dxccNeedsReview ? "primary" : "default"}
               className="min-w-0"
             >
-              <span className="hidden md:inline">{filters.dxccStatus === 'deleted' ? t('filter.dxccDeleted') : t('filter.dxccStatus')}</span>
-              <span className="md:hidden">{filters.dxccStatus === 'deleted' ? t('filter.dxccDeleted') : t('filter.dxccStatus')}</span>
+              <span className="hidden md:inline">
+                {filters.dxccNeedsReview
+                  ? t('filter.dxccNeedsReview')
+                  : filters.dxccStatus === 'deleted' ? t('filter.dxccDeleted') : t('filter.dxccStatus')}
+              </span>
+              <span className="md:hidden">
+                {filters.dxccNeedsReview
+                  ? t('filter.dxccNeedsReview')
+                  : filters.dxccStatus === 'deleted' ? t('filter.dxccDeleted') : t('filter.dxccStatus')}
+              </span>
             </Button>
           </DropdownTrigger>
           <DropdownMenu
             aria-label={t('filter.dxccStatusFilter')}
-            selectedKeys={filters.dxccStatus ? [filters.dxccStatus] : []}
+            selectedKeys={
+              filters.dxccNeedsReview
+                ? ['needs-review']
+                : filters.dxccStatus ? [filters.dxccStatus] : []
+            }
             selectionMode="single"
             onSelectionChange={(keys) => {
               const selected = Array.from(keys as Set<string>);
               const value = selected[0] || undefined;
-              handleFilterChange('dxccStatus', value as QSOFilters['dxccStatus']);
+              setFilters((prev) => {
+                const next = { ...prev };
+                delete next.dxccStatus;
+                delete next.dxccNeedsReview;
+                if (value === 'needs-review') {
+                  next.dxccNeedsReview = true;
+                } else if (value === 'deleted') {
+                  next.dxccStatus = 'deleted';
+                }
+                return next;
+              });
+              setCurrentPage(1);
             }}
           >
             <DropdownItem key="">{t('filter.allDxccStatus')}</DropdownItem>
             <DropdownItem key="deleted">{t('filter.dxccDeleted')}</DropdownItem>
+            <DropdownItem key="needs-review">{t('filter.dxccNeedsReview')}</DropdownItem>
           </DropdownMenu>
         </Dropdown>
 
@@ -1862,7 +1933,12 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         {/* Plugin-based sync provider buttons (dynamic) */}
         {syncProviders.map((provider) => {
           const isConfigured = syncConfigured[provider.id] ?? false;
-          const isBusy = syncingProviders[provider.id] ?? false;
+          const projected = syncStatus.providers[provider.id];
+          const status = projected?.status;
+          const presentation = syncPresentation.view(provider.id, projected, syncStatus.unavailable);
+          const isBusy = (projected?.supported ?? provider.statusSupported)
+            ? presentation.active
+            : syncingProviders[provider.id] ?? false;
           const name = provider.displayName;
 
           // Resolve action icon
@@ -1900,24 +1976,21 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                   startContent={!isBusy ? <FontAwesomeIcon icon={faSync} /> : undefined}
                   className="min-w-0"
                 >
-                  <span className="hidden lg:inline">{name}</span>
+                  <span className="hidden lg:inline">{name}{status?.resumable && !presentationIsActive(status.state) ? ` · ${t('sync.providerStatus.paused')}` : ''}</span>{presentation.badge && <span className="text-warning text-xs font-bold" aria-label={t('sync.providerStatus.details')}>!</span>}
                   <span className="lg:hidden hidden md:inline">{t('sync.sync')}</span>
                 </Button>
               </DropdownTrigger>
               <DropdownMenu
                 aria-label={t('sync.provider.ariaLabel', { name })}
                 onAction={(key) => {
+                  if (key === 'sync-details') return;
                   if (key === 'settings') {
                     openSyncConfig(provider.id);
                   } else if (viewPolicy.writable) {
                     const action = providerActions.find(a => a.id === String(key));
                     if (action?.pageId) {
                       // Open iframe modal for this action
-                      setActionModal({
-                        pluginName: provider.pluginName,
-                        pageId: action.pageId,
-                        title: `${name} — ${resolveLabel(action)}`,
-                      });
+                      openSyncPage(provider, action.pageId, `${name} — ${resolveLabel(action)}`, action.pageParams);
                     } else if (action?.operation) {
                       void handleProviderSync(provider.id, action.operation);
                     }
@@ -1935,6 +2008,12 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
                       {resolveLabel(action)}
                     </DropdownItem>
                   )),
+                  ...(status && status.state !== 'idle' && provider.actions?.some(action => action.pageId) ? [
+                    <DropdownItem key="sync-details" onPress={() => {
+                      const page = provider.actions?.find(action => action.pageId)?.pageId;
+                      if (page) openSyncPage(provider, page, name, { intent: status.resumable && !presentationIsActive(status.state) ? 'resume' : 'inspect', operation: status.operation });
+                    }}>{t(status.resumable && !presentationIsActive(status.state) ? 'sync.providerStatus.resume' : 'sync.providerStatus.details')}</DropdownItem>,
+                  ] : []),
                   <DropdownItem
                     key="settings"
                     startContent={<FontAwesomeIcon icon={faCog} className="text-default-400" />}
@@ -2130,6 +2209,9 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     filters.band,
     filters.mode,
     filters.qslStatus,
+    filters.dxccStatus,
+    filters.dxccNeedsReview,
+    filters.qslFlow,
     totalRecords,
     actualTotalRecords,
     hasFilters,
@@ -2380,6 +2462,25 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       <div className="p-2 md:p-4 lg:p-6 max-w-7xl mx-auto">
       {/* 通知区域 */}
       {/* Plugin-based sync provider messages */}
+      {syncProviders.filter(provider => syncConfigured[provider.id] && (syncStatus.providers[provider.id]?.supported ?? provider.statusSupported)).map(provider => {
+        const projection = syncStatus.providers[provider.id];
+        const status = projection?.status;
+        const unavailable = syncStatus.unavailable || !projection?.available;
+        const page = provider.actions?.find(action => action.pageId)?.pageId;
+        if (!syncPresentation.view(provider.id, projection, syncStatus.unavailable).showStrip || !status) return null;
+        return <div key={`status-${provider.id}`} role="status" className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-default-200 bg-content1 px-3 py-2">
+          <div className="min-w-0 flex-1">
+            <span className="text-sm font-medium">{provider.displayName} · {t(`sync.providerStatus.${unavailable ? 'unavailable' : status.state}`)}</span>
+            <p className="text-xs text-default-500">{unavailable
+              ? `${t('sync.providerStatus.updatedAt')}: ${new Date(status.updatedAt).toLocaleString()}`
+              : `${t(`sync.providerStatus.${status.stage}`)} · ${t('sync.providerStatus.processed')}: ${status.processed}${status.total === undefined ? '' : ` / ${status.total}`}`}</p>
+          </div>
+          {page && <Button size="sm" variant="light" onPress={() => openSyncPage(provider, page, provider.displayName, { operation: status.operation, intent: status.resumable && !presentationIsActive(status.state) ? 'resume' : 'inspect' })}>
+            {t(status.resumable && !presentationIsActive(status.state) ? 'sync.providerStatus.resume' : 'sync.providerStatus.details')}
+          </Button>}
+          <Button size="sm" isIconOnly variant="light" aria-label={t('common:button.close')} onPress={() => { syncPresentation.dismiss(provider.id, status); refreshPresentation(value => value + 1); }}>×</Button>
+        </div>;
+      })}
       {Object.entries(syncMessages).map(([providerId, msg]) => {
         const providerName = syncProviders.find(p => p.id === providerId)?.displayName ?? providerId;
         const title = msg.type === 'success'
@@ -2721,26 +2822,22 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
       {/* Sync action iframe modal (for pageId-based actions) */}
       <Modal
         isOpen={!!actionModal}
-        onClose={() => {
-          setActionModal(null);
-          // Refresh logbook data in case the action modified records
-          refreshLogbookData();
-        }}
-        size={actionModal?.pageId === 'upload-wizard' ? '3xl' : 'lg'}
+        onClose={closeSyncPage}
+        size={actionModal?.size ?? 'lg'}
         scrollBehavior="inside"
         placement="center"
       >
         <ModalContent className="max-h-[85vh] overflow-hidden">
           <ModalHeader>{actionModal?.title}</ModalHeader>
           <ModalBody className="min-h-0 overflow-y-auto p-0">
-            {actionModal && (
+            <div ref={actionBodyRef}>{actionModal && (
               <PluginIframeHost
                 pluginName={actionModal.pluginName}
                 pageId={actionModal.pageId}
-                params={{ callsign: operatorCallsign || '' }}
+                params={actionModal.params}
                 minHeight={0}
               />
-            )}
+            )}</div>
           </ModalBody>
         </ModalContent>
       </Modal>

@@ -1,34 +1,11 @@
-/*
- * TX-5DR Plugin Design Tokens (Reference File)
- *
- * This file is a REFERENCE COPY of the CSS custom properties injected by
- * the TX-5DR host into every plugin iframe page. Its purpose is to enable
- * IDE autocomplete when authoring plugin CSS — the actual runtime values
- * are injected by the host and may differ from these defaults.
- *
- * Usage:
- *   Copy this file into your plugin project root (or ui/ directory).
- *   VS Code's CSS Language Service will pick up the custom property names
- *   and offer autocomplete when you type `var(--tx5dr-`.
- *
- * DO NOT import or link this file in your HTML — the host already injects
- * the tokens via <link rel="stylesheet" href="/api/plugins/_bridge/tokens.css">.
- *
- * The values below correspond to the "dark" theme. Light-theme overrides
- * are applied automatically at runtime by the host when the user switches
- * themes.
- */
+/* Generated reference for IDE autocomplete. Host injects runtime tokens; do not import this file. */
+/* TX-5DR Plugin Design Tokens — auto-generated */
 :root {
-  /* ── Background ── */
   --tx5dr-bg: #18181b;
   --tx5dr-bg-content: #27272a;
   --tx5dr-bg-hover: #3f3f46;
-
-  /* ── Text ── */
   --tx5dr-text: #fafafa;
   --tx5dr-text-secondary: #a1a1aa;
-
-  /* ── Semantic colors ── */
   --tx5dr-primary: #006FEE;
   --tx5dr-primary-hover: #005bc4;
   --tx5dr-primary-soft: color-mix(in srgb, var(--tx5dr-primary) 14%, transparent);
@@ -49,32 +26,22 @@
   --tx5dr-danger-soft: color-mix(in srgb, var(--tx5dr-danger) 14%, transparent);
   --tx5dr-danger-soft-hover: color-mix(in srgb, var(--tx5dr-danger) 22%, transparent);
   --tx5dr-danger-foreground: #ffffff;
-
-  /* ── Border ── */
   --tx5dr-border: #3f3f46;
   --tx5dr-focus-ring: rgba(0, 111, 238, 0.4);
-
-  /* ── Border radius ── */
   --tx5dr-radius-sm: 8px;
   --tx5dr-radius-md: 12px;
   --tx5dr-radius-lg: 16px;
   --tx5dr-radius-full: 9999px;
-
-  /* ── Spacing ── */
   --tx5dr-spacing-xs: 4px;
   --tx5dr-spacing-sm: 8px;
   --tx5dr-spacing-md: 12px;
   --tx5dr-spacing-lg: 16px;
   --tx5dr-spacing-xl: 24px;
-
-  /* ── Typography ── */
   --tx5dr-font: 'Inter', system-ui, -apple-system, sans-serif;
   --tx5dr-font-mono: 'JetBrains Mono', ui-monospace, monospace;
   --tx5dr-font-size-sm: 13px;
   --tx5dr-font-size-md: 14px;
   --tx5dr-font-size-lg: 16px;
-
-  /* ── Control primitives ── */
   --tx5dr-control-height-xs: 24px;
   --tx5dr-control-height-sm: 32px;
   --tx5dr-control-height-md: 40px;
@@ -94,18 +61,22 @@
   --tx5dr-control-text: var(--tx5dr-text);
   --tx5dr-control-disabled-opacity: 0.55;
   --tx5dr-control-transition: 140ms ease;
-
-  /* ── Compact status primitives ── */
   --tx5dr-chip-height: 24px;
   --tx5dr-chip-padding-x: 9px;
   --tx5dr-chip-font-size: 11px;
   --tx5dr-chip-font-weight: 600;
-
-  /* ── Data and feedback primitives ── */
   --tx5dr-table-header-bg: var(--tx5dr-bg-content);
   --tx5dr-table-row-hover: color-mix(in srgb, var(--tx5dr-bg-hover) 45%, transparent);
   --tx5dr-table-divider: var(--tx5dr-border);
   --tx5dr-alert-padding: 10px 12px;
   --tx5dr-shadow-sm: 0 1px 2px color-mix(in srgb, var(--tx5dr-text) 8%, transparent);
   --tx5dr-shadow-md: 0 4px 14px color-mix(in srgb, var(--tx5dr-text) 12%, transparent);
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; }
+html, body {
+  font-family: var(--tx5dr-font);
+  font-size: var(--tx5dr-font-size-md);
+  color: var(--tx5dr-text);
+  background: var(--tx5dr-bg);
+  line-height: 1.5;
 }

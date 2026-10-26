@@ -725,7 +725,24 @@
       "auto_update_semver_not_newer": "更新器未接受该包为更新版本。如有需要请手动下载。",
       "update_install_not_completed": "上一次更新似乎没有完成。你可以重试或使用手动下载。"
     },
-    "updateTargetAndroidRuntime": "Android Runtime"
+    "updateTargetAndroidRuntime": "Android Runtime",
+    "updateTargetChannel": "订阅更新频道",
+    "updateStableRecommended": "正式版（推荐）",
+    "updateChannelHelp": "切换频道只检查目标版本，不会立即安装。当前运行版本将在安装完成后改变。",
+    "updateNightlyWarning": "Nightly 是开发版本，可能包含未经充分测试的功能。",
+    "updateChannelEmpty": "此频道暂无可用版本。你可以保留选择，稍后重试。",
+    "updateDowngradeWarning": "目标版本较低，可能无法读取现有配置或插件数据。安装前会备份；确认后将强制切换。恢复备份会丢失备份之后的变化。",
+    "updateConfirm": "当前：{{current}}；目标：{{target}}。下载此版本？",
+    "updateInstallConfirm": "停止电台与服务、备份用户数据，然后安装并重启？如备份失败将停止安装。",
+    "updateDiscardDownload": "切换频道将放弃已下载的更新，继续？",
+    "updateLinuxCommand": "在服务器终端执行以下命令。安装前会备份并要求确认：",
+    "updateDockerCommand": "将 Compose 镜像改为以下固定身份，再执行 pull 和 up -d；先停止服务并备份数据卷：",
+    "updateCopyCommand": "复制",
+    "updateAndroidNative": "请在 Android 主机的原生更新页选择频道并安装。APK 与运行时独立更新。",
+    "updateOpenAndroid": "打开 Android 更新页",
+    "updateStableMigration": "正式版已发布。可选择正式频道查看并安装；不会自动切换。",
+    "updateMigrationDismiss": "暂不切换",
+    "updateRestartCurrent": "重启当前已安装版本"
   },
   "freqPresets": {
     "title": "频率预设管理",

@@ -334,6 +334,9 @@ export {
   sanitizeSyncFailureText,
 } from './sync.js';
 
+export { SyncStatusSchema, SyncStatusProjectionSchema, SyncStatusesResponseSchema, SyncActionSchema, SyncPageParamsSchema } from '@tx5dr/contracts';
+export type { SyncStatus, SyncStatusProjection, SyncStatusesResponse } from '@tx5dr/contracts';
+
 /** Stable runtime enum values commonly referenced by plugin implementations. */
 export { FT8MessageType } from './ft8-message-type.js';
 
@@ -378,3 +381,6 @@ export {
   normalizeMessageHistory,
   sanitizeAdifFieldValue,
 } from './utils/qso-text-fields.js';
+
+/** Shared iframe theme source used by the Host and local previews. */
+export { getPluginThemeCss, getPluginThemeTokens } from './ui/theme.js';

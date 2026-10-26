@@ -401,6 +401,7 @@ export class ImageRadioService extends EventEmitter<ImageRadioServiceEvents> {
     try {
       playback = this.audioStream.openDeterministicPlayback({
         playbackKind: 'sstv',
+        injectIntoMonitor: true,
         onPlaybackChunk: (samples, sampleRate) => {
           if (this.activeTx?.sessionId !== sessionId) return;
           this.updateTx({

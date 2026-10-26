@@ -122,6 +122,28 @@ describe('ADIFLogProvider import', () => {
     await provider.close();
   }, DURABLE_IO_TEST_TIMEOUT_MS);
 
+  it('filters records that still need DXCC review', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-dxcc-review-'));
+    tempDirs.push(tempDir);
+    const logFilePath = join(tempDir, 'logbook.adi');
+    await writeFile(logFilePath, buildAdif([
+      '<call:6>QQ1QQQ<qso_date:8>20260115<time_on:6>120000<freq:9>14.074000<mode:3>FT8<APP_TX5DR_DXCC_NEEDS_REVIEW:1>Y<eor>',
+      '<call:5>BG2RW<qso_date:8>20260115<time_on:6>120001<freq:9>14.074000<mode:3>FT8<APP_TX5DR_DXCC_NEEDS_REVIEW:1>N<eor>',
+    ]), 'utf8');
+    const provider = new ADIFLogProvider({ logFilePath, autoCreateFile: false });
+    await provider.initialize();
+
+    expect((await provider.queryQSOs({ dxccNeedsReview: true })).map(record => record.callsign)).toEqual(['QQ1QQQ']);
+    expect(await provider.countQSOs({ dxccNeedsReview: true })).toBe(1);
+    expect(await provider.getDXCCSummary()).toMatchObject({ reviewCount: 1 });
+
+    const exported = await provider.exportADIF({ dxccNeedsReview: true });
+    expect(exported).toContain('QQ1QQQ');
+    expect(exported).not.toContain('BG2RW');
+
+    await provider.close();
+  }, DURABLE_IO_TEST_TIMEOUT_MS);
+
   it('initializes without recreating the retired metadata sidecar', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-meta-lazy-'));
     tempDirs.push(tempDir);

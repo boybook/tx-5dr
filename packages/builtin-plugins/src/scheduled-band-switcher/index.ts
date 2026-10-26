@@ -10,14 +10,19 @@ import {
   normalizeFrequencyMhzToHz,
   parseScheduleDays,
   parseScheduleTime,
+  type ScheduleTime,
 } from '../_shared/schedule-utils.js';
 import zhLocale from './locales/zh.json' with { type: 'json' };
 import enLocale from './locales/en.json' with { type: 'json' };
 import jaLocale from './locales/ja.json' with { type: 'json' };
 
 const TIMER_ID = 'scheduled-band-switcher';
-const TIMER_INTERVAL_MS = 30_000;
+/** A tick only acts on an open window start or a pending retry; idle ticks do no I/O. */
+const TIMER_INTERVAL_MS = 5_000;
+/** A new check waits for the previous one, including auto tune, to settle. */
+const CHECK_LEASE_MS = 90_000;
 const ROTATION_STATE_KEY = 'rotationState';
+const SCHEDULE_APPLIED_KEY = 'scheduleAppliedWindow';
 const FREQUENCY_TOLERANCE_HZ = 10;
 const TUNER_SWITCH_CAPABILITY_ID = 'tuner_switch';
 const TUNER_TUNE_CAPABILITY_ID = 'tuner_tune';
@@ -35,6 +40,11 @@ type ScheduleEntry = {
 type RotationState = {
   index: number;
   lastSwitchMs: number;
+};
+/** One matched schedule window occurrence and the frequency it demands. */
+type ScheduleTarget = {
+  frequency: number;
+  windowKey: string;
 };
 type BandSwitcherContext = PluginContextFor<readonly [
   'radio:read',
@@ -67,19 +77,60 @@ function getRotationFrequencies(value: unknown): number[] {
   return frequencies;
 }
 
-function getScheduledTargetFrequency(ctx: BandSwitcherContext, now = new Date()): number | null {
-  for (const row of getScheduleEntries(ctx.config.bandScheduleEntries)) {
+function getWindowStartMs(now: Date, start: ScheduleTime): number {
+  const windowStart = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    start.hour,
+    start.minute,
+    0,
+    0,
+  );
+  // An active overnight window began on the previous day.
+  if (windowStart.getTime() > now.getTime()) {
+    windowStart.setDate(windowStart.getDate() - 1);
+  }
+  return windowStart.getTime();
+}
+
+/**
+ * Resolves the first matching schedule window and the identity of that window
+ * occurrence, so one-shot switching can tell a running window from a new one.
+ */
+function getScheduledTarget(ctx: BandSwitcherContext, now = new Date()): ScheduleTarget | null {
+  for (const [index, row] of getScheduleEntries(ctx.config.bandScheduleEntries).entries()) {
     if (row.enabled === false) continue;
     const days = parseScheduleDays(row.days);
     const start = parseScheduleTime(row.startTime);
     const end = parseScheduleTime(row.endTime);
     const frequency = normalizeFrequencyMhzToHz(row.frequencyMhz);
     if (!days || !start || !end || !frequency) continue;
-    if (isScheduleDayActive(days, now) && isTimeInScheduleRange(now, start, end)) {
-      return frequency;
-    }
+    if (!isScheduleDayActive(days, now) || !isTimeInScheduleRange(now, start, end)) continue;
+    return {
+      frequency,
+      windowKey: `${index}|${frequency}|${getWindowStartMs(now, start)}`,
+    };
   }
   return null;
+}
+
+function keepsScheduleFrequency(ctx: BandSwitcherContext): boolean {
+  return ctx.config.keepScheduleFrequency === true;
+}
+
+function getAppliedWindow(ctx: BandSwitcherContext): string {
+  const value = ctx.store.global.get<string>(SCHEDULE_APPLIED_KEY, '');
+  return typeof value === 'string' ? value : '';
+}
+
+function markAppliedWindow(ctx: BandSwitcherContext, windowKey: string): void {
+  ctx.store.global.set(SCHEDULE_APPLIED_KEY, windowKey);
+}
+
+/** Forgets the applied window so re-enabling the switcher applies it again. */
+function clearAppliedWindow(ctx: BandSwitcherContext): void {
+  ctx.store.global.set(SCHEDULE_APPLIED_KEY, undefined);
 }
 
 function getRotationTargetFrequency(ctx: BandSwitcherContext, now = new Date()): number | null {
@@ -180,25 +231,15 @@ function configureTimer(ctx: BandSwitcherContext): void {
   ctx.timers.clear(TIMER_ID);
 }
 
-async function runBandSwitchCheck(ctx: BandSwitcherContext, now = new Date()): Promise<void> {
-  if (ctx.config.bandSwitchEnabled !== true) return;
-  if (!canSwitchRadio(ctx)) return;
-
-  const switchMode = getSwitchMode(ctx);
-  const targetFrequency = switchMode === 'rotation'
-    ? getRotationTargetFrequency(ctx, now)
-    : getScheduledTargetFrequency(ctx, now);
-  if (!targetFrequency) return;
-
-  if (Math.abs(ctx.radio.frequency - targetFrequency) <= FREQUENCY_TOLERANCE_HZ) {
-    if (switchMode === 'rotation') commitRotationTarget(ctx, targetFrequency, now);
-    return;
-  }
-
+async function switchRadioTo(
+  ctx: BandSwitcherContext,
+  targetFrequency: number,
+  mode: SwitchMode,
+): Promise<void> {
   ctx.log.info('Scheduled band switch setting radio frequency', {
     fromFrequency: ctx.radio.frequency,
     targetFrequency,
-    mode: getSwitchMode(ctx),
+    mode,
   });
   const autoTune = await shouldAutoTuneAfterSwitch(ctx);
   await ctx.radioCommands.submit({
@@ -206,14 +247,90 @@ async function runBandSwitchCheck(ctx: BandSwitcherContext, now = new Date()): P
     frequency: targetFrequency,
     autoTune,
   });
-  if (switchMode === 'rotation') commitRotationTarget(ctx, targetFrequency, now);
   if (autoTune) ctx.log.info('Scheduled band switch auto tune triggered');
+}
+
+/**
+ * Holds the radio on the target for as long as the window is open; a switch
+ * rejected by the Host stays unmarked and is retried on the next tick.
+ */
+async function runHeldScheduleWindow(ctx: BandSwitcherContext, target: ScheduleTarget): Promise<void> {
+  if (!canSwitchRadio(ctx)) return;
+  if (Math.abs(ctx.radio.frequency - target.frequency) <= FREQUENCY_TOLERANCE_HZ) return;
+  await switchRadioTo(ctx, target.frequency, 'schedule');
+}
+
+/**
+ * Switches once when a window opens and then leaves the radio to the operator
+ * until the next window, so a deliberate retune is never reverted.
+ */
+async function runOneShotScheduleWindow(ctx: BandSwitcherContext, target: ScheduleTarget): Promise<void> {
+  if (getAppliedWindow(ctx) === target.windowKey) return;
+  if (!canSwitchRadio(ctx)) return;
+  if (Math.abs(ctx.radio.frequency - target.frequency) > FREQUENCY_TOLERANCE_HZ) {
+    await switchRadioTo(ctx, target.frequency, 'schedule');
+  }
+  // Only a settled Host command marks the window, so a busy or failing radio is retried.
+  markAppliedWindow(ctx, target.windowKey);
+}
+
+async function runRotationCheck(ctx: BandSwitcherContext, now: Date): Promise<void> {
+  if (!canSwitchRadio(ctx)) return;
+
+  const targetFrequency = getRotationTargetFrequency(ctx, now);
+  if (!targetFrequency) return;
+
+  if (Math.abs(ctx.radio.frequency - targetFrequency) <= FREQUENCY_TOLERANCE_HZ) {
+    commitRotationTarget(ctx, targetFrequency, now);
+    return;
+  }
+
+  await switchRadioTo(ctx, targetFrequency, 'rotation');
+  commitRotationTarget(ctx, targetFrequency, now);
+}
+
+async function runScheduleCheck(ctx: BandSwitcherContext, now: Date): Promise<void> {
+  const target = getScheduledTarget(ctx, now);
+  if (!target) return;
+  if (keepsScheduleFrequency(ctx)) {
+    await runHeldScheduleWindow(ctx, target);
+    return;
+  }
+  await runOneShotScheduleWindow(ctx, target);
+}
+
+let activeCheckStartedAt = 0;
+
+/** Prevents the shorter timer from stacking commands while a switch or auto tune is running. */
+function acquireCheckLease(ctx: BandSwitcherContext): boolean {
+  const nowMs = Date.now();
+  if (activeCheckStartedAt > 0 && nowMs - activeCheckStartedAt < CHECK_LEASE_MS) {
+    ctx.log.debug('Scheduled band switch check skipped because the previous check is still running');
+    return false;
+  }
+  activeCheckStartedAt = nowMs;
+  return true;
+}
+
+async function runBandSwitchCheck(ctx: BandSwitcherContext, now = new Date()): Promise<void> {
+  if (ctx.config.bandSwitchEnabled !== true) return;
+  if (!acquireCheckLease(ctx)) return;
+
+  try {
+    if (getSwitchMode(ctx) === 'rotation') {
+      await runRotationCheck(ctx, now);
+      return;
+    }
+    await runScheduleCheck(ctx, now);
+  } finally {
+    activeCheckStartedAt = 0;
+  }
 }
 
 export const scheduledBandSwitcherPlugin = definePlugin({
   apiVersion: 2,
   name: 'scheduled-band-switcher',
-  version: '1.0.0',
+  version: '1.1.0',
   type: 'utility',
   instanceScope: 'global',
   permissions: ['radio:read', 'radio:control', 'radio:tuner-control'],
@@ -260,6 +377,14 @@ export const scheduledBandSwitcherPlugin = definePlugin({
         { key: 'frequencyMhz', type: 'number', label: 'entryFrequencyMhz', description: 'entryFrequencyMhzDesc', placeholder: '14.074' },
       ],
     },
+    keepScheduleFrequency: {
+      type: 'boolean',
+      default: false,
+      label: 'keepScheduleFrequency',
+      description: 'keepScheduleFrequencyDesc',
+      scope: 'global',
+      visibleWhen: { setting: 'bandSwitchMode', equals: 'schedule' },
+    },
     rotationFrequenciesMhz: {
       type: 'string[]',
       default: [],
@@ -285,8 +410,11 @@ export const scheduledBandSwitcherPlugin = definePlugin({
   },
 
   hooks: {
-    onConfigChange(_changes, ctx) {
+    onConfigChange(changes, ctx) {
       configureTimer(ctx);
+      if (changes.bandSwitchEnabled !== true) {
+        clearAppliedWindow(ctx);
+      }
     },
     onTimer(timerId, ctx) {
       if (timerId !== TIMER_ID) return;
@@ -304,7 +432,9 @@ export const scheduledBandSwitcherLocales: Record<string, Record<string, string>
 };
 
 export const scheduledBandSwitcherTestables = {
-  getScheduledTargetFrequency,
+  getScheduledTarget,
+  getAppliedWindow,
+  markAppliedWindow,
   getRotationTargetFrequency,
   commitRotationTarget,
   isOperatorBusy,

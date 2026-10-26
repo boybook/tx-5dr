@@ -62,9 +62,19 @@ export function DesktopUpdateCard() {
   const updateNotification = useUpdateNotification();
   const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
   const [desktopUpdateStatus, setDesktopUpdateStatus] = useState<DesktopUpdateState | null>(null);
-  const [desktopUpdateBusyAction, setDesktopUpdateBusyAction] = useState<'check' | 'download' | 'install' | 'openWebsite' | 'openCommits' | null>(null);
+  const [nativeUpdatesAvailable, setNativeUpdatesAvailable] = useState(false);
+  useEffect(() => {
+    const refresh = () => setNativeUpdatesAvailable(Boolean((window as unknown as { TX5DRUpdates?: unknown }).TX5DRUpdates));
+    refresh();
+    window.addEventListener('tx5dr-updates-ready', refresh);
+    return () => window.removeEventListener('tx5dr-updates-ready', refresh);
+  }, []);
+  const [desktopUpdateBusyAction, setDesktopUpdateBusyAction] = useState<'check' | 'download' | 'install' | 'openWebsite' | 'openCommits' | 'channel' | null>(null);
   const [desktopUpdateError, setDesktopUpdateError] = useState('');
   const [desktopUpdateExpanded, setDesktopUpdateExpanded] = useState(false);
+  const [migrationDismissed, setMigrationDismissed] = useState(() => {
+    try { return localStorage.getItem('tx5dr-stable-migration-dismissed') === '1'; } catch { return false; }
+  });
 
   const loadDesktopUpdateStatus = useCallback(async () => {
     try {
@@ -167,7 +177,9 @@ export function DesktopUpdateCard() {
     setDesktopUpdateBusyAction('download');
     setDesktopUpdateError('');
     try {
-      const status = await window.electronAPI.updater.download();
+      if (!desktopUpdateStatus?.identity) return;
+      if (!window.confirm(t('system.updateConfirm', { current: desktopUpdateStatus.currentVersion, target: desktopUpdateStatus.latestVersion }) + (desktopUpdateStatus.operation === 'downgrade' ? '\n' + t('system.updateDowngradeWarning') : ''))) return;
+      const status = await window.electronAPI.updater.download({ identity: desktopUpdateStatus.identity, allowDowngrade: desktopUpdateStatus.operation === 'downgrade' });
       setDesktopUpdateStatus(status as DesktopUpdateState);
       setDesktopUpdateError(status.errorMessage || '');
     } catch (err) {
@@ -176,22 +188,41 @@ export function DesktopUpdateCard() {
     } finally {
       setDesktopUpdateBusyAction(null);
     }
-  }, [handleOpenUpdateWebsite, t]);
+  }, [handleOpenUpdateWebsite, desktopUpdateStatus, t]);
 
   const handleInstallDesktopUpdate = useCallback(async () => {
     if (!window.electronAPI?.updater?.installAndRestart) return;
     setDesktopUpdateBusyAction('install');
     setDesktopUpdateError('');
     try {
-      const status = await window.electronAPI.updater.installAndRestart();
+      if (!desktopUpdateStatus?.identity) return;
+      if (!window.confirm(t('system.updateInstallConfirm') + (desktopUpdateStatus.operation === 'downgrade' ? '\n' + t('system.updateDowngradeWarning') : ''))) return;
+      const status = await window.electronAPI.updater.installAndRestart({ identity: desktopUpdateStatus.identity, allowDowngrade: desktopUpdateStatus.operation === 'downgrade' });
       setDesktopUpdateStatus(status as DesktopUpdateState);
       setDesktopUpdateError(status.errorMessage || '');
     } catch (err) {
       logger.error('Failed to install desktop update:', err);
       setDesktopUpdateError(err instanceof Error ? err.message : t('system.desktopUpdateInstallFailed'));
+    } finally {
       setDesktopUpdateBusyAction(null);
     }
-  }, [t]);
+  }, [desktopUpdateStatus, t]);
+
+  const handleChannelChange = async (channel: 'release' | 'nightly') => {
+    if (desktopUpdateStatus?.downloaded && !window.confirm(t('system.updateDiscardDownload'))) return;
+    setDesktopUpdateBusyAction('channel');
+    try {
+      if (window.electronAPI?.updater?.setChannel) {
+        setDesktopUpdateStatus(await window.electronAPI.updater.setChannel(channel));
+      } else {
+        await api.setUpdateChannel(channel);
+        setDesktopUpdateStatus(await api.getSystemUpdateStatus());
+      }
+      await updateNotification.refresh();
+    } catch (error) {
+      setDesktopUpdateError(error instanceof Error ? error.message : String(error));
+    } finally { setDesktopUpdateBusyAction(null); }
+  };
 
   const handleOpenDesktopUpdateCommits = useCallback(async () => {
     setDesktopUpdateBusyAction('openCommits');
@@ -261,8 +292,44 @@ export function DesktopUpdateCard() {
           </div>
         </div>
 
+        <div className="space-y-3">
+          <label className="flex flex-wrap items-center gap-3">
+            <span>{t('system.updateTargetChannel')}</span>
+            <select aria-label={t('system.updateTargetChannel')}
+              value={desktopUpdateStatus?.targetChannel ?? desktopUpdateStatus?.channel ?? 'nightly'}
+              disabled={!desktopUpdateStatus?.channelEditable || desktopUpdatePhase === 'installing' || desktopUpdateBusyAction === 'channel'}
+              onChange={event => void handleChannelChange(event.target.value as 'release' | 'nightly')}
+              className="rounded-medium bg-default-100 px-3 py-2 text-foreground">
+              <option value="release">{t('system.updateStableRecommended')}</option>
+              <option value="nightly">{t('system.desktopUpdateChannelNightly')}</option>
+            </select>
+          </label>
+          <p className={SUBDESC_CLASS}>{t('system.updateChannelHelp')}</p>
+          {desktopUpdateStatus?.targetChannel === 'nightly' && <p className={SUBDESC_CLASS}>{t('system.updateNightlyWarning')}</p>}
+          {desktopUpdateStatus?.availability === 'empty' && <p role="status" className={SUBDESC_CLASS}>{t('system.updateChannelEmpty')}</p>}
+          {desktopUpdateStatus?.operation === 'downgrade' && <p className="text-sm text-warning-600">{t('system.updateDowngradeWarning')}</p>}
+          {desktopUpdateStatus?.stableAvailable && !migrationDismissed && <div className="space-y-1">
+            <p className={SUBDESC_CLASS}>{t('system.updateStableMigration')}</p>
+            <div className="flex gap-2">
+              <Button size="sm" variant="light" onPress={() => void handleChannelChange('release')}>{t('system.updateStableRecommended')}</Button>
+              <Button size="sm" variant="light" onPress={() => { setMigrationDismissed(true); try { localStorage.setItem('tx5dr-stable-migration-dismissed', '1'); } catch { /* unavailable */ } }}>{t('system.updateMigrationDismiss')}</Button>
+            </div>
+          </div>}
+          {desktopUpdateStatus?.installCommand && <>
+            <p>{t(desktopUpdateStatus.target === 'docker' ? 'system.updateDockerCommand' : 'system.updateLinuxCommand')}</p>
+            <code className="block break-all select-all">{desktopUpdateStatus.installCommand}</code>
+            <Button size="sm" onPress={() => void navigator.clipboard.writeText(desktopUpdateStatus.installCommand!)}>{t('system.updateCopyCommand')}</Button>
+          </>}
+          {desktopUpdateStatus?.target === 'android-runtime' && <>
+            <p>{t('system.updateAndroidNative')}</p>
+            {nativeUpdatesAvailable &&
+              <Button onPress={() => (window as unknown as { TX5DRUpdates: { openUpdates: () => void } }).TX5DRUpdates.openUpdates()}>{t('system.updateOpenAndroid')}</Button>}
+          </>}
+        </div>
+
         {desktopUpdateError && (
-          <Alert color="danger" variant="flat" title={desktopUpdateError} />
+          <Alert color="danger" variant="flat" title={desktopUpdateError} endContent={isElectron && window.electronAPI?.app?.restart ?
+            <Button onPress={() => { if (window.confirm(t('system.updateRestartCurrent'))) void window.electronAPI?.app?.restart(); }}>{t('system.updateRestartCurrent')}</Button> : undefined} />
         )}
 
         <div className="grid gap-3 md:grid-cols-2">
@@ -300,7 +367,7 @@ export function DesktopUpdateCard() {
               color={desktopUpdateStatus?.updateAvailable ? 'warning' : 'success'}
               variant="flat"
             >
-              {desktopUpdateStatus?.updateAvailable
+              {desktopUpdateStatus?.availability === 'empty' ? t('system.updateChannelEmpty') : desktopUpdateStatus?.availability === 'error' ? t('system.desktopUpdateCheckFailed') : desktopUpdateStatus?.updateAvailable
                 ? t('system.desktopUpdateAvailable')
                 : t('system.desktopUpdateUpToDate')}
             </Chip>

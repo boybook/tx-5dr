@@ -2248,6 +2248,10 @@ export const api = {
     return apiRequest<NetworkInfo>('/system/network-info', undefined, apiBase);
   },
 
+  async setUpdateChannel(channel: 'release' | 'nightly'): Promise<{ channel: 'release' | 'nightly' }> {
+    return apiRequest('/system/update-preferences', { method: 'PUT', body: JSON.stringify({ channel }) });
+  },
+
   async getSystemUpdateStatus(apiBase?: string): Promise<SystemUpdateStatus> {
     return apiRequest<SystemUpdateStatus>('/system/update-status', undefined, apiBase);
   },

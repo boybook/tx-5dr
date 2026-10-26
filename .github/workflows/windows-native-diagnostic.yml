@@ -1,0 +1,39 @@
+name: Diagnose Windows native startup
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.15.1'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - shell: bash
+        run: corepack enable && yarn install --immutable && yarn build
+      - name: Verify WASAPI device discovery cleanup
+        run: node --expose-gc scripts/tests/windows-audio-lifecycle.mjs
+      - name: Capture native exception
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://download.sysinternals.com/files/Procdump.zip -OutFile "$env:RUNNER_TEMP/procdump.zip"
+          Expand-Archive "$env:RUNNER_TEMP/procdump.zip" "$env:RUNNER_TEMP/procdump"
+          $exe = "$env:RUNNER_TEMP/procdump/procdump64.exe"
+          if ((Get-AuthenticodeSignature $exe).Status -ne 'Valid') { throw 'Invalid ProcDump signature' }
+          New-Item -ItemType Directory "$env:RUNNER_TEMP/tx5dr-crash-dumps" | Out-Null
+          $env:TX5DR_SMOKE_DEBUGGER = $exe
+          $env:TX5DR_SMOKE_DUMPS = "$env:RUNNER_TEMP/tx5dr-crash-dumps"
+          node scripts/smoke-packaged-server.mjs .
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-native-diagnostic
+          path: ${{ runner.temp }}/tx5dr-crash-dumps
+          if-no-files-found: ignore
+          retention-days: 3
