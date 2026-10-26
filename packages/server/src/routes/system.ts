@@ -1,3 +1,5 @@
+import { UpdatePreferencesSchema } from '@tx5dr/contracts';
+import { getUpdatePreferences, setUpdatePreferences, canEditUpdateChannel } from '../services/UpdatePreferences.js';
 import { createReadStream } from 'node:fs';
 import { access } from 'node:fs/promises';
 import path from 'node:path';
@@ -44,6 +46,17 @@ export async function systemRoutes(fastify: FastifyInstance) {
     preHandler: [requireAbility('manage', 'all')],
   }, async (_request, reply) => {
     return reply.send(await getSystemUpdateStatus());
+  });
+
+  fastify.get('/update-preferences', { preHandler: [requireAbility('manage', 'all')] }, async (_request, reply) => {
+    if (!await canEditUpdateChannel()) return reply.code(409).send({ error: 'update_owned_by_native_host' });
+    return getUpdatePreferences();
+  });
+  fastify.put('/update-preferences', { preHandler: [requireAbility('manage', 'all')] }, async (request, reply) => {
+    if (!await canEditUpdateChannel()) return reply.code(409).send({ error: 'update_owned_by_native_host' });
+    const parsed = UpdatePreferencesSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'invalid_update_channel' });
+    return setUpdatePreferences(parsed.data);
   });
 
   // 获取网络访问地址

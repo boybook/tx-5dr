@@ -91,7 +91,7 @@ describe('RadioService spectrum subscription reliability', () => {
     const service = new RadioService();
     const client = mockState.clients[0]!;
 
-    expect(client.config.clientVersion).toBe('1.0.0');
+    expect(client.config.clientVersion).toBe(import.meta.env.PACKAGE_VERSION);
 
     service.subscribeSpectrum('audio');
 

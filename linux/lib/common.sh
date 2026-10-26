@@ -322,7 +322,11 @@ get_download_base_url() {
 get_server_manifest_url() {
     local base_url
     base_url=$(get_download_base_url) || return 1
-    printf "%s/tx-5dr/server/nightly/latest.json" "$base_url"
+    if [[ -n "${TX5DR_UPDATE_VERSION:-}" ]]; then
+        printf "%s/tx-5dr/server/builds/%s/latest.json" "$base_url" "${TX5DR_UPDATE_VERSION//+/%2B}"
+    else
+        printf "%s/tx-5dr/server/%s/latest.json" "$base_url" "${TX5DR_UPDATE_CHANNEL:-nightly}"
+    fi
 }
 
 get_server_legacy_manifest_url() {
@@ -332,7 +336,15 @@ get_server_legacy_manifest_url() {
 }
 
 get_server_github_manifest_url() {
-    printf "https://github.com/%s/releases/download/nightly-server/latest.json" "${TX5DR_GITHUB_REPO:-boybook/tx-5dr}"
+    if [[ -n "${TX5DR_UPDATE_VERSION:-}" ]]; then
+        local tag="v${TX5DR_UPDATE_VERSION}"
+        [[ "${TX5DR_UPDATE_CHANNEL:-nightly}" == nightly ]] && tag="build-${TX5DR_UPDATE_VERSION}"
+        printf "https://github.com/%s/releases/download/%s/server-manifest.json" "${TX5DR_GITHUB_REPO:-boybook/tx-5dr}" "${tag//+/%2B}"
+    elif [[ "${TX5DR_UPDATE_CHANNEL:-nightly}" == release ]]; then
+        printf "https://github.com/%s/releases/latest/download/server-manifest.json" "${TX5DR_GITHUB_REPO:-boybook/tx-5dr}"
+    else
+        printf "https://github.com/%s/releases/download/nightly-server/latest.json" "${TX5DR_GITHUB_REPO:-boybook/tx-5dr}"
+    fi
 }
 
 get_server_latest_install_script_url() {
@@ -379,8 +391,7 @@ fetch_server_manifest_from_source() {
             ;;
         oss|aliyun|"")
             manifest_url=$(get_server_manifest_url) || return 1
-            legacy_url=$(get_server_legacy_manifest_url) || legacy_url=""
-            curl -fsSL "$manifest_url" || { [[ -n "$legacy_url" ]] && curl -fsSL "$legacy_url"; }
+            curl -fsSL "$manifest_url"
             ;;
         *)
             return 1

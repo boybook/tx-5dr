@@ -1,3 +1,7 @@
+import { uploadAutomaticBatches } from '../_shared/auto-upload-batches.js';
+import { UploadAcceptance } from '../_shared/upload-acceptance.js';
+import { currentUploadRecords } from '../_shared/current-upload-records.js';
+import { SyncOperationGate, SyncBusyError, busyUpload, busyDownload } from '../_shared/sync-operation-gate.js';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // QRZSyncProvider — HTTP response handling requires any
 
@@ -89,6 +93,7 @@ function qsoBand(qso: QSORecord): string {
  * and communicates with QRZ.com Logbook API for QSO upload/download.
  */
 export class QRZSyncProvider implements LogbookSyncProvider {
+  private readonly operationGate = new SyncOperationGate();
   readonly id = 'qrz';
   readonly displayName = 'QRZ.com';
   readonly color = 'warning' as const;
@@ -100,7 +105,8 @@ export class QRZSyncProvider implements LogbookSyncProvider {
     { id: 'full_sync', label: 'Full Sync', icon: 'sync', operation: 'full_sync' },
   ];
 
-  constructor(private ctx: PluginContext) {}
+  private readonly acceptance: UploadAcceptance;
+  constructor(private ctx: PluginContext) { this.acceptance = new UploadAcceptance(ctx.store.global, 'qrz'); }
 
   // ===== Config helpers =====
 
@@ -117,6 +123,10 @@ export class QRZSyncProvider implements LogbookSyncProvider {
 
   /** Write per-callsign config to KVStore (synchronous write, async flush). */
   setConfig(callsign: string, config: QRZPluginConfig): void {
+    this.operationGate.assertIdle(callsign);
+    this.writeConfig(callsign, config);
+  }
+  private writeConfig(callsign: string, config: QRZPluginConfig): void {
     this.ctx.store.global.set(this.configKey(callsign), config);
   }
 
@@ -159,6 +169,12 @@ export class QRZSyncProvider implements LogbookSyncProvider {
   }
 
   async upload(callsign: string, options?: SyncUploadOptions): Promise<SyncUploadResult> {
+    try { return await this.operationGate.run(callsign, () => options?.trigger === 'auto' && options.records && options.records.length > 100
+      ? uploadAutomaticBatches(options.records, records => this.uploadImpl(callsign, { ...options, records }))
+      : this.uploadImpl(callsign, options), options?.trigger === 'auto'); }
+    catch (error) { if (error instanceof SyncBusyError) return busyUpload(this.id); throw error; }
+  }
+  private async uploadImpl(callsign: string, options?: SyncUploadOptions): Promise<SyncUploadResult> {
     const config = this.getConfig(callsign);
     if (!config?.apiKey) {
       return {
@@ -173,9 +189,10 @@ export class QRZSyncProvider implements LogbookSyncProvider {
       };
     }
     const logbook = this.ctx.logbook.forCallsign(callsign);
+    await this.acceptance.repair(callsign, logbook, options?.trigger === 'auto');
 
     const qsos = options?.records
-      ? options.records.filter((qso) => qso.qrzQslSent !== 'Y')
+      ? (await currentUploadRecords(logbook, options.records, options.trigger !== 'auto')).filter((qso) => qso.qrzQslSent !== 'Y')
       : await this.queryPendingQsos(logbook);
 
     if (qsos.length === 0) {
@@ -218,16 +235,20 @@ export class QRZSyncProvider implements LogbookSyncProvider {
 
     let localUpdates = 0;
     try {
+      await this.acceptance.remember(callsign, new Map(accepted.map(item => [item.qso.id, item.acceptedAt])));
       const reconciled = await reconcileLogbookBatch(
         logbook as BatchLogbookAccess,
         snapshot => this.planUploadStatusUpdates(snapshot, accepted),
+        2, options?.trigger === 'auto' ? { ids: accepted.map(item => item.qso.id) } : undefined,
       );
       localUpdates = reconciled.batch.outcomes.filter(outcome => outcome.status === 'updated').length;
+      await this.acceptance.clear(callsign);
     } catch (err) {
       failures.push(createSyncFailure({
         code: 'qrz_upload_logbook_failed',
         message: err instanceof Error ? err.message : 'Failed to persist QRZ upload status',
         source: 'logbook',
+        retryable: true,
         operation: 'upload',
         providerId: this.id,
         secrets: [config.apiKey],
@@ -256,7 +277,7 @@ export class QRZSyncProvider implements LogbookSyncProvider {
       }
     }
     if (failed === 0) {
-      this.setConfig(callsign, { ...config, lastSyncTime: Date.now() });
+      this.writeConfig(callsign, { ...config, lastSyncTime: Date.now() });
     }
 
     return {
@@ -272,18 +293,17 @@ export class QRZSyncProvider implements LogbookSyncProvider {
     snapshot: LogbookSnapshot,
     accepted: ReadonlyArray<{ qso: QSORecord; acceptedAt: number }>,
   ): { mutations: LogbookBatchMutation[]; value: undefined } {
-    const index = new WorkingLogbookIndex(snapshot.records);
+    const byId = new Map(snapshot.records.map(record => [record.id, record]));
     const mutations: LogbookBatchMutation[] = [];
     for (const { qso, acceptedAt } of accepted) {
-      const current = index.get(qso.id);
+      const current = byId.get(qso.id);
       if (!current) throw new Error(`QSO with id ${qso.id} not found after QRZ upload`);
-      if (current.qrzQslSent === 'Y') continue;
-      const updates: Partial<QSORecord> = {
-        qrzQslSent: 'Y',
-        qrzQslSentDate: acceptedAt,
-      };
+      const updates: Partial<QSORecord> = {};
+      if (current.qrzQslSent !== 'Y') updates.qrzQslSent = 'Y';
+      if (!current.qrzQslSentDate) updates.qrzQslSentDate = acceptedAt;
+      if (!Object.keys(updates).length) continue;
       mutations.push({ type: 'update', qsoId: qso.id, updates });
-      index.replace({ ...current, ...updates, id: current.id });
+      byId.set(current.id, { ...current, ...updates });
     }
     return { mutations, value: undefined };
   }
@@ -296,7 +316,11 @@ export class QRZSyncProvider implements LogbookSyncProvider {
     return allQsos.filter((qso) => qso.qrzQslSent !== 'Y');
   }
 
-  async download(callsign: string, _options?: SyncDownloadOptions): Promise<SyncDownloadResult> {
+  async download(callsign: string, options?: SyncDownloadOptions): Promise<SyncDownloadResult> {
+    try { return await this.operationGate.run(callsign, () => this.downloadImpl(callsign, options)); }
+    catch (error) { if (error instanceof SyncBusyError) return busyDownload(this.id); throw error; }
+  }
+  private async downloadImpl(callsign: string, _options?: SyncDownloadOptions): Promise<SyncDownloadResult> {
     const config = this.getConfig(callsign);
     if (!config?.apiKey) {
       return {
@@ -335,6 +359,7 @@ export class QRZSyncProvider implements LogbookSyncProvider {
         code: 'qrz_download_logbook_failed',
         message: err instanceof Error ? err.message : 'Failed to commit downloaded QSOs',
         source: 'logbook',
+        retryable: true,
         operation: 'download',
         providerId: this.id,
         secrets: [config.apiKey],
@@ -391,11 +416,13 @@ export class QRZSyncProvider implements LogbookSyncProvider {
       }
 
       matched += 1;
-      if (remoteQSO.qrzQslReceived !== 'Y' || localMatch.qrzQslReceived === 'Y') continue;
-      const updates: Partial<QSORecord> = { qrzQslReceived: 'Y' };
-      if (Number.isFinite(remoteQSO.qrzQslReceivedDate)) {
+      if (remoteQSO.qrzQslReceived !== 'Y') continue;
+      const updates: Partial<QSORecord> = {};
+      if (localMatch.qrzQslReceived !== 'Y') updates.qrzQslReceived = 'Y';
+      if (Number.isFinite(remoteQSO.qrzQslReceivedDate) && localMatch.qrzQslReceivedDate !== remoteQSO.qrzQslReceivedDate) {
         updates.qrzQslReceivedDate = remoteQSO.qrzQslReceivedDate;
       }
+      if (!Object.keys(updates).length) continue;
       mutations.push({ type: 'update', qsoId: localMatch.id, updates });
       index.replace({ ...localMatch, ...updates, id: localMatch.id });
     }

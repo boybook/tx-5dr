@@ -543,6 +543,8 @@ export interface RadioPowerCommandPort {
  * native query format.
  */
 export interface QSOQueryFilter {
+  /** Exact record IDs (at most 1,000). Empty returns no records; other filters still apply. */
+  ids?: readonly string[];
   /** Match a specific callsign (exact match). */
   callsign?: string;
   /** Restrict to a time window (epoch ms). */

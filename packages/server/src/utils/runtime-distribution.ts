@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import type { PluginDistribution } from '@tx5dr/contracts';
+import { SERVER_BUILD_INFO } from '../generated/buildInfo.js';
 
 function normalizeEnvValue(value: string | undefined): string | null {
   const trimmed = value?.trim();
@@ -24,6 +25,11 @@ export function resolveRuntimeDistribution(
 
   if (normalizeEnvValue(env.TX5DR_RUNTIME_FLAVOR) === 'android-bridge') {
     return 'android-bridge';
+  }
+
+  const packagedDistribution = SERVER_BUILD_INFO.distribution;
+  if (packagedDistribution && packagedDistribution !== 'web-dev' && packagedDistribution !== 'generic-server') {
+    return packagedDistribution;
   }
 
   if (hasDockerEnvFile || dataDir === '/app/data') {

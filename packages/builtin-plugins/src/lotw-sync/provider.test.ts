@@ -96,6 +96,7 @@ function createContext() {
   const ctx = {
     store: {
       global: {
+        flush: vi.fn(async () => undefined),
         get: vi.fn((key: string) => store.get(key)),
         set: vi.fn((key: string, value: unknown) => {
           store.set(key, value);
@@ -472,6 +473,44 @@ describe('LoTWSyncProvider', () => {
     expect(files.has(otherPath)).toBe(true);
   });
 
+  it('serializes upload entry points and protects certificate mutations while work is active', async () => {
+    const f = createContext(); const provider = new LoTWSyncProvider(f.ctx);
+    provider.setConfig('BG5DRB', { username: 'user', password: 'pass', autoUploadQSO: true,
+      uploadLocation: { callsign: 'BG5DRB', dxccId: 291, gridSquare: 'PM01AA', cqZone: '24', ituZone: '44' } });
+    const qso = createQso('one'); f.setSnapshotRecords([qso]);
+    const internals = provider as unknown as LoTWProviderInternals;
+    vi.spyOn(internals, 'prepareUpload').mockResolvedValue({ issues: [], blockedCount: 0, batches: [{ qsos: [qso], certificate: { callsign: 'BG5DRB' } }] });
+    vi.spyOn(internals, 'resolveUploadLocation').mockReturnValue({ callsign: 'BG5DRB', dxccId: 291, gridSquare: 'PM01AA', cqZone: '24', ituZone: '44', state: 'CA', county: 'Santa Clara' });
+    let release!: () => void; let started!: () => void;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const upload = vi.spyOn(internals, 'uploadBatch').mockImplementation(async () => {
+      started(); await new Promise<void>(resolve => { release = resolve; });
+      return { acceptedAt: Date.now(), responseSummary: 'accepted' };
+    });
+    const first = provider.upload('BG5DRB', { records: [qso] }); await entered;
+    const queued = provider.upload('BG5DRB', { trigger: 'auto', records: [qso] });
+    await expect(provider.deleteCertificate('BG5DRB', 'cert')).rejects.toThrow('already active');
+    expect((await provider.download('BG5DRB')).failures?.[0]?.code).toBe('sync_busy');
+    release(); expect((await first).uploaded).toBe(1);
+    expect((await queued).uploaded).toBe(0); expect(upload).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds an automatic backlog and reads only IDs for local sent patches', async () => {
+    const f = createContext(); const provider = new LoTWSyncProvider(f.ctx); configureProvider(provider);
+    const records = Array.from({ length: 201 }, (_, i) => createQso(`auto-${i}`)); f.setSnapshotRecords(records);
+    const internals = provider as unknown as LoTWProviderInternals;
+    vi.spyOn(internals, 'prepareUpload').mockImplementation(async (_config, input) => {
+      const qsos = input as QSORecord[];
+      expect(qsos.length).toBeLessThanOrEqual(100);
+      return { issues: [], blockedCount: 0, batches: [{ qsos, certificate: { callsign: 'BG5DRB' } }] };
+    });
+    vi.spyOn(internals, 'resolveUploadLocation').mockReturnValue({ callsign: 'BG5DRB', dxccId: 291, gridSquare: 'PM01AA', cqZone: '24', ituZone: '44', state: 'CA', county: 'Santa Clara' });
+    const upload = vi.spyOn(internals, 'uploadBatch').mockResolvedValue({ acceptedAt: Date.now(), responseSummary: 'accepted' });
+    expect((await provider.upload('BG5DRB', { trigger: 'auto', records })).uploaded).toBe(201);
+    expect(upload).toHaveBeenCalledTimes(3);
+    expect(f.queryQSOs).not.toHaveBeenCalled();
+    expect(f.applyQsoBatch.mock.calls.map(([batch]) => batch.length)).toEqual([100, 100, 1]);
+  });
   it('auto-upload uses explicit records without rescanning the logbook', async () => {
     const { ctx, queryQSOs, updateQSO, applyQsoBatch, notifyUpdated, setSnapshotRecords } = createContext();
     const provider = new LoTWSyncProvider(ctx);

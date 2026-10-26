@@ -1,3 +1,4 @@
+import { finishWorkInSlices } from './cooperative-work.js';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -214,6 +215,7 @@ function substantiveFilter(options?: LogQueryOptions): boolean {
     || options.mode
     || options.band
     || options.dxccStatus
+    || options.dxccNeedsReview
     || options.qslFlow
     || options.excludeModes?.length
     || options.qslStatus
@@ -349,6 +351,7 @@ export class ADIFLogProvider implements ILogProvider {
   async readQsoSnapshot(options?: LogQueryOptions): Promise<LogbookQsoSnapshot> {
     const queryOptions = options ? {
       ...options,
+      ids: options.ids ? [...options.ids] : undefined,
       frequencyRange: options.frequencyRange ? { ...options.frequencyRange } : undefined,
       timeRange: options.timeRange ? { ...options.timeRange } : undefined,
       excludeModes: options.excludeModes ? [...options.excludeModes] : undefined,
@@ -493,7 +496,7 @@ export class ADIFLogProvider implements ILogProvider {
         if (operations.length > 0) {
           PersistenceCoordinator.getInstance().assertMutationsAllowed('logbook:batch', this.options.logBookId);
           const mutation = changedExistingIds.length > 0
-            ? this.document!.prepareRewrite(operations)
+            ? await this.document!.prepareRewriteAsync(operations)
             : this.document!.prepareImport(operations);
           await this.commitMutation(mutation);
         }
@@ -538,6 +541,11 @@ export class ADIFLogProvider implements ILogProvider {
     this.assertReadable();
     const record = this.records.get(id);
     return record ? cloneRecord(record) : null;
+  }
+
+  findByCallsign(callsign: string): QSORecord[] {
+    this.assertReadable();
+    return this.document?.findByCallsign(callsign).map(cloneRecord) ?? [];
   }
 
   async queryQSOs(options?: LogQueryOptions): Promise<QSORecord[]> {
@@ -904,6 +912,14 @@ export class ADIFLogProvider implements ILogProvider {
     this.generation = generation;
   }
 
+  private async installScanInSlices(scan: AdifScanResult, generation: GenerationToken,
+    projections: readonly LogbookRecordProjection[]): Promise<void> {
+    const document = await LogbookDocument.fromScanAsync(scan, projections);
+    const records = await LogbookRecordService.createInSlices(document.getQsoRecords());
+    // Publish the complete projection and its revision together, after durable validation.
+    this.document = document; this.records = records; this.generation = generation;
+  }
+
   private refreshHealth(status = this.store?.getState().status ?? 'unavailable'): void {
     const dynamicIssues = this.store?.getState().issues.map(storeIssue) ?? [];
     const opaqueCount = this.document?.getOpaqueSegments().length ?? 0;
@@ -999,7 +1015,7 @@ export class ADIFLogProvider implements ILogProvider {
             validate: (scan, _generation, projections) => this.assertScanMatches(expected, scan, projections),
           },
         );
-        this.installCommittedMutation(mutation, committed);
+        await this.installCommittedMutation(mutation, committed);
       } else {
         try {
           await this.requireBackup().ensureBeforeRewrite();
@@ -1019,7 +1035,7 @@ export class ADIFLogProvider implements ILogProvider {
             validate: (scan, _generation, projections) => this.assertScanMatches(expected, scan, projections),
           },
         );
-        this.installCommittedMutation(mutation, committed);
+        await this.installCommittedMutation(mutation, committed);
       }
       this.backup?.markMutationCommitted();
       this.refreshHealth();
@@ -1041,14 +1057,14 @@ export class ADIFLogProvider implements ILogProvider {
     }
   }
 
-  private installCommittedMutation(
+  private async installCommittedMutation(
     mutation: PreparedLogbookMutation,
     committed: {
       scan: AdifScanResult;
       recordProjections: readonly LogbookRecordProjection[];
       generation: GenerationToken;
     },
-  ): void {
+  ): Promise<void> {
     try {
       if (mutation.kind === 'append') {
         // Appends do not move any existing source ranges. Reusing the
@@ -1064,7 +1080,7 @@ export class ADIFLogProvider implements ILogProvider {
         // Keep the established full installation for rewrites. It is outside
         // the TX critical path and preserves the scanner's external-record ID
         // and source semantics exactly.
-        this.installScan(committed.scan, committed.generation, committed.recordProjections);
+        await this.installScanInSlices(committed.scan, committed.generation, committed.recordProjections);
         return;
       }
       this.generation = committed.generation;
@@ -1076,7 +1092,7 @@ export class ADIFLogProvider implements ILogProvider {
         mutationKind: mutation.kind,
         error: error instanceof Error ? error.message : String(error),
       });
-      this.installScan(committed.scan, committed.generation, committed.recordProjections);
+      await this.installScanInSlices(committed.scan, committed.generation, committed.recordProjections);
     }
   }
 
@@ -1084,7 +1100,12 @@ export class ADIFLogProvider implements ILogProvider {
     expected: LogbookDocument,
     scan: AdifScanResult,
     projections?: readonly LogbookRecordProjection[],
-  ): void {
+  ): Promise<void> {
+    return finishWorkInSlices(this.scanValidationSteps(expected, scan, projections));
+  }
+
+  private *scanValidationSteps(expected: LogbookDocument, scan: AdifScanResult,
+    projections?: readonly LogbookRecordProjection[]): Generator<void, void> {
     const wanted = expected.getSegments();
     if (scan.records.length !== wanted.length) {
       throw new Error(`Committed ADIF has ${scan.records.length} segments; expected ${wanted.length}`);
@@ -1098,6 +1119,7 @@ export class ADIFLogProvider implements ILogProvider {
       if (projections && Boolean(left.qso) !== Boolean(projections[index]?.qso)) {
         throw new Error(`Committed ADIF segment ${index} changed QSO visibility`);
       }
+      yield;
     }
   }
 

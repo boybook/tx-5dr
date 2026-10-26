@@ -30,3 +30,17 @@ current and pending playback. System-notification permissions do not gate audio.
 New event types belong in the client event union and explicit handlers, with
 separate event policy and output drivers. This boundary does not provide server
 or plugin notification APIs. Multiple open clients deliver independently.
+
+Plugin synchronization results use the same client ownership boundary. Providers
+supply credential-free status, operation IDs, revisions and optional trigger/
+launch correlation. Initial loads and reconnects establish a quiet baseline;
+only a manual operation launched by this client can produce a once-per-operation
+result toast. Automatic successes stay quiet. Historical failures, automatic
+failures and resumable work mark the provider entry for inspection.
+
+Active manual work has a collapsible status strip; read failures preserve the
+last progress with an unavailable marker. Browser-session presentation memory
+is bounded and scoped by callsign, provider and operation. Dismissal and notice
+memory never changes plugin checkpoints or execution. The Host validates and
+projects provider status, while the plugin owns leases, pause, retries and
+completion. This adds no plugin Toast API or Host task scheduler.

@@ -61,7 +61,7 @@ try {
   const core = stageAndPack('packages/core');
   const pluginApi = stageAndPack('packages/plugin-api');
   const archive = execFileSync('tar', ['-tf', pluginApi], { encoding: 'utf8' });
-  for (const asset of ['package/dist/contest-logbook-ui/contest-log.html', 'package/dist/contest-logbook-ui/assets/contest-log.js', 'package/dist/contest-logbook-ui/assets/contest-log.css']) {
+  for (const asset of ['package/dist/ui.css', 'package/dist/contest-logbook-ui/contest-log.html', 'package/dist/contest-logbook-ui/assets/contest-log.js', 'package/dist/contest-logbook-ui/assets/contest-log.css']) {
     if (!archive.split('\n').includes(asset)) throw new Error(`missing packed contest logbook UI asset: ${asset}`);
   }
 
@@ -80,6 +80,9 @@ try {
   ], consumerRoot);
   writeFileSync(join(consumerRoot, 'smoke.mjs'), `
 import * as root from '@tx5dr/plugin-api';
+import { readFileSync } from 'node:fs';
+const ui = readFileSync(new URL(import.meta.resolve('@tx5dr/plugin-api/ui.css')), 'utf8');
+if (!ui.includes('.tx5dr-button') || ui.includes('wavelog')) throw new Error('invalid packed shared UI stylesheet');
 import * as toolkit from '@tx5dr/plugin-api/toolkit';
 import * as contest from '@tx5dr/plugin-api/contest';
 import * as ft8 from '@tx5dr/plugin-api/ft8';
@@ -103,7 +106,9 @@ for (const [value, name] of required) {
 `);
   run(process.execPath, ['smoke.mjs'], consumerRoot);
   writeFileSync(join(consumerRoot, 'smoke.ts'), `
-import type { StrategyRuntime, CapabilityTarget, CapabilityDescriptor, CapabilityValue } from '@tx5dr/plugin-api';
+import type { QSOQueryFilter, StrategyRuntime, CapabilityTarget, CapabilityDescriptor, CapabilityValue } from '@tx5dr/plugin-api';
+const targetedRecords: QSOQueryFilter = { ids: ['one'], mode: 'FT8' };
+void targetedRecords;
 const capabilityTarget: CapabilityTarget = { scope: 'channel', receiver: 0, channel: 0 };
 const capabilityValue: CapabilityValue = 0.5;
 const capabilityDescriptor: CapabilityDescriptor = {
@@ -202,6 +207,21 @@ void envelope;
     '--project',
     join(consumerRoot, 'tsconfig.json'),
   ], consumerRoot);
+  if (process.argv.includes('--ui-scaffolds')) {
+    const cli = join(repoRoot, 'packages/create-tx5dr-plugin/dist/index.js');
+    for (const template of ['ui-vanilla', 'ui-react', 'ui-vue']) {
+      run(process.execPath, [cli, `smoke-${template}`, '--template', template, '--type', 'utility', '--lang', 'ts'], temporaryRoot);
+      const project = join(temporaryRoot, `smoke-${template}`);
+      run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', contracts, core, pluginApi], project);
+      run('npm', ['run', 'build'], project);
+      run('npm', ['test', '--', '--pool=forks', '--maxWorkers=1', '--minWorkers=1'], project);
+      const entry = readFileSync(join(project, 'src/index.ts'), 'utf8');
+      if (!entry.includes("styles: 'standard'")) throw new Error(`missing standard styles in ${template}`);
+      const stylesheet = readFileSync(join(project, template === 'ui-vanilla' ? 'ui/settings.css' : 'ui/src/App.css'), 'utf8');
+      if (stylesheet.includes('.tx5dr-button {')) throw new Error(`duplicated control styles in ${template}`);
+    }
+    console.log('Packed SDK React, Vue and vanilla scaffold consumers passed.');
+  }
   console.log('Packed @tx5dr/plugin-api consumer smoke passed.');
 } finally {
   rmSync(temporaryRoot, { recursive: true, force: true });

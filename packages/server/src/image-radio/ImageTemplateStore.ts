@@ -3,9 +3,8 @@ import path from 'node:path';
 
 import { ImageTemplateSchema, type ImageTemplate } from '@tx5dr/contracts';
 
-import { SafeFileWriter, loadJsonWithRecovery } from '../utils/persistence/index.js';
-
-interface TemplateIndex { templates: ImageTemplate[] }
+import { ImageRecordStore } from './ImageRecordStore.js';
+import { PersistedTemplateSchema } from './ImagePersistenceSchema.js';
 
 function builtInTemplates(now = Date.now()): ImageTemplate[] {
   const layer = (id: string, text: string, y: number, fontSize: number) => ({
@@ -20,23 +19,14 @@ function builtInTemplates(now = Date.now()): ImageTemplate[] {
 }
 
 export class ImageTemplateStore {
-  private readonly writer = new SafeFileWriter({ backups: 3 });
-  private readonly filePath: string;
-  private templates: ImageTemplate[] = [];
-  private initialized = false;
+  readonly persistence: ImageRecordStore<ImageTemplate>;
+  private get templates() { return [...this.persistence.values.values()].filter(item => !item.builtIn); }
 
-  constructor(baseDir: string) { this.filePath = path.join(baseDir, 'templates.json'); }
-
-  async initialize(): Promise<void> {
-    if (this.initialized) return;
-    const loaded = await loadJsonWithRecovery<TemplateIndex>(this.filePath, {
-      defaultValue: () => ({ templates: [] }),
-      validate: (value) => ({ templates: ImageTemplateSchema.array().parse((value as TemplateIndex)?.templates ?? []) }),
-      writer: this.writer,
-    });
-    this.templates = loaded.value.templates.filter((item) => !item.builtIn);
-    this.initialized = true;
+  constructor(baseDir: string) {
+    this.persistence = new ImageRecordStore(path.join(baseDir, 'templates.json'), 'templates', 'templates', PersistedTemplateSchema, item => JSON.stringify([item.operatorId ?? null, item.id]));
   }
+
+  initialize(): Promise<void> { return this.persistence.initialize(); }
 
   list(operatorId?: string): ImageTemplate[] {
     return [...builtInTemplates(), ...this.templates.filter((item) => item.operatorId === operatorId)];
@@ -49,35 +39,27 @@ export class ImageTemplateStore {
   }
 
   async save(operatorId: string, input: Pick<ImageTemplate, 'id' | 'name' | 'backgroundArtifactId' | 'backgroundSource' | 'backgroundTransform' | 'layers'>): Promise<ImageTemplate> {
-    await this.initialize();
-    const now = Date.now();
-    const existing = this.templates.find((item) => item.id === input.id && item.operatorId === operatorId);
-    const template = ImageTemplateSchema.parse({
-      ...input,
-      id: existing?.id ?? input.id ?? randomUUID(),
-      operatorId,
-      builtIn: false,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
+    return this.persistence.transaction(records => {
+      const now = Date.now();
+      const existing = [...records.values()].find((item) => item.id === input.id && item.operatorId === operatorId);
+      const template = ImageTemplateSchema.parse({
+        ...input,
+        id: existing?.id ?? input.id ?? randomUUID(),
+        operatorId,
+        builtIn: false,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      });
+      records.set(JSON.stringify([operatorId, template.id]), template);
+      return template;
     });
-    this.templates = [
-      ...this.templates.filter((item) => !(item.id === template.id && item.operatorId === operatorId)),
-      template,
-    ];
-    await this.persist();
-    return template;
   }
 
   async delete(operatorId: string, id: string): Promise<void> {
-    await this.initialize();
-    if (id.startsWith('builtin-')) throw new Error('IMAGE_TEMPLATE_BUILTIN_READONLY');
-    const next = this.templates.filter((item) => !(item.id === id && item.operatorId === operatorId));
-    if (next.length === this.templates.length) throw new Error('IMAGE_TEMPLATE_NOT_FOUND');
-    this.templates = next;
-    await this.persist();
-  }
-
-  private async persist(): Promise<void> {
-    await this.writer.writeFile(this.filePath, `${JSON.stringify({ templates: this.templates }, null, 2)}\n`);
+    await this.persistence.transaction(records => {
+      if (id.startsWith('builtin-')) throw new Error('IMAGE_TEMPLATE_BUILTIN_READONLY');
+      const key = JSON.stringify([operatorId, id]);
+      if (!records.delete(key)) throw new Error('IMAGE_TEMPLATE_NOT_FOUND');
+    });
   }
 }

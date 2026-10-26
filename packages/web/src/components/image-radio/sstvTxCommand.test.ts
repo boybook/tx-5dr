@@ -7,6 +7,7 @@ describe('sstvTxErrorTranslationKey', () => {
     expect(sstvTxErrorTranslationKey('PHYSICAL_TX_BUSY')).toBe('txBusy');
     expect(sstvTxErrorTranslationKey('IMAGE_FREQUENCY_CHANGED')).toBe('txFrequencyChanged');
     expect(sstvTxErrorTranslationKey('IMAGE_TX_CALLSIGN_REQUIRED')).toBe('txCallsignRequired');
+    expect(sstvTxErrorTranslationKey('IMAGE_PERSISTENCE_UNAVAILABLE')).toBe('persistence.unavailable');
     expect(sstvTxErrorTranslationKey('UNKNOWN')).toBe('txRejected');
   });
 });

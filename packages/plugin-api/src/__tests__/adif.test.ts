@@ -170,3 +170,14 @@ describe('ADIF QSO comments', () => {
     expect(parsedLegacy?.messageHistory).toEqual(['CQ TEST', 'RR73']);
   });
 });
+
+it('reads standard QRZ status/date fields and allows deferred DXCC enrichment', () => {
+  const adif = '<call:6>N0CALL<qso_date:8>20260417<time_on:6>120000<mode:3>FT8<freq:9>14.074000'
+    + '<qrzcom_qso_upload_status:1>Y<qrzcom_qso_download_status:1>Y'
+    + '<qrzcom_qso_upload_date:8>20260417<qrzcom_qso_download_date:8>20260418<eor>';
+  const record = parseADIFRecord(adif, 'test', { resolveDxcc: false });
+  expect(record).toMatchObject({ qrzQslSent: 'Y', qrzQslReceived: 'Y',
+    qrzQslSentDate: Date.parse('2026-04-17T00:00:00Z'), qrzQslReceivedDate: Date.parse('2026-04-18T00:00:00Z') });
+  expect(record?.dxccResolvedAt).toBeUndefined();
+  expect(convertQSOToADIF(record!)).toContain('<qrzcom_qso_download_status:1>Y');
+});

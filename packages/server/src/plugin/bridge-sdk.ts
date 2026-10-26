@@ -1,3 +1,5 @@
+import { getPluginThemeTokens } from '@tx5dr/plugin-api';
+
 /**
  * Browser runtime injected into every plugin iframe page.
  *
@@ -50,28 +52,12 @@ export function getPluginBridgeSdkScript(): string {
   };
 
   // === Theme-aware CSS variable tokens ===
-  var THEME_TOKENS = {
-    dark: {
-      '--tx5dr-bg': '#18181b',
-      '--tx5dr-bg-content': '#27272a',
-      '--tx5dr-bg-hover': '#3f3f46',
-      '--tx5dr-text': '#fafafa',
-      '--tx5dr-text-secondary': '#a1a1aa',
-      '--tx5dr-border': '#3f3f46'
-    },
-    light: {
-      '--tx5dr-bg': '#ffffff',
-      '--tx5dr-bg-content': '#f4f4f5',
-      '--tx5dr-bg-hover': '#e4e4e7',
-      '--tx5dr-text': '#18181b',
-      '--tx5dr-text-secondary': '#71717a',
-      '--tx5dr-border': '#d4d4d8'
-    }
-  };
+  var THEME_TOKENS = ${JSON.stringify({ dark: getPluginThemeTokens('dark'), light: getPluginThemeTokens('light') })};
 
   function applyThemeTokens(theme) {
     var tokens = THEME_TOKENS[theme] || THEME_TOKENS.dark;
     var root = document.documentElement;
+    root.style.colorScheme = theme;
     for (var key in tokens) {
       root.style.setProperty(key, tokens[key]);
     }

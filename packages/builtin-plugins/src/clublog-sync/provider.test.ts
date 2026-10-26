@@ -29,6 +29,7 @@ function createContext(fetchImpl: (input: string, init?: RequestInit) => Promise
   const ctx = {
     store: {
       global: {
+        flush: vi.fn(async () => undefined),
         get: vi.fn((key: string) => store.get(key)),
         set: vi.fn((key: string, value: unknown) => {
           store.set(key, value);
@@ -79,11 +80,41 @@ function configure(provider: ClubLogSyncProvider) {
 }
 
 describe('ClubLogSyncProvider', () => {
+  it('retains the success ledger when a stale automatic upload waits behind a manual upload', async () => {
+    withApiKey();
+    let release!: (response: Response) => void; let started!: () => void;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const f = createContext(async () => { started(); return new Promise<Response>(resolve => { release = resolve; }); });
+    const provider = new ClubLogSyncProvider(f.ctx); configure(provider);
+    const original = createQso('one'); f.queryQSOs.mockResolvedValue([original]);
+    const first = provider.upload('BG5DRB', { records: [original] }); await entered;
+    const queued = provider.upload('BG5DRB', { trigger: 'auto', records: [original] });
+    expect(() => configure(provider)).toThrow();
+    expect((await provider.upload('BG5DRB', { records: [original] })).failures?.[0]?.code).toBe('sync_busy');
+    release(textResponse('File queued')); expect((await first).uploaded).toBe(1);
+    expect((await queued).uploaded).toBe(0);
+    expect(f.fetch).toHaveBeenCalledTimes(1);
+  });
+
   afterEach(() => {
     delete process.env.TX5DR_CLUBLOG_API_KEY;
     vi.restoreAllMocks();
   });
 
+  it('reuses a ledger across automatic calls and retries failed persistence before clearing the queue', async () => {
+    withApiKey(); const f = createContext(async () => textResponse('QSO OK'));
+    const provider = new ClubLogSyncProvider(f.ctx); configure(provider);
+    const store = f.ctx.store.global;
+    const flush = vi.mocked(store.flush);
+    flush.mockRejectedValueOnce(new Error('disk failure'));
+    const first = createQso('one');
+    await expect(provider.upload('BG5DRB', { trigger: 'auto', records: [first] })).rejects.toThrow('disk failure');
+    expect((await provider.upload('BG5DRB', { trigger: 'auto', records: [first] })).skipped).toBe(1);
+    const get = vi.mocked(store.get); get.mockClear();
+    expect((await provider.upload('BG5DRB', { trigger: 'auto', records: [createQso('two', { startTime: first.startTime + 60000 })] })).uploaded).toBe(1);
+    expect(get.mock.calls.filter(([key]) => String(key).startsWith('ledger:'))).toHaveLength(0);
+    expect(f.fetch).toHaveBeenCalledTimes(2);
+  });
   it('requires developer API key in addition to user credentials', async () => {
     const { ctx } = createContext(async () => textResponse('QSO OK'));
     const provider = new ClubLogSyncProvider(ctx);

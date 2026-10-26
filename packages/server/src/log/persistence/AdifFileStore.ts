@@ -1402,7 +1402,14 @@ async function collectRewriteChunks(
   let chunkIndex = 0;
   for await (const chunk of source) {
     if (chunk instanceof Uint8Array) chunks.push(Buffer.from(chunk));
-    else if (chunk.kind === 'source') chunks.push({ kind: 'source', range: { ...chunk.range } });
+    else if (chunk.kind === 'source') {
+      const previous = chunks[chunks.length - 1];
+      // Adjacent immutable ranges belong to the same source generation. Preserve
+      // their exact bytes while avoiding one IPC/copy operation for every QSO.
+      if (previous && !(previous instanceof Uint8Array) && previous.kind === 'source'
+        && previous.range.end === chunk.range.start) previous.range.end = chunk.range.end;
+      else chunks.push({ kind: 'source', range: { ...chunk.range } });
+    }
     else chunks.push({ kind: 'bytes', bytes: Buffer.from(chunk.bytes) });
     chunkIndex += 1;
     if (chunkIndex % 256 === 0) {

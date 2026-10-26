@@ -1,3 +1,4 @@
+import { isDetachedPluginData } from '../plugin-data-boundary.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'eventemitter3';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -340,7 +341,12 @@ describe('PluginContextFactory logbook access', () => {
     const logbook = ctx.logbook as LogbookAccess;
     await expect(logbook.addQSO(input)).resolves.toEqual(committedAdd);
     await expect(logbook.updateQSO(input.id, updates)).resolves.toEqual(committedUpdate);
-    const snapshot = await logbook.readQsoSnapshot({ callsign: 'BG2CM' });
+    const snapshot = await logbook.readQsoSnapshot({ callsign: 'BG2CM', ids: ['caller-id', 'caller-id'] });
+    expect(isDetachedPluginData(snapshot)).toBe(true);
+    expect(readQsoSnapshot).toHaveBeenCalledWith(expect.objectContaining({ ids: ['caller-id'] }));
+    for (const ids of [[''], [1], new Array(1), Array(1001).fill('one'), 'one']) {
+      await expect(logbook.readQsoSnapshot({ ids } as never)).rejects.toThrow('ids must contain');
+    }
     const batch = await logbook.applyQsoBatch(mutations, { expectedRevision: snapshot.revision });
     expect(addQSO).toHaveBeenCalledWith(input, 'operator-1');
     expect(updateQSO).toHaveBeenCalledWith(input.id, updates);

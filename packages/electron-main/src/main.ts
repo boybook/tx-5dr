@@ -1,3 +1,5 @@
+import { UpdatePreferencesSchema } from '@tx5dr/contracts';
+import { createUpdateBackup } from './updateBackup.js';
 import { app, BrowserWindow, ipcMain, shell, Tray, Menu, dialog, nativeTheme, powerSaveBlocker, session, globalShortcut, type WebContents } from 'electron';
 import log from 'electron-log/main';
 import { homedir, hostname as getHostname, networkInterfaces } from 'node:os';
@@ -301,10 +303,12 @@ let startupErrorState: StartupErrorPayload | null = null;
 const ELECTRON_SETTINGS_FILE = 'electron-settings.json';
 
 interface ElectronSettings {
+  updateChannel?: 'release' | 'nightly';
   closeBehavior: 'ask' | 'tray' | 'quit';
   desktopHttps?: PersistentDesktopHttpsConfig;
   remoteAccessPreset?: 'local' | 'lan' | 'public';
   shortcuts?: ShortcutConfig;
+  shortcutToggles?: ShortcutToggles;
 }
 
 const SHORTCUT_ACTION_IDS = [
@@ -356,11 +360,35 @@ interface ShortcutRecordingCancelledPayload {
   actionId: ShortcutActionId;
 }
 
+interface ShortcutToggles {
+  enabled: boolean;
+  globalEnabled: boolean;
+}
+
+const DEFAULT_SHORTCUT_TOGGLES: ShortcutToggles = { enabled: true, globalEnabled: true };
+
+function createDefaultShortcutToggles(): ShortcutToggles {
+  return { ...DEFAULT_SHORTCUT_TOGGLES };
+}
+
+function normalizeShortcutToggles(value: unknown): ShortcutToggles {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return createDefaultShortcutToggles();
+  }
+
+  const raw = value as Partial<ShortcutToggles>;
+  return {
+    enabled: raw.enabled !== false,
+    globalEnabled: raw.globalEnabled !== false,
+  };
+}
+
 const DEFAULT_ELECTRON_SETTINGS: ElectronSettings = {
   closeBehavior: 'ask',
   desktopHttps: { ...DEFAULT_DESKTOP_HTTPS_CONFIG, enabled: false },
   remoteAccessPreset: 'local',
   shortcuts: createDefaultShortcutConfig(),
+  shortcutToggles: createDefaultShortcutToggles(),
 };
 
 function getElectronSettingsPath(): string {
@@ -753,7 +781,8 @@ function stopShortcutRecording(options: { restoreGlobalShortcuts?: boolean } = {
   shortcutRecordingActionId = null;
 
   if (options.restoreGlobalShortcuts) {
-    applyGlobalShortcutConfig(loadElectronSettings().shortcuts);
+    const settings = loadElectronSettings();
+    applyShortcutSettings(settings.shortcuts, settings.shortcutToggles);
   }
 }
 
@@ -763,6 +792,7 @@ function loadElectronSettings(): ElectronSettings {
     () => ({
       ...DEFAULT_ELECTRON_SETTINGS,
       shortcuts: createDefaultShortcutConfig(),
+      shortcutToggles: createDefaultShortcutToggles(),
     }),
     (parsed) => {
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -778,18 +808,21 @@ function loadElectronSettings(): ElectronSettings {
           // LAN-exposed gateway defaults. Preserve that effective behavior.
           ?? 'lan',
         shortcuts: normalizeShortcutConfig(settings.shortcuts),
+        shortcutToggles: normalizeShortcutToggles(settings.shortcutToggles),
       };
     },
   );
 }
 
-function saveElectronSettings(settings: ElectronSettings): void {
+function saveElectronSettings(settings: ElectronSettings): boolean {
   try {
     const dir = getAppConfigDir();
     fs.mkdirSync(dir, { recursive: true });
     safeWriteFileSync(getElectronSettingsPath(), `${JSON.stringify(settings, null, 2)}\n`, { backups: 3, mode: 0o600 });
+    return true;
   } catch (err) {
     logger.error('failed to save electron settings', err);
+    return false;
   }
 }
 
@@ -806,8 +839,16 @@ function unregisterGlobalShortcuts(): void {
   registeredShortcutAccelerators.clear();
 }
 
-function applyGlobalShortcutConfig(configInput: unknown): ShortcutRegistrationStatus {
+function getShortcutToggles(): ShortcutToggles {
+  return loadElectronSettings().shortcutToggles ?? createDefaultShortcutToggles();
+}
+
+function applyShortcutSettings(
+  configInput: unknown,
+  togglesInput: unknown,
+): ShortcutRegistrationStatus {
   const config = normalizeShortcutConfig(configInput);
+  const toggles = normalizeShortcutToggles(togglesInput);
   const status: ShortcutRegistrationStatus = {
     config,
     registered: [],
@@ -815,6 +856,11 @@ function applyGlobalShortcutConfig(configInput: unknown): ShortcutRegistrationSt
   };
 
   unregisterGlobalShortcuts();
+
+  if (!toggles.enabled || !toggles.globalEnabled) {
+    logger.info('global shortcuts are switched off in shortcut settings', toggles);
+    return status;
+  }
 
   for (const actionId of SHORTCUT_ACTION_IDS) {
     const accelerator = shortcutBindingToAccelerator(config[actionId]);
@@ -1170,6 +1216,12 @@ async function applyDesktopHttpsSettings(update: Partial<PersistentDesktopHttpsC
   }
 
   return persistDesktopHttpsConfig(next);
+}
+
+// ===== Linux GTK 兼容性 =====
+// Electron 36 在 GNOME 上默认使用 GTK 4，而 TX-5DR 使用 Electron 的 GTK 3 运行时
+if (process.platform === 'linux') {
+  app.commandLine.appendSwitch('gtk-version', '3');
 }
 
 // ===== macOS 后台节流防护 =====
@@ -3491,7 +3543,8 @@ const startApp = async () => {
   createDockMenu();
   createApplicationMenu();
   setupIpcHandlers();
-  applyGlobalShortcutConfig(loadElectronSettings().shortcuts);
+  const startupSettings = loadElectronSettings();
+  applyShortcutSettings(startupSettings.shortcuts, startupSettings.shortcutToggles);
 
   const vcRuntimeOk = await ensureWindowsVCRuntimeInstalled();
   if (!vcRuntimeOk) return;
@@ -3517,9 +3570,22 @@ let relaunchAfterCleanup = false;
 let isInstallingDesktopUpdate = false;
 
 
+function assertUpdateSender(event: Electron.IpcMainInvokeEvent): void {
+  const owner = BrowserWindow.fromWebContents(event.sender);
+  if (!owner || event.senderFrame !== event.sender.mainFrame) throw new Error('update_sender_denied');
+  const url = new URL(event.senderFrame.url);
+  if (url.origin !== new URL(getWebUrl()).origin || url.pathname.includes('plugin-page')) {
+    throw new Error('update_sender_denied');
+  }
+}
+
 function getDesktopUpdateService(): DesktopUpdateService {
   if (!desktopUpdateService) {
     desktopUpdateService = new DesktopUpdateService({
+      getChannel: () => UpdatePreferencesSchema.parse({ channel: loadElectronSettings().updateChannel ?? BUILD_INFO.channel }).channel,
+      saveChannel: channel => {
+        if (!saveElectronSettings({ ...loadElectronSettings(), updateChannel: channel })) throw new Error('update_preferences_write_failed');
+      },
       prepareInstall: prepareForDesktopUpdateInstall,
       beforeQuitAndInstall: markDesktopUpdateInstallHandoff,
       onQuitAndInstallError: resetDesktopUpdateInstallHandoff,
@@ -3564,7 +3630,15 @@ async function prepareForDesktopUpdateInstall(): Promise<void> {
     let cleanupSucceeded = false;
 
     try {
+      if (serverProcess && !await prepareEmbeddedServerShutdown('desktop-update')) throw new Error('update_shutdown_not_safe');
       const childResults = await cleanup();
+      if (childResults.some(result => result.forced)) throw new Error('update_shutdown_forced');
+      const backupPath = await createUpdateBackup(
+        [getAppConfigDir(), getAppDataDir()],
+        path.join(path.dirname(getAppDataDir()), 'TX-5DR-update-backups'),
+        BUILD_INFO,
+      );
+      logger.info('Update backup completed', { backupPath });
       visualCloseMs = closeFrontendWindowsImmediately();
       hasCleanedUp = true;
       cleanupSucceeded = true;
@@ -4096,6 +4170,11 @@ function setupIpcHandlers() {
     return getDesktopUpdateService().getStatus();
   });
 
+  ipcMain.handle('updater:setChannel', async (event, request: unknown) => {
+    assertUpdateSender(event);
+    return getDesktopUpdateService().setChannel(request);
+  });
+
   ipcMain.handle('updater:check', async () => {
     return getDesktopUpdateService().checkForUpdates();
   });
@@ -4104,12 +4183,14 @@ function setupIpcHandlers() {
     await getDesktopUpdateService().openDownload(url);
   });
 
-  ipcMain.handle('updater:download', async () => {
-    return getDesktopUpdateService().download();
+  ipcMain.handle('updater:download', async (event, request: unknown) => {
+    assertUpdateSender(event);
+    return getDesktopUpdateService().download(request);
   });
 
-  ipcMain.handle('updater:installAndRestart', async () => {
-    return getDesktopUpdateService().installAndRestart();
+  ipcMain.handle('updater:installAndRestart', async (event, request: unknown) => {
+    assertUpdateSender(event);
+    return getDesktopUpdateService().installAndRestart(request);
   });
 
   ipcMain.handle('https:getStatus', async () => {
@@ -4208,22 +4289,39 @@ function setupIpcHandlers() {
     return loadElectronSettings().shortcuts ?? createDefaultShortcutConfig();
   });
 
+  ipcMain.handle('shortcuts:getToggles', () => {
+    return getShortcutToggles();
+  });
+
+  ipcMain.handle('shortcuts:setToggles', (_event, toggles: unknown) => {
+    const settings = loadElectronSettings();
+    const shortcutToggles = normalizeShortcutToggles(toggles);
+    if (!saveElectronSettings({ ...settings, shortcutToggles })) {
+      throw new Error('failed_to_persist_shortcut_toggles');
+    }
+    return applyShortcutSettings(settings.shortcuts, shortcutToggles);
+  });
+
   ipcMain.handle('shortcuts:setConfig', (_event, config: unknown) => {
     const settings = loadElectronSettings();
     const shortcuts = normalizeShortcutConfig(config);
-    saveElectronSettings({ ...settings, shortcuts });
-    return applyGlobalShortcutConfig(shortcuts);
+    if (!saveElectronSettings({ ...settings, shortcuts })) {
+      throw new Error('failed_to_persist_shortcut_config');
+    }
+    return applyShortcutSettings(shortcuts, settings.shortcutToggles);
   });
 
   ipcMain.handle('shortcuts:register', (_event, config?: unknown) => {
-    if (config !== undefined) {
-      const settings = loadElectronSettings();
-      const shortcuts = normalizeShortcutConfig(config);
-      saveElectronSettings({ ...settings, shortcuts });
-      return applyGlobalShortcutConfig(shortcuts);
+    const settings = loadElectronSettings();
+    if (config === undefined) {
+      return applyShortcutSettings(settings.shortcuts, settings.shortcutToggles);
     }
 
-    return applyGlobalShortcutConfig(loadElectronSettings().shortcuts);
+    const shortcuts = normalizeShortcutConfig(config);
+    if (!saveElectronSettings({ ...settings, shortcuts })) {
+      throw new Error('failed_to_persist_shortcut_config');
+    }
+    return applyShortcutSettings(shortcuts, settings.shortcutToggles);
   });
 
   ipcMain.handle('shortcuts:startRecording', (event, actionId: unknown) => {
