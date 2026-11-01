@@ -63,4 +63,6 @@ yarn dev:electron
 
 The server log reports the JSONL trace path for each session. Test QSOs use the ordinary callsign-scoped logbook and WW Digi page.
 
-The first version uses the real system UTC clock. Before the contest window, WW Digi Cabrillo reconciliation intentionally excludes these test QSOs even though the baseband QSO and ADIF persistence complete normally.
+The simulator uses the real system UTC clock. Outside the configured contest
+window, WW Digi Cabrillo reconciliation excludes test QSOs even when the
+baseband QSO and ADIF persistence complete normally.

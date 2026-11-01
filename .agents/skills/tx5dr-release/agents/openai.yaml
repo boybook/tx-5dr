@@ -1,0 +1,4 @@
+interface:
+  display_name: "TX-5DR 发布维护"
+  short_description: "Prepare, verify and recover TX-5DR product releases"
+  default_prompt: "使用 $tx5dr-release 按当前源码与工作流完成所需发布工作，并分别核验构建、分发和安装结果。"

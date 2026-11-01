@@ -1,74 +1,69 @@
 # Engineering Documentation
 
-This directory contains maintained engineering contracts, durable decisions,
-development-only tools, research evidence, and required legal text. User-facing
-installation and operation manuals are maintained in
-[`tx-5dr-site`](https://github.com/boybook/tx-5dr-site).
+This directory describes current project behavior, implementation boundaries,
+durable decisions, development tools and required privacy/legal information.
+Runtime schemas, code and tests are authoritative. User installation and
+operation guides belong in [tx-5dr-site](https://github.com/boybook/tx-5dr-site).
 
-## Architecture Contracts
+## Architecture
 
 - [Release identity and update ownership](architecture/release-updates.md)
-
 - [Server startup and radio lifecycle](architecture/server-startup.md)
 - [Desktop startup readiness](architecture/desktop-startup.md)
 - [Radio parameter capabilities](architecture/radio-capabilities.md)
-- [Realtime audio ownership and transport](architecture/realtime-audio.md)
-- [Spectrum amplitude semantics](architecture/spectrum.md)
-- [Persistence durability](architecture/persistence-durability.md)
+- [ICOM integration and protocol-library boundary](architecture/icom-integration.md)
+- [Realtime audio, soundcard IF input and transport](architecture/realtime-audio.md)
+- [Spectrum amplitude and rendering](architecture/spectrum.md)
+- [Persistence durability and sync checkpoints](architecture/persistence-durability.md)
 - [Frontend state and rendering](architecture/frontend-rendering.md)
+- [Assisted QSO queue and parallel protocol lanes](architecture/assisted-qso-queue.md)
 
-These files describe invariants that implementation and guard tests are expected
-to preserve. Update them when an owning boundary changes.
+## Public extension contract
 
-## Public Extension Contract
+- [Plugin API development guide](plugin-system.md)
 
-- [Plugin API v2 development guide](plugin-system.md)
-
-Public signatures remain defined by `@tx5dr/plugin-api`. The guide explains how
-the Host boundary is intended to be used; generated reference pages live in the
-site repository.
+Public signatures and supported ABI remain defined by `@tx5dr/plugin-api`.
+The guide explains Host/plugin responsibilities; generated reference pages live
+in the site repository. Host, SDK, plugin and data-format versions are separate.
 
 ## Decisions
 
 - [Client notification ownership](decisions/client-notifications.md)
 - [External device panel boundary](decisions/device-panel-boundary.md)
-- [TX audio input source capability](decisions/tx-audio-input-source.md)
-- [DeepCW engine integration](decisions/deepcw-engine-integration.md)
+- [Contest logbook UI boundary](decisions/contest-logbook-ui-boundary.md)
+- [TX audio input routing and disabled-capability boundary](decisions/tx-audio-input-source.md)
+- [FT8/FT4 transmit envelope](decisions/ft8-ft4-tx-envelope.md)
+- [DeepCW model integration and distribution obligations](decisions/deepcw-engine-integration.md)
 - [WSJT-X staged decode lifecycle](decisions/wsjtx-decode-lifecycle.md)
-
-Decision records retain the accepted boundary and current consequences. They do
-not track implementation progress or branch-by-branch task history.
 
 ## Development
 
 - [Runtime dependency sources and clean-install checks](development/runtime-dependencies.md)
 - [Virtual FT8/FT4 radio](development/virtual-radio.md)
+- [Logbook/sync performance tools](development/performance-checks.md)
 
-Development documents describe supported test tools that are not normal product
-configuration.
-
-## Research
-
-- [Automatic upload main-thread performance validation](research/auto-upload-performance.md)
-- [Wavelog sync protocol and interaction validation](research/wavelog-sync-validation.md)
-- [ICOM remote protocol and spectrum research](research/icom-remote-protocol.md)
-- [ICOM USB/ACC IF demodulation spike](research/icom-usb-if-demod-spike.md)
-- [FT8/FT4 contest framework coverage](research/ft8-contest-framework-coverage.md)
-- [TX audio input routing: Hamlib provider matrix](research/tx-audio-input-hamlib-matrix.md)
-
-Research files are dated evidence, not compatibility promises. Re-check their
-assumptions against current dependencies, hardware, firmware, and captures.
-
-## Legal and Privacy
+## Privacy
 
 - [Privacy and diagnostic data](privacy.md)
 
-## Documentation Rules
+## Maintenance and workflows
 
-- Code, runtime schemas, and tests outrank prose when they disagree.
-- Do not add completed plans, daily progress logs, generated review reports, or
-  credential setup notes as maintained architecture.
-- Put temporary work under ignored local directories, not in `docs`.
-- Mark experiments and research with status, scope, and evidence date.
-- Keep credentials, personal account identifiers, and secret values out of the
-  repository.
+Repository skills hold repeatable working procedures:
+
+- [Application development](../.agents/skills/tx5dr-development/SKILL.md)
+- [Public Plugin API changes](../.agents/skills/tx5dr-plugin-api-change/SKILL.md)
+- [Release preparation, publication, recovery and cleanup](../.agents/skills/tx5dr-release/SKILL.md)
+
+Keep each fact with its owner: architectural invariants here, operational steps
+in skills, user instructions on the website, and release-specific notes in
+`release-notes/`. Keep run IDs, test-result counts, dated benchmarks, implementation
+plans and abandoned prototypes in issues/PRs or ignored local output. Git history
+retains removed research; it does not need a second historical archive here.
+
+When code changes an owner, lifecycle, wire format or supported capability,
+update the corresponding document and index. Preserve exact protocol/model/ABI
+versions and license provenance when they are part of a live contract; do not
+remove them merely because they contain a date or version. Retained disabled
+implementations must be described as disabled, not as usable product features.
+Check links and source anchors after moves or removals. Do not put credentials,
+private account details or developer-specific absolute paths in maintained docs.

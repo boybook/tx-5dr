@@ -33,3 +33,9 @@ completion, import, review changes, and edition rebinding. The composer overlays
 that projection on the strategy snapshot, so the operator sees new callsign and
 contest multiplier tags from the independent contest logbook rather than from
 the station's primary logbook.
+
+Contest scoring/exchange helpers belong to the public `@tx5dr/plugin-api/contest`
+surface. The plugin owns the edition's authoritative rules, operating-hour and
+category policy, scoring, multipliers, validation and submission formatting.
+A past survey of contest rules is not a guarantee of compatibility with later
+editions; check the rule source and the current exported helpers for each plugin.

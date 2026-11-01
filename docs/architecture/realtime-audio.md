@@ -35,6 +35,28 @@ The digital chain is centered on the existing 12 kHz ring buffer. It serves FT8/
 
 ## Native Radio Bypass Chain
 
+### Soundcard IF input
+
+For an audio-device source, `audio.inputSignalType = 'icom-12k-if'` enables
+`IcomIfSsbDemodulator` in `AudioStreamManager` before digital resampling. The
+default remains `af`; `ifCenterHz` defaults to 12000. Configuration changes
+reconfigure the demodulator within the owning audio lifecycle. WLAN, TCI and
+OpenWebRX baseband sources do not enter this soundcard IF path.
+
+This is software demodulation of captured USB/ACC IF PCM, not the radio's
+`audio_if_mode` network capability. The actual radio output must match the
+selected signal type; changing application configuration does not change the
+radio menu. TX retains the existing AF output path. Native input frames are
+emitted before IF demodulation, so the Web radio-monitor control is unavailable
+for IF input rather than presenting raw IF as normal listening audio.
+
+`packages/server/src/audio/__tests__/IcomIfSsbDemodulator.test.ts` covers synthetic
+signal behavior; `packages/web/src/utils/__tests__/radioControl.test.ts` guards
+monitor availability. Those tests do not establish superior weak-signal reception
+for every radio/firmware. Hardware comparisons need identified RF conditions.
+
+### Native monitoring
+
 The radio bypass exists to avoid hidden latency from the digital ring buffer.
 
 - Soundcard radio input emits `nativeAudioInputData` before digital resampling.
@@ -83,7 +105,9 @@ PCM fallback remains intentionally simple and compatible. High-rate native PCM i
 - 12 kHz ICOM WLAN frames and 16 kHz buffered preview frames are sent unchanged.
 - The decimator keeps phase across chunks, so non-divisible device buffer sizes do not accumulate drift; the frame `sampleRate` metadata always reflects the transport sample rate.
 - Unusual high input rates still use the smallest integer factor that keeps the transport rate near or below 24 kHz, instead of falling back to full-rate PCM.
-- This intentionally removes the previous transport-edge low-pass FIR to test whether 24 kHz direct integer decimation is acceptable in practice with less processing and less tonal coloration.
+- This transport-edge decimator has no additional low-pass FIR; it is separate
+  from the digital decode resampler and must not be treated as an equivalent
+  anti-aliasing filter.
 
 ## FRP Public UDP Candidate Flow
 

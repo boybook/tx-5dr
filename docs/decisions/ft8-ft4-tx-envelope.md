@@ -1,6 +1,6 @@
 # FT8/FT4 transmission audio envelope
 
-Status: accepted (2026-09-01)
+Status: accepted
 
 ## Boundary
 

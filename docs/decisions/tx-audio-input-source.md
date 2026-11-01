@@ -1,19 +1,43 @@
 # TX audio input source capability
 
-Status: accepted (2026-09-01)
+## Current availability
 
-TX audio routing is model-specific and must not be inferred from DATA mode or
-Hamlib's generic level/PTT APIs. TX-5DR exposes only the current effective
-route through the dynamic `tx_audio_input_source` enum capability. Protocol
-adapters (or a future sidecar provider) translate normalized values such as
-`mic`, `usb`, `network`, and `accessory` to CI-V/CAT commands.
+The source contains the model-specific `tx_audio_input_source` capability and
+providers, but the capability is disabled for all models by
+`TEMPORARILY_DISABLED_CAPABILITIES` in
+`packages/server/src/radio/capabilities/definitions.ts`.
+`PhysicalRadioManager.applyTxAudioInputSourcePolicy()` also exits at that gate.
+The application must not advertise, dispatch or automatically apply this route
+while the gate is present. Adapter implementation alone is not feature availability.
 
-The capability is optional and is advertised only after a model/provider
-reports a model-specific route table. Hamlib connections without an exact model
-provider remain unsupported and are never sent guessed raw commands.
+The quarantine addresses asynchronous scope frames and raw CAT replies sharing
+the Hamlib/CI-V serial stream. Re-enabling requires protocol-level transaction
+isolation and matching regression/hardware evidence; removing a UI gate alone
+is insufficient. This document does not authorize re-enabling it.
 
-Profiles may set `txAudioInputSource` to `auto`, `unchanged`, or a normalized
-source. `auto` currently selects `network` for ICOM WLAN; all other backends
-leave their physical route unchanged until a provider is added. Applying the
-policy is best effort: failures mark the capability unavailable and emit a
-warning, but do not block PTT or other operating-state changes.
+## Retained design
+
+TX input routing is model-specific and is not implied by DATA mode or generic
+PTT/level support. Providers translate normalized sources such as `mic`, `usb`,
+`network` and `accessory` using an exact model route table. Unknown models remain
+unsupported. Compound menu selectors require one serialized write/readback
+transaction so partial changes cannot be mistaken for a confirmed input route.
+
+Hamlib provider selection and command/value tables live in
+`packages/server/src/radio/txAudioInput/TxAudioInputProvider.ts`, with adjacent
+unit tests. `HamlibConnection` executes their raw I/O through its serialized
+queue. `IcomWlanConnection` adapts the protocol library's model-specific source
+API. Neither path may guess commands from another radio's identity.
+
+Profiles retain `txAudioInputSource` for format compatibility: `auto`,
+`unchanged`, or a normalized source. Behind the disabled gate, `auto` is defined
+to choose `network` for ICOM WLAN and leave other backends unchanged. Failures
+use capability availability/warning projection rather than changing PTT policy.
+Those semantics describe retained code, not a currently active control.
+
+## Guards
+
+`packages/server/src/radio/__tests__/CapabilityDefinitions.test.ts` guards the
+disabled capability. Manager/capability tests must continue to prevent automatic
+writes and dispatch while it is quarantined. Provider tests prove byte mapping
+and readback behavior only; they do not establish live model compatibility.

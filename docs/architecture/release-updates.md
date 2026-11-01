@@ -1,29 +1,74 @@
 # Release identity and update ownership
 
-The root package version is the Host version source. Plugin SDK and Android APK versions are independent. A formal Host release is identified by an immutable `vX.Y.Z` tag matching the source version and exact commit. Desktop, Linux Server, Android Runtime and Docker consume that commit. Only the coordinator publishes channel pointers after all required product builds pass. Development branch verification does not publish.
+## Identity and distribution
 
-Immutable assets live below `tx-5dr/<product>/builds/<version>/`. Versioned manifests carry full source SHA, channel, product, version, assets and integrity metadata. Missing `schema_version` identifies the legacy decoder. Consumers validate the requested product and channel. CDN failure can fall back to GitHub for the same channel, never another channel. The stable website catalog is committed last. A GitHub Release alone is not distribution success.
+Root `package.json` is the Host base version source. Internal Host packages
+follow it; Plugin SDK and Android APK versions are independent. Runtime build
+identity is generated from `packages/server/src/generated/buildInfo.json` and
+consumed by Server, Electron and Web. A formal release uses an immutable
+`vX.Y.Z` tag matching the committed base version and full source SHA.
 
-Publication recovery may use corrected publishing tooling with the original
-immutable source and artifacts. The manual recovery workflow accepts only a
-completed formal tag run from this repository whose source and every required
-product job passed. It fetches that run's artifacts and source; tag identity,
-asset equality, checksum, platform completeness and channel promotion checks
-still apply. It never rebuilds binaries or changes an existing tag. CDN reads
-close each connection because synchronous upload commands block socket event
-processing; only transport failures receive three bounded attempts.
+A main-branch publication derives `X.Y.Z-nightly.<UTC commit timestamp>+g<short SHA>`.
+The complete SHA remains in the manifest. The current publisher keeps immutable
+`build-<nightly version>` GitHub Releases as well as fixed `nightly-<product>`
+Releases for existing consumers. Rolling tags/asset names identify update
+endpoints, not immutable source evidence. They must not be removed as test
+artifacts while referenced by clients or manifests.
 
-Installed channel and subscribed channel are separate facts. Selecting a channel persists a preference and checks its manifest; it never installs. A prepared update binds the exact version, commit, URLs and checksums. Changing channels invalidates pending work. Cross-channel downgrades require explicit confirmation and a successful backup; same-channel checks do not recommend older versions. Data compatibility and third-party plugin compatibility are not implied by SemVer.
+Versioned manifests contain product, channel, version, source SHA, asset size,
+hash, installation metadata and release notes. Missing `schema_version` selects
+the explicit legacy decoder. Consumers validate the requested product/channel;
+CDN failure may use GitHub for the same target, never another channel. Once
+selected, a download/install is bound to its exact URL and checksum.
 
-Owners:
+Assets live under `tx-5dr/<product>/builds/<version>/`. The coordinator builds
+all Host products from one SHA and checks their required outputs before
+promotion. Version assets cannot be replaced with different bytes. Publication
+exposes the version Release, updates product pointers and Docker aliases, then
+commits the unified channel catalog. This sequence is serialized but is not an
+atomic transaction across providers; partial failure requires verified recovery.
+The website uses the stable catalog as its complete-release recommendation.
 
-Packaged build identity determines the distribution and update path. A Linux Server package installed inside a container remains a Linux service; the presence of `/.dockerenv` alone must not select Docker image updates. Environment and directory detection remain for unpackaged builds.
+Current triggers, source gates, signing, artifact recovery and cleanup procedures
+are maintained in the [release skill](../../.agents/skills/tx5dr-release/SKILL.md),
+not copied into this architecture contract.
 
-- Electron main owns settings, downloads, install handoff and backup after embedded-server shutdown. Renderer IPC is limited to the application's top-level local pages. The embedded Server does not own desktop update preferences.
-- Linux Server and its CLI share `update-preferences.json` through the same Node implementation. The web API only changes preferences. The administrator runs the privileged CLI locally. CLI writes preserve configuration ownership. The CLI owns SemVer approval; RPM applies that confirmed target with `--oldpackage` because native package ordering differs from SemVer.
-- Android owns runtime preferences and installation in the native shell. `android-update-state.json` is an explicit read-only projection to the Server. WebView can navigate to native updates only from the local top-level application page. External browsers cannot invoke native installation. APK updates preserve package/signing identity and require increasing versionCode independently of runtime channel.
-- Docker preferences choose the proposed target only. An operator changes the actual container image by immutable digest and preserves the data volume. No Docker socket is exposed to the application.
+## Update owners
 
-Updates stop RF and drain persistence through the owning lifecycle before replacing executable files. Backups are kept outside install directories. Failed downloads leave the installed version intact. Failed startup may restore executable selection, but never silently overwrite user data with an old snapshot. Data restoration is a separate, explicit operation that discards post-backup changes.
+Installed channel and subscribed target channel are separate. Selecting a
+channel saves a preference and refreshes the preview; it does not install.
+Cross-channel downgrades require explicit confirmation and a successful backup.
+Same-channel checks do not recommend lower versions. SemVer does not establish
+compatibility of Host data or third-party plugin data.
 
-Rolling nightly release assets remain a legacy compatibility surface. Their tag is not immutable source evidence. Older clients first receive a transition nightly; newer clients retain their selected channel until the user changes it. `stable` and `latest` Docker tags represent formal releases; `nightly` remains the explicit development subscription.
+| Distribution | Owner | Installation boundary |
+| --- | --- | --- |
+| Electron | Main process; one local preference/status owner | Supported updater or explicit package download; embedded Server does not keep a second preference |
+| Linux Server | Shared server/CLI preference logic | Admin webpage selects; terminal CLI downloads, verifies and installs |
+| Android Runtime | Native shell; Server consumes its read-only state projection | Trusted local WebView can open native updates; LAN browsers cannot install |
+| Docker | Server preference projects the chosen target | Operator recreates container using image/digest and preserved volume; no Docker socket service |
+
+Packaged identity selects the distribution path. A Linux Server package running
+inside a container remains a Linux Server installation; `/.dockerenv` does not
+override that identity. Unpackaged execution retains environment/path detection.
+
+Channel changes invalidate earlier checks/downloads, and an installer handoff
+cannot be treated as successful installation. Verify the actual version/channel
+on restart. Legacy Electron pending-install records may omit channel and carry
+short or full SHA; accept a known matching installed identity without discarding
+real mismatches. Notification identity includes the selected product/channel/
+build so different channel results do not suppress one another.
+
+## Data and recovery
+
+Updates stop RF and drain persistence through the owning lifecycle before
+replacing executable files. Backups are outside the installation directory.
+Download or backup failure must not proceed into destructive replacement.
+Program rollback and data restoration are separate operations; do not silently
+overwrite current user data with an older snapshot. See
+[persistence durability](persistence-durability.md).
+
+APK replacement is independent of Runtime channel selection and preserves the
+package/signature/data identity with increasing `versionCode`. Docker stable
+publication controls `stable` and `latest`; development consumers use `nightly`.
+Existing users keep their selected channel until they explicitly change it.

@@ -28,7 +28,7 @@ contracts.
 - `packages/builtin-plugins`: plugins shipped with the application.
 - `packages/rigctld-server`: reusable NET rigctl TCP server.
 - `packages/client-tools`: production/Android static entry and API proxy.
-- `docs`: maintained engineering contracts, decisions, and research evidence.
+- `docs`: maintained engineering contracts, decisions, and development references.
 
 ## Sources of Truth
 
@@ -120,10 +120,12 @@ the relevant runtime or artifact; mock tests alone are not sufficient.
 Repository skills under `.agents/skills` provide detailed procedures only when
 the task matches them:
 
-- `tx5dr-radio-change`: radio backends, capabilities, meters, power, audio, and
-  timing-sensitive RF changes.
+- `tx5dr-development`: application features and fixes across UI, server,
+  contracts, persistence, Electron, plugins, and radio/audio; hardware-specific
+  boundaries are loaded only when relevant.
 - `tx5dr-plugin-api-change`: public Plugin API, Host boundary, scaffold,
   marketplace, generated docs, and npm compatibility.
-- `tx5dr-release`: desktop, server, Docker, Android runtime, and npm releases.
+- `tx5dr-release`: coordinated Host stable/nightly publication, product checks,
+  publication recovery and cleanup, plus separate APK/npm/site release boundaries.
 
 Maintained engineering documents are indexed in `docs/README.md`.

@@ -66,5 +66,9 @@ Start with the nearest tests, then run the owning workspace:
 - capability manager/definition tests: dynamic support and values.
 - realtime and transmission tests: audio source, queue, PTT, and hard-stop behavior.
 
-Use `docs/architecture/server-startup.md` for lifecycle invariants and
-`docs/architecture/realtime-audio.md` for realtime audio ownership.
+Use [server startup](../../../../docs/architecture/server-startup.md) for lifecycle
+invariants, [realtime audio](../../../../docs/architecture/realtime-audio.md) for
+audio ownership, [ICOM integration](../../../../docs/architecture/icom-integration.md)
+for the external protocol-library boundary, and
+[TX input routing](../../../../docs/decisions/tx-audio-input-source.md) for the
+retained but disabled input-source capability.

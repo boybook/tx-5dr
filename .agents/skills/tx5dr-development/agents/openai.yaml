@@ -1,0 +1,4 @@
+interface:
+  display_name: "TX-5DR 功能修改"
+  short_description: "Implement TX-5DR features, fixes and lifecycle changes"
+  default_prompt: "使用 $tx5dr-development 完成本次 TX-5DR 功能修改，并核对相关所有权、用户交互和测试。"

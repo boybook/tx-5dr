@@ -255,7 +255,7 @@ Host 会校验并冻结加载后的定义。不要在运行期修改 definition�
 
 ### 3.1 版本边界
 
-- TX-5DR `1.0.0-nightly.*` 是产品构建身份，只用于升级、诊断和 artifact 追踪。
+- TX-5DR `X.Y.Z` 或 `X.Y.Z-nightly.*` 是产品构建身份，只用于升级、诊断和 artifact 追踪；实际基础版本取自根 `package.json`。
 - `@tx5dr/plugin-api` SemVer 是插件兼容轴，Host 通过 `pluginApiVersion` 暴露内置版本。
 - `apiVersion: 2` 是运行时 ABI 代际，不是 npm package version。
 - 插件自己的 `version` 只用于 Marketplace 更新。
