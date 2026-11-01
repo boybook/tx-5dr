@@ -191,11 +191,9 @@ function normalizeVersion(value: string | null | undefined): string {
   return (value || '').trim().replace(/^v/i, '');
 }
 
-function currentIdentity(): string | null {
-  if (BUILD_INFO.channel === 'nightly') {
-    return BUILD_INFO.commit === 'development' ? null : BUILD_INFO.commitShort;
-  }
-  return normalizeVersion(BUILD_INFO.version) || null;
+function matchesCurrentCommit(commit: string): boolean {
+  return BUILD_INFO.commit !== 'development'
+    && (commit === BUILD_INFO.commit || commit === BUILD_INFO.commitShort);
 }
 
 function getPendingUpdatePath(): string | null {
@@ -250,9 +248,15 @@ function getInitialPendingState(): Pick<DesktopUpdateStatus, 'pendingInstallIden
   if (!pending) {
     return { pendingInstallIdentity: null, lastInstallFailed: false, phase: 'idle', errorMessage: null };
   }
-  if ((!pending.channel && pending.identity === currentIdentity()) ||
+  // Legacy clients wrote the manifest SHA (short or full) without a channel.
+  // A matching version alone must not hide an installer that ran a different build.
+  const legacyInstalled = !pending.channel && pending.version === BUILD_INFO.version
+    && (BUILD_INFO.channel === 'nightly'
+      ? matchesCurrentCommit(pending.identity) && (!pending.commit || matchesCurrentCommit(pending.commit))
+      : pending.identity === normalizeVersion(BUILD_INFO.version));
+  if (legacyInstalled ||
       (pending.channel === BUILD_INFO.channel && pending.version === BUILD_INFO.version &&
-       (!pending.commit || BUILD_INFO.commit.startsWith(pending.commit) || pending.commit.startsWith(BUILD_INFO.commitShort)))) {
+       (!pending.commit || matchesCurrentCommit(pending.commit)))) {
     clearPendingUpdateInstall();
     return { pendingInstallIdentity: null, lastInstallFailed: false, phase: 'idle', errorMessage: null };
   }
