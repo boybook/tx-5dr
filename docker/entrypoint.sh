@@ -69,7 +69,7 @@ for dir in "${NGINX_TEMP_DIRS[@]}"; do
     fi
     # 设置为 nginx 用户可写
     chown -R www-data:www-data "$dir"
-    chmod -R 755 "$dir"
+    chmod -R u+rwX,go+rX,go-w "$dir"
 done
 
 # 自动检测宿主机用户权限
@@ -138,14 +138,14 @@ log "Setting directory permissions..."
 for dir in "${DATA_DIRS[@]}"; do
     if [[ -d "$dir" ]]; then
         chown -R "$HOST_UID:$HOST_GID" "$dir"
-        chmod -R 755 "$dir"
+        chmod -R u+rwX,go+rX,go-w "$dir"
         log "Set permissions for: $dir"
     fi
 done
 
 # 设置应用目录权限
 chown -R "$HOST_UID:$HOST_GID" /app/data
-chmod -R 755 /app/data
+chmod -R u+rwX,go+rX,go-w /app/data
 
 # 创建PID文件目录
 mkdir -p /var/run/tx5dr
