@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RadioProfile } from '@tx5dr/contracts';
+import { EventEmitter } from 'eventemitter3';
+import { EngineLifecycle, type EngineLifecycleDeps } from '../../subsystems/EngineLifecycle.js';
+import { PhysicalTxCoordinator } from '../../transmission/PhysicalTxCoordinator.js';
+import { ResourceManager } from '../../utils/ResourceManager.js';
 
 const { state, mockConfigManager, mockEngine, mockReloadAudioConfig } = vi.hoisted(() => {
   const testState = {
@@ -9,12 +13,6 @@ const { state, mockConfigManager, mockEngine, mockReloadAudioConfig } = vi.hoist
 
   const configManager = {
     getActiveProfileId: vi.fn(() => testState.activeProfileId),
-    getPublicActiveProfileId: vi.fn(() => testState.activeProfileId),
-    getActiveVirtualRadioProfile: vi.fn(() => (
-      testState.profiles.find((profile) => profile.id === testState.activeProfileId)?.isVirtual
-        ? { id: testState.activeProfileId }
-        : null
-    )),
     hasConfiguredProfiles: vi.fn(() => testState.profiles.length > 0),
     getProfile: vi.fn((id: string) => testState.profiles.find((profile) => profile.id === id) ?? null),
     updateProfile: vi.fn(async (id: string, updates: Partial<RadioProfile>) => {
@@ -383,11 +381,11 @@ describe('ProfileManager audio runtime config application', () => {
     expect(mockConfigManager.switchActiveProfile).toHaveBeenCalledWith('profile-7610');
   });
 
-  it('does not cross the physical/virtual boundary while the old engine is still stopping', async () => {
+  it('does not cross the Profile boundary while the old engine is still stopping', async () => {
     vi.useFakeTimers();
     state.profiles = [
       makeProfile({ id: 'physical', name: 'IC-705' }),
-      makeProfile({ id: 'virtual', name: 'Virtual FT8', isVirtual: true }),
+      makeProfile({ id: 'virtual', name: 'Virtual FT8' }),
     ];
     state.activeProfileId = 'physical';
     mockEngine.getStatus.mockReturnValue({ isRunning: true, engineState: 'running' });
@@ -409,10 +407,10 @@ describe('ProfileManager audio runtime config application', () => {
     }
   });
 
-  it('does not replace one virtual session while its engine is still stopping', async () => {
+  it('does not replace one connection session while its engine is still stopping', async () => {
     state.profiles = [
-      makeProfile({ id: 'virtual-a', name: 'Virtual FT8 A', isVirtual: true }),
-      makeProfile({ id: 'virtual-b', name: 'Virtual FT8 B', isVirtual: true }),
+      makeProfile({ id: 'virtual-a', name: 'Virtual FT8 A' }),
+      makeProfile({ id: 'virtual-b', name: 'Virtual FT8 B' }),
     ];
     state.activeProfileId = 'virtual-a';
     mockEngine.getStatus.mockReturnValue({ isRunning: true, engineState: 'running' });
@@ -425,7 +423,7 @@ describe('ProfileManager audio runtime config application', () => {
     expect(mockEngine.start).not.toHaveBeenCalled();
   });
 
-  it('preserves best-effort switching after a same-backend stop failure', async () => {
+  it('retains the current Profile after a same-backend stop failure', async () => {
     state.profiles = [
       makeProfile({ id: 'physical-a', name: 'IC-705' }),
       makeProfile({ id: 'physical-b', name: 'IC-7610' }),
@@ -435,12 +433,54 @@ describe('ProfileManager audio runtime config application', () => {
     mockEngine.stop.mockRejectedValueOnce(new Error('stop failed'));
     const manager = ProfileManager.getInstance();
 
-    await expect(manager.activateProfile('physical-b')).resolves.toMatchObject({
-      success: true,
-      profile: { id: 'physical-b' },
-    });
+    await expect(manager.activateProfile('physical-b')).rejects.toThrow('stop failed');
+    expect(state.activeProfileId).toBe('physical-a');
+    expect(mockConfigManager.switchActiveProfile).not.toHaveBeenCalled();
+    expect(mockEngine.start).not.toHaveBeenCalled();
+  });
 
-    expect(mockConfigManager.switchActiveProfile).toHaveBeenCalledWith('physical-b');
-    expect(mockEngine.start).toHaveBeenCalledOnce();
+  it('keeps the Profile through real lifecycle/PTT cleanup failures, including retries from idle', async () => {
+    state.profiles = [makeProfile({ id: 'old' }), makeProfile({ id: 'new' })];
+    state.activeProfileId = 'old';
+    let releaseFails = true;
+    const transmitter = new PhysicalTxCoordinator({
+      isRadioConnected: () => true,
+      setPTT: async active => { if (!active && releaseFails) throw new Error('PTT release failed'); },
+      playAudio: async () => {},
+      stopCurrentPlayback: async () => 0,
+    });
+    const disconnect = vi.fn(async () => {});
+    const lifecycle = new EngineLifecycle({
+      engineEmitter: new EventEmitter(),
+      resourceManager: new ResourceManager(),
+      physicalTxCoordinator: transmitter,
+      radioManager: { isConnected: () => true, disconnect },
+      subsystems: { transmissionPipeline: { teardown() {} }, clockCoordinator: { teardown() {} } },
+      getAudioSidecar: () => ({ stop: async () => {} }),
+      getStatus: () => ({}),
+    } as unknown as EngineLifecycleDeps);
+    lifecycle.initializeStateMachine();
+    mockEngine.getStatus.mockImplementation(() => ({ isRunning: false, engineState: lifecycle.getEngineState() }));
+    mockEngine.stop.mockImplementation(() => lifecycle.stop());
+    await transmitter.acquireLease({ source: 'manual', reason: 'Profile handover regression' });
+    try {
+      const manager = ProfileManager.getInstance();
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await expect(manager.activateProfile('new')).rejects.toThrow('PTT release failed');
+        expect(state.activeProfileId).toBe('old');
+        expect(transmitter.getSnapshot().phase).toBe('unknown');
+        expect(mockConfigManager.switchActiveProfile).not.toHaveBeenCalled();
+        expect(mockEngine.start).not.toHaveBeenCalled();
+        expect(disconnect).not.toHaveBeenCalled();
+      }
+      releaseFails = false;
+      await expect(manager.activateProfile('new')).resolves.toMatchObject({ success: true });
+      expect(transmitter.getSnapshot().phase).toBe('idle');
+      expect(state.activeProfileId).toBe('new');
+      expect(disconnect).toHaveBeenCalledOnce();
+    } finally {
+      lifecycle.destroyStateMachine();
+      mockEngine.stop.mockImplementation(async () => {});
+    }
   });
 });

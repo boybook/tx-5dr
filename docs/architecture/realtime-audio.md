@@ -134,8 +134,7 @@ The public UDP setting is deliberately append-only. A bad FRP endpoint should no
 ## SSTV Transmit Timing
 
 SSTV has two explicit destinations. `ImageRadioService` advertises
-`sstvTxTarget: local` only when the owning radio configuration is `type: none`
-and no virtual-radio profile is active. A disconnected configured radio remains
+`sstvTxTarget: local` only when the owning radio configuration is `type: none`. A disconnected configured radio remains
 `radio`; connection loss never enables local playback. Clients without the new
 status field conservatively retain radio behavior.
 
@@ -300,3 +299,12 @@ Realtime voice audio is a state stream, not a file stream.
 - Do not re-enter large playback prefill after underrun; use at most one short PLC tail, then silence briefly and resume with fresh frames.
 - Keep sample-rate conversion only at true transport/device edges.
 - During transport fallback, keep the browser AudioContext and AudioWorklet runtime alive; only replace the network transport. This avoids autoplay/microphone gesture regressions and prevents duplicate audio services.
+
+## Test device and audio peer boundary
+
+External PCM devices use the normal capture/output path, including resampling
+and consumption/drain accounting. Digital TX observations distinguish native
+consumption from network/Android submission. They do not pace output. Synthetic
+peer replies enter normal capture or the audio-owned baseband contribution
+point; they never write the RX ring directly. Native monitoring does not label
+synthetic baseband as physical input. See [Station testing](station-testing.md).

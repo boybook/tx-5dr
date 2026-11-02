@@ -195,6 +195,7 @@ interface ResourceMetadata extends ResourceConfig {
 export class ResourceManager {
   private resources: Map<string, ResourceMetadata> = new Map();
   private startedResources: string[] = [];
+  private readonly pendingStops = new Map<string, Promise<void>>();
 
   /**
    * 注册资源（IResource形式）
@@ -333,10 +334,9 @@ export class ResourceManager {
       }
     }
 
-    this.startedResources = [];
-
+    this.startedResources = this.startedResources.filter((name) => this.resources.get(name)?.state !== ResourceState.STOPPED);
     if (errors.length > 0) {
-      logger.warn(`Stop complete with ${errors.length} resource failure(s)`);
+      throw new AggregateError(errors, `Failed to stop ${errors.length} resource(s)`);
     } else {
       logger.info('All resources stopped successfully');
     }
@@ -453,12 +453,17 @@ export class ResourceManager {
     logger.info(`Stopping resource: ${name}`);
 
     try {
-      await this.withTimeout(resource.stop(), stopTimeout, `Stopping resource "${name}"`);
-
-      metadata.state = ResourceState.STOPPED;
-      metadata.stoppedAt = Date.now();
-
-      logger.info(`Resource "${name}" stopped successfully`);
+      let pending = this.pendingStops.get(name);
+      if (!pending) {
+        pending = Promise.resolve().then(() => resource.stop()).then(() => {
+          metadata.state = ResourceState.STOPPED;
+          metadata.error = undefined;
+          metadata.stoppedAt = Date.now();
+          logger.info(`Resource "${name}" stopped successfully`);
+        }).finally(() => { this.pendingStops.delete(name); });
+        this.pendingStops.set(name, pending);
+      }
+      await this.withTimeout(pending, stopTimeout, `Stopping resource "${name}"`);
     } catch (error) {
       metadata.state = ResourceState.ERROR;
       metadata.error = error instanceof Error ? error : new Error(String(error));
@@ -473,18 +478,12 @@ export class ResourceManager {
    */
   private async rollback(): Promise<void> {
     logger.info(`Rolling back ${this.startedResources.length} started resource(s)...`);
-
-    const stopOrder = [...this.startedResources].reverse();
-
-    for (const name of stopOrder) {
-      try {
-        await this.stopResource(name);
-      } catch (error) {
-        logger.error(`Failed to stop resource "${name}" during rollback:`, error);
-      }
+    try {
+      await this.stopAll();
+    } catch (error) {
+      logger.error('Resource rollback incomplete; cleanup must be retried', error);
+      return;
     }
-
-    this.startedResources = [];
     logger.info('Rollback complete');
   }
 

@@ -8,6 +8,14 @@ description: Change or review TX-5DR's public Plugin API, Host projection, scaff
 Treat the packed third-party consumer as the compatibility boundary, not the
 monorepo workspace alone.
 
+Audio peer scenarios use the shared public declaration and Host execution;
+see [station testing](../../../docs/architecture/station-testing.md). Do not add
+plugin-specific test backdoors or raw device handles. Native/codec and real-slot
+checks are explicitly selected development validation, not unit tests or default
+CI. Read [station validation](../tx5dr-development/references/station-validation.md)
+when that development evidence is needed, including target-plugin identity,
+plugin session persistence, UI preparation and page-session renewal after reload.
+
 ## Workflow
 
 1. Identify whether the change is public API, Host-only implementation,

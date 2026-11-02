@@ -8,6 +8,7 @@ operation guides belong in [tx-5dr-site](https://github.com/boybook/tx-5dr-site)
 ## Architecture
 
 - [Release identity and update ownership](architecture/release-updates.md)
+- [Station testing and audio peers](architecture/station-testing.md)
 - [Server startup and radio lifecycle](architecture/server-startup.md)
 - [Desktop startup readiness](architecture/desktop-startup.md)
 - [Radio parameter capabilities](architecture/radio-capabilities.md)
@@ -39,7 +40,7 @@ in the site repository. Host, SDK, plugin and data-format versions are separate.
 ## Development
 
 - [Runtime dependency sources and clean-install checks](development/runtime-dependencies.md)
-- [Virtual FT8/FT4 radio](development/virtual-radio.md)
+- [Station regression tests](development/station-testing.md)
 - [Logbook/sync performance tools](development/performance-checks.md)
 
 ## Privacy

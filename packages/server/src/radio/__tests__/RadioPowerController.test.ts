@@ -157,7 +157,7 @@ describe('RadioPowerController', () => {
       id === 'profile-b' ? profileB : profileA
     ));
 
-    const { controller, radioManager } = createController({
+    const { controller, radioManager, lifecycle } = createController({
       profiles: [profileA, profileB],
       activeProfileId: 'profile-a',
       connected: false,
@@ -166,6 +166,7 @@ describe('RadioPowerController', () => {
         order.push('wake');
       }),
     });
+    lifecycle.stop.mockImplementation(async () => { order.push('stop'); });
 
     await expect(controller.handleRequest({
       profileId: 'profile-b',
@@ -176,7 +177,20 @@ describe('RadioPowerController', () => {
     expect(switchSpy).toHaveBeenCalledWith('profile-b');
     expect(mockReloadAudioConfig).toHaveBeenCalledTimes(1);
     expect(radioManager.wakeAndConnect).toHaveBeenCalledTimes(1);
-    expect(order).toEqual(['switch:profile-b', 'reloadAudio', 'wake']);
+    expect(order).toEqual(['stop', 'switch:profile-b', 'reloadAudio', 'wake']);
+  });
+
+  it.each([true, false])('does not switch Profile or power another device after failed cleanup (running=%s)', async running => {
+    const profileA = createProfile({ id: 'profile-a' }), profileB = createProfile({ id: 'profile-b' });
+    const { controller, lifecycle, radioManager } = createController({ profiles: [profileA, profileB], activeProfileId: 'profile-a', running });
+    const switchProfile = vi.spyOn(ConfigManager.getInstance(), 'switchActiveProfile');
+    lifecycle.stop.mockRejectedValue(new Error('PTT cleanup unconfirmed'));
+    await expect(controller.handleRequest({ profileId: 'profile-b', state: 'on', autoEngine: false })).rejects.toThrow('PTT cleanup unconfirmed');
+    expect(ConfigManager.getInstance().getActiveProfileId()).toBe('profile-a');
+    expect(switchProfile).not.toHaveBeenCalled();
+    expect(radioManager.wakeAndConnect).not.toHaveBeenCalled();
+    expect(radioManager.disconnect).not.toHaveBeenCalled();
+    expect(radioManager.clearIntentionalDisconnect).toHaveBeenCalledOnce();
   });
 
   it('does not stop the engine or disconnect when operate is unsupported', async () => {

@@ -259,7 +259,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
 
   // 进入编辑模式
   const handleStartEdit = (profile: RadioProfile) => {
-    if (!canManageProfiles || profile.readOnly || isRedactedProfile(profile)) return;
+    if (!canManageProfiles || isRedactedProfile(profile)) return;
     setEditName(profile.name);
     setEditDescription(profile.description || '');
     setEditRadioConfig(profile.radio);
@@ -326,7 +326,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
   // 删除 Profile
   const handleDelete = async (profileId: string) => {
     const profile = profiles.find(p => p.id === profileId);
-    if (!canManageProfiles || profile?.readOnly || (profile && isRedactedProfile(profile))) return;
+    if (!canManageProfiles || (profile && isRedactedProfile(profile))) return;
     if (profileId === activeProfileId) {
       addToast({ title: t('profileModal.cannotDeleteActive'), color: 'warning', timeout: 3000 });
       return;
@@ -417,7 +417,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
             <>
               <Reorder.Group axis="y" values={localProfiles} onReorder={handleReorder} className="space-y-2" as="div">
                 {localProfiles.map(profile => {
-                  const canManageThisProfile = canManageProfiles && !profile.readOnly && !isRedactedProfile(profile);
+                  const canManageThisProfile = canManageProfiles && !isRedactedProfile(profile);
                   return (
                     <Reorder.Item key={profile.id} value={profile} as="div" className="w-full" dragListener={canReorderProfiles}>
                       <Card
@@ -441,15 +441,12 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
                               <div className="min-w-0 flex-1">
                                 <div className="flex items-center gap-2">
                                   <span className="font-medium text-default-900 truncate">{profile.name}</span>
-                                  {profile.isVirtual && (
-                                    <Chip size="sm" color="secondary" variant="flat">{t('profileModal.virtual')}</Chip>
-                                  )}
                                   {profile.id === activeProfileId && (
                                     <Chip size="sm" color="success" variant="flat">{t('profileModal.current')}</Chip>
                                   )}
                                 </div>
                                 <p className="text-xs text-default-500 truncate mt-0.5">
-                                  {profile.isVirtual ? t('profileModal.virtualRadio') : getRadioTypeLabel(profile.radio)}
+                                  {getRadioTypeLabel(profile.radio)}
                                 </p>
                               </div>
                               {canManageThisProfile && (

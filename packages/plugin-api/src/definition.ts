@@ -154,7 +154,7 @@ export interface PluginDefinition<
     maxSimultaneousSignals?: number;
   };
 
-  /** Development-only virtual-radio peer scenarios. The Host owns execution and RF safety. */
+  /** Declarative audio peer scenarios. The Host owns execution and RF safety. */
   simulationScenarios?: SimulationScenarioDescriptor[];
 
   /**

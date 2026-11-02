@@ -75,6 +75,12 @@ contracts.
   Frequency/mode changes use a compound operating-state operation when available.
 - Software engine state, radio connection state, and physical radio power are
   separate axes. Do not map one to another implicitly.
+- Tests share production owners and replace only external device/protocol boundaries.
+  Follow [station testing](docs/architecture/station-testing.md); add regression
+  cases instead of test-only connection, scheduler, decode or completion paths.
+  Real-slot station/codec/native integration runs are explicit development
+  validation and bug reproduction tools; never include them in `test:unit`,
+  aggregate `test` scripts, or default CI. Keep unit regressions fast.
 - RF automation fails closed when identity, slot, permission, or radio state is
   incomplete. Plugins submit decisions through the Host; they do not bypass it
   for raw PTT or device ownership.
@@ -106,11 +112,15 @@ Useful focused checks include:
 
 ```bash
 yarn workspace @tx5dr/server test:unit
-yarn workspace @tx5dr/server test:virtual-radio-integration
 yarn workspace @tx5dr/plugin-api test
 yarn workspace @tx5dr/plugin-api smoke:pack
 yarn workspace @tx5dr/web test
 ```
+
+For a relevant development validation or bug reproduction, explicitly select
+`yarn test:station --case <case>` or the native/codec
+`yarn workspace @tx5dr/server test:station-integration` checks. These are not
+part of the full unit suite or routine CI.
 
 Native-module, packaging, platform, and real-radio claims require evidence from
 the relevant runtime or artifact; mock tests alone are not sufficient.

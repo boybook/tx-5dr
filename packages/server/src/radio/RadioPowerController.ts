@@ -218,13 +218,12 @@ export class RadioPowerController extends EventEmitter<RadioPowerControllerEvent
     }
 
     logger.info(`Switching active profile for power operation: ${currentActiveId ?? '(none)'} -> ${profileId}`);
-    if (lifecycle.getIsRunning()) {
-      radioManager.markIntentionalDisconnect('profile switch for power operation');
-      await lifecycle.stop().catch(() => undefined);
-    }
-    if (radioManager.isConnected()) {
-      radioManager.markIntentionalDisconnect('profile switch for power operation');
-      await radioManager.disconnect('profile switch for power operation').catch(() => undefined);
+    radioManager.markIntentionalDisconnect('profile switch for power operation');
+    try {
+      await lifecycle.stop();
+    } catch (error) {
+      radioManager.clearIntentionalDisconnect();
+      throw error;
     }
 
     // Same atomic snapshot / setActive / load path as ProfileManager.activateProfile.

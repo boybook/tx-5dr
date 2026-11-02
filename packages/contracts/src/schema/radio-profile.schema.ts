@@ -20,8 +20,6 @@ export const RadioProfileSchema = z.object({
   createdAt: z.number(),
   updatedAt: z.number(),
   description: z.string().optional(),
-  isVirtual: z.boolean().optional(),
-  readOnly: z.boolean().optional(),
 });
 
 export type RadioProfile = z.infer<typeof RadioProfileSchema>;

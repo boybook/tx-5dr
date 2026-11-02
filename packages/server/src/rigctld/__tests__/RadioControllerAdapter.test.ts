@@ -2,6 +2,31 @@ import { describe, expect, it, vi } from 'vitest';
 import { RadioControllerAdapter } from '../RadioControllerAdapter.js';
 
 describe('RadioControllerAdapter', () => {
+  it.each([
+    ['RFPOWER', 'rf_power', 'setRFPower'],
+    ['AF', 'af_gain', 'setAFGain'],
+    ['SQL', 'sql', 'setSQL'],
+  ] as const)('preserves normalized %s values while honoring the capability owner', async (level, capability, setter) => {
+    const directWrite = vi.fn();
+    let applied = 0;
+    const writeCapability = vi.fn(async (_id: string, value: number) => { applied = value; });
+    const radioManager = {
+      isConnected: () => true,
+      getCurrentConnection: () => ({ [setter]: directWrite }),
+      writeCapability,
+    };
+    const adapter = new RadioControllerAdapter(radioManager as any, {} as any);
+    for (const [requested, expected] of [[0.25, 0.25], [2, 1], [-1, 0]]) {
+      await adapter.setLevel(level, requested);
+      expect(applied).toBe(expected);
+      expect(writeCapability).toHaveBeenLastCalledWith(capability, expected);
+    }
+    writeCapability.mockRejectedValueOnce(new Error('Capability write denied'));
+    await expect(adapter.setLevel(level, 0.75)).rejects.toMatchObject({ code: -5 });
+    expect(applied).toBe(0);
+    expect(directWrite).not.toHaveBeenCalled();
+  });
+
   it('preserves the single-VFO handshake when a Hamlib model reports VFO operations unsupported', async () => {
     const radioManager = {
       isConnected: vi.fn(() => true),

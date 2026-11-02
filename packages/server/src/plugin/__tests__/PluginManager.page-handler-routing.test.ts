@@ -54,6 +54,77 @@ function createOperator(id: string, callsign: string): RadioOperator {
 }
 
 describe('PluginManager page handler routing', () => {
+  it('delivers ctx.ui pushes to both standalone queues and WebSocket listeners for the owning session', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-page-delivery-'));
+    tempDirs.push(dataDir);
+    await writeUserPlugin(dataDir, 'page-delivery-test', `
+      export default {
+        name: 'page-delivery-test', version: '1.0.0', type: 'utility',
+        ui: { pages: [{ id: 'monitor', title: 'Monitor', entry: 'monitor.html', accessScope: 'operator' }] },
+        onLoad(ctx) {
+          ctx.ui.registerPageHandler({
+            onMessage(_pageId, action, data, request) {
+              if (action === 'page') ctx.ui.pushToPage('monitor', 'updated', data);
+              if (action === 'session') ctx.ui.pushToSession(request.pageSessionId, 'updated', data);
+            },
+          });
+        },
+      };
+    `);
+    await mkdir(join(dataDir, 'plugins', 'page-delivery-test', 'ui'), { recursive: true });
+    await writeFile(join(dataDir, 'plugins', 'page-delivery-test', 'ui', 'monitor.html'), '<html></html>');
+    const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
+    const listener = vi.fn();
+    eventEmitter.on('pluginPagePush', listener);
+    const operators = [createOperator('operator-1', 'BG4IAJ'), createOperator('operator-2', 'BG5DRB')];
+    const manager = new PluginManager({
+      eventEmitter,
+      getOperators: () => operators,
+      getOperatorById: id => operators.find(operator => operator.config.id === id),
+      getCurrentMode: () => MODES.FT8,
+      getOperatorAutomationSnapshot: () => null,
+      requestOperatorCall() {}, getRadioFrequency: async () => null,
+      setRadioFrequency() {}, getRadioBand: () => '40m', getRadioConnected: () => true,
+      getLatestSlotPack: () => null, interruptOperatorTransmission: async () => {},
+      hasWorkedCallsign: async () => false, resetOperatorRuntime() {}, dataDir,
+    });
+    manager.loadConfig({
+      configs: { 'page-delivery-test': { enabled: true, settings: {} } },
+      operatorStrategies: {}, operatorSettings: {},
+    });
+    await manager.start();
+    try {
+      const sessions = operators.map(operator => manager.createPluginPageSession({
+        pluginName: 'page-delivery-test', pageId: 'monitor', accessScope: 'operator',
+        instanceTarget: { kind: 'operator', operatorId: operator.config.id },
+      }));
+      const request = {
+        pageSessionId: sessions[0].sessionId,
+        user: { tokenId: 'token-1', role: 'operator' as const, operatorIds: ['operator-1'] },
+        instanceTarget: sessions[0].instanceTarget,
+        files: { write: async () => {}, read: async () => null, delete: async () => false, list: async () => [] },
+        page: { sessionId: sessions[0].sessionId, pageId: 'monitor', push() {} },
+      };
+      for (const action of ['page', 'session']) {
+        const data = { counter: 1 };
+        await manager.invokePluginPageHandler('page-delivery-test', 'monitor', action, data, request);
+        data.counter = 99;
+        const queued = manager.pullPluginPageSessionPushes('page-delivery-test', 'monitor', sessions[0].sessionId);
+        expect(queued).toHaveLength(1);
+        expect(queued[0].data).toEqual({ counter: 1 });
+        expect(listener).toHaveBeenLastCalledWith(queued[0]);
+        expect(manager.pullPluginPageSessionPushes('page-delivery-test', 'monitor', sessions[0].sessionId)).toEqual([]);
+        expect(manager.pullPluginPageSessionPushes('page-delivery-test', 'monitor', sessions[1].sessionId)).toEqual([]);
+      }
+      await manager.reloadPlugin('page-delivery-test');
+      expect(manager.getPluginPageSession(sessions[0].sessionId)).toBeNull();
+      expect(() => manager.pullPluginPageSessionPushes('page-delivery-test', 'monitor', sessions[0].sessionId))
+        .toThrow('Page session not found');
+    } finally {
+      await manager.shutdown();
+    }
+  });
+
   it('detaches page push data before queueing and broadcasting it', () => {
     const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
     const listener = vi.fn();

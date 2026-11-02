@@ -229,6 +229,8 @@ export class PluginManager {
     };
     deps.listPluginPageSessions = (pluginName, instanceTarget, pageId) =>
       this.pageSessions.listByPluginInstance(pluginName, instanceTarget, pageId);
+    deps.pushPluginPageSession = (pluginName, pageId, sessionId, action, data) =>
+      this.pushPluginPageSession(pluginName, pageId, sessionId, action, data);
     deps.eventEmitter.on('pluginLog', this.recordPluginLogHistory);
     this.contextFactory = new PluginContextFactory(
       deps,

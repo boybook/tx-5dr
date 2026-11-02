@@ -35,6 +35,13 @@ export class PluginUIBridge implements UIBridge {
       instanceTarget: PluginUIInstanceTarget,
       pageId?: string,
     ) => PluginPageSession[],
+    private readonly pushSession: (
+      pluginName: string,
+      pageId: string,
+      pageSessionId: string,
+      action: string,
+      data?: unknown,
+    ) => void,
     private readonly onPanelMeta?: (payload: PluginPanelMetaPayload) => void,
     private readonly onPanelContributions?: (
       pluginName: string,
@@ -143,13 +150,7 @@ export class PluginUIBridge implements UIBridge {
     data?: unknown,
   ): void {
     const snapshot = snapshotPluginData(data, 'json');
-    this.eventEmitter.emit('pluginPagePush', {
-      pluginName: this.pluginName,
-      pageId: session.pageId,
-      pageSessionId: session.sessionId,
-      action,
-      data: snapshot,
-    });
+    this.pushSession(this.pluginName, session.pageId, session.sessionId, action, snapshot);
   }
 
   /**

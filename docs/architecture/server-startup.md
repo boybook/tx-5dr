@@ -25,6 +25,17 @@ Server 启动与 radio 链路按以下职责分层：
 
 重要约束：`power` 永远指物理电台电源，不指 TX-5DR 软件引擎启停。软件引擎只有 `idle/starting/running/stopping`；电台电源、CAT 连接、软件引擎是三条独立轴线，只允许 `RadioPowerController` 做显式策略联动。
 
+`idle` 也可能携带一次失败的清理结果。生命周期 `stop()` 必须根据到达目标状态时的
+错误确认结果，不能只等状态名。停止先移除发射生产者，再确认物理租约释放，并通过
+既有维护栅栏阻止设备操作与清理并发；随后关闭音频、按逆序停止资源，最后按停止
+范围断开 CAT。PTT 未知态、尚未结束的设备操作或资源停止失败均拒绝停止请求，保留
+当前 Profile 和可供恢复的 CAT 会话。Profile 激活即使从 `idle` 开始也必须等待这一
+清理过程，物理电源操作切换 Profile 时也遵守这一契约；重启同样先重试失败的清理。
+
+资源管理器尝试停止全部已启动资源后汇总抛出失败，保留失败资源供重试，并禁止清空
+其注册。超时的停止仍由同一 Promise 持有；重试等待原操作结束，不并发再次调用
+资源的停止方法。启动回滚遵守相同的资源保留规则。
+
 ## 2. 启动时序
 
 ### 2.1 Server 初始化
@@ -180,3 +191,11 @@ rigctld 优先报告连接的物理 VFO；后端明确不支持 VFO 命令时保
 - `EngineLifecycle.test.ts`：不同模式复用同一资源蓝图重建入口
 - `RadioBridge.test.ts`：连接事件投影不执行连接期写频
 - `HamlibConnection.test.ts` / `IcomWlanConnection.test.ts`：关键 I/O 串行化、复合切换与低优先级让路
+
+## Station test composition
+
+Station tests select external audio device ports before discovery and keep the
+normal resource plan, sidecar, radio bootstrap and TX coordinator. Profile
+handover must finish stopping the previous engine before switching; a failed
+stop retains the previous Profile. Audio peers are independent of radio type.
+See [Station testing](station-testing.md) for lifetime and physical permission.

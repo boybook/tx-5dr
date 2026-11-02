@@ -1,3 +1,4 @@
+import { assertRadioExecution } from '../radio/RadioExecutionPolicy.js';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // RadioRoutes - FastifyRequest处理需要使用any
 
@@ -1107,6 +1108,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
 
   // CW 键控端口测试
   fastify.post('/test-cw-keyer', { schema: { body: zodToJsonSchema(HamlibConfigSchema) }, onRequest: adminOnly }, async (req, reply) => {
+    assertRadioExecution({ kind: 'transmit', source: 'cw-keyer-test' });
     const config = normalizeHamlibConfig(HamlibConfigSchema.parse(req.body));
 
     const cwKeyPort = config.cwKeyPort?.trim();

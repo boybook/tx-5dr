@@ -33,7 +33,7 @@ export async function profileRoutes(fastify: FastifyInstance) {
       profiles: canReadFullProfiles(req.authUser?.role)
         ? profiles
         : redactProfilesForRead(profiles),
-      activeProfileId: configManager.getPublicActiveProfileId(),
+      activeProfileId: configManager.getActiveProfileId(),
       hasConfiguredProfiles: configManager.hasConfiguredProfiles(),
     });
   });

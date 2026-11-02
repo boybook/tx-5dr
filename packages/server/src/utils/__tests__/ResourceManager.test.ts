@@ -2,7 +2,7 @@
  * ResourceManager unit tests
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ResourceManager, IResource, ResourceState } from '../ResourceManager.js';
 
 
@@ -226,7 +226,7 @@ describe('ResourceManager', () => {
       expect(stopOrder).toEqual(['resource3', 'resource2', 'resource1']);
     });
 
-    it('single resource stop failure does not affect other resources', async () => {
+    it('reports stop failures after attempting every resource and retains failed cleanup for retry', async () => {
       const resource1 = createMockResource('resource1');
       const resource2 = createMockResource('resource2', { shouldFailStop: true });
       const resource3 = createMockResource('resource3');
@@ -236,11 +236,28 @@ describe('ResourceManager', () => {
       manager.register({ resource: resource3 });
 
       await manager.startAll();
-      await manager.stopAll();
+      await expect(manager.stopAll()).rejects.toThrow('Failed to stop 1 resource');
 
       // All resources should attempt to stop (even if resource2 fails)
       expect(resource1.isRunning()).toBe(false);
       expect(resource3.isRunning()).toBe(false);
+      expect(() => manager.clear()).toThrow('still running');
+      resource2.stop = vi.fn(async () => {});
+      await expect(manager.stopAll()).resolves.toBeUndefined();
+      expect(resource2.stop).toHaveBeenCalledOnce();
+      expect(() => manager.clear()).not.toThrow();
+    });
+
+    it('retains failed rollback cleanup instead of allowing a new resource plan to replace it', async () => {
+      const device = createMockResource('device', { shouldFailStop: true });
+      manager.register({ resource: device, priority: 1 });
+      manager.register({ resource: createMockResource('decoder', { shouldFailStart: true }), priority: 2 });
+      await expect(manager.startAll()).rejects.toThrow('start failed');
+      expect(() => manager.clear()).toThrow('still running');
+      device.stop = vi.fn(async () => {});
+      await expect(manager.stopAll()).resolves.toBeUndefined();
+      expect(device.stop).toHaveBeenCalledOnce();
+      expect(() => manager.clear()).not.toThrow();
     });
   });
 
@@ -292,11 +309,32 @@ describe('ResourceManager', () => {
 
       await manager.startAll();
 
-      // stopAll does not throw, it captures and logs errors then continues
-      await manager.stopAll();
+      await expect(manager.stopAll()).rejects.toThrow('Failed to stop 1 resource');
 
       // Resource state should be ERROR (due to stop timeout)
       expect(manager.getState('test')).toBe(ResourceState.ERROR);
+    });
+
+    it('waits for a timed-out stop without starting another cleanup or allowing clear', async () => {
+      vi.useFakeTimers();
+      try {
+        let finish!: () => void;
+        const stop = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+        manager.register({ name: 'device', start: async () => {}, stop, stopTimeout: 10 });
+        await manager.startAll();
+        const first = expect(manager.stopAll()).rejects.toThrow('Failed to stop');
+        await vi.advanceTimersByTimeAsync(10);
+        await first;
+        expect(() => manager.clear()).toThrow('still running');
+        const retry = manager.stopAll();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(stop).toHaveBeenCalledOnce();
+        finish();
+        await retry;
+        expect(() => manager.clear()).not.toThrow();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

@@ -1,3 +1,4 @@
+import { prepareRadioTransmission } from '../radio/RadioExecutionPolicy.js';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'eventemitter3';
 import {
@@ -311,6 +312,8 @@ export class PhysicalTxCoordinator extends EventEmitter<PhysicalTxCoordinatorEve
   }
 
   async acquireLease(request: PhysicalTxLeaseRequest): Promise<string> {
+    const permission = prepareRadioTransmission(request.source);
+    if (permission) await permission;
     if (this.activeLease || this.maintenanceReason || this.pendingOperationFences.size > 0) {
       throw new PhysicalTxBusyError(
         this.activeLease

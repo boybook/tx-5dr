@@ -276,6 +276,7 @@ export function canonicalizePluginDefinition(def: AnyPluginDefinition): AnyPlugi
 
 function validateSimulationScenarios(def: AnyPluginDefinition): void {
   const scenarios = def.simulationScenarios ?? [];
+  if (!Array.isArray(scenarios) || scenarios.length > 64) throw new Error('Simulation scenarios exceed the supported limit');
   const scenarioIds = new Set<string>();
   for (const scenario of scenarios) {
     if (!scenario.id?.trim() || scenarioIds.has(scenario.id)) {
@@ -319,7 +320,9 @@ function validateSimulationScenarios(def: AnyPluginDefinition): void {
     for (const rule of scenario.globalRules ?? []) {
       validateSimulationRule(scenario.id, 'global', rule, scenario.states);
     }
+    if (Object.keys(scenario.states).length > 128 || (scenario.identityPool?.length ?? 0) > 4096) throw new Error('Simulation scenario exceeds resource limits');
     for (const [stateId, state] of Object.entries(scenario.states)) {
+      if (!state || (state.rules !== undefined && (!Array.isArray(state.rules) || state.rules.length > 128)) || (state.timeouts !== undefined && (!Array.isArray(state.timeouts) || state.timeouts.length > 32))) throw new Error('Invalid simulation state');
       for (const rule of state.rules ?? []) {
         validateSimulationRule(scenario.id, stateId, rule, scenario.states);
       }
@@ -339,7 +342,7 @@ function validateSimulationRule(
   rule: import('@tx5dr/plugin-api').SimulationScenarioRule,
   states: SimulationScenarioDescriptor['states'],
 ): void {
-  if (!rule.pattern || rule.pattern.length > 512) {
+  if (typeof rule.pattern !== 'string' || !rule.pattern || rule.pattern.length > 512) {
     throw new Error(`Simulation scenario "${scenarioId}" state "${stateId}" has an invalid pattern`);
   }
   try {
@@ -356,10 +359,11 @@ function validateSimulationChoices(
   choices: SimulationScenarioChoice[],
   states: SimulationScenarioDescriptor['states'],
 ): void {
-  if (choices.length === 0) {
+  if (!Array.isArray(choices) || choices.length === 0 || choices.length > 32) {
     throw new Error(`Simulation scenario "${scenarioId}" state "${stateId}" has no choices`);
   }
   for (const choice of choices) {
+    if (!choice || (choice.reply !== undefined && (typeof choice.reply !== 'string' || choice.reply.length > 256)) || (choice.replyFrequency !== undefined && !['received', 'peer'].includes(choice.replyFrequency))) throw new Error('Invalid simulation reply');
     const actionCount = Number(Boolean(choice.reply))
       + Number(Boolean(choice.repeatLast))
       + Number(Boolean(choice.silence))

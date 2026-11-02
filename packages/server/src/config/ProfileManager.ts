@@ -147,10 +147,10 @@ export class ProfileManager {
   /**
    * 激活 Profile（核心流程）
    *
-   * 1. 安全停止引擎（如果运行中）
+   * 1. 确认旧引擎和连接会话已完成清理
    * 2. 经 ConfigManager 串行化切换配置（snapshot → setActive → load）
    * 3. 广播事件通知前端
-   * 4. 如果之前在运行，自动重启引擎（使用新 Profile 配置）
+   * 4. 使用新 Profile 配置启动引擎
    */
   async activateProfile(id: string): Promise<{ success: boolean; profile: RadioProfile; wasRunning: boolean }> {
     const configManager = ConfigManager.getInstance();
@@ -163,31 +163,21 @@ export class ProfileManager {
     const engineStatus = engine.getStatus();
     const wasRunning = engineStatus.isRunning;
     const previousProfileId = configManager.getActiveProfileId();
-    const involvesVirtualRadio = configManager.getActiveVirtualRadioProfile() !== null
-      || profile.isVirtual === true;
-    const requiresEngineStop = wasRunning
-      || (involvesVirtualRadio && engineStatus.engineState !== 'idle');
-
-    // 阶段1：安全停止引擎
-    if (requiresEngineStop) {
-      try {
-        await Promise.race([
-          engine.stop(),
-          new Promise<void>((_, reject) =>
-            setTimeout(() => reject(new Error('Engine stop timeout')), 10_000)
-          ),
-        ]);
-        logger.info('Engine stopped');
-      } catch (stopError) {
-        // A physical/virtual handover cannot share a late playback lease. Keep
-        // the current Profile active until its engine has stopped completely.
-        if (involvesVirtualRadio) {
-          logger.error('Engine stop failed during virtual radio Profile handover:', stopError);
-          throw stopError;
-        }
-        // Preserve the existing best-effort behavior for same-backend Profiles.
-        logger.warn('Engine stop error, proceeding with profile switch:', stopError);
-      }
+    // IDLE may still contain a failed stop or an independently opened CAT session.
+    let stopTimer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        engine.stop(),
+        new Promise<void>((_, reject) => {
+          stopTimer = setTimeout(() => reject(new Error('Engine stop timeout')), 10_000);
+        }),
+      ]);
+      logger.info('Engine stopped');
+    } catch (stopError) {
+      logger.error('Engine stop failed; retaining current Profile:', stopError);
+      throw stopError;
+    } finally {
+      if (stopTimer) clearTimeout(stopTimer);
     }
 
     // 阶段2：切换配置（经 ConfigManager 串行化：snapshot → setActive → load）
@@ -261,7 +251,7 @@ export class ProfileManager {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       engine.emit('profileListUpdated' as any, {
         profiles: this.getAllProfiles(),
-        activeProfileId: ConfigManager.getInstance().getPublicActiveProfileId(),
+        activeProfileId: ConfigManager.getInstance().getActiveProfileId(),
         hasConfiguredProfiles: ConfigManager.getInstance().hasConfiguredProfiles(),
       });
     } catch {

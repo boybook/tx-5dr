@@ -21,10 +21,10 @@
     "dev:check-native": "tsx src/scripts/check-native-modules.ts",
     "start": "node ../../scripts/run-with-env.mjs node dist/scripts/server-launcher.js dist/index.js",
     "lint": "eslint src/**/*.ts",
-    "test": "yarn test:unit && yarn test:virtual-radio-integration && yarn test:logbook-performance",
+    "test": "yarn test:unit && yarn test:logbook-performance",
     "test:unit": "vitest run --pool=forks --maxWorkers=2 --minWorkers=1 --exclude 'src/**/*.performance.test.ts'",
-    "test:virtual-radio-integration": "vitest run --pool=forks src/virtual-radio/VirtualRadioSession.performance.test.ts src/decode/__tests__/WSJTXDecodeSession.performance.test.ts --maxWorkers=1 --minWorkers=1",
-    "test:logbook-performance": "vitest run --pool=forks src/log/__tests__/ADIFLogProvider.performance.test.ts --maxWorkers=1 --minWorkers=1"
+    "test:logbook-performance": "vitest run --pool=forks src/log/__tests__/ADIFLogProvider.performance.test.ts --maxWorkers=1 --minWorkers=1",
+    "test:station-integration": "vitest run --pool=forks src/simulation/PeerSession.performance.test.ts src/radio/__tests__/HamlibConnection.dummy.performance.test.ts src/radio/__tests__/HamlibConnection.network.performance.test.ts src/decode/__tests__/WSJTXDecodeSession.performance.test.ts --maxWorkers=1 --minWorkers=1"
   },
   "dependencies": {
     "@casl/ability": "^6.8.0",

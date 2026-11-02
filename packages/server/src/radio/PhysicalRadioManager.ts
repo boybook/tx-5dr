@@ -1,3 +1,4 @@
+import { assertRadioExecution, prepareRadioTransmission } from './RadioExecutionPolicy.js';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // PhysicalRadioManager - 电台连接管理需要使用any类型以处理不同连接类型的事件
 
@@ -805,6 +806,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   }
 
   async withPowerOperation<T>(reason: string, task: () => Promise<T>): Promise<T> {
+    assertRadioExecution({ kind: 'power' });
     this.powerOperationFlag = { active: true, reason };
     this.stopReconnectForExternalOperation(reason);
     try {
@@ -1384,6 +1386,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     request: ApplyOperatingStateRequest,
     options: { expectedConnectionGeneration?: number } = {},
   ): Promise<ApplyOperatingStateResult> {
+    if (request.mode !== undefined) assertRadioExecution({ kind: 'mode-write' });
     return this.runSessionMutation('applyOperatingState', async () => {
       if (
         options.expectedConnectionGeneration !== undefined
@@ -1701,6 +1704,10 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 设置 PTT
    */
   async setPTT(state: boolean): Promise<void> {
+    if (state) {
+      const permission = prepareRadioTransmission('ptt');
+      if (permission) await permission;
+    }
     if (!this.connection) {
       throw new Error('Radio not connected, cannot set PTT');
     }
@@ -1770,6 +1777,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 设置模式
    */
   async setMode(mode: string, bandwidth?: RadioModeBandwidth, options?: SetRadioModeOptions): Promise<void> {
+    assertRadioExecution({ kind: 'mode-write' });
     if (!this.connection) {
       throw new Error('radio not connected');
     }
@@ -1956,6 +1964,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     action?: boolean,
     sessionId?: string,
   ): Promise<void> {
+    assertRadioExecution({ kind: 'capability-write', id });
     if (!this.connection || !this.isConnected()) {
       throw new RadioError({
         code: RadioErrorCode.INVALID_STATE,
@@ -1986,6 +1995,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   }
 
   async writeCapabilityGroup(groupId: string, values: Record<string, CapabilityValue>, sessionId: string): Promise<void> {
+    for (const id of Object.keys(values)) assertRadioExecution({ kind: 'capability-write', id });
     if (!this.connection || !this.isConnected()) throw new Error('Radio not connected');
     await this.capabilityManager.writeCapabilityGroup(groupId, values, sessionId);
   }
@@ -2258,6 +2268,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 启动手动调谐
    */
   async startTuning(): Promise<boolean> {
+    assertRadioExecution({ kind: 'transmit', source: 'tuner' });
     if (!this.connection) {
       throw new Error('radio not connected, cannot start tuning');
     }
@@ -2715,6 +2726,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   }
 
   private createConnectionSession(config: HamlibConfig): IRadioConnection {
+    assertRadioExecution({ kind: 'connect', config });
     const connection = this.connectionFactory(config);
     this.connection = connection;
     this.setupConnectionEventForwarding();

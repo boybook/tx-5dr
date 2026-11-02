@@ -23,6 +23,7 @@ describe('PluginUIBridge', () => {
       { kind: 'operator', operatorId: 'operator-1' },
       new EventEmitter<DigitalRadioEngineEvents>(),
       () => [],
+      vi.fn(),
     );
     const requestContext = {} as import('@tx5dr/plugin-api').PluginUIRequestContext;
 
@@ -54,6 +55,7 @@ describe('PluginUIBridge', () => {
       { kind: 'operator', operatorId: 'operator-1' },
       new EventEmitter<DigitalRadioEngineEvents>(),
       () => [],
+      vi.fn(),
       undefined,
       undefined,
       refresh,
@@ -72,6 +74,9 @@ describe('PluginUIBridge', () => {
       { kind: 'operator', operatorId: 'operator-1' },
       eventEmitter,
       () => [createSession()],
+      (pluginName, pageId, pageSessionId, action, data) => {
+        eventEmitter.emit('pluginPagePush', { pluginName, pageId, pageSessionId, action, data });
+      },
     );
 
     bridge.pushToPage('settings', 'updated', { ok: true });
@@ -111,6 +116,7 @@ describe('PluginUIBridge', () => {
           expiresAt: Date.now() + 1_000,
         },
       ]),
+      vi.fn(),
     );
 
     expect(() => bridge.pushToPage('settings', 'updated')).toThrow('explicit_page_session_required');
@@ -133,6 +139,7 @@ describe('PluginUIBridge', () => {
           expiresAt: Date.now() + 1_000,
         },
       ]),
+      vi.fn(),
     );
 
     expect(() => bridge.pushToSession('session-2', 'updated')).toThrow('page_session_not_found');
@@ -146,6 +153,7 @@ describe('PluginUIBridge', () => {
       { kind: 'operator', operatorId: 'operator-1' },
       eventEmitter,
       () => [],
+      vi.fn(),
       undefined,
       onContributions,
     );
@@ -177,6 +185,7 @@ describe('PluginUIBridge', () => {
       { kind: 'operator', operatorId: 'operator-1' },
       eventEmitter,
       () => [],
+      vi.fn(),
     );
     const sentAt = new Date('2026-08-23T01:02:03.000Z');
     const data = {
@@ -216,6 +225,7 @@ describe('PluginUIBridge', () => {
       { kind: 'operator', operatorId: 'operator-1' },
       eventEmitter,
       () => [],
+      vi.fn(),
       onPanelMeta,
     );
     const meta = {
@@ -248,6 +258,7 @@ describe('PluginUIBridge', () => {
       { kind: 'operator', operatorId: 'operator-1' },
       eventEmitter,
       () => [],
+      vi.fn(),
       undefined,
       onContributions,
     );
@@ -284,6 +295,9 @@ describe('PluginUIBridge', () => {
       { kind: 'operator', operatorId: 'operator-1' },
       eventEmitter,
       () => [createSession()],
+      (pluginName, pageId, pageSessionId, action, data) => {
+        eventEmitter.emit('pluginPagePush', { pluginName, pageId, pageSessionId, action, data });
+      },
     );
     const data = { nested: { value: 'before' } };
 
@@ -309,6 +323,7 @@ describe('PluginUIBridge', () => {
       { kind: 'operator', operatorId: 'operator-1' },
       eventEmitter,
       () => [],
+      vi.fn(),
     );
 
     expect(() => bridge.send('status', data)).toThrow(PluginDataBoundaryError);

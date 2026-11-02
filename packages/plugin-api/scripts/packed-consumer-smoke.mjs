@@ -95,6 +95,7 @@ const required = [
   [contest.composeFT8ContestPlugin, 'contest.composeFT8ContestPlugin'],
   [contest.createFT8ContestTestKit, 'contest.createFT8ContestTestKit'],
   [contest.standardFT8ContestLogbook, 'contest.standardFT8ContestLogbook'],
+  [contest.defaultContestLogbook, 'contest.defaultContestLogbook'],
   [ft8.createStandardQSOPluginRuntime, 'ft8.createStandardQSOPluginRuntime'],
   [ft8.FT8MessageParser, 'ft8.FT8MessageParser'],
   [contest.createContestQsoEnvelopeAdapter, 'contest.createContestQsoEnvelopeAdapter'],
@@ -124,6 +125,7 @@ void capabilityDescriptor;
 void nonScalarCapabilityValue;
 import {
   cabrilloSubmission,
+  defaultContestLogbook,
   CONTEST_SESSION_PERMISSIONS,
   composeFT8ContestPlugin,
   createContestQsoEnvelopeAdapter,
@@ -138,6 +140,9 @@ import {
 } from '@tx5dr/plugin-api/contest';
 import { buildCabrilloDocument } from '@tx5dr/plugin-api/toolkit';
 import { createMockContext } from '@tx5dr/plugin-api/testing';
+
+const sharedStateScope: NonNullable<Parameters<typeof defaultContestLogbook>[0]['stateScope']> = 'global';
+void sharedStateScope;
 
 const contest = defineFT8Contest({
   id: 'packed-consumer',

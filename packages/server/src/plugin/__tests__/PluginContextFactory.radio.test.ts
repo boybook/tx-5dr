@@ -58,13 +58,13 @@ async function createContext(plugin: LoadedPlugin, deps: PluginManagerDeps) {
 }
 
 describe('PluginContextFactory radio access', () => {
-  it('projects the active virtual profile as a generic simulation fact', async () => {
-    const virtual = vi.spyOn(ConfigManager.getInstance(), 'getActiveVirtualRadioProfile');
-    virtual.mockReturnValue({ id: 'virtual-dev' } as never);
+  it('projects native Hamlib Dummy as a simulation fact', async () => {
+    const virtual = vi.spyOn(ConfigManager.getInstance(), 'getRadioConfig');
+    virtual.mockReturnValue({ type: 'serial', serial: { path: '/dev/null', rigModel: 1 } });
     const ctx = await createContext(createPlugin(), createDeps());
     expect(ctx.radio.isSimulation).toBe(true);
 
-    virtual.mockReturnValue(null);
+    virtual.mockReturnValue({ type: 'none' });
     expect(ctx.radio.isSimulation).toBe(false);
   });
 

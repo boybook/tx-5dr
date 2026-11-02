@@ -563,7 +563,6 @@
   },
   "profileModal": {
     "virtual": "测试",
-    "virtualRadio": "开发用 FT4/FT8 测试电台",
     "edit": "编辑",
     "cannotDeleteActive": "无法删除当前激活的 Profile",
     "createNew": "新建电台配置",

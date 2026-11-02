@@ -1,3 +1,4 @@
+import type { TxAudioObservation } from './TxAudioObservation.js';
 import { createRtAudioInstance, type RtAudioInstance } from './rtaudio-api.js';
 import { RingBufferAudioProvider } from './AudioBufferProvider.js';
 import type { AudioClock } from './ringBuffer.js';
@@ -21,7 +22,6 @@ import { findOwnedUsbAudioHardwareId } from './linux-usb-audio-identity.js';
 import { IcomIfSsbDemodulator } from './IcomIfSsbDemodulator.js';
 import { DeterministicTxMonitorTap } from './DeterministicTxMonitorTap.js';
 import type { AudioInputSignalType } from '@tx5dr/contracts';
-import { VIRTUAL_AUDIO_INGRESS_TOKEN } from '../virtual-radio/virtualAudioIngress.js';
 import {
   applyTxAudioEnvelope,
   createTxAudioReleaseTail,
@@ -54,7 +54,7 @@ const RTAUDIO_TX_MAX_CONSECUTIVE_WRITE_FAILURES = 20;
 const RTAUDIO_OUTPUT_WARNING_LOG_WINDOW_MS = 5000;
 const MAX_SERIALIZED_INPUT_INGEST_DEPTH = 3;
 
-export type NativeAudioInputSourceKind = 'audio-device' | 'icom-wlan' | 'tci' | 'openwebrx' | 'simulation';
+export type NativeAudioInputSourceKind = 'audio-device' | 'icom-wlan' | 'tci' | 'openwebrx';
 
 interface SerializedInputIngestQueue {
   generation: number;
@@ -72,6 +72,7 @@ export interface NativeAudioInputFrame {
 }
 
 export interface AudioStreamEvents {
+  'txAudioObservation': (observation: TxAudioObservation) => void;
   'audioData': (samples: Float32Array, sampleRate: number) => void;
   'nativeAudioInputData': (frame: NativeAudioInputFrame) => void;
   'txMonitorAudioData': (data: { samples: Float32Array; sampleRate: number }) => void;
@@ -408,6 +409,13 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   private readonly rtAudioPlaybackStartWaiters: RtAudioPlaybackStartWaiter[] = [];
   private readonly rtAudioOutputDrainWaiters = new Set<RtAudioOutputDrainWaiter>();
   private readonly playbackFadeOutRequested = new Set<number>();
+  private basebandContribution?: (startMs: number, sampleRate: number, count: number) => Float32Array;
+
+  /** One audio owner combines normalized input; contributors never write the ring. */
+  setBasebandContribution(contribution?: (startMs: number, sampleRate: number, count: number) => Float32Array): void {
+    this.basebandContribution = contribution;
+  }
+
   private readonly now: AudioClock;
   private inputSignalType: AudioInputSignalType = 'af';
   private ifCenterHz = 12000;
@@ -842,17 +850,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
     return this.audioProvider;
   }
 
-  async ingestVirtualInput(
-    token: typeof VIRTUAL_AUDIO_INGRESS_TOKEN,
-    samples: Float32Array,
-    sampleRate = DEFAULT_INPUT_PROCESSING_SAMPLE_RATE,
-  ): Promise<void> {
-    if (token !== VIRTUAL_AUDIO_INGRESS_TOKEN) {
-      throw new Error('virtual audio ingress denied');
-    }
-    await this.ingestInputSamples(samples, sampleRate, 'simulation');
-  }
-  
   /**
    * 获取当前采样率
    */
@@ -1589,6 +1586,12 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   }
 
   private writeProcessedInputAudio(samples: Float32Array, sampleRate: number, arrivalTimeMs?: number, seq?: number): void {
+    if (this.basebandContribution) {
+      const extra = this.basebandContribution((arrivalTimeMs ?? this.now()) - samples.length / sampleRate * 1000, sampleRate, samples.length);
+      const mixed = new Float32Array(samples.length);
+      for (let i = 0; i < mixed.length; i++) mixed[i] = Math.max(-1, Math.min(1, samples[i]! + (extra[i] ?? 0)));
+      samples = mixed;
+    }
     this.audioProvider.writeAudio(samples, arrivalTimeMs, seq);
     this.emit('audioData', samples, sampleRate);
   }
@@ -3002,6 +3005,42 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    * 播放编码后的音频数据
    */
   async playAudio(audioData: Float32Array, targetSampleRate: number = 48000, options: PlayAudioOptions = {}): Promise<void> {
+    if (this.listenerCount('txAudioObservation') === 0) return this.playAudioImpl(audioData, targetSampleRate, options);
+    const transmissionId = randomUUID();
+    const streamGeneration = this.outputStreamGeneration;
+    const stage = this.rtAudioOutput ? 'consumed' as const : 'submitted' as const;
+    let timestampMs = this.now();
+    let offset = 0;
+    let rate = targetSampleRate;
+    let active = true;
+    const publish = (phase: TxAudioObservation['phase'], samples?: Float32Array, error?: string) => {
+      this.emit('txAudioObservation', { transmissionId, streamGeneration, kind: options.playbackKind ?? 'digital',
+        phase, timestampMs, sampleOffset: offset, sampleRate: rate, stage, samples, error });
+    };
+    try {
+      await this.playAudioImpl(audioData, targetSampleRate, {
+        ...options,
+        onPlaybackStarted: () => { timestampMs = this.now(); publish('started'); options.onPlaybackStarted?.(); },
+        onPlaybackChunk: (samples, sampleRate) => {
+          if (!active) return;
+          rate = sampleRate;
+          publish('samples', samples.slice());
+          offset += samples.length;
+          options.onPlaybackChunk?.(samples, sampleRate);
+        },
+      });
+      // Consume observations are deferred out of the native callback.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      if (offset === 0) throw new Error('Audio output completed without observed samples');
+      publish('completed');
+    } catch (error) {
+      await new Promise<void>(resolve => setImmediate(resolve));
+      publish('interrupted', undefined, (error as Error).message);
+      throw error;
+    } finally { active = false; }
+  }
+
+  private async playAudioImpl(audioData: Float32Array, targetSampleRate: number, options: PlayAudioOptions): Promise<void> {
     const playStartTime = Date.now();
     const playbackKind = options.playbackKind ?? 'digital';
     const playbackId = ++this.playbackSequence;
@@ -3137,6 +3176,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
 
             await radioAudioAdapter.sendAudio(chunk);
             signalPlaybackStarted();
+            options.onPlaybackChunk?.(chunk, targetSampleRate);
             if (options.injectIntoMonitor) {
               this.emit('txMonitorAudioData', { samples: chunk, sampleRate: targetSampleRate });
             }
@@ -3253,6 +3293,10 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           }
           if (options.injectIntoMonitor) {
             this.emit('txMonitorAudioData', { samples: chunk, sampleRate: this.outputSampleRate });
+          }
+          if (options.onPlaybackChunk) {
+            const observed = Float32Array.from(chunk, sample => Math.max(-1, Math.min(1, sample * this.volumeGain)));
+            options.onPlaybackChunk(observed, this.outputSampleRate);
           }
           samplesWritten += chunk.length;
           const targetElapsedMs = (samplesWritten / this.outputSampleRate) * 1000 - 80;
@@ -3390,6 +3434,14 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
           }
         },
       );
+      const observedChunks: Float32Array[] = [];
+      if (options.onPlaybackChunk) {
+        playbackStartWaiter.onConsumed = () => {
+          const pcm = observedChunks.shift();
+          const observedRate = this.outputSampleRate;
+          if (pcm) setImmediate(() => options.onPlaybackChunk?.(pcm, observedRate));
+        };
+      }
       let postGainPeak = 0;
       let postGainSumSquares = 0;
       let postGainSampleCount = 0;
@@ -3469,16 +3521,18 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
                   tail.subarray(offset, Math.min(offset + chunkSize, tail.length)),
                   chunkSize,
                   this.volumeGain,
-                  Boolean(options.injectIntoMonitor),
+                  Boolean(options.injectIntoMonitor || options.onPlaybackChunk),
                 );
+                if (options.onPlaybackChunk && encoded.monitorChunk) observedChunks.push(encoded.monitorChunk);
                 this.noteRtAudioChunkPending(playbackStartWaiter!);
                 try {
                   this.rtAudioOutput.write(encoded.buffer);
                 } catch (error) {
+                  observedChunks.pop();
                   this.rollbackRtAudioChunkPending(playbackStartWaiter!);
                   throw error;
                 }
-                if (encoded.monitorChunk && encoded.monitorChunk.length > 0) {
+                if (options.injectIntoMonitor && encoded.monitorChunk && encoded.monitorChunk.length > 0) {
                   this.emit('txMonitorAudioData', { samples: encoded.monitorChunk, sampleRate: this.outputSampleRate });
                 }
                 submittedChunks += 1;
@@ -3500,17 +3554,19 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               chunk,
               chunkSize,
               this.volumeGain,
-              Boolean(options.injectIntoMonitor),
+              Boolean(options.injectIntoMonitor || options.onPlaybackChunk),
             );
             // The RtAudio callback is the first reliable indication that the
             // device consumed a frame. Count the in-flight write before
             // entering native code because some backends invoke the callback
             // synchronously from write().
+            if (options.onPlaybackChunk && encoded.monitorChunk) observedChunks.push(encoded.monitorChunk);
             this.noteRtAudioChunkPending(playbackStartWaiter!);
             const writeStartedAt = performance.now();
             try {
               this.rtAudioOutput.write(encoded.buffer);
             } catch (error) {
+              observedChunks.pop();
               this.rollbackRtAudioChunkPending(playbackStartWaiter!);
               throw error;
             }
@@ -3531,7 +3587,7 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
               );
             }
             consecutiveWriteFailCount = 0;
-            if (encoded.monitorChunk && encoded.monitorChunk.length > 0) {
+            if (options.injectIntoMonitor && encoded.monitorChunk && encoded.monitorChunk.length > 0) {
               this.emit('txMonitorAudioData', { samples: encoded.monitorChunk, sampleRate: this.outputSampleRate });
             }
             if (encoded.sourceSamples > 0) {

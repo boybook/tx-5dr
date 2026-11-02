@@ -158,6 +158,10 @@ export class PluginContextFactory {
       this.deps.eventEmitter,
       (pluginName, instanceTarget, pageId) =>
         this.deps.listPluginPageSessions?.(pluginName, instanceTarget, pageId) ?? [],
+      (pluginName, pageId, sessionId, action, data) => {
+        if (!this.deps.pushPluginPageSession) throw new Error('page_push_not_supported');
+        this.deps.pushPluginPageSession(pluginName, pageId, sessionId, action, data);
+      },
       this.onPanelMeta,
       this.onPanelContributions,
       (id) => this.deps.notifyOperatorStatusChanged?.(id),
@@ -952,7 +956,8 @@ export class PluginContextFactory {
         return deps.getRadioConnected();
       },
       get isSimulation() {
-        return configManager.getActiveVirtualRadioProfile() !== null;
+        const radio = configManager.getRadioConfig();
+        return radio.type === 'serial' && radio.serial?.rigModel === 1;
       },
     };
 

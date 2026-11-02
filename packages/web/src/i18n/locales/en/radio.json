@@ -563,7 +563,6 @@
   },
   "profileModal": {
     "virtual": "Test",
-    "virtualRadio": "Development FT4/FT8 test radio",
     "edit": "Edit",
     "cannotDeleteActive": "Cannot delete the currently active Profile",
     "createNew": "New Radio Config",

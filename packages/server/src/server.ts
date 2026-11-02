@@ -1,3 +1,4 @@
+import { prepareStationTest } from './station-testing/StationTestRuntime.js';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // Server - Fastify服务器配置需要使用any
 
@@ -442,6 +443,7 @@ export async function createServer() {
   bootstrapCoordinator.startPhase('config-auth', 'Reading base configuration');
   await configManager.initialize();
   fastify.log.info('Config manager initialized');
+  const stationTest = await prepareStationTest();
 
   bootstrapCoordinator.startPhase('audio-device-discovery', 'Discovering audio devices');
   await AudioDeviceManager.getInstance().initializeDeviceRegistry();
@@ -482,6 +484,7 @@ export async function createServer() {
   bootstrapCoordinator.startPhase('engine-bootstrap', 'Assembling radio engine');
   await digitalRadioEngine.initialize();
   bootstrapCoordinator.completePhase('engine-bootstrap');
+  await stationTest?.attach(digitalRadioEngine, fastify, () => process.kill(process.pid, 'SIGTERM'));
   bootLogger.info('digital radio engine initialized');
   ConsoleLogger.getInstance().flushSync();
 

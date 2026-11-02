@@ -1,6 +1,6 @@
 ---
 name: tx5dr-development
-description: Implement or review TX-5DR application features and bug fixes across Web, server, Electron, shared contracts, plugins, and radio/audio. Use for software behavior, state, UI, persistence, and lifecycle changes; public SDK contracts and publication have specialized skills.
+description: Implement or review TX-5DR application changes, radio/audio behavior, and development-time station validation or bug reproduction. Use across Web, server, Electron, persistence and plugins; public SDK changes and publication have specialized skills.
 ---
 
 # TX-5DR Development
@@ -30,6 +30,13 @@ public SDK exports, Host capabilities, scaffold or marketplace contracts. An
 isolated built-in plugin fix need not become a public API change. Use
 [tx5dr-release](../tx5dr-release/SKILL.md) for packaging, publication and update
 distribution; a local build is not a release.
+
+For development-time station validation, audio peers or a radio/audio bug
+reproduction, including an Agent loading plugins and operating their UI, read
+[station validation](references/station-validation.md).
+Real-slot and native/codec integration are explicit development checks only:
+never add them to unit tests, aggregate test scripts or default CI. Keep the
+production pipeline shared and inject faults only at external boundaries.
 
 ## Implement and review
 

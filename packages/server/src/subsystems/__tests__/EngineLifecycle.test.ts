@@ -2,10 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'eventemitter3';
 import { EngineLifecycle } from '../EngineLifecycle.js';
 import { ConfigManager } from '../../config/config-manager.js';
+import { PhysicalTxCoordinator } from '../../transmission/PhysicalTxCoordinator.js';
+
+const lifecycles: EngineLifecycle[] = [];
 
 function createLifecycle(
   initialModeName: 'FT8' | 'VOICE' | 'CW' | 'SSTV' | 'FAX' = 'FT8',
-  options: { virtual?: boolean } = {},
 ) {
   let currentModeName = initialModeName;
   const resourceManager = {
@@ -27,13 +29,17 @@ function createLifecycle(
     start: vi.fn(async () => undefined),
     stop: vi.fn(async () => undefined),
   };
-  const physicalTxCoordinator = {
-    forceInterrupt: vi.fn(async () => null),
-  };
+  const setPTT = vi.fn(async (_active: boolean) => {});
+  const physicalTxCoordinator = new PhysicalTxCoordinator({
+    isRadioConnected: radioManager.isConnected,
+    setPTT,
+    playAudio: async () => {},
+    stopCurrentPlayback: async () => 0,
+  });
   const imageRadioService = { start: vi.fn(), stop: vi.fn() };
 
   const audioSidecar = {
-    start: vi.fn(),
+    start: vi.fn(async () => {}),
     stop: vi.fn(),
     isConnected: () => false,
     getStatus: () => 'idle',
@@ -51,6 +57,7 @@ function createLifecycle(
   vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
     getCWDecoderConfig: vi.fn(() => ({ enabled: false })),
     getRadioConfig: vi.fn(() => ({ type: 'none' })),
+    getActiveProfile: vi.fn(() => null),
   } as unknown as ConfigManager);
 
   const lifecycle = new EngineLifecycle({
@@ -80,10 +87,10 @@ function createLifecycle(
     getCWDecoderManager: () => ({ start: vi.fn(), stop: vi.fn(), getConfig: () => ({}) } as any),
     getAudioVolumeController: () => ({ restoreGainForCurrentSlot: vi.fn() } as any),
     getAudioSidecar: () => audioSidecar as any,
-    isVirtualRadioActive: () => options.virtual === true,
     getImageRadioService: () => imageRadioService as any,
     getStatus: () => ({}),
   });
+  lifecycles.push(lifecycle);
 
   return {
     lifecycle,
@@ -91,6 +98,7 @@ function createLifecycle(
     decodeQueue,
     radioManager,
     physicalTxCoordinator,
+    setPTT,
     audioSidecar,
     setModeName: (modeName: 'FT8' | 'VOICE' | 'CW' | 'SSTV' | 'FAX') => {
       currentModeName = modeName;
@@ -100,6 +108,7 @@ function createLifecycle(
 
 describe('EngineLifecycle', () => {
   afterEach(() => {
+    lifecycles.splice(0).forEach(lifecycle => lifecycle.destroyStateMachine());
     vi.restoreAllMocks();
   });
 
@@ -171,12 +180,13 @@ describe('EngineLifecycle', () => {
     expect(decodeQueue.stop).toHaveBeenCalledWith('digital-engine-stop');
   });
 
-  it('does not start a physical audio sidecar for a virtual radio session', async () => {
-    const { lifecycle, audioSidecar } = createLifecycle('FT8', { virtual: true });
+  it('starts the normal audio sidecar with the shared radio resource plan', async () => {
+    const { lifecycle, audioSidecar } = createLifecycle('FT8');
+    audioSidecar.start.mockResolvedValue(undefined);
 
     await (lifecycle as any).doStart();
 
-    expect(audioSidecar.start).not.toHaveBeenCalled();
+    expect(audioSidecar.start).toHaveBeenCalledOnce();
   });
 
   it('does not include decode workers in the voice resource plan', async () => {
@@ -247,5 +257,70 @@ describe('EngineLifecycle', () => {
     await (lifecycle as any).doStop();
 
     expect(radioManager.disconnect).toHaveBeenCalledWith('Engine stopped');
+  });
+
+  it('rejects all stop callers when cleanup fails and retries cleanup from idle', async () => {
+    const { lifecycle, audioSidecar, radioManager } = createLifecycle();
+    lifecycle.initializeStateMachine();
+    await lifecycle.startAndWaitForRunning();
+    audioSidecar.stop.mockRejectedValueOnce(new Error('audio close failed'));
+
+    const results = await Promise.allSettled([lifecycle.stop(), lifecycle.stop()]);
+    expect(results).toEqual([
+      { status: 'rejected', reason: expect.objectContaining({ message: 'audio close failed' }) },
+      { status: 'rejected', reason: expect.objectContaining({ message: 'audio close failed' }) },
+    ]);
+    expect(lifecycle.getEngineState()).toBe('idle');
+    expect(radioManager.disconnect).not.toHaveBeenCalled();
+
+    await expect(lifecycle.stop()).resolves.toBeUndefined();
+    expect(lifecycle.getEngineContext()?.error).toBeUndefined();
+    expect(radioManager.disconnect).toHaveBeenCalledOnce();
+  });
+
+  it('retains CAT and rejects restart until the unknown physical lease is released', async () => {
+    const { lifecycle, radioManager, physicalTxCoordinator, setPTT } = createLifecycle();
+    lifecycle.initializeStateMachine();
+    await lifecycle.startAndWaitForRunning();
+    await physicalTxCoordinator.acquireLease({ source: 'manual', reason: 'regression fixture' });
+    let releaseFails = true;
+    setPTT.mockImplementation(async active => {
+      if (!active && releaseFails) throw new Error('PTT release failed');
+    });
+
+    await expect(lifecycle.stop()).rejects.toThrow('PTT release failed');
+    expect(physicalTxCoordinator.getSnapshot().phase).toBe('unknown');
+    expect(radioManager.disconnect).not.toHaveBeenCalled();
+    await expect(lifecycle.start()).rejects.toThrow('PTT release failed');
+    expect(radioManager.applyConfig).toHaveBeenCalledOnce();
+
+    releaseFails = false;
+    await expect(lifecycle.stop()).resolves.toBeUndefined();
+    expect(physicalTxCoordinator.getSnapshot().phase).toBe('idle');
+    expect(radioManager.disconnect).toHaveBeenCalledOnce();
+    await lifecycle.startAndWaitForRunning();
+    expect(radioManager.applyConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it('propagates resource cleanup errors without disconnecting CAT', async () => {
+    const { lifecycle, resourceManager, radioManager } = createLifecycle();
+    lifecycle.initializeStateMachine();
+    await lifecycle.startAndWaitForRunning();
+    resourceManager.stopAll.mockRejectedValueOnce(new Error('decoder stop failed'));
+    await expect(lifecycle.stop()).rejects.toThrow('decoder stop failed');
+    expect(radioManager.disconnect).not.toHaveBeenCalled();
+    await expect(lifecycle.stop()).resolves.toBeUndefined();
+  });
+
+  it('keeps CAT while a late hardware operation is still settling', async () => {
+    const { lifecycle, physicalTxCoordinator, radioManager } = createLifecycle();
+    lifecycle.initializeStateMachine();
+    let finish!: () => void;
+    const pending = physicalTxCoordinator.runIdleMaintenance({ reason: 'pending CAT write' }, () => new Promise<void>(resolve => { finish = resolve; }));
+    await expect(lifecycle.stop()).rejects.toThrow('maintenance');
+    expect(radioManager.disconnect).not.toHaveBeenCalled();
+    finish();
+    await pending;
+    await expect(lifecycle.stop()).resolves.toBeUndefined();
   });
 });

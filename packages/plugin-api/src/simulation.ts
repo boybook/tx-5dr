@@ -47,7 +47,7 @@ export interface SimulationAddressedRestartPolicy {
   restartCompleted?: boolean;
 }
 
-/** Declarative protocol-peer state machine used only by the development simulator. */
+/** Declarative protocol-peer state machine executed by the Host audio peer service. */
 export interface SimulationScenarioDescriptor {
   id: string;
   modes: SimulationMode[];

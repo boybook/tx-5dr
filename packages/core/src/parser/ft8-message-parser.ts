@@ -691,8 +691,9 @@ export class FT8MessageParser {
    * @returns 格式化的信号报告字符串 (例如, "-15", "+05")。
    */
   static generateSignalReport(snr: number): string {
-    // 将 SNR 四舍五入到最接近的整数
-    const roundedSnr = Math.round(snr);
+    if (!Number.isFinite(snr)) throw new Error('Signal report requires a finite SNR');
+    // FT8/FT4 encode reports in the inclusive range -50 through +49 dB.
+    const roundedSnr = Math.max(-50, Math.min(49, Math.round(snr)));
     const absSnr = Math.abs(roundedSnr);
     // 格式化为两位数,添加正负号
     return `${roundedSnr < 0 ? '-' : '+'}${absSnr.toString().padStart(2, '0')}`;

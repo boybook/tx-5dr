@@ -1052,6 +1052,52 @@ describe('contest toolkit', () => {
     expect(plugin.hooks?.onConfigChange).toBeDefined();
   });
 
+  it.each([undefined, 'global'] as const)('keeps adapter writes and workbench reads in the same KV scope (%s)', async (stateScope) => {
+    const contest = createExampleContest();
+    const ctx = createMockContext({ permissions: CONTEST_LOGBOOK_PERMISSIONS });
+    const scope = stateScope ?? 'operator';
+    const seed = () => ({ schemaVersion: 1, revision: 0, settings: { confirmed: false } });
+    const repository = new ContestSessionRepository(ctx.store[scope], 'settings-state', seed);
+    const otherStore = ctx.store[scope === 'global' ? 'operator' : 'global'];
+    otherStore.set('settings-state', seed());
+    let handler!: PluginUIHandler;
+    ctx.ui.registerPageHandler = value => { handler = value; };
+    const plugin = composeFT8ContestPlugin({
+      name: 'scope-example', version: '1.0.0', permissions: CONTEST_LOGBOOK_PERMISSIONS, contest,
+      logbook: defaultContestLogbook({
+        contest, stateKey: () => 'settings-state', stateScope,
+        adapter: {
+          settings: { settings: {}, seed, validate: () => [] },
+          getState: (_contest, session) => ({
+            schemaVersion: 1,
+            contest: { id: contest.id, editionId: contest.edition.id, rulesetVersion: contest.rulesetVersion },
+            health: { state: 'healthy', readable: true, writable: true, updatedAt: 1 },
+            settings: { value: session.settings, valid: session.settings.confirmed, issues: [] },
+            score: { claimedScore: 0, qsoPoints: 0, multiplierCount: 0 }, qsos: [],
+            review: { pendingCount: 0, issues: [] }, import: { state: 'idle' }, export: { formats: [] },
+          }),
+          decode: (action, payload) => ({ action, payload }),
+          async handle() {
+            repository.update(current => ({ ...current, settings: { confirmed: true } }));
+            await repository.flush();
+          },
+        },
+      }),
+      runtime: () => ({}) as StrategyRuntime,
+    });
+    const request = {} as PluginUIRequestContext;
+    const read = () => handler.onMessage('contest-log', 'get-state', undefined, request) as Promise<{ settings: { valid: boolean } }>;
+    await plugin.onLoad?.(ctx as never);
+    expect((await read()).settings.valid).toBe(false);
+    await handler.onMessage('contest-log', 'save-settings', {}, request);
+    expect((await read()).settings.valid).toBe(true);
+    expect(otherStore.get('settings-state', seed())).toEqual(seed());
+    await plugin.onUnload?.(ctx as never);
+    await plugin.onLoad?.(ctx as never);
+    expect((await read()).settings.valid).toBe(true);
+    await plugin.onUnload?.(ctx as never);
+  });
+
   it('routes contest QSO completion effects into the contest session', async () => {
     const contest = createExampleContest();
     const ctx = createMockContext({ permissions: CONTEST_LOGBOOK_PERMISSIONS });

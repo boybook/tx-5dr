@@ -140,6 +140,42 @@ describe('engineStateMachine', () => {
   });
 
   describe('Stop flow', () => {
+    it('retries failed cleanup from idle and clears the failure only on a successful stop', async () => {
+      mockInput.onStop = vi.fn().mockRejectedValueOnce(new Error('cleanup failed')).mockResolvedValue(undefined);
+      const actor = createEngineActor(mockInput);
+      actor.start();
+      actor.send({ type: 'STOP' });
+      await waitForEngineState(actor, EngineState.IDLE, 1000);
+      expect(getEngineContext(actor).error?.message).toBe('cleanup failed');
+      actor.send({ type: 'STOP' });
+      await waitForEngineState(actor, EngineState.IDLE, 1000);
+      expect(getEngineContext(actor).error).toBeUndefined();
+      expect(mockInput.onStop).toHaveBeenCalledTimes(2);
+      actor.stop();
+    });
+
+    it('captures a stop failure before a subsequent retry clears the context', async () => {
+      mockInput.onStop = vi.fn().mockRejectedValueOnce(new Error('cleanup failed')).mockResolvedValue(undefined);
+      const actor = createEngineActor(mockInput);
+      actor.start();
+      actor.send({ type: 'STOP' });
+      const stopped = waitForEngineState(actor, EngineState.IDLE, 1000, { rejectOnError: true });
+      const retried = new Promise<void>(resolve => {
+        const subscription = actor.subscribe(snapshot => {
+          if (snapshot.value === EngineState.IDLE && snapshot.context.error) {
+            subscription.unsubscribe();
+            actor.send({ type: 'STOP' });
+            resolve();
+          }
+        });
+      });
+      await expect(stopped).rejects.toThrow('cleanup failed');
+      await retried;
+      await waitForEngineState(actor, EngineState.IDLE, 1000);
+      expect(getEngineContext(actor).error).toBeUndefined();
+      actor.stop();
+    });
+
     it('successful stop: running → stopping → idle', async () => {
       const actor = createEngineActor(mockInput);
       actor.start();

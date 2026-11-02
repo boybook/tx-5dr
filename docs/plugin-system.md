@@ -122,6 +122,9 @@ export default composeFT8ContestPlugin({
 `defaultContestSession()` 只保证当前
 Host 进程内的配置/投影 KV update 原子性，必须 `flush()` 后才 durable；QSO 数据
 则通过 Host plugin-session 的 revision-guarded batch 单独提交。
+`defaultContestLogbook()` 的非 QSO 配置状态默认属于操作员；适配已有全局状态时，
+应显式声明 `stateScope: 'global'`，并让 `stateKey` 与适配器已有的键一致。
+设置保存与页面投影必须读取同一状态所有者，不能分别使用 global 和 operator store。
 
 需要完整比赛应用层时，插件显式声明 `CONTEST_SESSION_PERMISSIONS`（即
 `logbook:session + plugin:event-bus`），并将 `defaultContestSession()` 交给组装器。
@@ -780,6 +783,10 @@ panels: [
 Web 打开新标签页，Android 在当前 WebView 中导航并使用系统返回栈。Host 会绑定按钮所属的
 `operatorId`；不同操作员以及同一操作员重复打开的页面使用相互独立的 page session，插件应通过
 `ctx.ui.listActivePageSessions(pageId)` 和 `ctx.ui.pushToSession(...)` 向所有需要更新的页面推送。
+`ctx.ui.pushToPage`、`ctx.ui.pushToSession` 和请求内的 `requestContext.page.push`
+统一交给 Host 的页面会话投递器：既写入有界 HTTP 拉取队列，也发出 WS 通知。
+独立页面因此可以接收定时器和其他页面触发的推送；重载或卸载插件会使旧会话失效，
+页面需要刷新后重新建立会话，不会自动恢复旧会话的权限。
 页面入口、路由、鉴权和 bridge 都由通用插件 Host 负责，插件不应自行调用 Electron IPC 或判断平台。
 需要打开官方网站等外部 HTTP(S) 链接时，页面应调用 `tx5dr.openExternal(url)`；Host 在 Electron
 中转交系统默认浏览器，在普通 Web 中打开新标签页，并拒绝非 HTTP(S) 协议。
@@ -983,3 +990,11 @@ instance and invalidates the cache on persistence failure. Its existing KV key,
 JSON format and synchronous KV costs remain. No migration, new worker, or new
 Host task mechanism is involved. Cold loading, native IPC and whole-file writes
 are measured separately from cooperative CPU work.
+
+## Declarative audio peers
+
+Plugins may declare `simulationScenarios` for FT8/FT4 peer exchanges. The Host
+validates and freezes these declarations and owns decoding, scheduling, encoding
+and audio. Built-in standard exchanges use the same contract as external
+plugins. Scenarios do not receive station strategy state or device handles.
+See [Station testing](architecture/station-testing.md) for evidence and lifetime.

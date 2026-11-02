@@ -551,7 +551,6 @@
   },
   "profileModal": {
     "virtual": "テスト",
-    "virtualRadio": "開発用 FT4/FT8 テスト無線機",
     "edit": "編集",
     "cannotDeleteActive": "現在アクティブなプロファイルを削除できません",
     "createNew": "新しい無線構成",

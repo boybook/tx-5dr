@@ -72,3 +72,6 @@ audio ownership, [ICOM integration](../../../../docs/architecture/icom-integrati
 for the external protocol-library boundary, and
 [TX input routing](../../../../docs/decisions/tx-audio-input-source.md) for the
 retained but disabled input-source capability.
+
+Use [station testing](../../../../docs/architecture/station-testing.md) for
+shared pipeline regression and the limits of Dummy versus physical evidence.

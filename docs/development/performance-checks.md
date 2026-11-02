@@ -23,7 +23,7 @@ a benchmark. See [persistence durability](../architecture/persistence-durability
 and the automatic-sync section of the [plugin guide](../plugin-system.md).
 
 Focused server checks include `test:logbook-performance` and
-`test:virtual-radio-integration`; inspect `packages/server/package.json` for their
+`test:station-integration`; inspect `packages/server/package.json` for their
 current commands. Run latency-sensitive measurements without a competing build
 or full test suite. Record timeouts/failures and distinguish an isolated rerun
 from a clean full-suite result.

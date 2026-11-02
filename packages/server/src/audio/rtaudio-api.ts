@@ -2,7 +2,22 @@ import audify from 'audify';
 import { createLogger } from '../utils/logger.js';
 
 const { RtAudio } = audify;
-export type RtAudioInstance = InstanceType<typeof RtAudio>;
+/** The device boundary shared by enumeration and normal audio streams. */
+export type RtAudioInstance = Pick<InstanceType<typeof RtAudio>,
+  'getDevices' | 'getDefaultInputDevice' | 'getDefaultOutputDevice' |
+  'openStream' | 'closeStream' | 'start' | 'stop' | 'isStreamOpen' |
+  'isStreamRunning' | 'write' | 'clearOutputQueue' | 'getApi' |
+  'getStreamLatency' | 'getStreamSampleRate'>;
+
+export type AudioDeviceFactory = () => RtAudioInstance;
+let deviceFactory: AudioDeviceFactory | undefined;
+
+/** Composition-root injection. One process uses one device backend. */
+export function installAudioDeviceFactory(factory: AudioDeviceFactory): () => void {
+  if (deviceFactory) throw new Error('Audio device factory already installed');
+  deviceFactory = factory;
+  return () => { if (deviceFactory === factory) deviceFactory = undefined; };
+}
 
 // RtAudioApi values from audify (const enum not importable under isolatedModules)
 export const RTAUDIO_API_UNSPECIFIED = 0;
@@ -178,6 +193,7 @@ export function getSelectedRtAudioApi(log: LoggerLike = logger): number {
 }
 
 export function describeConfiguredRtAudioBackend(): string {
+  if (deviceFactory) return 'injected audio device';
   if (cachedDescription) return cachedDescription;
   const configuredBackend = getConfiguredBackendName();
   const explicitApi = expectedApiForBackend(configuredBackend);
@@ -191,6 +207,7 @@ export function createRtAudioInstance(options: {
   logger?: LoggerLike;
   purpose?: string;
 } = {}): RtAudioInstance {
+  if (deviceFactory) return deviceFactory();
   const log = options.logger ?? logger;
   const api = getSelectedRtAudioApi(log);
   const instance = instantiate(api);

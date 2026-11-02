@@ -1,3 +1,4 @@
+import { standardSimulationScenarios } from './simulationScenarios.js';
 import {
   definePlugin,
   type StrategyPluginContext,
@@ -131,6 +132,7 @@ export const standardQSOStrategyPlugin = definePlugin({
   name: BUILTIN_STANDARD_QSO_PLUGIN_NAME,
   version: '1.0.0',
   type: 'strategy',
+  simulationScenarios: standardSimulationScenarios,
   description: 'Built-in FT8/FT4 standard QSO strategy',
 
   settings: standardQSOSettings,

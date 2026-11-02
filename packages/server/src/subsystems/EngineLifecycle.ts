@@ -57,7 +57,6 @@ export interface EngineLifecycleDeps {
   getCWDecoderManager: () => import('../cw-decoder/index.js').CWDecoderManager;
   getAudioVolumeController: () => AudioVolumeController;
   getAudioSidecar: () => AudioSidecarController;
-  isVirtualRadioActive?: () => boolean;
   getImageRadioService?: () => ImageRadioService | null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   getStatus: () => any;
@@ -618,6 +617,12 @@ export class EngineLifecycle {
       return;
     }
 
+    // IDLE also represents a failed lifecycle operation. Finish its cleanup
+    // before START can clear the error and reuse the same resources.
+    if (getEngineContext(this.engineStateMachineActor).error) {
+      await this.stop();
+    }
+
     logger.info('Delegating to state machine: START');
     this.engineStateMachineActor.send({ type: 'START' });
   }
@@ -678,16 +683,6 @@ export class EngineLifecycle {
       throw new Error('Engine state machine not initialized');
     }
 
-    if (isEngineState(this.engineStateMachineActor, EngineState.IDLE)) {
-      logger.info('Engine already stopped, sending status sync');
-      if (scope === 'full' && this.deps.radioManager.isConnected()) {
-        await this.deps.radioManager.disconnect('Engine stopped');
-      }
-      const status = this.deps.getStatus();
-      this.deps.engineEmitter.emit('systemStatus', status);
-      return;
-    }
-
     if (isEngineState(this.engineStateMachineActor, EngineState.STOPPING)) {
       // A full stop may upgrade a mode-only stop that is already draining.
       if (scope === 'full') {
@@ -695,10 +690,10 @@ export class EngineLifecycle {
       }
       logger.info('Engine already stopping, waiting for completion...');
       try {
-        await waitForEngineState(this.engineStateMachineActor, EngineState.IDLE, 10000);
+        await waitForEngineState(this.engineStateMachineActor, EngineState.IDLE, 10000, { rejectOnError: true });
         logger.info('Stop completed');
       } catch (error) {
-        logger.error('Waiting for stop timed out:', error);
+        logger.error('Engine stop did not complete:', error);
         throw error;
       }
       return;
@@ -716,10 +711,10 @@ export class EngineLifecycle {
 
     // Wait for engine to reach IDLE state after sending STOP
     try {
-      await waitForEngineState(this.engineStateMachineActor, EngineState.IDLE, 15000);
+      await waitForEngineState(this.engineStateMachineActor, EngineState.IDLE, 15000, { rejectOnError: true });
       logger.info('Stop completed');
     } catch (error) {
-      logger.error('Waiting for stop timed out:', error);
+      logger.error('Engine stop did not complete:', error);
       throw error;
     }
   }
@@ -790,11 +785,9 @@ export class EngineLifecycle {
       this.audioStarted = true;
 
       // 5. 启动音频 sidecar（fire-and-forget，不阻塞引擎主流程）
-      if (!this.deps.isVirtualRadioActive?.()) {
-        void this.deps.getAudioSidecar().start().catch((err) => {
-          logger.error('audio sidecar start threw unexpectedly', err);
-        });
-      }
+      void this.deps.getAudioSidecar().start().catch((err) => {
+        logger.error('audio sidecar start threw unexpectedly', err);
+      });
 
       logger.info('Engine started successfully');
     } catch (error) {
@@ -813,31 +806,28 @@ export class EngineLifecycle {
     logger.info('Stopping engine');
 
     try {
-      // 1. 先停止音频 sidecar（取消重试 timer + 关闭音频资源）
-      try {
-        await this.deps.getAudioSidecar().stop('engine-stopped');
-      } catch (err) {
-        logger.warn('audio sidecar stop failed', err);
-      }
-
-      // 2. 清除编码/混音监听器 + PTT 定时器
+      // Stop producers before awaiting physical cleanup.
       this.deps.subsystems.transmissionPipeline.teardown();
-
-      // 3. 清除时钟/解码/频谱监听器
       this.deps.subsystems.clockCoordinator.teardown();
 
-      // 4. Shutdown is a hard-interrupt boundary. Release the single physical
-      // lease before audio/radio resources disappear underneath it.
-      await this.deps.physicalTxCoordinator.forceInterrupt('engine stopping');
-
-      // 5. 按逆序停止资源
-      await this.deps.resourceManager.stopAll();
-
-      if (this.requestedStopScope === 'full' && this.deps.radioManager.isConnected()) {
-        await this.deps.radioManager.disconnect('Engine stopped');
+      const transmitter = this.deps.physicalTxCoordinator;
+      const result = transmitter.getSnapshot().phase === 'unknown'
+        ? await transmitter.retryUnknownStop('engine stopping')
+        : await transmitter.forceInterrupt('engine stopping');
+      if (transmitter.getSnapshot().phase !== 'idle') {
+        throw new Error(result?.error ?? result?.reason ?? 'Physical transmitter cleanup is unconfirmed');
       }
 
-      // 6. 清除状态标志
+      // Keep the CAT session available for recovery if cleanup fails. The
+      // existing maintenance fence also rejects late operations during stop.
+      await transmitter.runIdleMaintenance({ reason: 'engine stopping' }, async () => {
+        await this.deps.getAudioSidecar().stop('engine-stopped');
+        await this.deps.resourceManager.stopAll();
+        if (this.requestedStopScope === 'full' && this.deps.radioManager.isConnected()) {
+          await this.deps.radioManager.disconnect('Engine stopped');
+        }
+      });
+
       this.isRunning = false;
       this.audioStarted = false;
 

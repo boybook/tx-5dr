@@ -300,6 +300,13 @@ export interface PluginManagerDeps {
     instanceTarget: PluginUIInstanceTarget,
     pageId?: string,
   ) => import('./PluginPageSessionStore.js').PluginPageSession[];
+  pushPluginPageSession?: (
+    pluginName: string,
+    pageId: string,
+    pageSessionId: string,
+    action: string,
+    data?: unknown,
+  ) => void;
   pluginEventBusHost?: PluginEventBusHost;
 }
 

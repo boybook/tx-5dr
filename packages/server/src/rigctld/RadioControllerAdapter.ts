@@ -267,15 +267,15 @@ export class RadioControllerAdapter implements RadioController {
       switch (name) {
         case 'RFPOWER':
           if (!conn.setRFPower) throw new RigctldProtocolError(RigErr.ENIMPL);
-          await conn.setRFPower(clamped);
+          await this.pm.writeCapability('rf_power', clamped);
           return;
         case 'AF':
           if (!conn.setAFGain) throw new RigctldProtocolError(RigErr.ENIMPL);
-          await conn.setAFGain(clamped);
+          await this.pm.writeCapability('af_gain', clamped);
           return;
         case 'SQL':
           if (!conn.setSQL) throw new RigctldProtocolError(RigErr.ENIMPL);
-          await conn.setSQL(clamped);
+          await this.pm.writeCapability('sql', clamped);
           return;
         case 'STRENGTH':
           throw new RigctldProtocolError(RigErr.EINVAL, 'STRENGTH is read-only');

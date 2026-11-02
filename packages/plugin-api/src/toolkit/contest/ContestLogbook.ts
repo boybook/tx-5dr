@@ -267,6 +267,8 @@ export interface DefaultContestLogbookOptions<
   resolveContest?(context: ContestSessionContext): TContest;
   sessionKey?(contest: TContest, context: ContestSessionContext): string;
   stateKey?(contest: TContest, context: ContestSessionContext): string;
+  /** Scope of non-QSO KV state; defaults to operator. Match an existing adapter's state owner explicitly. */
+  stateScope?: 'operator' | 'global';
   /** Defers durable logbook opening and historical projection until Host startup is ready. */
   deferStartup?: boolean;
   adapter: ContestLogbookAdapter<
@@ -666,6 +668,7 @@ export function defaultContestLogbook<
     create: (_contest, context) => adapter.settings.seed(_contest, context),
     sessionKey: options.sessionKey,
     stateKey: options.stateKey,
+    stateScope: options.stateScope,
     title: adapter.settings.title,
   });
   const sessionReady = new Map<string, Promise<void>>();

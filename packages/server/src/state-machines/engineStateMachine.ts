@@ -165,6 +165,9 @@ export function createEngineStateMachine(
           START: {
             target: EngineState.STARTING,
           },
+          STOP: {
+            target: EngineState.STOPPING,
+          },
         },
       },
 
@@ -231,6 +234,7 @@ export function createEngineStateMachine(
        */
       [EngineState.STOPPING]: {
         entry: [
+          'clearError',
           'recordStopTime',
           { type: 'notifyStateChange', params: { engineInput: input, state: EngineState.STOPPING } },
         ],
@@ -312,7 +316,8 @@ export function getEngineContext(actor: EngineActor): EngineContext {
 export function waitForEngineState(
   actor: EngineActor,
   targetState: EngineState,
-  timeout = 30000
+  timeout = 30000,
+  options: { rejectOnError?: boolean } = {},
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const timeoutId = setTimeout(() => {
@@ -327,15 +332,18 @@ export function waitForEngineState(
       if (snapshot.value === targetState) {
         clearTimeout(timeoutId);
         subscription.unsubscribe();
-        resolve();
+        if (options.rejectOnError && snapshot.context.error) reject(snapshot.context.error);
+        else resolve();
       }
     });
 
     // 立即检查当前状态
-    if (actor.getSnapshot().value === targetState) {
+    const snapshot = actor.getSnapshot();
+    if (snapshot.value === targetState) {
       clearTimeout(timeoutId);
       subscription.unsubscribe();
-      resolve();
+      if (options.rejectOnError && snapshot.context.error) reject(snapshot.context.error);
+      else resolve();
     }
   });
 }
