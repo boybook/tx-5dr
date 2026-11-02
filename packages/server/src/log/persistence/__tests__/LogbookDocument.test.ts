@@ -358,6 +358,51 @@ describe('LogbookDocument prepared mutations', () => {
     expect(document.getQso(second!.id)).toBeDefined();
   });
 
+  it('keeps mixed append, rename and delete indexes consistent with a fresh scan', async () => {
+    const source = Buffer.from(`${rawRecord('BG2AA', '010203')}\n<CALL:nope>opaque<EOR>\n`);
+    const original = LogbookDocument.fromBuffer(source);
+    const first = original.getQsoRecords()[0]!;
+    const added = qso({ id: 'batch-added' });
+    const external = Buffer.from(`${rawRecord('BG2BB', '010303')}\n`);
+    const plan = [
+      { type: 'append' as const, raw: encodeAdifRecord(added) },
+      { type: 'replace' as const, id: added.id, qso: { ...added, id: 'renamed' } },
+      { type: 'append' as const, raw: external },
+      { type: 'delete' as const, id: first.id },
+      { type: 'replace' as const, id: 'renamed', qso: { ...added, id: 'renamed', notes: 'merged' } },
+      { type: 'append' as const, raw: external },
+    ];
+
+    const mutation = await original.prepareImportAsync(plan);
+    const synchronous = original.prepareImport(plan);
+    const bytes = mutation.nextDocument.toBuffer();
+    const reloaded = LogbookDocument.fromBuffer(bytes);
+    expect(bytes).toEqual(synchronous.nextDocument.toBuffer());
+    expect(mutation.nextDocument.getQsoRecords()).toEqual(reloaded.getQsoRecords());
+    expect(mutation.nextDocument.getOpaqueSegments()).toHaveLength(1);
+    expect(mutation.nextDocument.getQso('renamed')?.notes).toBe('merged');
+    expect(original.toBuffer()).toEqual(source);
+    for (const segment of mutation.nextDocument.getSegments()) {
+      expect(mutation.nextDocument.getRawRecord(segment.segmentId))
+        .toEqual(bytes.subarray(segment.rawRange.start, segment.rawRange.end));
+    }
+    expect(mutation.nextDocument.getRawRecord('missing')).toBeUndefined();
+  });
+
+  it('uses the same append byte layout and duplicate IDs in cooperative import preparation', async () => {
+    const source = Buffer.from('Header<EOH>\r\n');
+    const original = LogbookDocument.fromBuffer(source);
+    const raw = Buffer.from(`${rawRecord('BG2AA', '010203')}\r\n`);
+    const operations = Array.from({ length: 128 }, () => ({ type: 'append' as const, raw }));
+    const mutation = await original.prepareImportAsync(operations);
+    const synchronous = original.prepareImport(operations);
+    expect(mutation.kind).toBe('append');
+    expect(mutation.nextDocument.toBuffer()).toEqual(synchronous.nextDocument.toBuffer());
+    const reloaded = LogbookDocument.fromBuffer(mutation.nextDocument.toBuffer());
+    expect(mutation.nextDocument.getQsoRecords()).toEqual(reloaded.getQsoRecords());
+    expect(original.toBuffer()).toEqual(source);
+  });
+
   it('refuses every mutation while an incomplete tail remains unresolved', () => {
     const source = Buffer.from(`${rawRecord('BG2AA', '010203')}\n<CALL:5>PART`);
     const document = LogbookDocument.fromBuffer(source, scanAdifBuffer(source));

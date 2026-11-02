@@ -921,6 +921,33 @@ describe('AdifFileStore durability', () => {
     expect(all.scan.records).toHaveLength(2);
   });
 
+  it('rejects same-size external changes before and during a cached snapshot read', async () => {
+    const original = `${adifRecord('BG5NA')}\n`;
+    const replacement = `${adifRecord('BG5NB')}\n`;
+    const { filePath } = await createLogbook(original);
+    let replaceDuringRead = false;
+    const store = new AdifFileStore(filePath, {
+      fileSystem: {
+        ...nodeAdifFileSystem,
+        readFile: async (target) => {
+          const bytes = await nodeAdifFileSystem.readFile(target);
+          if (target === filePath && replaceDuringRead) await writeFile(filePath, replacement);
+          return bytes;
+        },
+      },
+    });
+    const opened = await store.open();
+    replaceDuringRead = true;
+    await expect(store.readAll(opened.generation)).rejects.toBeInstanceOf(AdifGenerationConflictError);
+    expect(await readFile(filePath, 'utf8')).toBe(replacement);
+
+    replaceDuringRead = false;
+    await writeFile(filePath, original);
+    const reopened = await store.open();
+    await writeFile(filePath, replacement);
+    await expect(store.readAll(reopened.generation)).rejects.toBeInstanceOf(AdifGenerationConflictError);
+  });
+
   it('accepts post-rename metadata drift after content verification', async () => {
     const replacement = `${adifRecord('BG5OB')}\n`;
     const { filePath } = await createLogbook(`${adifRecord('BG5OA')}\n`);

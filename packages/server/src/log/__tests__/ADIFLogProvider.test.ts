@@ -122,6 +122,72 @@ describe('ADIFLogProvider import', () => {
     await provider.close();
   }, DURABLE_IO_TEST_TIMEOUT_MS);
 
+  it('commits duplicates within a new import as one append and preserves the merged QSO after reload', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-import-batch-duplicate-'));
+    tempDirs.push(tempDir);
+    let store!: CountingAdifFileStore;
+    const options = { logFilePath: join(tempDir, 'book.adi'), logFileName: 'book.adi', autoCreateFile: true };
+    const provider = new ADIFLogProvider({
+      ...options,
+      fileStoreFactory: (filePath, storeOptions) => (store = new CountingAdifFileStore(filePath, storeOptions)),
+    });
+    await provider.initialize();
+    const raw = '<CALL:3>C5R<QSO_DATE:8>20261015<TIME_ON:6>084345<MODE:3>FT8<FREQ:9>14.075254';
+
+    const result = await provider.importADIF(buildAdif([
+      `${raw}<RST_SENT:3>-15<RST_RCVD:3>+00<EOR>`,
+      `${raw}<RST_SENT:3>-15<RST_RCVD:3>+00<GRIDSQUARE:4>IK13<EOR>`,
+    ]));
+
+    expect(result).toMatchObject({ totalRead: 2, imported: 1, merged: 1, skipped: 0 });
+    expect(store.appendCommits).toBe(1);
+    expect(store.rewriteCommits).toBe(0);
+    await provider.close();
+
+    const reloaded = new ADIFLogProvider(options);
+    await reloaded.initialize();
+    expect(await reloaded.queryQSOs()).toMatchObject([{ callsign: 'C5R', grid: 'IK13', reportSent: '-15' }]);
+    await reloaded.close();
+  }, DURABLE_IO_TEST_TIMEOUT_MS);
+
+  it('owns the import bytes and drains queued imports and exports before close', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+    const content = Buffer.from(buildAdif([
+      '<CALL:5>BG2AA<QSO_DATE:8>20260101<TIME_ON:6>120000<MODE:3>FT8<FREQ:9>14.074000<APP_OTHER:4>kept<EOR>',
+      '<CALL:5>BG2BB<QSO_DATE:8>20260101<TIME_ON:6>120100<MODE:3>FT8<FREQ:9>14.074000<EOR>',
+    ]));
+    const imported = provider.importADIF(content);
+    content.fill(0);
+    const exported = provider.exportADIF();
+    await provider.close();
+
+    expect(await imported).toMatchObject({ imported: 2 });
+    expect(await exported).toContain('<APP_OTHER:4>kept');
+    const reloaded = new ADIFLogProvider({ logFilePath: join(tempDir, 'logbook.adi'), logFileName: 'logbook.adi' });
+    await reloaded.initialize();
+    expect((await reloaded.queryQSOs()).map(record => record.callsign)).toEqual(['BG2AA', 'BG2BB']);
+    await reloaded.close();
+  }, DURABLE_IO_TEST_TIMEOUT_MS);
+
+  it('does not rewrite unchanged resolved records when the source repeats unsupported DXCC values', async () => {
+    const { provider, tempDir } = await createProvider();
+    tempDirs.push(tempDir);
+    const content = buildAdif([
+      '<CALL:8>A60PC/14<QSO_DATE:8>20260101<TIME_ON:6>120000<MODE:3>FT8<FREQ:9>14.074000<DXCC:3>391<EOR>',
+      '<CALL:9>UR5FSP/MM<QSO_DATE:8>20260101<TIME_ON:6>120100<MODE:3>FT8<FREQ:9>14.074000<DXCC:1>0<EOR>',
+    ]);
+    await provider.importADIF(content);
+    await provider.importADIF(content);
+    const before = await readFile(join(tempDir, 'logbook.adi'));
+    const revision = await provider.getRevision();
+
+    expect(await provider.importADIF(content)).toMatchObject({ imported: 0, merged: 0, skipped: 2 });
+    expect(await provider.getRevision()).toBe(revision);
+    expect(await readFile(join(tempDir, 'logbook.adi'))).toEqual(before);
+    await provider.close();
+  }, DURABLE_IO_TEST_TIMEOUT_MS);
+
   it('filters records that still need DXCC review', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'tx5dr-log-dxcc-review-'));
     tempDirs.push(tempDir);

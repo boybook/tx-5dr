@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import path from 'node:path';
+import { finishWorkInSlices } from '../cooperative-work.js';
 
 import {
   encodeAdifHeader,
-  scanAdifBuffer,
+  scanAdifBufferAsync,
   type AdifByteRange,
   type AdifScanIssue,
   type AdifScanResult,
@@ -319,7 +320,7 @@ export class AdifFileStore {
       }
 
       const appendBytes = Buffer.concat(buffers.map(buffer => Buffer.from(buffer)));
-      const preparedAppend = this.prepareAppendScan(before, appendBytes);
+      const preparedAppend = await this.prepareAppendScan(before, appendBytes);
       const oldEof = before.generation.size;
       let handle: AdifFileHandle | undefined;
       try {
@@ -1012,11 +1013,11 @@ export class AdifFileStore {
     return hasher.digest('hex');
   }
 
-  private prepareAppendScan(
+  private async prepareAppendScan(
     before: LogbookFileScanResult,
     appendBytes: Buffer,
-  ): PreparedAppendScan {
-    const appended = scanAdifBuffer(appendBytes);
+  ): Promise<PreparedAppendScan> {
+    const appended = await scanAdifBufferAsync(appendBytes);
     if (!isCompleteScan(appended)) {
       throw new AdifFileCommitError(
         'append',
@@ -1038,7 +1039,13 @@ export class AdifFileStore {
       before.scan.records,
       before.recordProjections,
     );
-    const appendedProjections = appended.records.map(record => projector.project(record));
+    const appendedProjections: LogbookRecordProjection[] = [];
+    await finishWorkInSlices((function* () {
+      for (const record of appended.records) {
+        appendedProjections.push(projector.project(record));
+        yield;
+      }
+    })());
     const scan = mergeAppendedScan(before.scan, appended, appendBytes);
     return {
       scan,
@@ -1209,10 +1216,10 @@ export class AdifFileStore {
   ): Promise<{ value: T; generation: GenerationToken; scan: AdifScanResult }> {
     if (this.closing || this.state === 'closed') throw new AdifFileStoreReadOnlyError(this.state);
     return this.queue.run(this.filePath, async () => {
-      const before = await this.scanRequired(this.filePath);
+      const before = await this.scanCurrentGeneration(expectedGeneration);
       this.assertExpectedGeneration(expectedGeneration, before.generation);
       const value = await reader(before);
-      const after = await this.scanRequired(this.filePath);
+      const after = await this.scanCurrentGeneration(before.generation);
       if (!sameGeneration(before.generation, after.generation)) {
         this.throwGenerationConflict(before.generation, after.generation);
       }

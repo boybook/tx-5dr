@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { finishWork, finishWorkInSlices } from '../cooperative-work.js';
 
 import {
   CONTEST_QSO_ENVELOPE_MAX_BYTES,
@@ -269,9 +270,10 @@ function parseTagAt(source: Buffer, start: number): ParsedTag {
   };
 }
 
-function findHeaderRange(source: Buffer): AdifByteRange | undefined {
+function* findHeaderRange(source: Buffer): Generator<void, AdifByteRange | undefined> {
   let cursor = 0;
   while (cursor < source.length) {
+    yield;
     const open = source.indexOf(0x3c, cursor); // <
     if (open < 0) return undefined;
     const tag = parseTagAt(source, open);
@@ -291,7 +293,19 @@ export function scanAdifBuffer(
   source: Buffer,
   onRecordsScanned?: (recordsScanned: number) => void,
 ): AdifScanResult {
-  const headerRange = findHeaderRange(source);
+  return finishWork(scanAdifBufferSteps(source, onRecordsScanned));
+}
+
+/** Cooperatively scan an owned, immutable import snapshot using the same byte parser. */
+export function scanAdifBufferAsync(source: Buffer): Promise<AdifScanResult> {
+  return finishWorkInSlices(scanAdifBufferSteps(source));
+}
+
+function* scanAdifBufferSteps(
+  source: Buffer,
+  onRecordsScanned?: (recordsScanned: number) => void,
+): Generator<void, AdifScanResult> {
+  const headerRange = yield* findHeaderRange(source);
   const bodyStart = headerRange?.end ?? 0;
   const records: ScannedAdifRecord[] = [];
   const issues: AdifScanIssue[] = [];
@@ -304,6 +318,7 @@ export function scanAdifBuffer(
   let stoppedAtIncompleteTag = false;
 
   while (cursor < source.length) {
+    yield;
     const open = source.indexOf(0x3c, cursor);
     if (open < 0) break;
 

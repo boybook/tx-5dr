@@ -8,6 +8,7 @@ import {
   encodeAdifRecord,
   getLastAdifFieldValue,
   scanAdifBuffer,
+  scanAdifBufferAsync,
 } from '../AdifCodec.js';
 
 function field(name: string, value: string): string {
@@ -27,6 +28,17 @@ function record(overrides: Partial<QSORecord> = {}): QSORecord {
 }
 
 describe('AdifCodec byte scanner', () => {
+  it.each([
+    '',
+    'Header<EOH>\r\n<CALL:5>BG2AA<COMMENT:10><eor><eoh><EOR>\r\n',
+    '<CALL:5>BG2AA<COMMENT:6>\u4f60\u597d<EOR>\n',
+    '<CALL:nope>BAD<EOR>\n<CALL:5>PART',
+    '<CALL:5>BG2AA<EOR>\nnot whitespace\n<CALL:5>BG2BB<EOR>\n',
+  ])('keeps cooperative scans identical for bytes %j', async (text) => {
+    const bytes = Buffer.from(text);
+    expect(await scanAdifBufferAsync(bytes)).toEqual(scanAdifBuffer(bytes));
+  });
+
   it('preserves header, CRLF separators, case, unknown fields, and byte ranges', () => {
     const first = '<call:5>BG2AA<qso_date:8>20260810<time_on:6>010203<mode:3>FT8<freq:9>14.074000<app_other:3>YES<eOr>';
     const second = '<CALL:5>BG2BB<QSO_DATE:8>20260810<TIME_ON:6>010303<MODE:3>FT8<FREQ:9>14.074000<EOR>';

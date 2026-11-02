@@ -51,7 +51,7 @@ import {
   decodeAdifRecord,
   encodeAdifHeader,
   encodeAdifRecord,
-  scanAdifBuffer,
+  scanAdifBufferAsync,
   type AdifScanResult,
 } from './persistence/AdifCodec.js';
 import {
@@ -607,27 +607,32 @@ export class ADIFLogProvider implements ILogProvider {
       });
       const chunks: Buffer[] = [encodeAdifHeader()];
 
-      if (!substantiveFilter(options)) {
-        for (const segment of this.document!.getOpaqueSegments()) {
-          const raw = this.document!.getRawRecord(segment.segmentId, adapter);
-          if (raw) chunks.push(ensureRecordLine(raw));
-        }
-      }
-
-      for (const qso of selected) {
-        const segment = this.document!.getSegmentForQso(qso.id);
-        if (segment?.source === 'external') {
-          const raw = this.document!.getRawRecord(segment.segmentId, adapter);
-          if (raw) {
-            chunks.push(ensureRecordLine(raw));
-            continue;
+      const document = this.document!;
+      await finishWorkInSlices((function* () {
+        if (!substantiveFilter(options)) {
+          for (const segment of document.getOpaqueSegments()) {
+            const raw = document.getRawRecord(segment.segmentId, adapter);
+            if (raw) chunks.push(ensureRecordLine(raw));
+            yield;
           }
         }
-        chunks.push(encodeAdifRecord(qso, {
-          fallbackMyGrid: exportOptions?.fallbackGrid,
-          preservedContestEntry: segment?.unparsedContestEntry,
-        }));
-      }
+
+        for (const qso of selected) {
+          yield;
+          const segment = document.getSegmentForQso(qso.id);
+          if (segment?.source === 'external') {
+            const raw = document.getRawRecord(segment.segmentId, adapter);
+            if (raw) {
+              chunks.push(ensureRecordLine(raw));
+              continue;
+            }
+          }
+          chunks.push(encodeAdifRecord(qso, {
+            fallbackMyGrid: exportOptions?.fallbackGrid,
+            preservedContestEntry: segment?.unparsedContestEntry,
+          }));
+        }
+      })());
       return Buffer.concat(chunks).toString('utf8');
     });
   }
@@ -671,23 +676,30 @@ export class ADIFLogProvider implements ILogProvider {
     return this.executeWrite('import', undefined, undefined, async () => {
       this.assertWritable();
       PersistenceCoordinator.getInstance().assertMutationsAllowed('logbook:import:adif');
-      const source = typeof content === 'string'
-        ? Buffer.from(content, 'utf8')
-        : Buffer.from(content.buffer, content.byteOffset, content.byteLength);
-      const scan = scanAdifBuffer(source);
-      const candidates = scan.records.map((record, index) => {
-        const start = index === 0 ? record.range.start : record.leadingRange.start;
-        const end = index === scan.records.length - 1 ? scan.safeTrailingRange.end : record.range.end;
-        return {
-          qso: decodeAdifRecord(record),
-          raw: Buffer.from(source.subarray(start, end)),
-        };
+      // Own the snapshot before yielding or waiting behind another mutation.
+      const source = Buffer.from(content);
+      return this.enqueue(async () => {
+        this.assertWritable();
+        const scan = await scanAdifBufferAsync(source);
+        const candidates: ImportCandidate[] = [];
+        await finishWorkInSlices((function* () {
+          for (let index = 0; index < scan.records.length; index += 1) {
+            const record = scan.records[index]!;
+            const start = index === 0 ? record.range.start : record.leadingRange.start;
+            const end = index === scan.records.length - 1 ? scan.safeTrailingRange.end : record.range.end;
+            candidates.push({
+              qso: decodeAdifRecord(record),
+              raw: source.subarray(start, end),
+            });
+            yield;
+          }
+        })());
+        const incomplete = scan.incompleteTailRange
+          && scan.incompleteTailRange.end > scan.incompleteTailRange.start
+          ? 1
+          : 0;
+        return this.importCandidates(candidates, 'adif', scan.records.length + incomplete, incomplete);
       });
-      const incomplete = scan.incompleteTailRange
-        && scan.incompleteTailRange.end > scan.incompleteTailRange.start
-        ? 1
-        : 0;
-      return this.importCandidates(candidates, 'adif', scan.records.length + incomplete, incomplete);
     });
   }
 
@@ -695,13 +707,16 @@ export class ADIFLogProvider implements ILogProvider {
     return this.executeWrite('import', undefined, undefined, async () => {
       this.assertWritable();
       PersistenceCoordinator.getInstance().assertMutationsAllowed('logbook:import:csv');
-      const parsed = parseTx5drCsvContent(content);
-      return this.importCandidates(
-        parsed.records.map(qso => ({ qso, raw: Buffer.alloc(0) })),
-        'csv',
-        parsed.totalRead,
-        parsed.skipped,
-      );
+      return this.enqueue(async () => {
+        this.assertWritable();
+        const parsed = parseTx5drCsvContent(content);
+        return this.importCandidates(
+          parsed.records.map(qso => ({ qso, raw: Buffer.alloc(0) })),
+          'csv',
+          parsed.totalRead,
+          parsed.skipped,
+        );
+      });
     });
   }
 
@@ -1066,7 +1081,7 @@ export class ADIFLogProvider implements ILogProvider {
     },
   ): Promise<void> {
     try {
-      if (mutation.kind === 'append') {
+      if (mutation.kind === 'append' && mutation.addedIds.length <= 1) {
         // Appends do not move any existing source ranges. Reusing the
         // prepared document avoids rebuilding every segment after each QSO.
         this.document = mutation.nextDocument;
@@ -1075,11 +1090,9 @@ export class ADIFLogProvider implements ILogProvider {
           if (next) this.records.append(next);
         }
       } else {
-        // Rewrites can change record lengths, so source ranges must come from
-        // the verified post-rename scan rather than the pre-commit document.
-        // Keep the established full installation for rewrites. It is outside
-        // the TX critical path and preserves the scanner's external-record ID
-        // and source semantics exactly.
+        // Rewrites and bulk appends install a complete private projection from
+        // the verified scan before publishing it. Yielding while incrementally
+        // adding a batch would expose partially installed records to readers.
         await this.installScanInSlices(committed.scan, committed.generation, committed.recordProjections);
         return;
       }
@@ -1129,110 +1142,116 @@ export class ADIFLogProvider implements ILogProvider {
     totalRead: number,
     initialSkipped: number,
   ): Promise<LogBookImportResult> {
-    return this.enqueue(async () => {
-      this.assertWritable();
-      const result: LogBookImportResult = {
-        detectedFormat,
-        totalRead,
-        imported: 0,
-        merged: 0,
-        skipped: initialSkipped,
-      };
-      const operations: LogbookRewriteOperation[] = [];
-      const existingFingerprints = this.records.fingerprintIndex();
-      const working = new Map<string, WorkingImportRecord>();
-      let forceRewrite = false;
+    const { result, operations } = await finishWorkInSlices(
+      this.importCandidateSteps(candidates, detectedFormat, totalRead, initialSkipped),
+    );
+    if (operations.length === 0) return result;
+    const mutation = await this.document!.prepareImportAsync(operations);
+    await this.commitMutation(mutation);
+    return result;
+  }
 
-      for (const candidate of candidates) {
-        if (!candidate.qso) {
-          operations.push({ type: 'append', raw: candidate.raw });
+  private *importCandidateSteps(
+    candidates: readonly ImportCandidate[],
+    detectedFormat: LogBookImportResult['detectedFormat'],
+    totalRead: number,
+    initialSkipped: number,
+  ): Generator<void, { result: LogBookImportResult; operations: LogbookRewriteOperation[] }> {
+    const result: LogBookImportResult = {
+      detectedFormat,
+      totalRead,
+      imported: 0,
+      merged: 0,
+      skipped: initialSkipped,
+    };
+    const operations: LogbookRewriteOperation[] = [];
+    const existingFingerprints = this.records.fingerprintIndex();
+    const working = new Map<string, WorkingImportRecord>();
+
+    for (const candidate of candidates) {
+      yield;
+      if (!candidate.qso) {
+        operations.push({ type: 'append', raw: candidate.raw });
+        result.skipped += 1;
+        continue;
+      }
+      const incoming = candidate.qso;
+      const fingerprint = buildImportedQsoFingerprint(incoming);
+      let current = working.get(fingerprint);
+      if (!current) {
+        const existingId = existingFingerprints.get(fingerprint);
+        if (existingId) {
+          const existing = this.records.get(existingId);
+          if (existing) {
+            current = { record: existing, operationIndex: -1, targetId: existingId };
+            working.set(fingerprint, current);
+          }
+        }
+      }
+
+      if (current) {
+        const merged = mergeImportedQso(current.record, incoming);
+        if (!merged.changed) {
           result.skipped += 1;
           continue;
         }
-        const incoming = candidate.qso;
-        const fingerprint = buildImportedQsoFingerprint(incoming);
-        let current = working.get(fingerprint);
-        if (!current) {
-          const existingId = existingFingerprints.get(fingerprint);
-          if (existingId) {
-            const existing = this.records.get(existingId);
-            if (existing) {
-              current = { record: existing, operationIndex: -1, targetId: existingId };
-              working.set(fingerprint, current);
-            }
-          }
-        }
-
-        if (current) {
-          const merged = mergeImportedQso(current.record, incoming);
-          if (!merged.changed) {
-            result.skipped += 1;
-            continue;
-          }
-          result.merged += 1;
-          forceRewrite = true;
-          if (current.targetId) {
-            const normalized = normalizeQsoForPersistence({ ...merged.record, id: current.targetId });
-            const replacement: LogbookRewriteOperation = {
-              type: 'replace',
-              id: current.targetId,
-              qso: normalized,
-            };
-            if (current.operationIndex < 0) {
-              current.operationIndex = operations.push(replacement) - 1;
-            } else {
-              operations[current.operationIndex] = replacement;
-            }
-            current.record = normalized;
+        result.merged += 1;
+        if (current.targetId) {
+          const normalized = normalizeQsoForPersistence({ ...merged.record, id: current.targetId });
+          const replacement: LogbookRewriteOperation = {
+            type: 'replace',
+            id: current.targetId,
+            qso: normalized,
+          };
+          if (current.operationIndex < 0) {
+            current.operationIndex = operations.push(replacement) - 1;
           } else {
-            current.canonicalId ??= `tx5dr-import-${randomUUID()}`;
-            const normalized = normalizeQsoForPersistence({
-              ...merged.record,
-              id: current.canonicalId,
-            });
-            operations[current.operationIndex] = {
-              type: 'append',
-              raw: encodeAdifRecord(normalized),
-              qso: normalized,
-            };
-            current.record = normalized;
+            operations[current.operationIndex] = replacement;
           }
-          continue;
-        }
-
-        if (detectedFormat === 'adif') {
-          const operationIndex = operations.push({
-            type: 'append',
-            raw: candidate.raw,
-            qso: incoming,
-          }) - 1;
-          working.set(fingerprint, { record: incoming, operationIndex });
+          current.record = normalized;
         } else {
+          current.canonicalId ??= `tx5dr-import-${randomUUID()}`;
           const normalized = normalizeQsoForPersistence({
-            ...incoming,
-            id: `tx5dr-import-${randomUUID()}`,
+            ...merged.record,
+            id: current.canonicalId,
           });
-          const operationIndex = operations.push({
+          operations[current.operationIndex] = {
             type: 'append',
             raw: encodeAdifRecord(normalized),
             qso: normalized,
-          }) - 1;
-          working.set(fingerprint, {
-            record: normalized,
-            operationIndex,
-            canonicalId: normalized.id,
-          });
+          };
+          current.record = normalized;
         }
-        result.imported += 1;
+        continue;
       }
 
-      if (operations.length === 0) return result;
-      const mutation = forceRewrite
-        ? this.document!.prepareRewrite(operations)
-        : this.document!.prepareImport(operations);
-      await this.commitMutation(mutation);
-      return result;
-    });
+      if (detectedFormat === 'adif') {
+        const operationIndex = operations.push({
+          type: 'append',
+          raw: candidate.raw,
+          qso: incoming,
+        }) - 1;
+        working.set(fingerprint, { record: incoming, operationIndex });
+      } else {
+        const normalized = normalizeQsoForPersistence({
+          ...incoming,
+          id: `tx5dr-import-${randomUUID()}`,
+        });
+        const operationIndex = operations.push({
+          type: 'append',
+          raw: encodeAdifRecord(normalized),
+          qso: normalized,
+        }) - 1;
+        working.set(fingerprint, {
+          record: normalized,
+          operationIndex,
+          canonicalId: normalized.id,
+        });
+      }
+      result.imported += 1;
+    }
+
+    return { result, operations };
   }
 
   private async executeWrite<T>(

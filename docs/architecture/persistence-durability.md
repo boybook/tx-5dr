@@ -85,6 +85,18 @@ For each ADIF logbook:
 
 Each mutation is prepared against an immutable in-memory document. The document and indexes change only after the file commit succeeds. If an append fails, TX-5DR attempts to truncate back to the previous EOF and sync it. Only a failed rollback or content state that cannot be determined puts that logbook into read-only mode; it never creates an emergency log or reports an in-memory-only success.
 
+Imports own their input bytes and enter the provider queue before asynchronous
+parsing, so shutdown drains accepted imports. Parsing, batch preparation and ADIF
+export encoding share the ordinary production algorithms in cooperative slices.
+Merging records within the incoming batch does not require rewriting existing
+file bytes; the resulting operations determine append versus rewrite. Mutation
+planning reuses batch indexes, and raw export records are indexed by segment ID.
+Bulk additions, like rewrites, build a complete verified projection privately and
+publish document, record indexes and generation together after the durable commit.
+Consistent reads may reuse scanned projections only after verifying the current
+content hash before and after the read. Imported merges compare the effective
+resolved record; refreshing derived DXCC timing alone does not rewrite the file.
+
 Loading and validation run in an isolated worker. Content and expected I/O failures become per-logbook health (`loading`, `healthy`, `degraded`, `read_only`, or `unavailable`) and never control server readiness. A complete but unparseable record is preserved with a warning. An unsafe non-whitespace tail is left untouched and opens read-only for explicit operator action.
 
 TX-5DR does not support another program writing the same `.adi` concurrently. Size and content hashes define the revision used by prepared mutations; inode, device and mtime are diagnostic metadata only and never lock a healthy logbook. External read-only access is supported.

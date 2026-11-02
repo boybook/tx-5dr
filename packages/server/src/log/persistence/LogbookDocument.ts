@@ -127,6 +127,12 @@ interface StoredSegment {
   rawRange: AdifByteRange;
 }
 
+interface MutationIndex {
+  rawOrdinals: Map<string, number>;
+  usedIds: Set<string>;
+  positions: Map<string, number>;
+}
+
 type StoredPart = LogbookSourcePart | LogbookBytesPart;
 
 interface DocumentParts {
@@ -140,6 +146,7 @@ interface DocumentParts {
 
 interface DocumentLayout {
   segments: readonly StoredSegment[];
+  segmentsById: ReadonlyMap<string, StoredSegment>;
   segmentViews: readonly LogbookDocumentSegment[];
   prefixRange: AdifByteRange;
   headerRange?: AdifByteRange;
@@ -425,6 +432,7 @@ export class LogbookDocument {
 
   private readonly prefix: readonly StoredPart[];
   private readonly segments: readonly StoredSegment[];
+  private readonly segmentsById: ReadonlyMap<string, StoredSegment>;
   private readonly safeTrailing: readonly StoredPart[];
   private readonly incompleteTail: readonly StoredPart[];
   private readonly sourceAdapter?: LogbookSourceAdapter;
@@ -440,6 +448,7 @@ export class LogbookDocument {
     this.incompleteTail = Object.freeze(cloneParts(parts.incompleteTail));
     this.sourceAdapter = parts.sourceAdapter;
     this.segments = layout.segments;
+    this.segmentsById = layout.segmentsById;
     this.segmentViews = layout.segmentViews;
     this.prefixRange = layout.prefixRange;
     this.headerRange = layout.headerRange;
@@ -480,7 +489,12 @@ export class LogbookDocument {
     const byteLength = offset + partsLength(parts.incompleteTail);
 
     const views: LogbookDocumentSegment[] = [];
-    for (const segment of segments) { views.push(asSegmentView(segment)); yield; }
+    const segmentsById = new Map<string, StoredSegment>();
+    for (const segment of segments) {
+      segmentsById.set(segment.segmentId, segment);
+      views.push(asSegmentView(segment));
+      yield;
+    }
     const segmentViews = Object.freeze(views);
 
     const qsoById = new Map<string, Readonly<QSORecord>>();
@@ -507,7 +521,7 @@ export class LogbookDocument {
     }
 
     for (const records of qsosByCallsign.values()) { Object.freeze(records); yield; }
-    return new LogbookDocument(parts, { segments, segmentViews, prefixRange, headerRange, safeTrailingRange,
+    return new LogbookDocument(parts, { segments, segmentsById, segmentViews, prefixRange, headerRange, safeTrailingRange,
       incompleteTailRange, byteLength, qsoById, segmentsByQsoId, qsosByCallsign, workedCallsignBands });
   }
 
@@ -648,7 +662,7 @@ export class LogbookDocument {
   }
 
   getRawRecord(segmentId: string, adapter = this.sourceAdapter): Buffer | undefined {
-    const segment = this.segments.find((candidate) => candidate.segmentId === segmentId);
+    const segment = this.segmentsById.get(segmentId);
     return segment ? resolvePart(segment.raw, adapter) : undefined;
   }
 
@@ -682,7 +696,7 @@ export class LogbookDocument {
 
   prepareAppend(qso: QSORecord): PreparedAppendMutation {
     if (this.qsoById.has(qso.id)) throw new Error(`QSO with id ${qso.id} already exists`);
-    return this.prepareAppendInputs([{ type: 'append', qso, raw: encodeAdifRecord(qso) }]);
+    return finishWork(this.prepareAppendInputsSteps([{ type: 'append', qso, raw: encodeAdifRecord(qso) }]));
   }
 
   prepareUpdate(id: string, updates: Partial<QSORecord>): PreparedRewriteMutation {
@@ -699,10 +713,18 @@ export class LogbookDocument {
 
   /** Pure additions remain append mutations; any replacement/deletion becomes one rewrite. */
   prepareImport(operations: readonly LogbookRewriteOperation[]): PreparedLogbookMutation {
+    return finishWork(this.prepareImportSteps(operations));
+  }
+
+  prepareImportAsync(operations: readonly LogbookRewriteOperation[]): Promise<PreparedLogbookMutation> {
+    return finishWorkInSlices(this.prepareImportSteps(operations));
+  }
+
+  private *prepareImportSteps(operations: readonly LogbookRewriteOperation[]): Generator<void, PreparedLogbookMutation> {
     if (operations.every((operation) => operation.type === 'append')) {
-      return this.prepareAppendInputs(operations as readonly LogbookImportAppend[]);
+      return yield* this.prepareAppendInputsSteps(operations as readonly LogbookImportAppend[]);
     }
-    return this.prepareRewrite(operations);
+    return yield* this.prepareRewriteSteps(operations);
   }
 
   prepareRewrite(operations: readonly LogbookRewriteOperation[]): PreparedRewriteMutation {
@@ -718,39 +740,49 @@ export class LogbookDocument {
     let segments = yield* cloneSegments(this.segments);
     let safeTrailing = cloneParts(this.safeTrailing);
     const changedIds: string[] = [];
+    const index = yield* this.mutationIndexSteps(segments);
 
     for (const operation of operations) {
       if (operation.type === 'delete') {
-        const index = segments.findIndex((segment) => segment.qso?.id === operation.id);
-        if (index < 0) throw new Error(`QSO with id ${operation.id} not found`);
-        segments.splice(index, 1);
+        const position = index.positions.get(operation.id);
+        if (position === undefined) throw new Error(`QSO with id ${operation.id} not found`);
+        const previous = segments[position]!;
+        index.rawOrdinals.set(previous.rawHash, index.rawOrdinals.get(previous.rawHash)! - 1);
+        if (!this.qsoById.has(operation.id)) index.usedIds.delete(operation.id);
+        segments.splice(position, 1);
+        index.positions.delete(operation.id);
+        for (let next = position; next < segments.length; next += 1) {
+          const id = segments[next]!.qso?.id;
+          if (id) index.positions.set(id, next);
+          yield;
+        }
         changedIds.push(operation.id);
         yield;
         continue;
       }
 
       if (operation.type === 'replace') {
-        const index = segments.findIndex((segment) => segment.qso?.id === operation.id);
-        if (index < 0) throw new Error(`QSO with id ${operation.id} not found`);
+        const position = index.positions.get(operation.id);
+        if (position === undefined) throw new Error(`QSO with id ${operation.id} not found`);
         const replacementId = operation.qso.id?.trim() || operation.id;
         if (
           replacementId !== operation.id
-          && segments.some(segment => segment.qso?.id === replacementId)
+          && index.positions.has(replacementId)
         ) {
           throw new Error(`QSO with id ${replacementId} already exists`);
         }
         const replacement = { ...operation.qso, id: replacementId };
-        const previous = segments[index]!;
+        const previous = segments[position]!;
         const unparsedContestEntry = replacement.contestEntry
           ? undefined
           : previous.unparsedContestEntry;
         const fragment = parseRecordFragment(encodeAdifRecord(replacement, {
           preservedContestEntry: unparsedContestEntry,
         }));
-        const nextSegment = segments[index + 1];
+        const nextSegment = segments[position + 1];
         if (fragment.trailing.length > 0) {
           if (nextSegment && partsLength(nextSegment.leading) === 0) {
-            segments[index + 1] = {
+            segments[position + 1] = {
               ...nextSegment,
               leading: inlinePart(fragment.trailing),
             };
@@ -758,7 +790,7 @@ export class LogbookDocument {
             safeTrailing = inlinePart(fragment.trailing);
           }
         }
-        segments[index] = {
+        segments[position] = {
           ...previous,
           source: 'tx5dr',
           explicitId: replacementId,
@@ -768,13 +800,19 @@ export class LogbookDocument {
           qso: cloneQso(replacement, replacementId),
           unparsedContestEntry,
         };
+        index.rawOrdinals.set(previous.rawHash, index.rawOrdinals.get(previous.rawHash)! - 1);
+        index.rawOrdinals.set(fragment.scan.rawHash, (index.rawOrdinals.get(fragment.scan.rawHash) ?? 0) + 1);
+        index.positions.delete(operation.id);
+        index.positions.set(replacementId, position);
+        if (!this.qsoById.has(operation.id)) index.usedIds.delete(operation.id);
+        index.usedIds.add(replacementId);
         changedIds.push(operation.id);
         if (replacementId !== operation.id) changedIds.push(replacementId);
         yield;
         continue;
       }
 
-      const appended = this.appendFragments(segments, safeTrailing, [operation]);
+      const appended = yield* this.appendFragmentsSteps(segments, safeTrailing, [operation], index);
       segments = appended.segments;
       safeTrailing = appended.safeTrailing;
       changedIds.push(...appended.addedIds);
@@ -791,7 +829,7 @@ export class LogbookDocument {
     });
   }
 
-  private prepareAppendInputs(inputs: readonly LogbookImportAppend[]): PreparedAppendMutation {
+  private *prepareAppendInputsSteps(inputs: readonly LogbookImportAppend[]): Generator<void, PreparedAppendMutation> {
     this.assertMutationSafe();
     if (inputs.length === 0) {
       return Object.freeze({
@@ -802,9 +840,10 @@ export class LogbookDocument {
       });
     }
 
-    const segments = this.segments.map(cloneSegmentShallow);
-    const appended = this.appendFragments(segments, cloneParts(this.safeTrailing), inputs);
-    const nextDocument = this.withParts(appended.segments, appended.safeTrailing);
+    const segments = yield* cloneSegments(this.segments);
+    const index = yield* this.mutationIndexSteps(segments);
+    const appended = yield* this.appendFragmentsSteps(segments, cloneParts(this.safeTrailing), inputs, index);
+    const nextDocument = yield* this.withPartsSteps(appended.segments, appended.safeTrailing);
     return Object.freeze({
       kind: 'append',
       appendBytes: concatenate(inputs.map((input) => Buffer.from(input.raw))),
@@ -813,20 +852,33 @@ export class LogbookDocument {
     });
   }
 
-  private appendFragments(
+  private *mutationIndexSteps(segments: readonly StoredSegment[]): Generator<void, MutationIndex> {
+    const rawOrdinals = new Map<string, number>();
+    // Keep original IDs reserved until the complete rewrite is reprojected.
+    const usedIds = new Set(this.qsoById.keys());
+    const positions = new Map<string, number>();
+    for (let position = 0; position < segments.length; position += 1) {
+      const segment = segments[position]!;
+      rawOrdinals.set(segment.rawHash, (rawOrdinals.get(segment.rawHash) ?? 0) + 1);
+      if (segment.qso) {
+        usedIds.add(segment.qso.id);
+        positions.set(segment.qso.id, position);
+      }
+      yield;
+    }
+    return { rawOrdinals, usedIds, positions };
+  }
+
+  private *appendFragmentsSteps(
     initialSegments: StoredSegment[],
     initialSafeTrailing: StoredPart[],
     inputs: readonly LogbookImportAppend[],
-  ): { segments: StoredSegment[]; safeTrailing: StoredPart[]; addedIds: string[] } {
+    index: MutationIndex,
+  ): Generator<void, { segments: StoredSegment[]; safeTrailing: StoredPart[]; addedIds: string[] }> {
     const segments = initialSegments;
     let safeTrailing = initialSafeTrailing;
     const addedIds: string[] = [];
-    const rawOrdinals = new Map<string, number>();
-    const usedIds = new Set(this.qsoById.keys());
-    for (const segment of segments) {
-      rawOrdinals.set(segment.rawHash, (rawOrdinals.get(segment.rawHash) ?? 0) + 1);
-      if (segment.qso) usedIds.add(segment.qso.id);
-    }
+    const { rawOrdinals, usedIds, positions } = index;
 
     for (const input of inputs) {
       const fragment = parseRecordFragment(input.raw);
@@ -847,6 +899,7 @@ export class LogbookDocument {
       if (decoded && usedIds.has(decoded.id)) throw new Error(`QSO with id ${decoded.id} already exists`);
       if (decoded) {
         usedIds.add(decoded.id);
+        positions.set(decoded.id, segments.length);
         addedIds.push(decoded.id);
       }
 
@@ -867,13 +920,10 @@ export class LogbookDocument {
         rawRange: { start: 0, end: 0 },
       });
       safeTrailing = inlinePart(fragment.trailing);
+      yield;
     }
 
     return { segments, safeTrailing, addedIds };
-  }
-
-  private withParts(segments: StoredSegment[], safeTrailing: StoredPart[], reproject = false): LogbookDocument {
-    return finishWork(this.withPartsSteps(segments, safeTrailing, reproject));
   }
 
   private *withPartsSteps(segments: StoredSegment[], safeTrailing: StoredPart[], reproject = false): Generator<void, LogbookDocument> {
