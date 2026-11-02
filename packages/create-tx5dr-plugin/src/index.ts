@@ -182,7 +182,7 @@ function readContestLogbookUiAssets(): Map<string, string> {
 
 function generatePackageJson(config: PluginConfig): string {
   const devDeps: Record<string, string> = {
-    '@tx5dr/plugin-api': '^2.5.0',
+    '@tx5dr/plugin-api': '^2.6.0',
   };
 
   if (config.lang === 'ts') {

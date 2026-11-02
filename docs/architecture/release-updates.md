@@ -8,6 +8,11 @@ identity is generated from `packages/server/src/generated/buildInfo.json` and
 consumed by Server, Electron and Web. A formal release uses an immutable
 `vX.Y.Z` tag matching the committed base version and full source SHA.
 
+The public SDK train publishes contracts, core, plugin-api and the scaffold in
+dependency order. Publication waits for each exact dependency version and its
+tarball to become available before continuing. The wait is bounded; a registry
+failure stops the train and leaves any already published versions immutable.
+
 A main-branch publication derives `X.Y.Z-nightly.<UTC commit timestamp>+g<short SHA>`.
 The complete SHA remains in the manifest. The current publisher keeps immutable
 `build-<nightly version>` GitHub Releases as well as fixed `nightly-<product>`

@@ -21,6 +21,8 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      SDK_VERSION: ${{ inputs.version }}
 
     steps:
       - name: Checkout repository
@@ -147,6 +149,9 @@ jobs:
       - name: Verify packed plugin API exports
         run: yarn workspace @tx5dr/plugin-api smoke:pack
 
+      - name: Test registry propagation gate
+        run: node --test scripts/tests/wait-npm-version.test.mjs
+
       - name: Publish @tx5dr/contracts
         run: |
           cd packages/contracts
@@ -156,6 +161,10 @@ jobs:
           else
             npm publish --access public
           fi
+
+      - name: Wait for @tx5dr/contracts availability
+        if: inputs.dry_run == false
+        run: node scripts/wait-npm-version.mjs @tx5dr/contracts "$SDK_VERSION"
 
       - name: Publish @tx5dr/core
         run: |
@@ -167,6 +176,10 @@ jobs:
             npm publish --access public
           fi
 
+      - name: Wait for @tx5dr/core availability
+        if: inputs.dry_run == false
+        run: node scripts/wait-npm-version.mjs @tx5dr/core "$SDK_VERSION"
+
       - name: Publish @tx5dr/plugin-api
         run: |
           cd packages/plugin-api
@@ -177,6 +190,10 @@ jobs:
             npm publish --access public
           fi
 
+      - name: Wait for @tx5dr/plugin-api availability
+        if: inputs.dry_run == false
+        run: node scripts/wait-npm-version.mjs @tx5dr/plugin-api "$SDK_VERSION"
+
       - name: Publish create-tx5dr-plugin
         run: |
           cd packages/create-tx5dr-plugin
@@ -186,6 +203,10 @@ jobs:
           else
             npm publish --access public
           fi
+
+      - name: Wait for scaffold availability
+        if: inputs.dry_run == false
+        run: node scripts/wait-npm-version.mjs create-tx5dr-plugin "$SDK_VERSION"
 
       - name: Create git tag
         if: inputs.dry_run == false
