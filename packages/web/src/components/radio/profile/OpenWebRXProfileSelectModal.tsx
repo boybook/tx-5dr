@@ -16,6 +16,7 @@ import type {
   OpenWebRXProfileSelectRequest,
   OpenWebRXProfileVerifyResult,
 } from '@tx5dr/contracts';
+import { formatFrequencyMHz } from '../../../utils/frequencyMHz';
 import { useWSEvent } from '../../../hooks/useWSEvent';
 import { useConnection } from '../../../store/radioStore';
 import { useCan } from '../../../store/authStore';
@@ -137,7 +138,7 @@ export function OpenWebRXProfileSelectModal() {
   // Only show for users with frequency control permission
   if (!canSetFrequency) return null;
 
-  const targetFreqMHz = request ? (request.targetFrequency / 1_000_000).toFixed(3) : '';
+  const targetFreqMHz = request ? formatFrequencyMHz(request.targetFrequency) : '';
 
   return (
     <Modal
@@ -196,7 +197,7 @@ export function OpenWebRXProfileSelectModal() {
                 <Alert color="danger" variant="flat">
                   {verifyResult.centerFreq != null && verifyResult.sampRate != null
                     ? t('settings:openwebrx.profileSelect.verifyFailed', {
-                        centerFreq: (verifyResult.centerFreq / 1_000_000).toFixed(3),
+                        centerFreq: formatFrequencyMHz(verifyResult.centerFreq),
                         bandwidth: (verifyResult.sampRate / 2 / 1_000_000).toFixed(3),
                       })
                     : verifyResult.error ?? t('settings:openwebrx.profileSelect.verifyFailed', {

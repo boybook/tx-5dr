@@ -38,6 +38,7 @@ import {
   type ProfileVolumeGainSlot,
   type RuntimeState,
 } from './RuntimeStateManager.js';
+import { formatFrequencyMHz } from '../utils/frequencyMHz.js';
 
 const logger = createLogger('ConfigManager');
 
@@ -1710,7 +1711,7 @@ export class ConfigManager {
       profileId,
       engineMode: memory.lastEngineMode ?? 'digital',
       digitalMHz: memory.lastSelectedFrequency
-        ? (memory.lastSelectedFrequency.frequency / 1_000_000).toFixed(3)
+        ? formatFrequencyMHz(memory.lastSelectedFrequency.frequency)
         : null,
     });
   }
