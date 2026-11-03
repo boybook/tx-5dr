@@ -44,3 +44,9 @@ is bounded and scoped by callsign, provider and operation. Dismissal and notice
 memory never changes plugin checkpoints or execution. The Host validates and
 projects provider status, while the plugin owns leases, pause, retries and
 completion. This adds no plugin Toast API or Host task scheduler.
+
+The settings update badge indicates an unread available target in the selected
+update channel. Read state is scoped by product, channel and build identity.
+An available stable-channel migration is shown inside the update page and does
+not light the badge for an up-to-date nightly subscription. Dismissing that prompt
+does not mark future updates as read or change the subscribed channel.

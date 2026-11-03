@@ -125,9 +125,7 @@ export function UpdateNotificationProvider({ children }: { children: React.React
 
   const isUnreadUpdateAvailable = useMemo(() => {
     void seenNonce;
-    let stableUnread = false;
-    try { stableUnread = Boolean(status?.stableAvailable && localStorage.getItem('tx5dr-stable-migration-dismissed') !== '1'); } catch { /* unavailable */ }
-    return stableUnread || Boolean(status?.updateAvailable && status.identity && !isSeen(status));
+    return Boolean(status?.updateAvailable && status.identity && !isSeen(status));
   }, [status, seenNonce]);
 
   const value = useMemo<UpdateNotificationContextValue>(() => ({
