@@ -107,7 +107,7 @@ Names are normalized exact aliases, never substring matches. A successful
 which must not retain a guessed model's extension table. MK2 USB, ACC and LAN
 connector commands use their own documented addresses and encodings.
 
-The Host consumes the published `icom-wlan-node@0.8.0` package; the exact
+The Host consumes the published `icom-wlan-node@0.8.1` package; the exact
 resolution and integrity are recorded in `yarn.lock`. Protocol changes are
 maintained and released in the public library repository, not duplicated in the
 Host. Version 0.8 changes formerly synchronous setters to acknowledged promises;
