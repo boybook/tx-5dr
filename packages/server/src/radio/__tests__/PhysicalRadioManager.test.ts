@@ -122,6 +122,43 @@ describe('PhysicalRadioManager', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it('does not downgrade capabilities or reconnect when ICOM rejects a command', async () => {
+    const error = new RadioError({ code: RadioErrorCode.INVALID_OPERATION,
+      message: 'ICOM CI-V command rejected', userMessage: 'Radio rejected command',
+      severity: RadioErrorSeverity.WARNING,
+      context: { protocol: 'icom-wlan', commandRejected: true, operation: 'setMode' },
+    });
+    const setMode = vi.fn().mockRejectedValue(error);
+    asTestManager(manager).connection = { setMode };
+    await expect(manager.setMode('USB')).rejects.toThrow('command rejected');
+    expect(send).not.toHaveBeenCalled();
+    expect(manager.getCoreCapabilities().writeRadioMode).toBe(true);
+  });
+
+  it('waits for passive-session resource release before a subsequent session mutation', async () => {
+    const release = createDeferred<void>();
+    const disconnect = vi.fn().mockImplementation(() => release.promise);
+    const access = asTestManager(manager);
+    access.radioActor = null;
+    access.connection = { disconnect, off: vi.fn() };
+    (manager as unknown as { cleanupAfterDisconnect(): void }).cleanupAfterDisconnect();
+    let finished = false;
+    const stopped = manager.disconnect().then(() => { finished = true; });
+    await vi.waitFor(() => expect(disconnect).toHaveBeenCalledTimes(1));
+    expect(finished).toBe(false);
+    release.resolve();
+    await stopped;
+    expect(finished).toBe(true);
+  });
+
+  it('ignores a retired ICOM request error after the mutation gate has finished', () => {
+    asTestManager(manager).handleConnectionError(new RadioError({
+      code: RadioErrorCode.INVALID_STATE, message: 'radio session changed', userMessage: 'Radio session ended',
+      context: { protocol: 'icom-wlan', cancelled: true },
+    }));
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('publishes operating-state snapshots with monotonic revisions for one CAT session', () => {
     asTestManager(manager).connectionGeneration = 4;
     const snapshots: Array<{ frequency: number; metadata: Record<string, unknown> }> = [];

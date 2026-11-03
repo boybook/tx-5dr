@@ -3019,9 +3019,15 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     this.resetCoreCapabilities();
     if (this.connection) {
       this.cleanupConnectionListeners();
-      // 不调用 connection.disconnect()，因为连接已断（被动断线）
+      const retiredConnection = this.connection;
       this.connection = null;
       this.connectionGeneration += 1;
+      // Logical loss does not prove the sockets/token have been released.
+      // Enqueue before any following connect so generations cannot overlap.
+      void this.runSessionMutation('release disconnected session', async () => {
+        try { await retiredConnection.disconnect('session lost'); }
+        catch (error) { logger.warn('Failed to release disconnected session', error); }
+      });
     }
   }
 
@@ -3340,6 +3346,15 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    * 处理连接错误
    */
   private handleConnectionError(error: Error): void {
+    if (error instanceof RadioError && error.context?.protocol === 'icom-wlan' && error.context?.cancelled === true) {
+      logger.debug('Ignoring error from a retired ICOM session');
+      return;
+    }
+    if (error instanceof RadioError && error.context?.protocol === 'icom-wlan' && error.context?.commandRejected === true) {
+      logger.warn('ICOM command rejected; retaining live connection', { error: error.message });
+      return;
+    }
+
     if (this.shouldSuppressSessionCancellationError(error)) {
       logger.debug(`Suppressing stale session health error: ${error.message}`);
       return;

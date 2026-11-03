@@ -84,7 +84,7 @@ export const PARALLEL_RADIO_IO_QUEUE_OPTIONS: Pick<
 
 /**
  * ICOM control traffic shares one CI-V command/reply stream. Keep the main
- * control queue strictly serial; isolated spectrum work has its own lane.
+ * control queue strictly serial, including spectrum commands.
  */
 export const ICOM_WLAN_RADIO_IO_QUEUE_OPTIONS: Pick<
   RadioIoQueueOptions,

@@ -137,6 +137,9 @@ function createConnectedConnection(): { connection: IcomWlanConnection; rig: Moc
   const connection = new IcomWlanConnection();
   const rig: MockRig = {
     profile: {
+      modelId: 'IC-705',
+      connectorModes: { MIC: 0, USB: 1, MIC_USB: 2, WLAN: 3 },
+      vendorExtensions: { connectorDataMode: {} },
       functions: ['TUNER', 'NB', 'NR', 'COMP', 'VOX', 'LOCK', 'RIT', 'XIT', 'TONE', 'TSQL', 'MON', 'ANF', 'MN', 'APF', 'DIGI_SEL'],
       levels: ['NB', 'NR', 'COMP', 'MONITOR_GAIN', 'APF', 'AGC', 'AGC_TIME', 'RF', 'CWPITCH', 'KEYSPD', 'VOXDELAY', 'BALANCE', 'DIGI_SEL_LEVEL', 'SPECTRUM_AVG'],
       parameters: ['BEEP', 'AFIF_WLAN'],
@@ -290,7 +293,7 @@ describe('IcomWlanConnection', () => {
     expect(rig.setConnectorDataMode).toHaveBeenCalledWith('USB');
     await expect(connection.getTxAudioInputSource!()).resolves.toBe('usb');
     await expect(connection.getSupportedTxAudioInputSources!()).resolves.toEqual([
-      'mic', 'accessory', 'usb', 'network',
+      'mic', 'usb', 'network',
     ]);
   });
 
@@ -319,6 +322,19 @@ describe('IcomWlanConnection', () => {
     await expect(connection.setMode('CW', 'nochange', { intent: 'cw' })).resolves.toBeUndefined();
 
     expect(rig.setMode).toHaveBeenCalledWith(expect.any(Number), { dataMode: false });
+  });
+
+  it('uses declared verified MK2 routes while rejecting unknown identity', async () => {
+    const { connection, rig } = createConnectedConnection();
+    rig.profile.modelId = 'IC-7300MK2';
+    rig.profile.connectorModes = { MIC: 0, USB: 1, ACC: 2, WLAN: 5 };
+    await expect(connection.getSupportedTxAudioInputSources()).resolves.toEqual([]);
+    asTestConnection(connection).radioIdentity = {
+      modelId: 'IC-7300MK2', profileName: 'Icom IC-7300MK2', authority: 'civ-transceiver-id', verified: true,
+    };
+    await expect(connection.getSupportedTxAudioInputSources()).resolves.toEqual(['mic', 'accessory', 'usb', 'network']);
+    await connection.setTxAudioInputSource('network');
+    expect(rig.setConnectorDataMode).toHaveBeenCalledWith('WLAN');
   });
 
   it('passes digital intent through applyOperatingState', async () => {
@@ -750,7 +766,7 @@ describe('IcomWlanConnection', () => {
     await expect(connection.setRitEnabled(true)).resolves.toBeUndefined();
     await expect(connection.getMonitorGain()).resolves.toBe(0.42);
     await expect(connection.setRFGain(0.7)).resolves.toBeUndefined();
-    await expect(connection.getAgcMode()).resolves.toBe('fast');
+    await expect(connection.getAgcMode()).resolves.toBe('medium');
     await expect(connection.setAgcMode('slow')).resolves.toBeUndefined();
 
     expect(rig.getFunction).toHaveBeenCalledWith('COMP', { timeout: 3000 });
@@ -861,7 +877,7 @@ describe('IcomWlanConnection', () => {
     });
   });
 
-  it('keeps ICOM spectrum display polling out of the main CAT queue', async () => {
+  it('serializes ICOM spectrum polling with critical CAT writes', async () => {
     const displayRead = createDeferred<any>();
     const { connection, rig } = createConnectedConnection();
     rig.getSpectrumDisplayState.mockReturnValueOnce(displayRead.promise);
@@ -870,13 +886,13 @@ describe('IcomWlanConnection', () => {
     await Promise.resolve();
 
     const frequencyPromise = connection.setFrequency(7100000);
-    await frequencyPromise;
-
-    expect(rig.setFrequency).toHaveBeenCalledWith(7100000);
+    await Promise.resolve();
+    expect(rig.setFrequency).not.toHaveBeenCalled();
     expect(rig.getSpectrumDisplayState).toHaveBeenCalledTimes(1);
-
     displayRead.resolve({ mode: 'center', spanHz: 50000, supportedSpans: [50000] });
     await expect(displayPromise).resolves.toMatchObject({ mode: 'center', spanHz: 50000 });
+    await frequencyPromise;
+    expect(rig.setFrequency).toHaveBeenCalledWith(7100000);
   });
 
   it('does not stack repeated ICOM spectrum display polls while a previous poll is active', async () => {
@@ -915,4 +931,51 @@ describe('IcomWlanConnection', () => {
       displayStyle: 's-meter-dbm',
     });
   });
+  it('rejects non-ICOM AGC enumerations and preserves the actual device values', async () => {
+    const { connection, rig } = createConnectedConnection();
+    await expect(connection.getSupportedAgcModes()).resolves.toEqual(['fast', 'medium', 'slow']);
+    await connection.setAgcMode('fast');
+    expect(rig.setLevel).toHaveBeenCalledWith('AGC', 1);
+    await expect(connection.setAgcMode('superfast')).rejects.toThrow('Unsupported AGC mode');
+  });
+
+  it('keeps protocol rejections distinct from connection timeouts', async () => {
+    const { connection, rig } = createConnectedConnection();
+    const rejection = new Error('ICOM CI-V command rejected: frequency');
+    rejection.name = 'CivCommandRejectedError';
+    rig.setFrequency.mockRejectedValue(rejection);
+    await expect(connection.setFrequency(7100000)).rejects.toMatchObject({
+      code: RadioErrorCode.INVALID_OPERATION,
+      context: { protocol: 'icom-wlan', commandRejected: true },
+    });
+  });
+
+  it('fences a spectrum result that arrives after disconnect', async () => {
+    const { connection, rig } = createConnectedConnection();
+    const response = createDeferred<any>();
+    rig.getSpectrumDisplayState.mockReturnValue(response.promise);
+    (rig as any).disconnect = vi.fn().mockResolvedValue(undefined);
+    const pending = connection.getSpectrumDisplayState();
+    const failed = expect(pending).rejects.toThrow('radio session changed');
+    await Promise.resolve();
+    await connection.disconnect();
+    response.resolve({ mode: 'center', spanHz: 50000 });
+    await failed;
+  });
+
+  it('labels late failures as cancellation rather than a new session health error', async () => {
+    const { connection, rig } = createConnectedConnection();
+    const response = createDeferred<number>();
+    rig.readOperatingFrequency.mockReturnValue(response.promise);
+    (rig as any).disconnect = vi.fn().mockResolvedValue(undefined);
+    const pending = connection.getFrequency();
+    const cancelled = expect(pending).rejects.toMatchObject({
+      context: { protocol: 'icom-wlan', cancelled: true },
+    });
+    await Promise.resolve();
+    await connection.disconnect();
+    response.reject(new Error('ICOM session ended'));
+    await cancelled;
+  });
+
 });

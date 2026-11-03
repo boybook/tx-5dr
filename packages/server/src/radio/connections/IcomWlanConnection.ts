@@ -25,7 +25,6 @@ import type { MeterCapabilities } from '@tx5dr/contracts';
 import { TunerCapabilities, TunerStatus } from '@tx5dr/contracts';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../../utils/errors/RadioError.js';
 import { createLogger } from '../../utils/logger.js';
-import { isProcessShuttingDown } from '../../utils/process-shutdown.js';
 import { isRecoverableOptionalRadioError } from '../optionalRadioError.js';
 import { ICOM_WLAN_RADIO_IO_QUEUE_OPTIONS, RADIO_IO_SKIPPED, RadioIoQueue } from './RadioIoQueue.js';
 import {
@@ -65,17 +64,7 @@ const METER_SAMPLE_LOG_INTERVAL_MS = 5000;
 const ICOM_WLAN_POWER_METER_SUPPORTED = true;
 const FREQUENCY_NULL_FAILURE_LIMIT = 3;
 const FREQUENCY_NULL_FAILURE_WINDOW_MS = 8000;
-const ICOM_AGC_CODE_TO_MODE: Record<number, string> = {
-  0: 'off',
-  1: 'superfast',
-  2: 'fast',
-  3: 'slow',
-  4: 'user',
-  5: 'medium',
-  6: 'auto',
-  7: 'long',
-  8: 'on',
-};
+const ICOM_AGC_CODE_TO_MODE: Record<number, string> = { 1: 'fast', 2: 'medium', 3: 'slow' };
 const ICOM_AGC_MODE_TO_CODE: Record<string, number> = Object.fromEntries(
   Object.entries(ICOM_AGC_CODE_TO_MODE).map(([code, mode]) => [mode, Number(code)]),
 ) as Record<string, number>;
@@ -136,14 +125,14 @@ export class IcomWlanConnection
   /**
    * 清理保护标志（防止重复清理导致资源泄漏或冲突）
    */
-  private isCleaningUp = false;
+  private cleanupPromise: Promise<void> | null = null;
+  private readonly rigListenerDisposers: Array<() => void> = [];
 
   /**
    * 天调启用状态（本地跟踪，简化版实现）
    */
   private tunerEnabled = false;
   private scopeEnabled = false;
-  private readonly isolatedSpectrumTasks = new Set<string>();
   private softwarePttActive = false;
   private pttActivatedAt: number | null = null;
   private lastMeterSampleLoggedAt = 0;
@@ -219,7 +208,10 @@ export class IcomWlanConnection
 
   private ensureSession(sessionId: number): void {
     if (sessionId !== this.ioSessionId) {
-      throw new Error('radio session changed');
+      throw new RadioError({ code: RadioErrorCode.INVALID_STATE, message: 'radio session changed',
+        userMessage: 'Radio session ended', severity: RadioErrorSeverity.WARNING,
+        context: { protocol: 'icom-wlan', cancelled: true },
+      });
     }
   }
 
@@ -232,9 +224,8 @@ export class IcomWlanConnection
     const id = options?.id ?? (!options?.critical && taskName.startsWith('get') ? taskName : undefined);
     return this.ioQueue.run({ sessionId, name: taskName, critical: options?.critical, id }, async (activeSessionId) => {
       this.ensureSession(activeSessionId);
-      const result = await task();
-      this.ensureSession(activeSessionId);
-      return result;
+      try { return await task(); }
+      finally { this.ensureSession(activeSessionId); }
     });
   }
 
@@ -320,7 +311,7 @@ export class IcomWlanConnection
     await this.runSerializedTask(taskName, async () => {
       this.checkConnected();
       try {
-        this.rig!.setFunction(functionName, enabled);
+        await this.rig!.setFunction(functionName, enabled);
       } catch (error) {
         throw this.convertOptionalOperationError(error, taskName);
       }
@@ -346,50 +337,26 @@ export class IcomWlanConnection
     await this.runSerializedTask(taskName, async () => {
       this.checkConnected();
       try {
-        this.rig!.setLevel(levelName, value);
+        await this.rig!.setLevel(levelName, value);
       } catch (error) {
         throw this.convertOptionalOperationError(error, taskName);
       }
     });
   }
 
-  private async runIsolatedSpectrumTask<T>(
+  private async runSpectrumTask<T>(
     taskName: string,
     task: () => Promise<T>,
-    options?: { timeoutMs?: number; skipIfBusy?: boolean; skippedValue?: T },
+    options?: { skipIfBusy?: boolean; skippedValue?: T },
   ): Promise<T> {
-    if (options?.skipIfBusy && this.isolatedSpectrumTasks.size > 0) {
-      logger.debug(`Skipping isolated spectrum CAT task because previous call is still active: ${taskName}`);
-      return options.skippedValue as T;
-    }
-
-    this.isolatedSpectrumTasks.add(taskName);
-    const operation = Promise.resolve()
-      .then(task)
-      .finally(() => {
-        this.isolatedSpectrumTasks.delete(taskName);
-      });
-
-    if (!options?.timeoutMs) {
-      return operation;
-    }
-
-    let timeout: NodeJS.Timeout | null = null;
-    try {
-      return await Promise.race([
-        operation,
-        new Promise<T>((_, reject) => {
-          timeout = setTimeout(
-            () => reject(new Error(`${taskName} timed out after ${options.timeoutMs}ms`)),
-            options.timeoutMs,
-          );
-        }),
-      ]);
-    } finally {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-    }
+    if (!options?.skipIfBusy) return this.runSerializedTask(taskName, task);
+    const sessionId = this.ioSessionId;
+    const result = await this.ioQueue.runLowPriority({ sessionId, name: taskName, id: taskName }, async activeSessionId => {
+      this.ensureSession(activeSessionId);
+      try { return await task(); }
+      finally { this.ensureSession(activeSessionId); }
+    });
+    return result === RADIO_IO_SKIPPED ? options.skippedValue as T : result;
   }
 
   private async performFrequencyWrite(frequency: number): Promise<void> {
@@ -463,6 +430,7 @@ export class IcomWlanConnection
     config: RadioConnectionConfig,
     options?: { mode?: 'full' | 'control-only' }
   ): Promise<void> {
+    if (this.cleanupPromise) await this.cleanupPromise;
     const mode = options?.mode ?? 'full';
     // 状态检查
     if (this.state === RadioConnectionState.CONNECTING) {
@@ -508,6 +476,7 @@ export class IcomWlanConnection
     this.currentConfig = config;
     this.defaultDataMode = config.icomWlan.dataMode ?? true;
     this.ioSessionId += 1;
+    const connectingSessionId = this.ioSessionId;
     this.backgroundTasksStarted = false;
     this.lastKnownFrequency = null;
     this.resetFrequencyNullFailures();
@@ -528,6 +497,8 @@ export class IcomWlanConnection
         userName: config.icomWlan.userName || 'ICOM',
         password: config.icomWlan.password || '',
         model: 'auto',
+        connectTimeoutMs: 15000,
+        logger: (message, details) => logger.info(message, details),
       });
 
       // 设置事件监听器
@@ -540,39 +511,21 @@ export class IcomWlanConnection
         autoReconnect: false,       // 禁用自动重连
       });
 
-      // 执行连接（带超时保护）
-      const CONNECTION_TIMEOUT = 10000; // 10秒超时
-
-      // 认证失败立即 reject，避免等待超时（密码错误时 icom-wlan-node 不会 reject connect()）
-      const loginErrorPromise = new Promise<never>((_, reject) => {
-        this.rig!.events.once('login', (res) => {
-          if (!res.ok) {
-            reject(new Error(`Login failed: ${res.errorCode}`));
-          }
-        });
-      });
-
-      await Promise.race([
-        this.rig.connect(),
-        loginErrorPromise,
-        new Promise((_, reject) =>
-          setTimeout(
-            () => reject(new Error('Connection timeout')),
-            CONNECTION_TIMEOUT
-          )
-        ),
-      ]);
+      // The protocol owner bounds and cancels every handshake stage.
+      const rig = this.rig;
+      await rig.connect();
+      this.ensureSession(connectingSessionId);
 
       const getIdentity = mode === 'full' && (this.rig as unknown as {
         getRadioIdentity?: (options?: { timeout?: number }) => Promise<IcomRadioIdentity>;
       }).getRadioIdentity;
       if (typeof getIdentity === 'function') {
         try {
-          this.radioIdentity = await getIdentity.call(this.rig, { timeout: 1500 });
-          if (this.radioIdentity.modelId) {
-            this.detectedModelId = this.radioIdentity.modelId;
-            this.detectedProfileName = this.radioIdentity.profileName;
-          }
+          const identity = await getIdentity.call(this.rig, { timeout: 1500 });
+          this.ensureSession(connectingSessionId);
+          this.radioIdentity = identity;
+          this.detectedModelId = this.radioIdentity.modelId;
+          this.detectedProfileName = this.radioIdentity.profileName;
           logger.info('ICOM radio identity resolved', {
             modelId: this.radioIdentity.modelId,
             authority: this.radioIdentity.authority,
@@ -581,6 +534,7 @@ export class IcomWlanConnection
             civAddress: this.radioIdentity.civAddress,
           });
         } catch (error) {
+          this.ensureSession(connectingSessionId);
           logger.warn('ICOM radio identity query failed; keeping identity unverified', {
             error: error instanceof Error ? error.message : String(error),
           });
@@ -588,6 +542,7 @@ export class IcomWlanConnection
         }
       }
 
+      this.ensureSession(connectingSessionId);
       // 连接成功
       if (mode === 'control-only') {
         this.setState(RadioConnectionState.CONTROL_ONLY);
@@ -599,9 +554,12 @@ export class IcomWlanConnection
       }
 
     } catch (error) {
-      // 连接失败，清理资源
-      await this.cleanup();
-      this.setState(RadioConnectionState.ERROR);
+      // A cancelled old connect must not clean up or overwrite a replacement.
+      if (connectingSessionId === this.ioSessionId) {
+        this.ioSessionId += 1;
+        await this.cleanup();
+        this.setState(RadioConnectionState.ERROR);
+      }
 
       // 转换错误
       throw this.convertError(error, 'connect');
@@ -776,6 +734,7 @@ export class IcomWlanConnection
       this.ensureSession(activeSessionId);
       try {
         const state = await this.rig!.readTransceiverState({ timeout: 1000 });
+        this.ensureSession(activeSessionId);
         if (state === 'TX') return true;
         if (state === 'RX') return false;
         throw new Error(`ICOM PTT state unavailable: ${state ?? 'null'}`);
@@ -928,7 +887,7 @@ export class IcomWlanConnection
   }
 
   async enableScopeStream(): Promise<void> {
-    await this.runIsolatedSpectrumTask('enableScopeStream', async () => {
+    await this.runSpectrumTask('enableScopeStream', async () => {
       this.checkConnected();
       if (this.scopeEnabled) {
         return;
@@ -936,18 +895,18 @@ export class IcomWlanConnection
 
       await this.rig!.enableScope();
       this.scopeEnabled = true;
-    }, { timeoutMs: SPECTRUM_CAT_TIMEOUT_MS });
+    });
   }
 
   async disableScopeStream(): Promise<void> {
-    await this.runIsolatedSpectrumTask('disableScopeStream', async () => {
+    await this.runSpectrumTask('disableScopeStream', async () => {
       if (!this.rig || !this.scopeEnabled) {
         return;
       }
 
       await this.rig.disableScope();
       this.scopeEnabled = false;
-    }, { timeoutMs: SPECTRUM_CAT_TIMEOUT_MS });
+    });
   }
 
   addScopeFrameListener(listener: (frame: IcomScopeFrame) => void): void {
@@ -977,33 +936,33 @@ export class IcomWlanConnection
   }
 
   async getCurrentSpectrumSpan(): Promise<number | null> {
-    return this.runIsolatedSpectrumTask('getCurrentSpectrumSpan', async () => {
+    return this.runSpectrumTask('getCurrentSpectrumSpan', async () => {
       this.checkConnected();
       try {
-        const info = await this.rig!.readScopeSpan();
+        const info = await this.rig!.readScopeSpan({ timeout: SPECTRUM_CAT_TIMEOUT_MS });
         return typeof info?.spanHz === 'number' && Number.isFinite(info.spanHz) && info.spanHz > 0 ? info.spanHz : null;
       } catch (error) {
         throw this.convertError(error, 'getCurrentSpectrumSpan');
       }
-    }, { timeoutMs: SPECTRUM_CAT_TIMEOUT_MS, skipIfBusy: true, skippedValue: null });
+    }, { skipIfBusy: true, skippedValue: null });
   }
 
   async setSpectrumSpan(spanHz: number): Promise<void> {
-    await this.runIsolatedSpectrumTask('setSpectrumSpan', async () => {
+    await this.runSpectrumTask('setSpectrumSpan', async () => {
       this.checkConnected();
       try {
         await this.rig!.setScopeSpan(spanHz);
       } catch (error) {
         throw this.convertError(error, 'setSpectrumSpan');
       }
-    }, { timeoutMs: SPECTRUM_CAT_TIMEOUT_MS });
+    });
   }
 
   async getSpectrumDisplayState(): Promise<RadioSpectrumDisplayState | null> {
-    return this.runIsolatedSpectrumTask('getSpectrumDisplayState', async () => {
+    return this.runSpectrumTask('getSpectrumDisplayState', async () => {
       this.checkConnected();
       try {
-        const state = await this.rig!.getSpectrumDisplayState();
+        const state = await this.rig!.getSpectrumDisplayState({ timeout: SPECTRUM_CAT_TIMEOUT_MS });
         return {
           mode: state?.mode ?? null,
           spanHz: typeof state?.spanHz === 'number' && Number.isFinite(state.spanHz) && state.spanHz > 0 ? state.spanHz : null,
@@ -1019,7 +978,7 @@ export class IcomWlanConnection
       } catch (error) {
         throw this.convertError(error, 'getSpectrumDisplayState');
       }
-    }, { timeoutMs: SPECTRUM_CAT_TIMEOUT_MS, skipIfBusy: true, skippedValue: null });
+    }, { skipIfBusy: true, skippedValue: null });
   }
 
   async configureSpectrumDisplay(config: {
@@ -1029,14 +988,14 @@ export class IcomWlanConnection
     edgeLowHz?: number;
     edgeHighHz?: number;
   }): Promise<void> {
-    await this.runIsolatedSpectrumTask('configureSpectrumDisplay', async () => {
+    await this.runSpectrumTask('configureSpectrumDisplay', async () => {
       this.checkConnected();
       try {
         await this.rig!.configureSpectrumDisplay(config);
       } catch (error) {
         throw this.convertError(error, 'configureSpectrumDisplay');
       }
-    }, { timeoutMs: SPECTRUM_CAT_TIMEOUT_MS });
+    });
   }
 
   // ===== 天线调谐器控制 =====
@@ -1110,7 +1069,7 @@ export class IcomWlanConnection
       this.checkConnected();
 
       try {
-        this.rig!.setTunerEnabled(enabled);
+        await this.rig!.setTunerEnabled(enabled);
         this.tunerEnabled = enabled;
         logger.debug(`Tuner ${enabled ? 'enabled' : 'disabled'}`);
       } catch (error) {
@@ -1129,7 +1088,7 @@ export class IcomWlanConnection
       this.checkConnected();
 
       try {
-        this.rig!.startManualTune();
+        await this.rig!.startManualTune();
         logger.debug('Manual tuning started');
         return true;
       } catch (error) {
@@ -1159,7 +1118,7 @@ export class IcomWlanConnection
     await this.runSerializedTask('setAFGain', async () => {
       this.checkConnected();
       try {
-        this.rig!.setAFGain(value);
+        await this.rig!.setAFGain(value);
         logger.debug(`AF gain set: ${(value * 100).toFixed(0)}%`);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setAFGain');
@@ -1185,7 +1144,7 @@ export class IcomWlanConnection
     await this.runSerializedTask('setSQL', async () => {
       this.checkConnected();
       try {
-        this.rig!.setSQL(value);
+        await this.rig!.setSQL(value);
         logger.debug(`SQL set: ${(value * 100).toFixed(0)}%`);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setSQL');
@@ -1211,7 +1170,7 @@ export class IcomWlanConnection
     await this.runSerializedTask('setRFPower', async () => {
       this.checkConnected();
       try {
-        this.rig!.setRFPower(value);
+        await this.rig!.setRFPower(value);
         logger.debug(`RF power set: ${(value * 100).toFixed(0)}%`);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setRFPower');
@@ -1237,7 +1196,7 @@ export class IcomWlanConnection
     await this.runSerializedTask('setMicGain', async () => {
       this.checkConnected();
       try {
-        this.rig!.setMicGain(value);
+        await this.rig!.setMicGain(value);
         logger.debug(`MIC gain set: ${(value * 100).toFixed(0)}%`);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setMicGain');
@@ -1405,7 +1364,7 @@ export class IcomWlanConnection
     await this.runSerializedTask('setBeepEnabled', async () => {
       this.checkConnected();
       try {
-        this.rig!.setBeepEnabled(enabled);
+        await this.rig!.setBeepEnabled(enabled);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setBeepEnabled');
       }
@@ -1449,7 +1408,7 @@ export class IcomWlanConnection
     await this.runSerializedTask('setBreakInDelay', async () => {
       this.checkConnected();
       try {
-        this.rig!.setBreakInDelay(value);
+        await this.rig!.setBreakInDelay(value);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setBreakInDelay');
       }
@@ -1469,7 +1428,9 @@ export class IcomWlanConnection
 
   async getAgcMode(): Promise<string> {
     const value = await this.readLevelCapability('getAgcMode', 'AGC');
-    return ICOM_AGC_CODE_TO_MODE[Math.round(value)] ?? 'off';
+    const mode = ICOM_AGC_CODE_TO_MODE[Math.round(value)];
+    if (!mode) throw this.optionalOperationUnavailable('getAgcMode', `Unknown ICOM AGC code: ${value}`);
+    return mode;
   }
 
   async setAgcMode(mode: string): Promise<void> {
@@ -1500,7 +1461,7 @@ export class IcomWlanConnection
     await this.runSerializedTask('setRitOffset', async () => {
       this.checkConnected();
       try {
-        this.rig!.setRitOffset(offsetHz);
+        await this.rig!.setRitOffset(offsetHz);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setRitOffset');
       }
@@ -1522,7 +1483,7 @@ export class IcomWlanConnection
     await this.runSerializedTask('setXitOffset', async () => {
       this.checkConnected();
       try {
-        this.rig!.setXitOffset(offsetHz);
+        await this.rig!.setXitOffset(offsetHz);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setXitOffset');
       }
@@ -1548,7 +1509,7 @@ export class IcomWlanConnection
       this.checkConnected();
       const normalized = mode === 'semi' || mode === 'full' ? mode : 'off';
       try {
-        this.rig!.setBreakInMode(normalized);
+        await this.rig!.setBreakInMode(normalized);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setBreakInMode');
       }
@@ -1570,7 +1531,7 @@ export class IcomWlanConnection
     await this.runSerializedTask('setVfo', async () => {
       this.checkConnected();
       try {
-        this.rig!.setVfo(vfo as IcomVfoName);
+        await this.rig!.setVfo(vfo as IcomVfoName);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setVfo');
       }
@@ -1596,7 +1557,7 @@ export class IcomWlanConnection
     await this.runSerializedTask('setSplitEnabled', async () => {
       this.checkConnected();
       try {
-        this.rig!.setSplitEnabled(enabled);
+        await this.rig!.setSplitEnabled(enabled);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setSplitEnabled');
       }
@@ -1618,7 +1579,7 @@ export class IcomWlanConnection
     await this.runSerializedTask('setTuningStep', async () => {
       this.checkConnected();
       try {
-        this.rig!.setTuningStep(stepHz);
+        await this.rig!.setTuningStep(stepHz);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setTuningStep');
       }
@@ -1648,7 +1609,7 @@ export class IcomWlanConnection
       this.checkConnected();
       const normalized = shift === 'minus' || shift === 'plus' ? shift : 'none';
       try {
-        this.rig!.setRepeaterShift(normalized);
+        await this.rig!.setRepeaterShift(normalized);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setRepeaterShift');
       }
@@ -1670,7 +1631,7 @@ export class IcomWlanConnection
     await this.runSerializedTask('setRepeaterOffset', async () => {
       this.checkConnected();
       try {
-        this.rig!.setRepeaterOffset(offsetHz);
+        await this.rig!.setRepeaterOffset(offsetHz);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setRepeaterOffset');
       }
@@ -1693,7 +1654,7 @@ export class IcomWlanConnection
     await this.runSerializedTask('setCtcssTone', async () => {
       this.checkConnected();
       try {
-        this.rig!.setToneFrequency(tone / 10);
+        await this.rig!.setToneFrequency(tone / 10);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setCtcssTone');
       }
@@ -1725,7 +1686,7 @@ export class IcomWlanConnection
       if (typeof getMode === 'function') {
         const mode = await getMode.call(this.rig, { timeout: 1500 });
         const normalized = ({ MIC: 'mic', ACC: 'accessory', USB: 'usb', WLAN: 'network' } as const)[mode as 'MIC' | 'ACC' | 'USB' | 'WLAN'];
-        if (normalized) this.txAudioInputSource = normalized;
+        this.txAudioInputSource = normalized ?? null;
       }
       return this.txAudioInputSource;
     });
@@ -1733,35 +1694,18 @@ export class IcomWlanConnection
 
   async getSupportedTxAudioInputSources(): Promise<TxAudioInputSource[]> {
     const model = this.radioIdentity?.verified ? this.radioIdentity.modelId : null;
-    if (model !== 'IC-705' && model !== 'IC-905') {
-      logger.debug('ICOM TX audio input route not advertised', {
-        detectedModelId: this.detectedModelId,
-        effectiveModelId: model,
-        profileName: this.detectedProfileName,
-      });
-      return [];
-    }
-    return ['mic', 'accessory', 'usb', 'network'];
+    const profile = this.getActiveProfile();
+    if (!model || profile?.modelId !== model || !profile.vendorExtensions?.connectorDataMode) return [];
+    return (Object.entries(ICOM_CONNECTOR_SOURCE_MAP) as Array<[TxAudioInputSource, string]>)
+      .filter(([, connector]) => profile.connectorModes?.[connector] !== undefined)
+      .map(([source]) => source);
   }
 
   async setTxAudioInputSource(source: TxAudioInputSource): Promise<RadioWriteResult<TxAudioInputSource>> {
     return this.runSerializedTask('setTxAudioInputSource', async () => {
       this.checkConnected();
-      const model = this.radioIdentity?.verified ? this.radioIdentity.modelId : null;
-      if (model !== 'IC-705' && model !== 'IC-905') {
-        if (!model) {
-          logger.warn('ICOM TX audio input route unavailable: connector profile not resolved', {
-            detectedModelId: this.detectedModelId,
-            profileName: this.detectedProfileName,
-          });
-          throw new Error('ICOM connector profile not resolved');
-        }
-        logger.warn('ICOM TX audio input route unavailable: active profile has no connector route provider', {
-          detectedModelId: this.detectedModelId,
-          effectiveModelId: model,
-          profileName: this.detectedProfileName,
-        });
-        throw this.optionalOperationUnavailable('setTxAudioInputSource', 'No connector data-mode extension for active profile');
+      if (!(await this.getSupportedTxAudioInputSources()).includes(source)) {
+        throw this.optionalOperationUnavailable('setTxAudioInputSource', 'No verified connector route for this source');
       }
       const connector = ICOM_CONNECTOR_SOURCE_MAP[source];
       if (!connector) throw new Error(`Unsupported ICOM TX audio source: ${source}`);
@@ -1785,7 +1729,7 @@ export class IcomWlanConnection
     await this.runSerializedTask('setAudioIfMode', async () => {
       this.checkConnected();
       try {
-        this.rig!.setAudioIfMode(source as IcomAudioIfSource);
+        await this.rig!.setAudioIfMode(source as IcomAudioIfSource);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setAudioIfMode');
       }
@@ -1812,7 +1756,7 @@ export class IcomWlanConnection
     await this.runSerializedTask('setSpectrumDataOutput', async () => {
       this.checkConnected();
       try {
-        this.rig!.setSpectrumDataOutput(enabled);
+        await this.rig!.setSpectrumDataOutput(enabled);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setSpectrumDataOutput');
       }
@@ -1834,7 +1778,7 @@ export class IcomWlanConnection
     await this.runSerializedTask('setSpectrumHold', async () => {
       this.checkConnected();
       try {
-        this.rig!.setSpectrumHold(enabled);
+        await this.rig!.setSpectrumHold(enabled);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setSpectrumHold');
       }
@@ -1856,7 +1800,7 @@ export class IcomWlanConnection
     await this.runSerializedTask('setSpectrumSpeed', async () => {
       this.checkConnected();
       try {
-        this.rig!.setSpectrumSpeed(speed as IcomSpectrumSpeed);
+        await this.rig!.setSpectrumSpeed(speed as IcomSpectrumSpeed);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setSpectrumSpeed');
       }
@@ -1882,7 +1826,7 @@ export class IcomWlanConnection
     await this.runSerializedTask('setSpectrumRef', async () => {
       this.checkConnected();
       try {
-        this.rig!.setSpectrumRef(db);
+        await this.rig!.setSpectrumRef(db);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setSpectrumRef');
       }
@@ -1907,7 +1851,7 @@ export class IcomWlanConnection
     await this.runSerializedTask('setSpectrumVbw', async () => {
       this.checkConnected();
       try {
-        this.rig!.setSpectrumVbw(value);
+        await this.rig!.setSpectrumVbw(value);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setSpectrumVbw');
       }
@@ -1929,7 +1873,7 @@ export class IcomWlanConnection
     await this.runSerializedTask('setSpectrumRbw', async () => {
       this.checkConnected();
       try {
-        this.rig!.setSpectrumRbw(value);
+        await this.rig!.setSpectrumRbw(value);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setSpectrumRbw');
       }
@@ -1951,7 +1895,7 @@ export class IcomWlanConnection
     await this.runSerializedTask('setSpectrumDuringTx', async () => {
       this.checkConnected();
       try {
-        this.rig!.setSpectrumDuringTx(enabled);
+        await this.rig!.setSpectrumDuringTx(enabled);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setSpectrumDuringTx');
       }
@@ -1973,7 +1917,7 @@ export class IcomWlanConnection
     await this.runSerializedTask('setSpectrumCenterType', async () => {
       this.checkConnected();
       try {
-        this.rig!.setSpectrumCenterType(type as IcomSpectrumCenterType);
+        await this.rig!.setSpectrumCenterType(type as IcomSpectrumCenterType);
       } catch (error) {
         throw this.convertOptionalOperationError(error, 'setSpectrumCenterType');
       }
@@ -2003,9 +1947,19 @@ export class IcomWlanConnection
    */
   private setupEventListeners(): void {
     if (!this.rig) return;
+    const rig = this.rig;
+    const sessionId = this.ioSessionId;
+    const listen = (event: string, handler: (...args: any[]) => void) => {
+      const guarded = (...args: any[]) => {
+        if (this.rig !== rig || this.ioSessionId !== sessionId) return;
+        handler(...args);
+      };
+      rig.events.on(event, guarded);
+      this.rigListenerDisposers.push(() => rig.events.off(event, guarded));
+    };
 
     // 登录结果
-    this.rig.events.on('login', (res) => {
+    listen('login', (res) => {
       if (res.ok) {
         logger.info('ICOM login successful');
       } else {
@@ -2016,12 +1970,12 @@ export class IcomWlanConnection
     });
 
     // 状态信息
-    this.rig.events.on('status', (s) => {
+    listen('status', (s) => {
       logger.debug(`ICOM status: CIV port=${s.civPort}, audio port=${s.audioPort}`);
     });
 
     // 能力信息
-    this.rig.events.on('capabilities', (c) => {
+    listen('capabilities', (c) => {
       this.detectedModelId = c.modelId ?? null;
       this.detectedProfileName = c.profileName ?? null;
       logger.debug(
@@ -2030,7 +1984,7 @@ export class IcomWlanConnection
     });
 
     // 音频数据
-    this.rig.events.on('audio', (frame) => {
+    listen('audio', (frame) => {
       // Convert once at the protocol boundary. The server audio contract is
       // Float32 mono, so downstream consumers never perform PCM round trips.
       const samples = new Float32Array(frame.pcm16.length / 2);
@@ -2045,20 +1999,21 @@ export class IcomWlanConnection
       });
     });
 
-    this.rig.events.on('scopeFrame', (frame) => {
+    listen('scopeFrame', (frame) => {
       this.emit('scopeFrame' as any, frame);
     });
 
     // 连接丢失 → 只 emit disconnected，不直接改状态（让上层状态机管理）
-    this.rig.events.on('connectionLost', (info) => {
+    listen('connectionLost', (info) => {
       logger.warn(`Connection lost: ${info.sessionType}, idle ${info.timeSinceLastData}ms`);
+      this.ioSessionId += 1;
       this.stopMeterPolling();
       this.emit('disconnected', `Connection lost: ${info.sessionType}`);
     });
 
 
     // 错误处理
-    this.rig.events.on('error', (err) => {
+    listen('error', (err) => {
       logger.error('ICOM UDP error:', err);
       const radioError = this.convertError(err, 'udp');
       this.emit('error', radioError);
@@ -2127,6 +2082,7 @@ export class IcomWlanConnection
           maxWatts: null,
         } : null;
 
+        this.ensureSession(activeSessionId);
         if (swr === null && alc === null && level === null && power === null) {
           return;
         }
@@ -2263,8 +2219,7 @@ export class IcomWlanConnection
         throw new Error(`Unsupported power state: ${state}`);
       }
       try {
-        const data = Buffer.from([0x18, subcode]);
-        this.rig!.sendCiv(data);
+        await this.rig!.setPowerState(subcode === 0x01 ? 'on' : 'off');
         logger.debug(`ICOM WLAN power state sent: ${normalized}`);
       } catch (error) {
         throw this.convertError(error, 'setPowerState');
@@ -2284,59 +2239,28 @@ export class IcomWlanConnection
    * 清理资源
    */
   private async cleanup(): Promise<void> {
-    // 防重入保护：避免重复清理导致资源泄漏或冲突
-    if (this.isCleaningUp) {
-      logger.debug('Cleanup already in progress, skipping');
-      return;
-    }
-
-    this.isCleaningUp = true;
-
-    try {
-      // 停止数值表轮询
-      this.stopMeterPolling();
-      this.scopeEnabled = false;
-      this.backgroundTasksStarted = false;
-
-      // 清理 rig 实例
-      if (this.rig) {
-        try {
-          const disconnectTimeoutMs = isProcessShuttingDown() ? 1000 : 5000;
-          if (this.rig.events) {
-            // 先移除所有业务监听器，防止 disconnect 过程中触发真实操作
-            this.rig.events.removeAllListeners();
-            // 注册持久的 error 静默处理器，吞掉 disconnect 后异步 UDP 回调的错误
-            // 关闭 UDP socket 后，已排队的 send 回调仍会在事件循环中触发
-            // 如果 EventEmitter 上没有 'error' 监听器，Node.js 会抛出 uncaughtException
-            // 不可再次调用 removeAllListeners，否则会移除此处理器
-            this.rig.events.on('error', () => {});
-          }
-
-          await Promise.race([
-            this.rig.disconnect(),
-            new Promise((_, reject) => {
-              setTimeout(() => reject(new Error('Disconnect timeout')), disconnectTimeoutMs);
-            }),
-          ]);
-          logger.debug('Event listeners cleared and connection closed');
-        } catch (error: any) {
-          logger.warn('Failed to disconnect during cleanup:', error);
-        }
-
-        this.rig = null;
+    if (this.cleanupPromise) return this.cleanupPromise;
+    const rig = this.rig;
+    this.stopMeterPolling();
+    this.scopeEnabled = false;
+    this.backgroundTasksStarted = false;
+    for (const dispose of this.rigListenerDisposers.splice(0)) dispose();
+    const operation = (async () => {
+      try {
+        if (rig) await rig.disconnect();
+      } finally {
+        if (this.rig === rig) this.rig = null;
+        this.currentConfig = null;
+        this.tunerEnabled = false;
+        this.detectedModelId = null;
+        this.detectedProfileName = null;
+        this.radioIdentity = null;
+        this.txAudioInputSource = null;
       }
-
-      this.currentConfig = null;
-      this.tunerEnabled = false;
-      this.detectedModelId = null;
-      this.detectedProfileName = null;
-      this.radioIdentity = null;
-      this.txAudioInputSource = null;
-      this.removeAllListeners();
-    } finally {
-      // 确保标志位被重置
-      this.isCleaningUp = false;
-    }
+    })();
+    this.cleanupPromise = operation;
+    try { await operation; }
+    finally { if (this.cleanupPromise === operation) this.cleanupPromise = null; }
   }
 
   /**
@@ -2372,6 +2296,14 @@ export class IcomWlanConnection
     const errorMessage =
       error instanceof Error ? error.message : String(error);
     const errorMessageLower = errorMessage.toLowerCase();
+    if (error instanceof Error && error.name === 'CivCommandRejectedError') {
+      return new RadioError({ code: RadioErrorCode.INVALID_OPERATION,
+        message: error.message, userMessage: 'Radio rejected the requested operation',
+        severity: RadioErrorSeverity.WARNING, cause: error,
+        context: { operation: context, protocol: 'icom-wlan', commandRejected: true },
+      });
+    }
+
 
     // 连接相关错误
     if (
@@ -2399,9 +2331,9 @@ export class IcomWlanConnection
       errorMessageLower.includes('connection timeout')
     ) {
       return new RadioError({
-        code: RadioErrorCode.CONNECTION_TIMEOUT,
-        message: `ICOM WLAN connection timeout: ${errorMessage}`,
-        userMessage: 'Timeout connecting to ICOM radio',
+        code: context === 'connect' ? RadioErrorCode.CONNECTION_TIMEOUT : RadioErrorCode.OPERATION_TIMEOUT,
+        message: `ICOM WLAN ${context === 'connect' ? 'connection' : 'operation'} timeout: ${errorMessage}`,
+        userMessage: context === 'connect' ? 'Timeout connecting to ICOM radio' : 'ICOM radio operation timed out',
         suggestions: [
           'Check if network is functioning',
           'Verify radio and computer are on the same network',
