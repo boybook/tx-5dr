@@ -3637,6 +3637,7 @@ async function prepareForDesktopUpdateInstall(): Promise<void> {
         [getAppConfigDir(), getAppDataDir()],
         path.join(path.dirname(getAppDataDir()), 'TX-5DR-update-backups'),
         BUILD_INFO,
+        { sessionDataDir: app.getPath('sessionData') },
       );
       logger.info('Update backup completed', { backupPath });
       visualCloseMs = closeFrontendWindowsImmediately();

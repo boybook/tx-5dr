@@ -68,6 +68,16 @@ build so different channel results do not suppress one another.
 
 Updates stop RF and drain persistence through the owning lifecycle before
 replacing executable files. Backups are outside the installation directory.
+Electron backs up station config/data only after the embedded Server exits.
+These roots may overlap Chromium's `sessionData` directory. Browser-owned
+storage/cache entries at that exact root are excluded: Electron is still alive
+and can hold its Cookies/LevelDB files locked, especially on Windows. The same
+names inside plugin/station subdirectories remain included. Exclusions are
+recorded in the backup manifest; restoration overlays the backed-up files and
+does not remove excluded browser state. Browser cookies/preferences are not part
+of this station snapshot and remain in place during an ordinary binary update.
+Station-file copy failures still abort installation; failed staging is removed
+best-effort and never published as a complete backup.
 Download or backup failure must not proceed into destructive replacement.
 Program rollback and data restoration are separate operations; do not silently
 overwrite current user data with an older snapshot. See
