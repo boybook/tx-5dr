@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { configPatchSchema } from '../utils/configPatchSchema.js';
 
 /**
  * PSKReporter 统计信息 Schema
@@ -40,7 +41,7 @@ export const PSKReporterConfigSchema = z.object({
   useTestServer: z.boolean().default(false),
 
   /** 上报统计 */
-  stats: PSKReporterStatsSchema.default({}),
+  stats: PSKReporterStatsSchema.prefault({}),
 });
 
 /**
@@ -96,5 +97,7 @@ export const PSKReporterStatusSchema = z.object({
 // 类型导出
 export type PSKReporterStats = z.infer<typeof PSKReporterStatsSchema>;
 export type PSKReporterConfig = z.infer<typeof PSKReporterConfigSchema>;
+
+export const PSKReporterConfigPatchSchema = configPatchSchema(PSKReporterConfigSchema);
 export type PSKReporterSpot = z.infer<typeof PSKReporterSpotSchema>;
 export type PSKReporterStatus = z.infer<typeof PSKReporterStatusSchema>;

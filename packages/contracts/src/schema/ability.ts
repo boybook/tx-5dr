@@ -95,7 +95,7 @@ export const PERMISSION_RULE_MAP: Record<Permission, { action: AppAction; subjec
 export const PermissionGrantSchema = z.object({
   permission: PermissionSchema,
   /** MongoDB-style conditions for CASL, e.g. { frequency: { $in: [14074000] } } */
-  conditions: z.record(z.unknown()).optional(),
+  conditions: z.record(z.string(), z.unknown()).optional(),
 });
 
 export type PermissionGrant = z.infer<typeof PermissionGrantSchema>;

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { configPatchSchema } from '../utils/configPatchSchema.js';
 import { PermissionGrantSchema } from './ability.js';
 
 // ===== 角色枚举 =====
@@ -275,7 +276,7 @@ export const RemoteAccessSecurityConfigSchema = z.object({
 });
 export type RemoteAccessSecurityConfig = z.infer<typeof RemoteAccessSecurityConfigSchema>;
 
-export const UpdateRemoteAccessSecurityRequestSchema = RemoteAccessSecurityConfigSchema.partial().extend({
+export const UpdateRemoteAccessSecurityRequestSchema = configPatchSchema(RemoteAccessSecurityConfigSchema).extend({
   allowPublicViewing: z.boolean().optional(),
 });
 export type UpdateRemoteAccessSecurityRequest = z.infer<typeof UpdateRemoteAccessSecurityRequestSchema>;
@@ -293,7 +294,7 @@ export const AuthConfigSchema = z.object({
   enabled: z.boolean().default(true),
   // Existing installations persist their explicit value; new installations opt in.
   allowPublicViewing: z.boolean().default(false),
-  remoteAccess: RemoteAccessSecurityConfigSchema.default({}),
+  remoteAccess: RemoteAccessSecurityConfigSchema.prefault({}),
   jwtSecret: z.string().optional(),
   jwtExpiresInSeconds: z.number().default(7 * 24 * 3600), // 7 days
   tokens: z.array(AuthTokenSchema).default([]),

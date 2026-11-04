@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { configPatchSchema } from '../utils/configPatchSchema.js';
 
 export const CWDecoderBackendSchema = z.enum(['deepcw-onnx']);
 export type CWDecoderBackend = z.infer<typeof CWDecoderBackendSchema>;
@@ -37,6 +38,8 @@ export const CWDecoderConfigSchema = z.object({
   maxPendingAgeMs: z.number().int().positive().default(4000),
 });
 export type CWDecoderConfig = z.infer<typeof CWDecoderConfigSchema>;
+
+export const CWDecoderConfigPatchSchema = configPatchSchema(CWDecoderConfigSchema);
 
 export const CWDecoderTuningUpdateSchema = z.object({
   targetFreqHz: z.number().int().min(100).max(1500).optional(),

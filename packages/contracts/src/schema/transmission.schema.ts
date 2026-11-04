@@ -22,7 +22,7 @@ export const StrategyStateSchema = z.object({
   name: z.string(), // 策略名称（如 standard-qso）
   state: z.string(), // 当前状态（如 TX1, TX2, IDLE 等）
   availableSlots: z.array(z.string()), // 可用的时隙列表
-  metadata: z.record(z.any()).optional(), // 状态的额外信息
+  metadata: z.record(z.string(), z.any()).optional(), // 状态的额外信息
 });
 
 // ========== 呼叫请求类型 ==========

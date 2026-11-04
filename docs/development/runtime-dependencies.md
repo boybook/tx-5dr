@@ -46,3 +46,27 @@ uninitialization. Reversing that order can unload `MMDevApi.dll` before its
 interface is released during garbage collection, crashing even without an
 open audio stream. Windows CI exercises repeated enumeration and collection
 as well as full packaged server startup.
+
+## Validation and diagnostic dependencies
+
+Contracts use Zod 4. Nested configuration defaults that must be parsed use
+`prefault`, so legacy files receive the same field defaults as explicit empty
+objects. HTTP schemas use Zod's native JSON Schema conversion with draft-07
+and input semantics for request bodies; handlers still perform the authoritative
+Zod parse, including refinements. Configuration patch schemas remove top-level
+default wrappers before making fields optional; an omitted patch field must
+never overwrite existing settings with a creation default. Consumers must use `ZodError.issues` for
+validation details. The serialized request and configuration formats are
+independent of Zod's TypeScript API.
+
+Root resolutions constrain legacy upstream pins for Babel, Busboy, XML parsing,
+minimatch, temporary files, UUID and CMake tooling. Remove a constraint when its
+parent accepts a fixed version and an immutable install and dependency audit
+confirm that the obsolete branch is absent. CMake 8 keeps native builds on tar 7;
+validate source builds as well as prebuilt native loading when changing it.
+
+Use `yarn workspace @tx5dr/server profile:cpu` or `profile:heap` for Node's native
+CPU and allocation profiles. These replace the unmaintained Clinic toolchain;
+they write standard `.cpuprofile` and `.heapprofile` files on process exit for
+inspection in developer tools. They do not reproduce Clinic's HTML reports or
+Bubbleprof's async graph.

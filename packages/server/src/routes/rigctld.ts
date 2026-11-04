@@ -5,7 +5,7 @@
  * - PUT  /config — update enabled/bindAddress/port and reconcile the listener.
  */
 import { FastifyInstance } from 'fastify';
-import { RigctldBridgeConfigSchema } from '@tx5dr/contracts';
+import { RigctldBridgeConfigPatchSchema } from '@tx5dr/contracts';
 import { requireAbility } from '../auth/authPlugin.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 
@@ -20,7 +20,7 @@ export async function rigctldRoutes(fastify: FastifyInstance) {
     '/config',
     { preHandler: [requireAbility('execute', 'RigctldBridge')] },
     async (req, reply) => {
-      const patch = RigctldBridgeConfigSchema.partial().parse(req.body);
+      const patch = RigctldBridgeConfigPatchSchema.parse(req.body);
       const status = await engine.updateRigctldConfig(patch);
       return reply.send(status);
     },

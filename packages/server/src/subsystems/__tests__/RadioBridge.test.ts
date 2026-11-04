@@ -29,6 +29,7 @@ function createRadioManagerStub() {
 describe('RadioBridge', () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it('projects connected state without performing connection-time frequency writes', async () => {

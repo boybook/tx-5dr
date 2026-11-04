@@ -24,7 +24,7 @@ export class ImageRecordStore<T> {
     readonly filePath: string,
     private readonly collection: string,
     store: ImagePersistenceStoreStatus['store'],
-    private readonly schema: z.ZodType<T, z.ZodTypeDef, unknown>,
+    private readonly schema: z.ZodType<T, unknown>,
     private readonly key: (record: T) => string,
   ) { this.health = { store, state: 'loading', retainedRecords: 0, rejectedRecords: 0 }; }
 
@@ -78,7 +78,7 @@ export class ImageRecordStore<T> {
     for (const [index, item] of input.entries()) {
       const result = this.schema.safeParse(migrateImageRecord(item, version, this.collection));
       if (!result.success) {
-        issues.push(...result.error.issues.map(issue => ({ path: [this.collection, index, ...issue.path], code: issue.code })));
+        issues.push(...result.error.issues.map(issue => ({ path: [this.collection, index, ...issue.path.map(part => typeof part === 'symbol' ? String(part) : part)], code: issue.code })));
         continue;
       }
       const key = this.key(result.data);

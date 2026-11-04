@@ -677,7 +677,7 @@ describe('AdifFileStore durability', () => {
 
   it('uses one adjacent rewrite temp and never creates recovery artifacts', async () => {
     const { directory, filePath } = await createLogbook(`${adifRecord('BG5HA')}\n`);
-    const store = new AdifFileStore(filePath);
+    const store = new AdifFileStore(filePath, { scanner: { scan: scanLogbookFileInline } });
     await store.open();
 
     for (const call of ['BG5HB', 'BG5HC', 'BG5HD']) {

@@ -10,7 +10,7 @@ import { AudioDeviceManager } from '../audio/audio-device-manager.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { ProfileManager } from '../config/ProfileManager.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { z } from 'zod';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 
 /**
@@ -57,7 +57,7 @@ export async function audioRoutes(fastify: FastifyInstance) {
 
   fastify.post('/resolve', {
     schema: {
-      body: zodToJsonSchema(AudioSettingsResolveRequestSchema),
+      body: z.toJSONSchema(AudioSettingsResolveRequestSchema, { target: 'draft-7', io: 'input' }),
     },
   }, async (request, reply) => {
     try {
@@ -78,7 +78,7 @@ export async function audioRoutes(fastify: FastifyInstance) {
   // 更新音频设备设置
   fastify.post('/settings', {
     schema: {
-      body: zodToJsonSchema(AudioDeviceSettingsSchema),
+      body: z.toJSONSchema(AudioDeviceSettingsSchema, { target: 'draft-7', io: 'input' }),
     },
   }, async (request, reply) => {
     try {

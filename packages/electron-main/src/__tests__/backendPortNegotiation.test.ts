@@ -95,14 +95,20 @@ describe('backend port negotiation', () => {
 
   it('fails fast when a ready backend keeps failing health probes', async () => {
     const staleReady = ready(4000);
-
-    await expect(waitForServerReadyWithProbe({
-      readyFile: 'server-ready.json',
-      readReadyFile: () => staleReady,
-      timeoutMs: 100,
-      intervalMs: 1,
-      healthFailureTimeoutMs: 5,
-      probe: vi.fn(async () => probeResult({ timedOut: true, errorCode: 'ETIMEDOUT' })),
-    })).rejects.toBeInstanceOf(ServerReadyHealthProbeError);
+    vi.useFakeTimers();
+    try {
+      const rejected = expect(waitForServerReadyWithProbe({
+        readyFile: 'server-ready.json',
+        readReadyFile: () => staleReady,
+        timeoutMs: 100,
+        intervalMs: 1,
+        healthFailureTimeoutMs: 5,
+        probe: vi.fn(async () => probeResult({ timedOut: true, errorCode: 'ETIMEDOUT' })),
+      })).rejects.toBeInstanceOf(ServerReadyHealthProbeError);
+      await vi.advanceTimersByTimeAsync(10);
+      await rejected;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

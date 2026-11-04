@@ -35,7 +35,7 @@ export const BaseErrorResponseSchema = z.object({
   userMessage: z.string().optional(),
   suggestions: z.array(z.string()).optional(),
   severity: z.enum(['info', 'warning', 'error', 'critical']).optional(),
-  context: z.record(z.any()).optional(),
+  context: z.record(z.string(), z.any()).optional(),
 });
 
 // ========== 电台配置相关响应 ==========

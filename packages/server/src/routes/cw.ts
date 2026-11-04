@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   UserRole,
   CWKeyerBackendSchema,
-  CWDecoderConfigSchema,
+  CWDecoderConfigPatchSchema,
   CWDecoderTuningUpdateSchema,
   CWMessagePanelUpdateSchema,
   CWMessageSlotUpdateSchema,
@@ -61,7 +61,7 @@ export async function cwRoutes(fastify: FastifyInstance) {
     preHandler: [requireAbility('update', 'CWDecoderConfig')],
   }, async (req, reply) => {
     try {
-      const patch = CWDecoderConfigSchema.partial().parse(req.body);
+      const patch = CWDecoderConfigPatchSchema.parse(req.body);
       const config = await engine.updateCWDecoderConfig(patch);
       return reply.send({ success: true, config, status: engine.getCWDecoderStatus() });
     } catch (error) {
@@ -85,7 +85,7 @@ export async function cwRoutes(fastify: FastifyInstance) {
     preHandler: [requireAbility('execute', 'CWDecoder'), requireCWDecoderConfigUpdateForPatch],
   }, async (req, reply) => {
     try {
-      const patch = CWDecoderConfigSchema.partial().parse(req.body ?? {});
+      const patch = CWDecoderConfigPatchSchema.parse(req.body ?? {});
       const status = await engine.startCWDecoder(patch);
       return reply.send({ success: true, status, config: engine.getCWDecoderConfig() });
     } catch (error) {

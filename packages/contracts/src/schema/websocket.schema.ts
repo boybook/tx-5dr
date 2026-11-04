@@ -945,12 +945,12 @@ export const WSErrorMessageSchema = WSBaseMessageSchema.extend({
     userMessage: z.string().optional(),
     /** 前端 i18n 翻译键（优先用于 Toast 副标题本地化） */
     userMessageKey: z.string().optional(),
-    userMessageParams: z.record(z.union([z.string(), z.number()])).optional(),
+    userMessageParams: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
     code: z.string().optional(),
     severity: z.enum(['info', 'warning', 'error', 'critical']).optional(),
     suggestions: z.array(z.string()).optional(),
     timestamp: z.union([z.string(), z.number()]).optional(),
-    context: z.record(z.unknown()).optional(),
+    context: z.record(z.string(), z.unknown()).optional(),
     details: z.any().optional(),
   }),
 });
@@ -1461,7 +1461,7 @@ export const RadioErrorEventDataSchema = z.object({
   /** 前端 i18n 翻译键，格式如 'radio:error.xxx'；存在时前端优先使用 t() */
   userMessageKey: z.string().optional(),
   /** i18n 参数（与 userMessageKey 配合） */
-  userMessageParams: z.record(z.union([z.string(), z.number()])).optional(),
+  userMessageParams: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
   /** 解决建议列表 */
   suggestions: z.array(z.string()).default([]),
   /** 错误代码（RadioErrorCode） */
@@ -1473,7 +1473,7 @@ export const RadioErrorEventDataSchema = z.object({
   /** 错误堆栈（仅非生产环境） */
   stack: z.string().optional(),
   /** 错误上下文 */
-  context: z.record(z.unknown()).optional(),
+  context: z.record(z.string(), z.unknown()).optional(),
   /** 连接健康状态 */
   connectionHealth: z.object({
     connectionHealthy: z.boolean(),
@@ -1674,7 +1674,7 @@ export const WSTextMessageSchema = WSBaseMessageSchema.extend({
     /** i18n key，前端有此字段时优先翻译显示 */
     key: z.string().optional(),
     /** i18n 插值参数 */
-    params: z.record(z.string()).optional(),
+    params: z.record(z.string(), z.string()).optional(),
   }),
 });
 

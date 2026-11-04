@@ -188,7 +188,7 @@ export async function operatorRoutes(fastify: FastifyInstance) {
             'Ensure frequency value is in valid range (0-4000 Hz)',
             'Refer to API documentation for example format',
           ],
-          context: { errors: error.errors },
+          context: { errors: error.issues },
         });
       }
 
@@ -236,7 +236,7 @@ export async function operatorRoutes(fastify: FastifyInstance) {
             'Ensure frequency value is in valid range (0-4000 Hz)',
             'Refer to API documentation for update example',
           ],
-          context: { errors: error.errors },
+          context: { errors: error.issues },
         });
       } else if (error instanceof Error && error.message.includes('does not exist')) {
         const operatorId = (request.params as any).id;

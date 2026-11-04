@@ -13,7 +13,7 @@ import {
   UpdateNtpServerListRequestSchema,
   UpdateSystemLoggingSettingsSchema,
 } from '@tx5dr/contracts';
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { z } from 'zod';
 import { requireAbility } from '../auth/authPlugin.js';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
@@ -82,7 +82,7 @@ export async function systemRoutes(fastify: FastifyInstance) {
 
   fastify.put('/logging', {
     schema: {
-      body: zodToJsonSchema(UpdateSystemLoggingSettingsSchema),
+      body: z.toJSONSchema(UpdateSystemLoggingSettingsSchema, { target: 'draft-7', io: 'input' }),
     },
     preHandler: [requireAbility('manage', 'all')],
   }, async (request, reply) => {
@@ -101,7 +101,7 @@ export async function systemRoutes(fastify: FastifyInstance) {
 
   fastify.post('/clock/offset', {
     schema: {
-      body: zodToJsonSchema(SetClockOffsetRequestSchema),
+      body: z.toJSONSchema(SetClockOffsetRequestSchema, { target: 'draft-7', io: 'input' }),
     },
     preHandler: [requireAbility('manage', 'all')],
   }, async (request, reply) => {
@@ -119,7 +119,7 @@ export async function systemRoutes(fastify: FastifyInstance) {
 
   fastify.put('/clock/auto-apply', {
     schema: {
-      body: zodToJsonSchema(SetClockAutoApplyRequestSchema),
+      body: z.toJSONSchema(SetClockAutoApplyRequestSchema, { target: 'draft-7', io: 'input' }),
     },
     preHandler: [requireAbility('manage', 'all')],
   }, async (request, reply) => {
@@ -140,7 +140,7 @@ export async function systemRoutes(fastify: FastifyInstance) {
 
   fastify.put('/clock/settings', {
     schema: {
-      body: zodToJsonSchema(UpdateNtpServerListRequestSchema),
+      body: z.toJSONSchema(UpdateNtpServerListRequestSchema, { target: 'draft-7', io: 'input' }),
     },
     preHandler: [requireAbility('manage', 'all')],
   }, async (request, reply) => {

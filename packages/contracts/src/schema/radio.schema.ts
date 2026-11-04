@@ -137,7 +137,7 @@ export const SerialConfigSchema = z.object({
   post_write_delay: z.number().int().min(0).optional(), // 命令间延迟(ms)
 });
 
-export const HamlibBackendConfigSchema = z.record(z.string());
+export const HamlibBackendConfigSchema = z.record(z.string(), z.string());
 
 export const HamlibConfigFieldTypeSchema = z.enum([
   'string',
@@ -410,7 +410,7 @@ export const SerialPortsResponseSchema = z.object({
 export const TestResponseSchema = z.object({
   success: z.boolean(),
   message: z.string().optional(),
-  details: z.record(z.unknown()).optional(),
+  details: z.record(z.string(), z.unknown()).optional(),
 });
 
 /**

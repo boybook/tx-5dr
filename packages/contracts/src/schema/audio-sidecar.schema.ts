@@ -24,7 +24,7 @@ export const AudioSidecarErrorSchema = z.object({
   message: z.string(),
   userMessage: z.string().optional(),
   userMessageKey: z.string().optional(),
-  userMessageParams: z.record(z.union([z.string(), z.number()])).optional(),
+  userMessageParams: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
 });
 
 export type AudioSidecarError = z.infer<typeof AudioSidecarErrorSchema>;

@@ -205,6 +205,7 @@ describe('LegacyLogbookMaintenance quarantine-only cleanup', () => {
     await fs.writeFile(path.join(dir, 'BOUNDED.meta.json'), '{}');
     const maintenance = new LegacyLogbookMaintenance(dir, {
       now: () => Date.parse('2026-01-01T00:00:00Z'),
+      scanner: { scan: scanLogbookFileInline },
     });
 
     for (let pass = 0; pass < 100; pass += 1) {

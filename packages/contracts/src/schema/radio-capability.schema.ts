@@ -212,7 +212,7 @@ export const CapabilityStateSchema = z.object({
    * 附加元数据（能力特有信息）
    * 例：tuner_switch 的 meta 可携带 { status: 'tuning' | 'idle' | 'success' | 'failed', swr?: number }
    */
-  meta: z.record(z.unknown()).optional(),
+  meta: z.record(z.string(), z.unknown()).optional(),
 
   /** 最后更新时间戳（ms） */
   updatedAt: z.number(),
@@ -248,7 +248,7 @@ export type WriteCapabilityPayload = z.infer<typeof WriteCapabilityPayloadSchema
 export const WriteCapabilityGroupPayloadSchema = z.object({
   groupId: z.string().min(1),
   sessionId: z.string().min(1),
-  values: z.record(CapabilityValueSchema),
+  values: z.record(z.string(), CapabilityValueSchema),
 }).strict();
 export type WriteCapabilityGroupPayload = z.infer<typeof WriteCapabilityGroupPayloadSchema>;
 

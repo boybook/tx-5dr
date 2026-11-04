@@ -837,7 +837,7 @@ describe('SpectrumStreamController memory behavior', () => {
   });
 
   it('falls back to the latest native radio SDR range when optimistic tuning times out', () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     try {
       const controller = new SpectrumStreamController(4);
       controller.updateContext({ selectedKind: 'radio-sdr' });

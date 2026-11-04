@@ -105,7 +105,7 @@ vi.mock('../../utils/audioUtils.js', () => ({
 // discover function, so wrap them to consume the mocked discovery instead.
 vi.mock('../linux-usb-audio-identity.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../linux-usb-audio-identity.js')>();
-  const discoverMock = vi.fn<[], ReturnType<typeof actual.discoverLinuxUsbAudioIdentities>>(() => []);
+  const discoverMock = vi.fn<typeof actual.discoverLinuxUsbAudioIdentities>(() => []);
   return {
     ...actual,
     discoverLinuxUsbAudioIdentities: discoverMock,

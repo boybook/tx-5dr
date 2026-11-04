@@ -17,7 +17,7 @@ describe('concurrent provider local commits', () => {
         if (++readers <= 3) { if (readers === 3) release(); await barrier; }
         return snapshot;
       }),
-      applyQsoBatch: vi.fn(async (mutations, options) => {
+      applyQsoBatch: vi.fn<CallsignLogbookAccess['applyQsoBatch']>(async (mutations, options) => {
         if (options.expectedRevision !== String(revision)) throw Object.assign(new Error('conflict'), { code: 'LOGBOOK_REVISION_CONFLICT' });
         const outcomes = mutations.map((mutation, inputIndex) => {
           if (mutation.type === 'add') { records.push(mutation.record); return { inputIndex, status: 'added' as const, record: mutation.record }; }

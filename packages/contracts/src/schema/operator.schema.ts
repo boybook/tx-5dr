@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { configPatchSchema } from '../utils/configPatchSchema.js';
 import { ModeDescriptorSchema } from './mode.schema.js';
 import { sanitizeCallsignInput } from '../utils/callsign.js';
 import { sanitizeGridInput } from '../utils/grid.js';
@@ -34,7 +35,7 @@ export const CreateRadioOperatorRequestSchema = RadioOperatorConfigSchema.omit({
 });
 
 // 更新操作员请求（客户端不能修改 id 和 createdByTokenId）
-export const UpdateRadioOperatorRequestSchema = RadioOperatorConfigSchema.partial().omit({
+export const UpdateRadioOperatorRequestSchema = configPatchSchema(RadioOperatorConfigSchema).omit({
   id: true,
   createdByTokenId: true,
 });

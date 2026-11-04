@@ -17,17 +17,17 @@
     "@tx5dr/core": "workspace:*",
     "@tx5dr/server": "workspace:*",
     "electron-log": "^5.4.3",
-    "electron-updater": "6.8.3",
-    "esbuild": "^0.20.0"
+    "electron-updater": "6.8.11",
+    "esbuild": "^0.28.2"
   },
   "devDependencies": {
     "@tx5dr/electron-preload": "workspace:*",
     "@tx5dr/shared-config": "workspace:*",
     "@types/node": "^20.0.0",
-    "electron": "^36.4.0",
+    "electron": "^45.2.1",
     "eslint": "^8.0.0",
     "typescript": "^5.0.0",
-    "vitest": "^1.0.0",
+    "vitest": "^4.1.12",
     "wait-on": "^7.0.0"
   }
 }

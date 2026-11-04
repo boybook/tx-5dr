@@ -656,7 +656,7 @@ export type PluginSystemState = z.infer<typeof PluginSystemStateSchema>;
  */
 export const PluginPanelMetaSchema = z.object({
   title: z.string().nullable().optional(),
-  titleValues: z.record(z.unknown()).optional(),
+  titleValues: z.record(z.string(), z.unknown()).optional(),
   visible: z.boolean().optional(),
 });
 export type PluginPanelMeta = z.infer<typeof PluginPanelMetaSchema>;

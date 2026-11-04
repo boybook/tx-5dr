@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ModeDescriptorSchema } from '@tx5dr/contracts';
 import { requireAbility } from '../auth/authPlugin.js';
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { z } from 'zod';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 
 /**
@@ -43,7 +43,7 @@ export async function modeRoutes(fastify: FastifyInstance) {
   // 切换模式
   fastify.post('/switch', {
     schema: {
-      body: zodToJsonSchema(ModeDescriptorSchema),
+      body: z.toJSONSchema(ModeDescriptorSchema, { target: 'draft-7', io: 'input' }),
     },
     preHandler: [requireAbility('execute', 'ModeSwitch')],
   }, async (request, reply) => {

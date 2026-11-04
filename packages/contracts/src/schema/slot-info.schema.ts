@@ -228,7 +228,7 @@ export const SlotPackSchema = z.object({
     lastUpdated: z.number().default(() => Date.now()),
     /** SlotPack 单调更新序号，用于客户端丢弃乱序旧包 */
     updateSeq: z.number().int().nonnegative().optional()
-  }).default({}),
+  }).prefault({}),
   /** 解码历史（用于调试） */
   decodeHistory: z.array(z.object({
     windowIdx: z.number(),

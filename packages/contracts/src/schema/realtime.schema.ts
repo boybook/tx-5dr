@@ -188,7 +188,7 @@ export const RealtimeConnectivityIssueSchema = z.object({
   userMessage: z.string(),
   suggestions: z.array(z.string()),
   technicalDetails: z.string().optional(),
-  context: z.record(z.string()).optional(),
+  context: z.record(z.string(), z.string()).optional(),
 });
 export type RealtimeConnectivityIssue = z.infer<typeof RealtimeConnectivityIssueSchema>;
 

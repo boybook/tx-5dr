@@ -31,7 +31,7 @@ import {
   buildFrequencyOperatingStateRequest,
   resolveFrequencyRadioMode,
 } from '../radio/frequencyRadioMode.js';
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { z } from 'zod';
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 import { normalizeHamlibConfig } from '../radio/hamlibConfigUtils.js';
 import { darwinCalloutPathFromDialin } from '../radio/serialPortPath.js';
@@ -544,7 +544,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
     return reply.send({ success: true, config: configManager.getRadioConfig() });
   });
 
-  fastify.post('/config', { schema: { body: zodToJsonSchema(HamlibConfigSchema) }, onRequest: adminOnly, preHandler: [requireAbility('update', 'RadioConfig')] }, async (req, reply) => {
+  fastify.post('/config', { schema: { body: z.toJSONSchema(HamlibConfigSchema, { target: 'draft-7', io: 'input' }) }, onRequest: adminOnly, preHandler: [requireAbility('update', 'RadioConfig')] }, async (req, reply) => {
     const config = normalizeHamlibConfig(HamlibConfigSchema.parse(req.body));
     await configManager.updateRadioConfig(config);
 
@@ -950,8 +950,8 @@ export async function radioRoutes(fastify: FastifyInstance) {
 
   fastify.post('/dds-frequency', {
     schema: {
-      body: zodToJsonSchema(DdsFrequencyRequestSchema),
-      response: { 200: zodToJsonSchema(SetDdsFrequencyResponseSchema) },
+      body: z.toJSONSchema(DdsFrequencyRequestSchema, { target: 'draft-7', io: 'input' }),
+      response: { 200: z.toJSONSchema(SetDdsFrequencyResponseSchema, { target: 'draft-7', io: 'output' }) },
     },
     preHandler: [requireAbilityFor('execute', 'RadioFrequency', (r) => ({ frequency: (r.body as any).frequency }))],
   }, async (req, reply) => {
@@ -995,7 +995,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
     });
   });
 
-  fastify.post('/test', { schema: { body: zodToJsonSchema(HamlibConfigSchema) }, onRequest: adminOnly }, async (req, reply) => {
+  fastify.post('/test', { schema: { body: z.toJSONSchema(HamlibConfigSchema, { target: 'draft-7', io: 'input' }) }, onRequest: adminOnly }, async (req, reply) => {
     const config = normalizeHamlibConfig(HamlibConfigSchema.parse(req.body));
 
     if (config.type === 'none') {
@@ -1046,7 +1046,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
     }
   });
 
-  fastify.post('/test-ptt', { schema: { body: zodToJsonSchema(HamlibConfigSchema) }, onRequest: adminOnly }, async (req, reply) => {
+  fastify.post('/test-ptt', { schema: { body: z.toJSONSchema(HamlibConfigSchema, { target: 'draft-7', io: 'input' }) }, onRequest: adminOnly }, async (req, reply) => {
     const config = normalizeHamlibConfig(HamlibConfigSchema.parse(req.body));
 
     if (config.pttMethod === 'none' || config.pttMethod === 'vox') {
@@ -1107,7 +1107,7 @@ export async function radioRoutes(fastify: FastifyInstance) {
   });
 
   // CW 键控端口测试
-  fastify.post('/test-cw-keyer', { schema: { body: zodToJsonSchema(HamlibConfigSchema) }, onRequest: adminOnly }, async (req, reply) => {
+  fastify.post('/test-cw-keyer', { schema: { body: z.toJSONSchema(HamlibConfigSchema, { target: 'draft-7', io: 'input' }) }, onRequest: adminOnly }, async (req, reply) => {
     assertRadioExecution({ kind: 'transmit', source: 'cw-keyer-test' });
     const config = normalizeHamlibConfig(HamlibConfigSchema.parse(req.body));
 

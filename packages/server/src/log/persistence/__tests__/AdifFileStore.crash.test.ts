@@ -11,6 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, it } from 'vitest';
+import { scanLogbookFileInline } from '../LogbookScanCore.js';
 
 import {
   AdifFileStore,
@@ -176,7 +177,8 @@ describe('AdifFileStore process-crash durability', () => {
 
     for (let index = 0; index < 100; index += 1) {
       const next = index % 2 === 0 ? second : first;
-      const writer = new AdifFileStore(filePath);
+      // Keep the real parser and durable file owner without spawning 200 scan workers.
+      const writer = new AdifFileStore(filePath, { scanner: { scan: scanLogbookFileInline } });
       const opened = await writer.open();
       await writer.commitRewrite([Buffer.from(next)], opened.generation, { recordCount: 1 });
       await writer.close();

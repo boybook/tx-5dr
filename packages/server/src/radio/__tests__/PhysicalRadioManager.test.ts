@@ -1801,11 +1801,11 @@ describe('PhysicalRadioManager', () => {
     const destroy = vi.fn().mockResolvedValue(undefined);
 
     vi.doMock('hamlib', () => ({
-      HamLib: vi.fn().mockImplementation(() => ({
+      HamLib: vi.fn().mockImplementation(function () { return {
         getConfigSchema: vi.fn().mockRejectedValue(new Error('schema probe failed')),
         getPortCaps: vi.fn().mockResolvedValue({ portType: 'serial' }),
         destroy,
-      })),
+      }; }),
     }));
 
     try {
@@ -1852,13 +1852,13 @@ describe('PhysicalRadioManager', () => {
 
   it('falls back to temporary HamLib instance when static model metadata is unavailable', async () => {
     const destroy = vi.fn().mockResolvedValue(undefined);
-    const HamLib = vi.fn().mockImplementation(() => ({
+    const HamLib = vi.fn().mockImplementation(function () { return {
       getConfigSchema: vi.fn().mockResolvedValue([
         { token: 1, name: 'rig_pathname', label: 'Path', tooltip: '', defaultValue: '', type: 'string' },
       ]),
       getPortCaps: vi.fn().mockResolvedValue({ portType: 'network' }),
       destroy,
-    }));
+    }; });
 
     vi.doMock('hamlib', () => ({ HamLib }));
 

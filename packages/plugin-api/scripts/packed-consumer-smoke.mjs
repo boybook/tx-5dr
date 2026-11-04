@@ -71,7 +71,7 @@ try {
   }, null, 2));
   run('npm', [
     'install',
-    '--ignore-scripts',
+    '--ignore-scripts', '--include=dev',
     '--no-audit',
     '--no-fund',
     contracts,
@@ -217,9 +217,9 @@ void envelope;
     for (const template of ['ui-vanilla', 'ui-react', 'ui-vue']) {
       run(process.execPath, [cli, `smoke-${template}`, '--template', template, '--type', 'utility', '--lang', 'ts'], temporaryRoot);
       const project = join(temporaryRoot, `smoke-${template}`);
-      run('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', contracts, core, pluginApi], project);
+      run('npm', ['install', '--ignore-scripts', '--include=dev', '--no-audit', '--no-fund', contracts, core, pluginApi], project);
       run('npm', ['run', 'build'], project);
-      run('npm', ['test', '--', '--pool=forks', '--maxWorkers=1', '--minWorkers=1'], project);
+      run('npm', ['test', '--', '--pool=forks', '--maxWorkers=1'], project);
       const entry = readFileSync(join(project, 'src/index.ts'), 'utf8');
       if (!entry.includes("styles: 'standard'")) throw new Error(`missing standard styles in ${template}`);
       const stylesheet = readFileSync(join(project, template === 'ui-vanilla' ? 'ui/settings.css' : 'ui/src/App.css'), 'utf8');

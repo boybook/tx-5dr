@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { configPatchSchema } from '../utils/configPatchSchema.js';
 
 /**
  * rigctld-compatible TCP bridge configuration.
@@ -21,6 +22,8 @@ export const RigctldBridgeConfigSchema = z.object({
 });
 
 export type RigctldBridgeConfig = z.infer<typeof RigctldBridgeConfigSchema>;
+
+export const RigctldBridgeConfigPatchSchema = configPatchSchema(RigctldBridgeConfigSchema);
 
 export const DEFAULT_RIGCTLD_BRIDGE_CONFIG: RigctldBridgeConfig = {
   enabled: false,

@@ -3,10 +3,10 @@ import { EventEmitter } from 'eventemitter3';
 import { UserRole } from '@tx5dr/contracts';
 import { decodeWsCompatAudioFrame, int16ToFloat32Pcm } from '@tx5dr/core';
 
-const mockGetRealtimeTransportPolicy = vi.fn<[], 'auto' | 'force-compat'>();
+const mockGetRealtimeTransportPolicy = vi.fn<() => 'auto' | 'force-compat'>();
 const mockGetConnectivityHints = vi.fn();
 const mockResolveSource = vi.fn();
-const mockRtcDataAudioAvailable = vi.fn<[], boolean>();
+const mockRtcDataAudioAvailable = vi.fn<() => boolean>();
 const mockRtcDataAudioBuildOffer = vi.fn();
 const mockRtcDataAudioAcceptConnection = vi.fn();
 

@@ -3,7 +3,7 @@ import {
   DecodeWindowSettingsSchema,
   DEFAULT_DECODE_WINDOW_SETTINGS,
   NtpServerListSettingsSchema,
-  PSKReporterConfigSchema,
+  PSKReporterConfigPatchSchema,
   RealtimeSettingsSchema,
   StationInfoSchema,
   UpdateNtpServerListRequestSchema,
@@ -112,7 +112,7 @@ export class HostSettingsService {
   }
 
   async updatePSKReporter(patch: HostPSKReporterSettingsPatch): Promise<PSKReporterConfig> {
-    const parsed = PSKReporterConfigSchema.partial().parse(patch);
+    const parsed = PSKReporterConfigPatchSchema.parse(patch);
     await this.configManager.updatePSKReporterConfig(parsed);
     return this.getPSKReporter();
   }
