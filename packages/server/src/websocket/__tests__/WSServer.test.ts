@@ -352,6 +352,48 @@ function createTestConnection(id = 'conn-test'): { connection: WSConnection; sen
 }
 
 describe('WSServer security filtering', () => {
+  it('projects plugin diagnostics per connection for both lists and status updates', () => {
+    const admin = createTestConnection('admin');
+    const operator = createTestConnection('operator');
+    const viewer = createTestConnection('viewer');
+    const pending = createTestConnection('pending');
+    admin.connection.setAuthenticated(UserRole.ADMIN, [], 'admin');
+    operator.connection.setAuthenticated(UserRole.OPERATOR, ['op-1'], 'operator');
+    viewer.connection.setPublicViewer();
+    pending.connection.setAuthenticated(UserRole.ADMIN, [], 'pending');
+    for (const entry of [admin, operator, viewer]) entry.connection.completeHandshake([]);
+    const server = Object.create(WSServer.prototype) as any;
+    server.getActiveConnections = () => [admin, operator, viewer, pending].map((entry) => entry.connection);
+    const plugin = {
+      name: 'diagnostic-plugin', autoDisabled: true, lastError: 'private diagnostic',
+      autoDisableInfo: { reason: 'load-failed', timestamp: 1, operation: 'onLoad', message: 'private diagnostic', errors: [] },
+    };
+    server.broadcastPluginStatus(WSMessageType.PLUGIN_LIST, { generation: 1, plugins: [plugin] });
+    server.broadcastPluginStatus(WSMessageType.PLUGIN_STATUS_CHANGED, { generation: 1, plugin });
+    expect(admin.sent.map((entry) => entry.data)).toEqual([
+      { generation: 1, plugins: [plugin] }, { generation: 1, plugin },
+    ]);
+    expect(JSON.stringify(operator.sent)).not.toContain('private diagnostic');
+    expect(JSON.stringify(operator.sent)).not.toContain('autoDisableInfo');
+    expect(operator.sent).toHaveLength(2);
+    expect(viewer.sent).toHaveLength(0);
+    expect(pending.sent).toHaveLength(0);
+  });
+
+  it.each([UserRole.OPERATOR, UserRole.VIEWER])('denies plugin diagnostic log history to %s', async (role) => {
+    const { connection, sent } = createTestConnection(role);
+    connection.setAuthenticated(role, [], role);
+    connection.completeHandshake([]);
+    const server = Object.create(WSServer.prototype) as any;
+    const handler = vi.fn();
+    server.getConnection = () => connection;
+    server.commandHandlers = { [WSMessageType.GET_PLUGIN_RUNTIME_LOG_HISTORY]: handler };
+    await server.handleClientCommand(role, { type: WSMessageType.GET_PLUGIN_RUNTIME_LOG_HISTORY, data: {} });
+    expect(handler).not.toHaveBeenCalled();
+    expect(sent).toContainEqual(expect.objectContaining({
+      type: WSMessageType.ERROR, data: expect.objectContaining({ code: 'FORBIDDEN' }),
+    }));
+  });
   it('guards all queue mutations as operator-scoped manage commands', () => {
     const commandAccess = (WSServer as any).COMMAND_ACCESS;
     const operatorCommands = (WSServer as any).OPERATOR_DATA_COMMANDS as Set<WSMessageType>;

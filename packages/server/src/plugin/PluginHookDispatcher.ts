@@ -1,4 +1,4 @@
-import type { ParsedFT8Message } from '@tx5dr/contracts';
+import type { ParsedFT8Message, PluginAutoDisableInfo, PluginErrorRecord } from '@tx5dr/contracts';
 import { isUndecodedCallsignPlaceholder } from '@tx5dr/core';
 import type {
   AutoCallExecutionPlan,
@@ -48,10 +48,11 @@ export class PluginHookDispatcher {
   constructor(
     private getActiveInstances: (operatorId: string) => PluginInstance[],
     private getStrategyInstance: (operatorId: string) => PluginInstance | undefined,
-    onAutoDisable: (pluginName: string, reason: string) => void,
+    onAutoDisable: (pluginName: string, reason: string, info: PluginAutoDisableInfo) => void,
     private readonly invocationGuard = new PluginInvocationGuard(),
+    onError?: (instance: PluginInstance, entry: PluginErrorRecord, count: number) => void,
   ) {
-    this.errorTracker = new PluginErrorTracker(onAutoDisable);
+    this.errorTracker = new PluginErrorTracker(onAutoDisable, onError);
   }
 
   // ===== Pipeline hook: onFilterCandidates =====

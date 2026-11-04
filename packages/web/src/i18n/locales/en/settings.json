@@ -604,7 +604,7 @@
     "statusDisabled": "Disabled",
     "statusAssigned": "Assigned",
     "statusAvailable": "Available",
-    "statusAutoDisabled": "Auto-disabled",
+    "statusAutoDisabled": "Temporarily disabled",
     "errorCount": "{{count}} errors",
     "reload": "Reload plugins",
     "marketplaceTitle": "Marketplace",
@@ -817,7 +817,24 @@
         }
       }
     },
-    "directoryHintAndroidBridge": "This is the plugin directory inside the Android bridge runtime. Install marketplace plugins here and reload plugins from the web UI."
+    "directoryHintAndroidBridge": "This is the plugin directory inside the Android bridge runtime. Install marketplace plugins here and reload plugins from the web UI.",
+    "disableDetailsAction": "View why this plugin was disabled",
+    "disableDetailsTitle": "Plugin temporarily disabled by the system",
+    "disableReason": "Reason",
+    "disableTime": "Time",
+    "disableOperation": "Failed operation",
+    "disableOperator": "Source operator",
+    "disableErrors": "Error details",
+    "disableErrorNumber": "Error #{{number}}",
+    "disableTrigger": "Triggered disable",
+    "disableDetailsUnavailable": "No detailed error record is available. Check the plugin runtime logs or server logs.",
+    "disableRecoveryHint": "The system stopped this plugin. It will not resume automatically. Fix the issue, make sure the enable switch is on and saved, then use Reload plugins to try again. Toggling the switch alone does not clear this state.",
+    "disableReasons": {
+      "consecutive-errors": "The same hook failed 5 consecutive times",
+      "load-failed": "Plugin startup failed",
+      "abort-timeout": "The task did not stop after cancellation",
+      "runtime-incompatible": "Strategy runtime creation failed or its interface is incompatible"
+    }
   },
   "serverHealth": {
     "title": "Server Process Health",

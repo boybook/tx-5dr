@@ -114,6 +114,149 @@ function isPluginLogEntry(entry: PluginLogHistoryEntry): entry is PluginLogEntry
 }
 
 describe('PluginManager runtime logs', () => {
+  it('keeps plugin-owned connection failures enabled, recovers, and still disables unhandled faults', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-business-failure-'));
+    tempDirs.push(dataDir);
+    // The plugin owns classification and presentation; replace only the network boundary.
+    await writeUserPlugin(dataDir, 'connection-status', `
+      class ConnectionFailure extends Error {}
+      function isConnectionFailure(error) {
+        return error instanceof ConnectionFailure || error?.name === 'TimeoutError'
+          || ['ETIMEDOUT', 'ECONNREFUSED'].includes(error?.cause?.code);
+      }
+      async function refresh(ctx) {
+        let status;
+        try {
+          const response = await ctx.fetch('https://remote.example/status', {
+            signal: AbortSignal.timeout(1000),
+          });
+          if (!response.ok) throw new ConnectionFailure('Remote HTTP ' + response.status);
+          await response.json();
+          status = { state: 'connected' };
+        } catch (error) {
+          if (!isConnectionFailure(error)) throw error;
+          // A log at error level is presentation, not an unhandled callback failure.
+          ctx.log.error('Remote connection unavailable', { reason: error.message });
+          status = { state: 'unavailable', message: error.message };
+        }
+        ctx.store.global.set('connectionStatus', status);
+        ctx.ui.send('connection', status);
+      }
+      export default {
+        name: 'connection-status', version: '1.0.0', type: 'utility', instanceScope: 'global',
+        permissions: ['network'], onLoad: refresh,
+        hooks: { onConfigChange(changes, ctx) { return refresh(ctx); } },
+      };
+    `);
+    const network = vi.spyOn(globalThis, 'fetch');
+    const timeout = () => new DOMException('Connection timed out', 'TimeoutError');
+    network.mockRejectedValue(timeout());
+    const events = new EventEmitter<DigitalRadioEngineEvents>();
+    const updates: unknown[] = [];
+    events.on('pluginData', (entry) => { if (entry.pluginName === 'connection-status') updates.push(entry); });
+    const manager = createPluginManager(dataDir, events, createOperator(events));
+    manager.loadConfig({ configs: { 'connection-status': { enabled: true, settings: {} } }, operatorStrategies: {}, operatorSettings: {} });
+    await manager.start();
+    const status = () => manager.getSnapshot().plugins.find((plugin) => plugin.name === 'connection-status');
+    try {
+      expect(status()).toMatchObject({ enabled: true, autoDisabled: false, errorCount: 0 });
+      // Exercise repeated timeout, disconnected service and remote business rejections.
+      const refused = Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
+      for (const failure of [timeout(), timeout(), refused, 401, 429, 503]) {
+        if (typeof failure === 'number') network.mockResolvedValue(new Response('', { status: failure }));
+        else network.mockRejectedValue(failure);
+        const previous = updates.length;
+        manager.setPluginSettings('connection-status', {});
+        await vi.waitFor(() => expect(updates).toHaveLength(previous + 1));
+        expect(status()).toMatchObject({ autoDisabled: false, errorCount: 0 });
+      }
+      expect(status()?.autoDisableInfo).toBeUndefined();
+      expect(manager.getRuntimeLogHistory().some((entry) => isPluginLogEntry(entry)
+        && entry.pluginName === 'connection-status' && entry.level === 'error')).toBe(true);
+      const previous = updates.length;
+      network.mockImplementation(async () => new Response('{}', { status: 200 }));
+      manager.setPluginSettings('connection-status', {});
+      await vi.waitFor(() => expect(updates).toHaveLength(previous + 1));
+      expect(updates.at(-1)).toMatchObject({ data: { state: 'connected' } });
+
+      // An unknown programming error containing 'timeout' must not get a Host exemption.
+      network.mockRejectedValue(new Error('Unexpected timeout state invariant'));
+      for (let i = 1; i <= 5; i += 1) {
+        manager.setPluginSettings('connection-status', {});
+        await vi.waitFor(() => expect(status()?.errorCount).toBe(i));
+      }
+      expect(status()).toMatchObject({ autoDisabled: true, autoDisableInfo: { reason: 'consecutive-errors' } });
+    } finally { await manager.shutdown(); }
+  });
+  it.each([
+    ['load-failed', "type: 'utility', onLoad() { throw new Error('startup failed token=private-token'); }", 'onLoad'],
+    ['runtime-incompatible', "type: 'strategy', createStrategyRuntime() { return {}; }", 'createStrategyRuntime'],
+  ])('projects %s evidence even with no hook error count', async (reason, implementation, operation) => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-diagnostic-'));
+    tempDirs.push(dataDir);
+    await writeUserPlugin(dataDir, 'diagnostic', `export default { apiVersion: 2, name: 'diagnostic', version: '1.0.0', ${implementation} };`);
+    const events = new EventEmitter<DigitalRadioEngineEvents>();
+    const operator = createOperator(events);
+    const manager = createPluginManager(dataDir, events, operator);
+    manager.loadConfig({ configs: { diagnostic: { enabled: true, settings: {} } }, operatorStrategies: {}, operatorSettings: {} });
+    await manager.start();
+    try {
+      const status = manager.getSnapshot().plugins.find((plugin) => plugin.name === 'diagnostic');
+      expect(status).toMatchObject({ autoDisabled: true, errorCount: 0, autoDisableInfo: { reason, operation } });
+      expect(status?.autoDisableInfo?.errors).toHaveLength(1);
+      expect(JSON.stringify(status)).not.toContain('private-token');
+      expect(manager.getRuntimeLogHistory().some((entry) => isRuntimeLogEntry(entry)
+        && entry.pluginName === 'diagnostic' && (entry.details as any)?.autoDisableInfo?.reason === reason)).toBe(true);
+    } finally { await manager.shutdown(); }
+  });
+
+  it('logs every failure and publishes the same triggering streak in disabled status', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-diagnostic-'));
+    tempDirs.push(dataDir);
+    await writeUserPlugin(dataDir, 'diagnostic', `
+      let count = 0;
+      export default { name: 'diagnostic', version: '1.0.0', type: 'utility', instanceScope: 'global',
+        hooks: { onConfigChange() { throw new Error('failure-' + (++count)); } } };
+    `);
+    const events = new EventEmitter<DigitalRadioEngineEvents>();
+    const manager = createPluginManager(dataDir, events, createOperator(events));
+    manager.loadConfig({ configs: { diagnostic: { enabled: true, settings: {} } }, operatorStrategies: {}, operatorSettings: {} });
+    await manager.start();
+    try {
+      for (let i = 1; i <= 5; i += 1) {
+        manager.setPluginSettings('diagnostic', { attempt: i });
+        await vi.waitFor(() => expect(manager.getRuntimeLogHistory().filter((entry) =>
+          isRuntimeLogEntry(entry) && entry.pluginName === 'diagnostic' && entry.message === 'Plugin hook failed',
+        )).toHaveLength(i));
+      }
+      const status = manager.getSnapshot().plugins.find((plugin) => plugin.name === 'diagnostic');
+      expect(status?.autoDisableInfo?.errors.map((entry) => entry.message)).toEqual([1, 2, 3, 4, 5].map((n) => `failure-${n}`));
+      const disabledLog = manager.getRuntimeLogHistory().find((entry) => isRuntimeLogEntry(entry)
+        && entry.pluginName === 'diagnostic' && entry.message === 'Plugin auto-disabled after consecutive hook errors');
+      expect((disabledLog as PluginRuntimeLogEntry).details).toEqual({ autoDisableInfo: status?.autoDisableInfo });
+    } finally { await manager.shutdown(); }
+  });
+
+  it('retains the operation that ignored cancellation in the disable details', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-diagnostic-'));
+    tempDirs.push(dataDir);
+    await writeUserPlugin(dataDir, 'diagnostic', `export default {
+      name: 'diagnostic', version: '1.0.0', type: 'utility', instanceScope: 'global',
+      hooks: { onConfigChange() { return new Promise(() => {}); } }
+    };`);
+    const events = new EventEmitter<DigitalRadioEngineEvents>();
+    const manager = createPluginManager(dataDir, events, createOperator(events));
+    manager.loadConfig({ configs: { diagnostic: { enabled: true, settings: {} } }, operatorStrategies: {}, operatorSettings: {} });
+    await manager.start();
+    try {
+      vi.useFakeTimers();
+      manager.setPluginSettings('diagnostic', { changed: true });
+      await vi.advanceTimersByTimeAsync(6001);
+      expect(manager.getSnapshot().plugins.find((plugin) => plugin.name === 'diagnostic')).toMatchObject({
+        autoDisabled: true, autoDisableInfo: { reason: 'abort-timeout', operation: 'onConfigChange' },
+      });
+    } finally { vi.useRealTimers(); await manager.shutdown(); }
+  });
   it('stores runtime logs in backend history and supports limit queries', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'tx5dr-plugin-runtime-log-'));
     tempDirs.push(dataDir);

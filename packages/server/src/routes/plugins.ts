@@ -16,6 +16,7 @@ import { ConfigManager } from '../config/config-manager.js';
 import { AuthManager } from '../auth/AuthManager.js';
 import { createLogger } from '../utils/logger.js';
 import { getPluginRuntimeInfo } from '../plugin/runtime-info.js';
+import { projectPluginSnapshot } from '../plugin/plugin-status-projection.js';
 import { fetchPluginMarketCatalog } from '../plugin/marketplace.js';
 import {
   installPluginFromMarketplace,
@@ -404,10 +405,12 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get('/', async (req, reply) => {
     // Operator-facing UI (automation quick actions/panels) needs plugin
     // metadata, while mutation routes below remain admin-only.
-    if (!await requireMinimumRole(fastify, req, reply, UserRole.OPERATOR)) {
+    const user = await requireMinimumRole(fastify, req, reply, UserRole.OPERATOR);
+    if (!user) {
       return;
     }
-    return reply.send(engine.pluginManager.getSnapshot());
+    return reply.send(projectPluginSnapshot(engine.pluginManager.getSnapshot(),
+      AuthManager.hasMinRole(user.role, UserRole.ADMIN)));
   });
 
   fastify.get<{ Querystring: { channel?: string } }>('/market/catalog', async (req, reply) => {
@@ -702,11 +705,13 @@ export async function pluginRoutes(fastify: FastifyInstance): Promise<void> {
     '/operators/:operatorId',
     async (req, reply) => {
       const { operatorId } = req.params;
-      if (!await requireOperatorBindingAccess(fastify, req, reply, operatorId)) {
+      const user = await requireOperatorBindingAccess(fastify, req, reply, operatorId);
+      if (!user) {
         return;
       }
 
-      const pluginSnapshot = engine.pluginManager.getSnapshot();
+      const pluginSnapshot = projectPluginSnapshot(engine.pluginManager.getSnapshot(),
+        AuthManager.hasMinRole(user.role, UserRole.ADMIN));
       const runtimeState = engine.pluginManager.getOperatorRuntimeStatus(operatorId);
       const operatorSettings = Object.fromEntries(
         pluginSnapshot.plugins.map((plugin) => [

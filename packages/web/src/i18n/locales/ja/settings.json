@@ -602,7 +602,7 @@
     "statusDisabled": "障害者",
     "statusAssigned": "割り当てられた",
     "statusAvailable": "利用可能",
-    "statusAutoDisabled": "自動的に無効になります",
+    "statusAutoDisabled": "一時無効",
     "errorCount": "{{count}} エラー",
     "reload": "プラグインのリロード",
     "marketplaceTitle": "プラグイン市場",
@@ -813,7 +813,24 @@
         }
       }
     },
-    "directoryHintAndroidBridge": "これは Android Bridge ランタイム内のプラグイン ディレクトリです。マーケットプレイスのプラグインをここにインストールし、Web UI からプラグインを再読み込みしてください。"
+    "directoryHintAndroidBridge": "これは Android Bridge ランタイム内のプラグイン ディレクトリです。マーケットプレイスのプラグインをここにインストールし、Web UI からプラグインを再読み込みしてください。",
+    "disableDetailsAction": "プラグインが無効になった理由を表示",
+    "disableDetailsTitle": "システムがプラグインを一時的に無効化しました",
+    "disableReason": "無効化の理由",
+    "disableTime": "発生日時",
+    "disableOperation": "失敗した処理",
+    "disableOperator": "発生元オペレーター",
+    "disableErrors": "エラー詳細",
+    "disableErrorNumber": "{{number}} 回目",
+    "disableTrigger": "無効化のきっかけ",
+    "disableDetailsUnavailable": "詳細なエラー記録がありません。プラグイン実行ログまたはサーバーログを確認してください。",
+    "disableRecoveryHint": "システムがこのプラグインを停止しました。自動では復旧しません。問題を修正し、有効スイッチをオンにして保存してから「プラグインを再読み込み」で再試行してください。スイッチの切り替えだけでは解除されません。",
+    "disableReasons": {
+      "consecutive-errors": "同じフックで 5 回連続してエラーが発生",
+      "load-failed": "プラグインの起動に失敗",
+      "abort-timeout": "キャンセル後もタスクが終了しなかった",
+      "runtime-incompatible": "ストラテジーランタイムの作成失敗またはインターフェースの非互換"
+    }
   },
   "serverHealth": {
     "title": "サーバープロセスの健全性ステータス",

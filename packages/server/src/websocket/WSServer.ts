@@ -9,6 +9,8 @@ import type {
   ImageRxEvent,
   JWTPayload,
   ModeDescriptor,
+  PluginStatus,
+  PluginSystemSnapshot,
   RadioProfile,
   SlotInfo,
   SlotPack,
@@ -38,6 +40,7 @@ import { SpectrumSessionCoordinator } from '../spectrum/SpectrumSessionCoordinat
 import { projectSpectrumFrame } from '../spectrum/spectrumProjection.js';
 import { buildRadioStatusPayload } from '../radio/buildRadioStatusPayload.js';
 import { OperatorScopedSlotPackProjectionService } from './OperatorScopedSlotPackProjectionService.js';
+import { projectPluginSnapshot, projectPluginStatus } from '../plugin/plugin-status-projection.js';
 import { canReadFullProfiles, redactHamlibConfigForRead, redactProfileForRead, redactProfilesForRead } from '../security/profileRedaction.js';
 
 const logger = createLogger('WSServer');
@@ -2207,6 +2210,19 @@ export class WSServer extends WSMessageHandler {
     });
   }
 
+  private broadcastPluginStatus(
+    type: WSMessageType.PLUGIN_LIST | WSMessageType.PLUGIN_STATUS_CHANGED,
+    data: PluginSystemSnapshot | { generation: number; plugin: PluginStatus },
+  ): void {
+    for (const connection of this.getActiveConnections()) {
+      if (!connection.isHandshakeCompleted() || !connection.hasMinRole(UserRole.OPERATOR)) continue;
+      const includeDiagnostics = connection.hasMinRole(UserRole.ADMIN);
+      connection.send(type, 'plugins' in data
+        ? projectPluginSnapshot(data, includeDiagnostics)
+        : { ...data, plugin: projectPluginStatus(data.plugin, includeDiagnostics) });
+    }
+  }
+
   private sendCWDecoderStatus(connection: WSConnection): void {
     try {
       connection.send(WSMessageType.CW_DECODER_STATUS, this.digitalRadioEngine.getCWDecoderStatus());
@@ -3184,11 +3200,11 @@ export class WSServer extends WSMessageHandler {
     });
 
     // ===== 插件系统事件 =====
-    this.digitalRadioEngine.on('pluginList' as any, (data: any) => {
-      this.broadcastToMinRole(UserRole.OPERATOR, WSMessageType.PLUGIN_LIST, data);
+    this.digitalRadioEngine.on('pluginList', (data) => {
+      this.broadcastPluginStatus(WSMessageType.PLUGIN_LIST, data);
     });
-    this.digitalRadioEngine.on('pluginStatusChanged' as any, (data: any) => {
-      this.broadcastToMinRole(UserRole.OPERATOR, WSMessageType.PLUGIN_STATUS_CHANGED, data);
+    this.digitalRadioEngine.on('pluginStatusChanged', (data) => {
+      this.broadcastPluginStatus(WSMessageType.PLUGIN_STATUS_CHANGED, data);
     });
     this.digitalRadioEngine.on('pluginData' as any, (data: any) => {
       this.broadcastToMinRole(UserRole.OPERATOR, WSMessageType.PLUGIN_DATA, data);
@@ -3331,7 +3347,9 @@ export class WSServer extends WSMessageHandler {
 
       // 2.5 发送插件系统快照
       if (connection.hasMinRole(UserRole.OPERATOR)) try {
-        connection.send(WSMessageType.PLUGIN_LIST, this.digitalRadioEngine.pluginManager.getSnapshot());
+        connection.send(WSMessageType.PLUGIN_LIST, projectPluginSnapshot(
+          this.digitalRadioEngine.pluginManager.getSnapshot(), connection.hasMinRole(UserRole.ADMIN),
+        ));
       } catch (error) {
         logger.error('failed to send plugin snapshot', error);
       }

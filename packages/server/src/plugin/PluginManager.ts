@@ -6,6 +6,7 @@ import type {
   PluginPanelMetaPayload,
   PluginRuntimeLogEntry,
   PluginStatus,
+  PluginAutoDisableInfo,
   PluginSystemSnapshot,
   PluginUIPanelContributionGroup,
   PluginsConfig,
@@ -15,6 +16,7 @@ import type {
   QSORecord,
   StrategyRuntimeContext,
 } from '@tx5dr/contracts';
+import { createPluginErrorRecord, recordPluginAutoDisable } from './plugin-diagnostics.js';
 import type {
   RuntimePluginContext,
   StrategyPluginContext,
@@ -242,8 +244,19 @@ export class PluginManager {
     this.dispatcher = new PluginHookDispatcher(
       (operatorId) => this.getActiveInstances(operatorId),
       (operatorId) => this.getStrategyInstance(operatorId),
-      (pluginName, reason) => this.handleAutoDisable(pluginName, reason),
+      (pluginName, reason, info) => this.handleAutoDisable(pluginName, reason, info),
       this.invocationGuard,
+      (instance, entry, count) => this.emitPluginRuntimeLog({
+        stage: 'activate',
+        level: 'warn',
+        message: 'Plugin hook failed',
+        pluginName: instance.plugin.definition.name,
+        details: {
+          ...entry,
+          consecutiveErrors: count,
+          operatorId: instance.scope.kind === 'operator' ? instance.scope.operatorId : undefined,
+        },
+      }),
     );
     this.orchestrator = new DecisionOrchestrator({
       submitQsoCompletion: deps.submitQsoCompletion,
@@ -310,11 +323,13 @@ export class PluginManager {
     elapsedAfterAbortMs: number,
   ): void {
     if (instance.autoDisabled) return;
-    instance.autoDisabled = true;
+    const info = recordPluginAutoDisable(instance, 'abort-timeout', createPluginErrorRecord(
+      operation,
+      `Invocation ${operation} did not stop within ${elapsedAfterAbortMs}ms after abort`,
+    ));
     instance.desiredLifecycle = 'inactive';
     instance.lifecycleRevision += 1;
     instance.lifecycle = 'quarantined';
-    instance.lastError = `Invocation ${operation} did not stop within ${elapsedAfterAbortMs}ms after abort`;
     this.closeInstanceIngress(instance);
     this.invocationGuard.revokeInstance(instance, 'plugin instance quarantined after abort timeout');
     void instance.rawCtx.network?.udp.closeAll().catch(() => undefined);
@@ -334,6 +349,7 @@ export class PluginManager {
         operation,
         elapsedAfterAbortMs,
         generation: instance.generation,
+        autoDisableInfo: info,
       },
     });
     this.broadcastPluginList();
@@ -564,17 +580,16 @@ export class PluginManager {
           );
           instance.runtime = runtime;
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
           instance.enabled = false;
-          instance.autoDisabled = true;
-          instance.lastError = message;
+          const info = recordPluginAutoDisable(instance, 'runtime-incompatible',
+            createPluginErrorRecord('createStrategyRuntime', error));
           logger.error(`Strategy runtime rejected: plugin=${pluginName}, operator=${operatorId}`, error);
           this.emitPluginRuntimeLog({
             stage: 'validate',
             level: 'error',
-            message: `PLUGIN_API_INCOMPATIBLE: ${message}`,
+            message: `PLUGIN_API_INCOMPATIBLE: ${info.message}`,
             pluginName,
-            details: { operatorId },
+            details: { operatorId, autoDisableInfo: info },
           });
         }
       }
@@ -3008,14 +3023,10 @@ export class PluginManager {
       return globalInstance;
     }
 
-    for (const operatorInstances of this.instances.values()) {
-      const instance = operatorInstances.get(pluginName);
-      if (instance) {
-        return instance;
-      }
-    }
-
-    return undefined;
+    const instances = Array.from(this.instances.values())
+      .map((entries) => entries.get(pluginName))
+      .filter((instance): instance is PluginInstance => Boolean(instance));
+    return instances.find((instance) => instance.autoDisabled) ?? instances[0];
   }
 
   private resolvePluginActionTarget(pluginName: string, operatorId?: string): PluginInstance | undefined {
@@ -3305,7 +3316,7 @@ export class PluginManager {
     }
   }
 
-  private handleAutoDisable(pluginName: string, reason: string): void {
+  private handleAutoDisable(pluginName: string, reason: string, info: PluginAutoDisableInfo): void {
     if (!this.pluginsConfig.configs) {
       this.pluginsConfig.configs = {};
     }
@@ -3318,12 +3329,21 @@ export class PluginManager {
     for (const instance of affectedInstances) {
       instance.enabled = false;
       instance.autoDisabled = true;
+      instance.autoDisableInfo = info;
+      instance.lastError = reason;
       const operatorId = instance.scope.kind === 'operator'
         ? instance.scope.operatorId
         : GLOBAL_PLUGIN_SCOPE_ID;
       void this.deactivateInstance(operatorId, instance);
     }
     logger.warn(`Plugin auto-disabled: ${pluginName}, reason: ${reason}`);
+    this.emitPluginRuntimeLog({
+      stage: 'activate',
+      level: 'error',
+      message: 'Plugin auto-disabled after consecutive hook errors',
+      pluginName,
+      details: { autoDisableInfo: info },
+    });
     this.bumpGeneration();
     this.broadcastStatusChanged(pluginName);
   }
@@ -3690,7 +3710,7 @@ export class PluginManager {
       instance.desiredLifecycle = 'inactive';
       instance.lifecycleRevision += 1;
       instance.lifecycle = 'quarantined';
-      instance.autoDisabled = true;
+      const info = recordPluginAutoDisable(instance, 'load-failed', createPluginErrorRecord('onLoad', err));
       this.closeInstanceIngress(instance);
       this.invocationGuard.revokeInstance(instance, 'plugin onLoad failed');
       await instance.rawCtx.network?.udp.closeAll().catch(() => undefined);
@@ -3702,7 +3722,8 @@ export class PluginManager {
         directoryName: instance.plugin.dirPath ? path.basename(instance.plugin.dirPath) : undefined,
         details: {
           operatorId,
-          error: err instanceof Error ? err.message : String(err),
+          error: info.message,
+          autoDisableInfo: info,
         },
       });
       logger.error(`onLoad error: plugin=${instance.plugin.definition.name}, operator=${operatorId}`, err);

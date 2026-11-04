@@ -184,6 +184,14 @@ export type FrequencyChangeState = FrequencyState;
  * awaited with cancellation and error handling rather than detached in the
  * background.
  *
+ * Plugins own expected business failures (for example a remote connection
+ * timeout, authentication rejection or service outage). Catch recognized
+ * failures, publish plugin-owned status/UI and return normally. Logging through
+ * `ctx.log`, even at error level, does not contribute to automatic disable.
+ * Rethrow unknown faults; escaping hook exceptions enter Host error tracking.
+ * A Host invocation deadline or ignored cancellation is still a lifecycle
+ * violation, so bound network work below the hook budget and await it.
+ *
  * DTO arguments are detached snapshots and may be inspected or transformed
  * without mutating Host state. `ctx` properties that perform Host operations are
  * live capabilities and may only be invoked before the current Hook settles.
@@ -287,6 +295,8 @@ export interface PluginHooks<Permissions extends readonly PluginPermission[] = r
   /**
    * Broadcast when a named timer created through {@link PluginContext.timers}
    * fires.
+   * Return/await all asynchronous work; a detached request can outlive its Host
+   * capabilities even if it later catches its own network error.
    */
   onTimer?(timerId: string, ctx: PluginContextFor<Permissions>): void | Promise<void>;
 

@@ -23,6 +23,7 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPuzzlePiece, faCircleQuestion } from '@fortawesome/free-solid-svg-icons';
 import type { PluginStatus, RadioOperatorConfig } from '@tx5dr/contracts';
 import { PluginSettingsPanel } from './PluginSettingsPanel';
+import { PluginAutoDisableDetails } from './PluginAutoDisableDetails';
 import { api } from '@tx5dr/core';
 import { createLogger } from '../../utils/logger';
 import { usePluginSnapshot } from '../../hooks/usePluginSnapshot';
@@ -523,7 +524,7 @@ interface PluginCardProps {
   cardRef?: (node: HTMLDivElement | null) => void;
 }
 
-const PluginCard: React.FC<PluginCardProps> = ({ plugin, selected, onSelect, onToggle, cardRef }) => {
+export const PluginCard: React.FC<PluginCardProps> = ({ plugin, selected, onSelect, onToggle, cardRef }) => {
   const { t } = useTranslation('settings');
   const canToggle = plugin.type === 'utility';
   const pluginTitle = resolvePluginName(plugin.name, plugin.name);
@@ -550,36 +551,36 @@ const PluginCard: React.FC<PluginCardProps> = ({ plugin, selected, onSelect, onT
   return (
     <div ref={cardRef} className="w-full">
       <Card
-        isPressable
-        className={`w-full cursor-pointer transition-all ${selected ? 'ring-2 ring-primary' : ''}`}
-        onPress={() => onSelect(plugin)}
+        className={`w-full transition-all ${selected ? 'ring-2 ring-primary' : ''}`}
       >
         <CardBody className="py-2 px-3">
           <div className="flex items-center gap-2">
-            <FontAwesomeIcon icon={faPuzzlePiece} className="text-default-400 text-xs" />
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium truncate">{pluginTitle}</span>
-                <span className="text-xs text-default-400">v{plugin.version}</span>
-                {plugin.isBuiltIn && (
-                  <Chip size="sm" variant="flat" color="primary" className="text-xs h-4">
-                    {t('plugins.builtin', 'Built-in')}
-                  </Chip>
+            <button type="button" onClick={() => onSelect(plugin)} className="flex flex-1 min-w-0 items-center gap-2 rounded text-left outline-none focus-visible:ring-2 focus-visible:ring-primary">
+              <FontAwesomeIcon icon={faPuzzlePiece} className="text-default-400 text-xs" />
+              <span className="flex-1 min-w-0">
+                <span className="flex items-center gap-2">
+                  <span className="text-sm font-medium truncate">{pluginTitle}</span>
+                  <span className="text-xs text-default-400">v{plugin.version}</span>
+                  {plugin.isBuiltIn && (
+                    <Chip as="span" size="sm" variant="flat" color="primary" className="text-xs h-4">
+                      {t('plugins.builtin', 'Built-in')}
+                    </Chip>
+                  )}
+                </span>
+                {pluginDescription && (
+                  <span className="block text-xs text-default-400 truncate">{pluginDescription}</span>
                 )}
-              </div>
-              {pluginDescription && (
-                <div className="text-xs text-default-400 truncate">{pluginDescription}</div>
-              )}
-            </div>
+              </span>
+            </button>
             <div className="flex items-center gap-2 flex-shrink-0">
-              <Chip
+              {plugin.autoDisabled ? <PluginAutoDisableDetails plugin={plugin} /> : <Chip
                 size="sm"
                 variant="dot"
                 color={statusColor}
                 className="text-xs"
               >
                 {statusLabel}
-              </Chip>
+              </Chip>}
               {canToggle && (
                 <Switch
                   size="sm"
@@ -590,9 +591,9 @@ const PluginCard: React.FC<PluginCardProps> = ({ plugin, selected, onSelect, onT
               )}
             </div>
           </div>
-          {plugin.errorCount > 0 && plugin.lastError && (
+          {plugin.lastError && (
             <div className="mt-1 text-xs text-danger truncate">
-              {t('plugins.errorCount', '{{count}} errors', { count: plugin.errorCount })}: {plugin.lastError}
+              {plugin.errorCount > 0 && <>{t('plugins.errorCount', '{{count}} errors', { count: plugin.errorCount })}: </>}{plugin.lastError}
             </div>
           )}
         </CardBody>

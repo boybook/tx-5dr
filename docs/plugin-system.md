@@ -830,6 +830,72 @@ Host 验证；不要相信 iframe 自行提交的 operatorId、callsign 或权�
 - UDP socket、event bus subscription 和外部客户端应保存自己的 cleanup handle，
   在 unload 时关闭；Host timer 会自动清理。
 
+### 自动禁用诊断
+
+#### 业务失败与运行异常
+
+插件负责在自己的协议/业务边界分类失败，Host 不根据 `timeout` 等消息文本或
+`ctx.log` 的日志级别猜测严重程度：
+
+| 层次 | 处理方与行为 |
+| --- | --- |
+| 可预期业务失败，如连接超时、服务离线、认证拒绝、限流 | 插件识别错误码/协议结果，更新自身连接状态、面板或页面提示，并按自身策略重试；hook 正常返回，不进入禁用计数 |
+| 未处理的程序异常或不满足约定的数据 | 异常逃出 hook 后进入 Host 连续错误追踪；同一 hook 连续失败达到阈值触发禁用 |
+| 生命周期或安全边界失败 | Host invocation 超时后撤销能力；取消后仍不结束则隔离。启动未完成就抛错、runtime 不兼容也保持现有保护 |
+
+`ctx.log.error()` 仅写日志，不表示 hook 执行失败。插件可以记录业务失败，但用户可见
+的连接状态、提示去重、退避重试和恢复提示仍由插件负责。不能只修改日志级别来分类，
+也不要用覆盖整个 hook 的无条件 `catch` 吞掉所有异常。
+
+网络请求应设置短于观察 hook 预算（目前 5 秒）的自身截止时间，并 `await` 请求和
+响应体读取。网络超时是业务结果；Host 的执行期限用于约束 callback 生命周期，两者
+含义不同。已经超过 Host 期限的任务不能因为声明为业务失败而继续使用能力。
+`onLoad` 应完成本地初始化并注册 Host timer，远端离线通常进入插件自身 degraded
+状态，之后通过新 timer invocation 重试，不应无限等待远端上线。
+
+例如，插件可在协议适配层将已知错误转换为自己的业务错误，再在 hook 内处理：
+
+```ts
+class RemoteUnavailable extends Error {}
+
+async function pollRemote(ctx) {
+  let state;
+  try {
+    // 此适配器必须设置网络 deadline，且只将已知协议/网络失败转换为
+    // RemoteUnavailable；未知异常直接向上抛出。使用具备 network 权限的 ctx。
+    await requestRemoteStatus(ctx);
+    state = { connected: true };
+  } catch (error) {
+    if (!(error instanceof RemoteUnavailable)) throw error;
+    ctx.log.warn('Remote service unavailable');
+    state = { connected: false, reason: 'remote-unavailable' };
+  }
+  // 插件面板通过自身 locale 解释状态；不要把凭据或原始远端响应发给前端。
+  ctx.ui.send('connection-status', state);
+}
+
+// hooks.onTimer 中 return pollRemote(ctx)，不要脱离 invocation 后台执行。
+```
+
+这沿用现有 hook 契约，不增加绕过禁用的错误标记，也不由 Host 替插件执行自动重连。
+
+#### 禁用证据
+
+Host 在同一 hook 连续失败 5 次、`onLoad` 失败、取消后任务未在宽限期内结束，
+或 strategy runtime 创建/校验失败时记录自动禁用原因。`PluginStatus.autoDisableInfo`
+是可选的运行时诊断快照，包含原因、时间、失败操作、来源操作员及触发禁用的错误；
+连续失败保留该 hook 的这 5 次错误，成功调用会重置该 hook 的计数和记录。
+禁用后的迟到回调不能清除禁用状态或覆盖诊断证据。消息沿用服务器日志脱敏规则。
+
+每次 hook 失败及最终禁用事件都会进入插件运行日志。诊断快照独立于滚动日志缓存，
+保留到实例被重建；重载/重启会创建新实例，不作为持久故障审计存储。
+连续错误仍按插件名停用全部实例，各实例携带相同的来源故障快照；其他失败保持
+现有实例隔离范围。插件列表优先投影被禁用的实例，前端通过状态标签查看该快照，
+无需根据日志文本推断原因。诊断快照及 `lastError` 仅管理员可读，HTTP 查询、
+WebSocket 初始快照和后续推送使用相同的服务端权限投影；操作员仅接收基础状态。
+插件运行日志实时推送和历史查询仍要求管理员权限。此诊断字段不改变配置启用状态与运行状态的区别，
+也不新增自动恢复或重试机制。
+
 ## 9. 测试与发布检查
 
 测试工具从 `@tx5dr/plugin-api/testing` 导入：

@@ -580,6 +580,25 @@ export type PluginSource = z.infer<typeof PluginSourceSchema>;
 export const PluginLocalesSchema = z.record(z.string(), z.record(z.string(), z.string()));
 export type PluginLocales = z.infer<typeof PluginLocalesSchema>;
 
+/** Host-recorded failure; messages use the server's log redaction policy. */
+export const PluginErrorRecordSchema = z.object({
+  timestamp: z.number(),
+  operation: z.string(),
+  message: z.string(),
+});
+export type PluginErrorRecord = z.infer<typeof PluginErrorRecordSchema>;
+
+/** Retained on the disabled instance independently of the rolling log buffer. */
+export const PluginAutoDisableInfoSchema = z.object({
+  reason: z.enum(['consecutive-errors', 'load-failed', 'abort-timeout', 'runtime-incompatible']),
+  timestamp: z.number(),
+  operation: z.string(),
+  message: z.string(),
+  operatorId: z.string().optional(),
+  errors: z.array(PluginErrorRecordSchema).max(5),
+});
+export type PluginAutoDisableInfo = z.infer<typeof PluginAutoDisableInfoSchema>;
+
 /**
  * Runtime-facing plugin status snapshot exposed to the frontend.
  *
@@ -596,8 +615,9 @@ export const PluginStatusSchema = z.object({
   isBuiltIn: z.boolean(),
   loaded: z.boolean().default(true),
   enabled: z.boolean(),
-  /** 是否被自动禁用（连续错误达到阈值） */
+  /** Whether the Host disabled this instance after a runtime failure. */
   autoDisabled: z.boolean().optional().default(false),
+  autoDisableInfo: PluginAutoDisableInfoSchema.optional(),
   errorCount: z.number(),
   lastError: z.string().optional(),
   /** 仅对 strategy 插件有意义：当前被哪些 operator 选中 */

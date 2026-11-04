@@ -18,8 +18,12 @@ const snapshot: PluginSystemSnapshot = {
       isBuiltIn: true,
       loaded: true,
       enabled: true,
-      autoDisabled: false,
+      autoDisabled: true,
       errorCount: 0,
+      lastError: 'station diagnostic',
+      autoDisableInfo: {
+        reason: 'load-failed', timestamp: 1, operation: 'onLoad', message: 'station diagnostic', errors: [],
+      },
       quickActions: [{ id: 'run', label: 'Run' }],
     },
   ],
@@ -54,6 +58,8 @@ vi.mock('../../DigitalRadioEngine.js', () => ({
     getInstance: () => ({
       pluginManager: {
         getSnapshot,
+        getOperatorRuntimeStatus: () => ({ strategyName: 'standard-qso', currentSlot: null }),
+        getOperatorPluginSettingsProjection: () => ({}),
         getLoadedPlugin,
         createPluginPageSession: () => ({ sessionId: 'fixture-page-session' }),
         setOperatorPluginPaused,
@@ -178,8 +184,33 @@ describe('pluginRoutes auth', () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual(snapshot);
+    expect(response.json().plugins[0]).toMatchObject({ name: 'automation-demo', autoDisabled: true });
+    expect(response.json().plugins[0]).not.toHaveProperty('autoDisableInfo');
+    expect(response.json().plugins[0]).not.toHaveProperty('lastError');
     expect(getSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('includes disable diagnostics only for administrators and rejects anonymous requests', async () => {
+    const admin = await fastify.inject({ method: 'GET', url: '/api/plugins', headers: { 'x-role': UserRole.ADMIN } });
+    expect(admin.statusCode).toBe(200);
+    expect(admin.json()).toEqual(snapshot);
+    getSnapshot.mockClear();
+    const anonymous = await fastify.inject({ method: 'GET', url: '/api/plugins' });
+    expect(anonymous.statusCode).toBe(401);
+    expect(getSnapshot).not.toHaveBeenCalled();
+  });
+
+  it.each([UserRole.ADMIN, UserRole.OPERATOR])('projects diagnostics in both copies of operator plugin status for %s', async (role) => {
+    const response = await fastify.inject({ method: 'GET', url: '/api/plugins/operators/operator-1', headers: { 'x-role': role } });
+    expect(response.statusCode).toBe(200);
+    const data = response.json();
+    for (const status of [data.pluginSnapshot.plugins[0], data.plugins[0]]) {
+      if (role === UserRole.ADMIN) expect(status.autoDisableInfo).toEqual(snapshot.plugins[0].autoDisableInfo);
+      else {
+        expect(status).not.toHaveProperty('autoDisableInfo');
+        expect(status).not.toHaveProperty('lastError');
+      }
+    }
   });
 
   it('projects only visible provider statuses and keeps viewers out', async () => {
