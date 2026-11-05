@@ -372,8 +372,8 @@ const states: { [key in SlotsIndex]: StandardState } = {
                 }
             }
 
-            // Fox/Hound 模式：Fox 发出邀请 (PREVHOUND RR73; MYCALL <FOXHASH>)
-            // 表示 Fox 已有我们之前的信号报告，邀请我们直接发 R-report
+            // The Fox completes the previous Hound and sends us a report in
+            // the same frame; acknowledge it with our locally measured SNR.
             const foxInvite = messages
                 .filter((msg) =>
                     msg.message.type === FT8MessageType.FOX_RR73 &&
@@ -384,10 +384,10 @@ const states: { [key in SlotsIndex]: StandardState } = {
             if (foxInvite) {
                 const foxMsg = foxInvite.message as FT8MessageFoxRR73;
                 strategy.logger.debug(`TX1: Fox/Hound invite received (myCallsign=${strategy.context.config.myCallsign}, foxHash=${foxMsg.foxHash}, snrForNext=${foxMsg.snrForNext})`);
-                // Fox告知的SNR作为R-report基础；降级使用本机解码SNR
-                strategy.context.reportSent = foxMsg.snrForNext ?? foxInvite.snr;
-                // 本机解码Fox的SNR记为reportReceived（QSO日志用）
-                strategy.context.reportReceived = foxInvite.snr;
+                strategy.context.reportSent = foxInvite.snr;
+                // A clipped invite may omit the peer's report. Keep it unknown
+                // rather than substituting our decoder SNR or a cached report.
+                strategy.context.reportReceived = foxMsg.snrForNext;
                 // 记录 Fox 哈希备用
                 strategy.foxHash = foxMsg.foxHash;
                 strategy.updateSlots();

@@ -3854,8 +3854,9 @@ describe('PluginManager standard-qso late re-decision', () => {
 
     expect(changed).toBe(true);
     expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).currentSlot).toBe('TX3');
-    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.reportSent).toBe(-14);
-    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('EX8ABR/P JH5FVT R-14');
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.reportSent).toBe(-9);
+    expect(pluginManager.getOperatorRuntimeStatus(operator.config.id).context?.reportReceived).toBe(-14);
+    expect(getCurrentTransmission(pluginManager, operator.config.id)).toBe('EX8ABR/P JH5FVT R-09');
 
     await pluginManager.shutdown();
   });

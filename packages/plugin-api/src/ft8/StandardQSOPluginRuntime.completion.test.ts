@@ -17,10 +17,10 @@ function received(rawMessage: string, snr = -10): ParsedFT8Message {
   };
 }
 
-function createRuntime(skipTx1 = false) {
+function createRuntime(skipTx1 = false, myCallsign = 'W1AAA') {
   return new StandardQSOPluginRuntime({
     config: {
-      id: 'test-operator', mode: MODES.FT8, myCallsign: 'W1AAA', myGrid: 'FN31',
+      id: 'test-operator', mode: MODES.FT8, myCallsign, myGrid: 'FN31',
       frequency: 14074000, transmitCycles: [0], autoReplyToCQ: false,
       autoResumeCQAfterFail: false, autoResumeCQAfterSuccess: true,
       replyToWorkedStations: false, prioritizeNewCalls: true,
@@ -121,6 +121,42 @@ describe('standard QSO completion facts', () => {
 });
 
 describe('standard QSO transmitted report facts', () => {
+  it.each([
+    { snr: 2, peerReport: '+18', sentReport: '+02', receivedReport: 18 },
+    { snr: -9, peerReport: '-14', sentReport: '-09', receivedReport: -14 },
+    { snr: 0, peerReport: '+18', sentReport: '+00', receivedReport: 18 },
+    { snr: 2, peerReport: '+00', sentReport: '+02', receivedReport: 0 },
+    { snr: 2, peerReport: '', sentReport: '+02', receivedReport: undefined },
+  ])('keeps Fox/Hound report directions through reply and completion (SNR $snr, peer "$peerReport")', async ({ snr, peerReport, sentReport, receivedReport }) => {
+    const runtime = createRuntime(false, 'BG5JKZ');
+    runtime.requestCall('XX9LT', undefined);
+    runtime.patchContext({ reportSent: -20, reportReceived: -30 });
+
+    const invite = await runtime.decide([
+      received(`JR4FSG RR73; BG5JKZ <XX9LT> ${peerReport}`.trim(), snr),
+    ], meta());
+
+    expect(invite.snapshot.currentState).toBe('TX3');
+    expect(invite.transmission).toBe(`XX9LT BG5JKZ R${sentReport}`);
+    expect(invite.snapshot.context?.reportSent).toBe(snr);
+    expect(invite.snapshot.context?.reportReceived).toBe(receivedReport);
+    runtime.onTransmissionQueued(invite.transmission!);
+
+    // The next Hound's report and the completion frame's SNR belong to neither
+    // report in our completed contact.
+    const completion = await runtime.decide([
+      received('BG5JKZ RR73; JA1AAA <XX9LT> -06', -12),
+    ], meta());
+
+    expect(completion.snapshot.currentState).toBe('TX5');
+    expect(completion.qsoCompletion?.record).toMatchObject({
+      callsign: 'XX9LT',
+      myCallsign: 'BG5JKZ',
+      reportSent: sentReport,
+      reportReceived: receivedReport?.toString(),
+    });
+  });
+
   it.each([
     ['ROGER_REPORT', 'W1AAA K1BBB R-12'],
     ['SIGNAL_REPORT', 'W1AAA K1BBB -12'],
