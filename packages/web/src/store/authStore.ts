@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useReducer, useEffect, useCallback, useMemo, ReactNode } from 'react';
+import React, { createContext, useContext, useReducer, useEffect, useCallback, useMemo, useRef, ReactNode } from 'react';
 import { createMongoAbility, type MongoAbility, type RawRuleOf, subject as caslSubject } from '@casl/ability';
 import { api, configureAuthToken } from '@tx5dr/core';
 import { buildAbilityRules, type PermissionGrant, type AppAction, type AppSubject } from '@tx5dr/contracts';
@@ -217,6 +217,20 @@ export async function authenticateUrlCredentials(
     }
   }
   return null;
+}
+
+/**
+ * Whether a resolved session grants exactly the identity this page already holds.
+ */
+export function hasSameAuthIdentity(
+  state: Pick<AuthState, 'role' | 'label' | 'operatorIds' | 'maxOperators' | 'permissionGrants'>,
+  me: Pick<AuthMeResponse, 'role' | 'label' | 'operatorIds' | 'maxOperators' | 'permissionGrants'>,
+): boolean {
+  return state.role === me.role
+    && state.label === me.label
+    && state.maxOperators === me.maxOperators
+    && JSON.stringify(state.operatorIds) === JSON.stringify(me.operatorIds)
+    && JSON.stringify(state.permissionGrants ?? null) === JSON.stringify(me.permissionGrants ?? null);
 }
 
 // ===== JWT 本地存储 =====
@@ -462,6 +476,79 @@ export function AuthProvider({ children }: AuthProviderProps) {
       dispatch({ type: 'SET_PUBLIC_VIEWER' });
     }
   }, [state.allowPublicViewing]);
+
+  // Same-origin pages (workspace, standalone spectrum, logbook, plugin pages)
+  // share one stored session. A login or logout in another tab replaces this
+  // page's in-memory JWT so it never keeps operating on a session the user ended.
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  useEffect(() => {
+    let generation = 0;
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== JWT_STORAGE_KEY && event.key !== null) return;
+      const current = stateRef.current;
+      if (!current.initialized || !current.authEnabled) return;
+
+      const nextJwt = loadJwt();
+      if (nextJwt === current.jwt) return;
+      const syncGeneration = ++generation;
+
+      const endSession = () => {
+        configureAuthToken(null);
+        dispatch({ type: 'LOGOUT' });
+        if (current.allowPublicViewing) {
+          dispatch({ type: 'SET_PUBLIC_VIEWER' });
+        }
+      };
+
+      if (!nextJwt) {
+        logger.info('Session ended in another tab');
+        endSession();
+        return;
+      }
+
+      // The stored session is the shared source of truth; stop using the
+      // replaced JWT before resolving the new identity.
+      configureAuthToken(nextJwt);
+      void (async () => {
+        try {
+          const me: AuthMeResponse = await api.getAuthMe();
+          if (syncGeneration !== generation) return;
+          const latest = stateRef.current;
+          if (latest.jwt && hasSameAuthIdentity(latest, me)) {
+            // Another page re-authenticated as the same identity (for example an
+            // Electron window opened with a browser login code). Keep this
+            // page's still-valid session instead of reconnecting it.
+            configureAuthToken(latest.jwt);
+            return;
+          }
+          logger.info('Session changed in another tab', { role: me.role, label: me.label });
+          dispatch({
+            type: 'RESTORE_SESSION',
+            payload: {
+              jwt: nextJwt,
+              role: me.role,
+              label: me.label,
+              operatorIds: me.operatorIds,
+              maxOperators: me.maxOperators,
+              permissionGrants: me.permissionGrants,
+            },
+          });
+        } catch (err) {
+          if (syncGeneration !== generation) return;
+          logger.warn('Session from another tab is invalid; ending this session', err);
+          endSession();
+        }
+      })();
+    };
+
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      generation += 1;
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
 
   const isAuthenticated = state.role !== null;
   const requiresLogin = state.initialized && state.authEnabled && !state.allowPublicViewing && !isAuthenticated;

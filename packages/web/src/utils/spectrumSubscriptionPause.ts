@@ -1,5 +1,9 @@
 const STORAGE_KEY = 'spectrum-display-collapsed';
 
+// The collapse preference belongs to the main workspace. A standalone spectrum
+// page detaches from it so it always subscribes on open and never rewrites the
+// workspace preference while both pages are open side by side.
+let persisted = true;
 let paused = readInitialPaused();
 
 function readInitialPaused(): boolean {
@@ -21,7 +25,7 @@ export function isSpectrumSubscriptionPaused(): boolean {
 export function setSpectrumSubscriptionPaused(nextPaused: boolean): void {
   paused = nextPaused;
 
-  if (typeof window === 'undefined') {
+  if (!persisted || typeof window === 'undefined') {
     return;
   }
 
@@ -33,8 +37,19 @@ export function setSpectrumSubscriptionPaused(nextPaused: boolean): void {
 }
 
 export function readSpectrumSubscriptionPaused(): boolean {
-  paused = readInitialPaused();
+  if (persisted) {
+    paused = readInitialPaused();
+  }
   return paused;
+}
+
+/**
+ * Makes the pause state page-local and initially unpaused. Called once by the
+ * standalone spectrum entry before rendering.
+ */
+export function detachSpectrumSubscriptionPauseFromWorkspace(): void {
+  persisted = false;
+  paused = false;
 }
 
 export const SPECTRUM_COLLAPSED_STORAGE_KEY = STORAGE_KEY;

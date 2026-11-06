@@ -194,6 +194,7 @@
     "radioSdrSource": "無線SDR",
     "openwebrxSdrSource": "OpenWebRX",
     "popOut": "別ウィンドウで表示",
+    "pageTitle": "スペクトラム",
     "rangeSettings": "スペクトル設定",
     "viewSettings": "ビュー",
     "analysisSettings": "解析",

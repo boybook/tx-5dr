@@ -158,6 +158,14 @@ interface WebGLWaterfallProps {
   viewportInteraction?: WaterfallViewportInteraction;
   /** Imperative preview bridge used when trace and waterfall share a host. */
   viewportRuntime?: SpectrumViewportRuntime;
+  /**
+   * Optional render-only surface drawn above the waterfall rows (the standalone
+   * spectrum trace). The waterfall's single overlay/interaction layer spans
+   * both, so every marker, hover probe and gesture behaves the same above and
+   * below. `height` remains the total height; rows use `height - headerHeight`.
+   */
+  header?: React.ReactNode;
+  headerHeight?: number;
   /** Absolute viewport panning/zooming for wide-band IQ sources (TCI). */
   enableLocalViewportPanZoom?: boolean;
   localViewportRange?: InteractionFrequencyRange | null;
@@ -892,6 +900,22 @@ export function buildCycleMarkerPositions(
   return markers;
 }
 
+/**
+ * Resolves the RF frequency for a dragged carrier/Split overlay from the
+ * absolute display frequency under the pointer. Absolute gesture sessions keep
+ * their negotiated range and step; baseband sessions only round to whole Hz,
+ * because their range and step describe operator audio offsets, not RF.
+ */
+export function resolveRadioOverlayDragFrequency(
+  displayFrequencyHz: number,
+  interactionFrequencyMode: 'baseband' | 'absolute',
+  clampAbsoluteInteraction: (frequency: number) => number,
+): number {
+  return interactionFrequencyMode === 'absolute'
+    ? clampAbsoluteInteraction(displayFrequencyHz)
+    : Math.round(displayFrequencyHz);
+}
+
 export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   controller,
   className = '',
@@ -919,6 +943,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   interactionFrequencyRange = null,
   viewportInteraction,
   viewportRuntime,
+  header,
+  headerHeight = 0,
   enableLocalViewportPanZoom = false,
   localViewportRange = null,
   localViewportBounds = null,
@@ -1115,8 +1141,11 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
   const uploadBufferRef = useRef<Uint8Array | null>(null);
   const supplementScratchRowRef = useRef<Uint8Array | null>(null);
   const supplementUploadBufferRef = useRef<Uint8Array | null>(null);
-  const heightRef = useRef(height);
-  useEffect(() => { heightRef.current = height; }, [height]);
+  // Rows render below an optional header surface; `height` stays the total.
+  const rowsHeight = Math.max(1, height - Math.max(0, headerHeight));
+  const rowsTop = height - rowsHeight;
+  const heightRef = useRef(rowsHeight);
+  useEffect(() => { heightRef.current = rowsHeight; }, [rowsHeight]);
   const minDbRef = useRef(minDb);
   const maxDbRef = useRef(maxDb);
   const sharpPixelsRef = useRef(sharpPixels);
@@ -3246,7 +3275,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     }, 0);
 
     return () => clearTimeout(timer);
-  }, [height, handleResize]);
+  }, [rowsHeight, handleResize]);
 
   // 参数变化只重建纹理/重绘，不重建 WebGL context
   useEffect(() => {
@@ -3497,22 +3526,27 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     return clampBasebandFrequency(basebandFrequency);
   }, [FREQ_POSITION_OFFSET, clampBasebandFrequency, frequencyAxisTransform, hasAxis, isAbsoluteDisplayMode, maxFrequency, minFrequency, readContainerHorizontalMetrics, referenceFrequencyHz]);
 
-  const getInteractionFrequencyFromMousePosition = useCallback((clientX: number, visualOffsetHz = FREQ_POSITION_OFFSET, stepHz?: number | null) => {
+  const getDisplayFrequencyFromMousePosition = useCallback((clientX: number, visualOffsetHz = FREQ_POSITION_OFFSET): number | null => {
     const metrics = readContainerHorizontalMetrics();
-    if (!metrics || !hasAxis || metrics.width <= 0) return 0;
+    if (!metrics || !hasAxis || metrics.width <= 0) return null;
 
     const relativeX = clientX - metrics.left;
     const percentage = Math.max(0, Math.min(1, relativeX / metrics.width));
     const gestureRange = gestureViewAxisRef.current;
     const interactionMin = gestureRange?.min ?? minFrequency;
     const interactionMax = gestureRange?.max ?? maxFrequency;
-    const displayFrequency = getWaterfallSemanticFrequencyAtRatio(
+    return getWaterfallSemanticFrequencyAtRatio(
       percentage,
       interactionMin,
       interactionMax,
       frequencyAxisTransform,
       visualOffsetHz,
     );
+  }, [FREQ_POSITION_OFFSET, frequencyAxisTransform, hasAxis, maxFrequency, minFrequency, readContainerHorizontalMetrics]);
+
+  const getInteractionFrequencyFromMousePosition = useCallback((clientX: number, visualOffsetHz = FREQ_POSITION_OFFSET, stepHz?: number | null) => {
+    const displayFrequency = getDisplayFrequencyFromMousePosition(clientX, visualOffsetHz);
+    if (displayFrequency === null) return 0;
 
     if (interactionFrequencyMode === 'absolute') {
       return clampInteractionFrequency(displayFrequency, stepHz);
@@ -3526,15 +3560,21 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     clampBasebandFrequency,
     clampInteractionFrequency,
     FREQ_POSITION_OFFSET,
-    frequencyAxisTransform,
-    hasAxis,
+    getDisplayFrequencyFromMousePosition,
     interactionFrequencyMode,
     isAbsoluteDisplayMode,
-    maxFrequency,
     minFrequency,
-    readContainerHorizontalMetrics,
     referenceFrequencyHz,
   ]);
+
+  // Carrier/Split overlays are drawn on the absolute RF axis whatever the
+  // operator gesture target is (digital modes use baseband TX offsets), so a
+  // drag must resolve an absolute frequency too.
+  const getRadioOverlayFrequencyFromMousePosition = useCallback((clientX: number): number | null => {
+    const displayFrequency = getDisplayFrequencyFromMousePosition(clientX);
+    if (displayFrequency === null || !isAbsoluteDisplayMode) return null;
+    return resolveRadioOverlayDragFrequency(displayFrequency, interactionFrequencyMode, clampInteractionFrequency);
+  }, [clampInteractionFrequency, getDisplayFrequencyFromMousePosition, interactionFrequencyMode, isAbsoluteDisplayMode]);
 
   const getInteractionFrequencyPosition = useCallback((frequency: number, visualOffsetHz = FREQ_POSITION_OFFSET) => {
     if (interactionFrequencyMode === 'absolute') {
@@ -4167,7 +4207,8 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     if (activeBandOverlayDragPointerIdRef.current !== e.pointerId) return;
     if (!draggingBandOverlayId || !onTxBandOverlayFrequencyChange) return;
 
-    const newFrequency = getInteractionFrequencyFromMousePosition(e.clientX);
+    const newFrequency = getRadioOverlayFrequencyFromMousePosition(e.clientX);
+    if (newFrequency === null) return;
     setLocalBandOverlayOverride({ id: draggingBandOverlayId, frequency: newFrequency });
     latestBandOverlayFrequencyRef.current = { id: draggingBandOverlayId, frequency: newFrequency };
 
@@ -4178,7 +4219,7 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         onTxBandOverlayFrequencyChange(latest.id, latest.frequency);
       }
     }, 200);
-  }, [draggingBandOverlayId, getInteractionFrequencyFromMousePosition, onTxBandOverlayFrequencyChange]);
+  }, [draggingBandOverlayId, getRadioOverlayFrequencyFromMousePosition, onTxBandOverlayFrequencyChange]);
 
   const handleFrequencyBandOverlayPointerDown = useCallback((
     event: React.PointerEvent<HTMLDivElement>,
@@ -4673,7 +4714,13 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
     <div
       ref={containerRef}
       className={`relative ${className}`}
-      style={{ height: `${height}px`, touchAction: (onDragFrequencyChange || localViewportInteractionEnabled) ? 'none' : undefined }}
+      style={{
+        height: `${height}px`,
+        // Padding (not a canvas margin, which would collapse through this
+        // container) reserves the header area; absolute layers still span it.
+        paddingTop: rowsTop > 0 ? `${rowsTop}px` : undefined,
+        touchAction: (onDragFrequencyChange || localViewportInteractionEnabled) ? 'none' : undefined,
+      }}
       onPointerDown={localViewportInteractionEnabled ? handleLocalViewportPointerDown : (onDragFrequencyChange ? handleGenericFrequencyDragPointerDown : undefined)}
       onPointerEnter={updateHoverCursorFromPointer}
       onPointerMove={updateHoverCursorFromPointer}
@@ -4696,12 +4743,18 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
         }
       }}
     >
+      {header && rowsTop > 0 && (
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-0 overflow-hidden" style={{ height: `${rowsTop}px` }}>
+          {header}
+        </div>
+      )}
+
       {!markerOnly && (
         <canvas
           ref={canvasRef}
           className="relative z-0 w-full"
           style={{
-            height: `${height}px`,
+            height: `${rowsHeight}px`,
             // Keep CSS scaling from re-blurring IF hard pixels after NEAREST sampling.
             imageRendering: sharpPixels ? 'pixelated' : 'auto',
           }}
@@ -4709,54 +4762,61 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
       )}
 
       {!markerOnly && (
-        <div ref={cycleMarkerLayerRef} className="pointer-events-none absolute inset-0 z-20 will-change-transform" />
+        <div ref={cycleMarkerLayerRef} className="pointer-events-none absolute inset-x-0 bottom-0 z-20 will-change-transform" style={{ top: `${rowsTop}px` }} />
       )}
 
       {/* Hover ruler: below interactive markers/buttons, above the WebGL canvas. */}
       <div className="pointer-events-none absolute inset-0 z-10">
-        <div
-          ref={rulerLayerRef}
-          className={`absolute inset-x-0 top-0 h-11 overflow-hidden transition-all duration-150 ease-out ${
-            showHoverProbe ? 'translate-y-0 opacity-100' : '-translate-y-0.5 opacity-0'
-          }`}
-        >
-          <div className="absolute inset-0 bg-gradient-to-b from-black/55 via-black/30 to-transparent" />
-          <div className="absolute inset-x-0 top-7 h-px bg-gradient-to-r from-transparent via-white/22 to-transparent" />
-          {rulerTicks.map((tick) => {
-            const tickClassName = tick.kind === 'major'
-              ? 'h-4 bg-white/35'
-              : tick.kind === 'medium'
-                ? 'h-3.5 bg-white/25'
-                : 'h-2.5 bg-white/18';
+        {/* A header surface (standalone trace) draws its own permanent
+            ruler directly above the rows, so the hover/gesture rulers would
+            only duplicate it. */}
+        {rowsTop === 0 && (
+          <>
+          <div
+            ref={rulerLayerRef}
+            className={`absolute inset-x-0 top-0 h-11 overflow-hidden transition-all duration-150 ease-out ${
+              showHoverProbe ? 'translate-y-0 opacity-100' : '-translate-y-0.5 opacity-0'
+            }`}
+          >
+            <div className="absolute inset-0 bg-gradient-to-b from-black/55 via-black/30 to-transparent" />
+            <div className="absolute inset-x-0 top-7 h-px bg-gradient-to-r from-transparent via-white/22 to-transparent" />
+            {rulerTicks.map((tick) => {
+              const tickClassName = tick.kind === 'major'
+                ? 'h-4 bg-white/35'
+                : tick.kind === 'medium'
+                  ? 'h-3.5 bg-white/25'
+                  : 'h-2.5 bg-white/18';
 
-            return (
-              <div
-                key={tick.id}
-                className="absolute top-0 -translate-x-1/2"
-                style={{ left: `${tick.positionPercent}%` }}
-              >
-                <div className={`mx-auto w-px rounded-full ${tickClassName}`} />
-                {tick.label && (
-                  <div className="absolute left-1/2 top-1.5 -translate-x-1/2 select-none whitespace-nowrap text-[10px] font-medium leading-none tabular-nums tracking-wide text-white/50">
-                    {tick.label}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+              return (
+                <div
+                  key={tick.id}
+                  className="absolute top-0 -translate-x-1/2"
+                  style={{ left: `${tick.positionPercent}%` }}
+                >
+                  <div className={`mx-auto w-px rounded-full ${tickClassName}`} />
+                  {tick.label && (
+                    <div className="absolute left-1/2 top-1.5 -translate-x-1/2 select-none whitespace-nowrap text-[10px] font-medium leading-none tabular-nums tracking-wide text-white/50">
+                      {tick.label}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
 
-        {/* Gesture ruler: React renders the two static background stripes
-            only; tick elements are pooled imperatively (see
-            updateGestureRuler) so React never reconciles them. */}
-        <div
-          ref={gestureRulerLayerRef}
-          className="absolute inset-x-0 top-0 h-11 overflow-hidden"
-          style={{ visibility: 'hidden' }}
-        >
-          <div className="absolute inset-0 bg-gradient-to-b from-black/55 via-black/30 to-transparent" />
-          <div className="absolute inset-x-0 top-7 h-px bg-gradient-to-r from-transparent via-white/22 to-transparent" />
-        </div>
+          {/* Gesture ruler: React renders the two static background stripes
+              only; tick elements are pooled imperatively (see
+              updateGestureRuler) so React never reconciles them. */}
+          <div
+            ref={gestureRulerLayerRef}
+            className="absolute inset-x-0 top-0 h-11 overflow-hidden"
+            style={{ visibility: 'hidden' }}
+          >
+            <div className="absolute inset-0 bg-gradient-to-b from-black/55 via-black/30 to-transparent" />
+            <div className="absolute inset-x-0 top-7 h-px bg-gradient-to-r from-transparent via-white/22 to-transparent" />
+          </div>
+          </>
+        )}
 
         {showHoverProbe && hoverCursor && (
           <div

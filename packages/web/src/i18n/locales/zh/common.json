@@ -194,6 +194,7 @@
     "radioSdrSource": "电台 SDR",
     "openwebrxSdrSource": "OpenWebRX",
     "popOut": "在独立窗口中显示",
+    "pageTitle": "频谱图",
     "rangeSettings": "频谱设置",
     "viewSettings": "视图",
     "analysisSettings": "分析",

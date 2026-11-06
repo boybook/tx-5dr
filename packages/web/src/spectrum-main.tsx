@@ -5,9 +5,11 @@ import { HeroUIProvider } from '@heroui/react';
 import { configureApi } from '@tx5dr/core';
 import { getApiBaseUrl } from './utils/config';
 import { SpectrumPage } from './pages/SpectrumPage';
+import { detachSpectrumSubscriptionPauseFromWorkspace } from './utils/spectrumSubscriptionPause';
 import './index.css';
 
 configureApi(getApiBaseUrl());
+detachSpectrumSubscriptionPauseFromWorkspace();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <HeroUIProvider>

@@ -192,13 +192,29 @@ for the waterfall and that same snapshot for a spectrum trace; it must not open
 a second subscription or decode the frame again.
 
 The inline radio page keeps the existing waterfall interaction surface. The
-standalone spectrum window opts into a trace-plus-waterfall layout: the trace
-owns the TX/RX hit targets, while both trace and waterfall accept the same
-background viewport gestures. The lower waterfall is read-only for frequency
-overlays but remains an interactive viewport surface. Both renderers use the same absolute axis, viewport,
+standalone spectrum window opts into a trace-plus-waterfall layout. The trace
+is render-only and is mounted as the waterfall's header surface; the
+waterfall's single overlay and interaction layer spans both, so markers, the
+hover probe, popovers, overlay drags, click-to-tune and viewport gestures are
+one implementation with one writer, identical above and below. The waterfall
+reserves the header height above its rows, and a presentation-scoped viewport
+runtime carries live viewport previews to the trace. Carrier and Split overlays are positioned on the
+absolute RF axis, so their drags resolve absolute frequencies even when the
+session's operator gesture target is a baseband TX offset. Both renderers use the same absolute axis, viewport,
 level range, supplement fallback, and declarative frequency overlays. This
 presentation choice is client layout state and is deliberately separate from
 the server-owned TCI `wide` versus ICOM/Hamlib `radio-center` capability.
+
+The standalone page (`spectrum.html`) is an independent authenticated client:
+it restores the same-origin stored session and opens its own WebSocket. In
+Electron it is a host window that reports its closure, so the workspace hides
+its inline spectrum until then. Browsers open one named tab, which repeated
+requests focus; with no reliable close signal, the inline spectrum stays
+mounted. Because a tab opened by the workspace starts with a copy of its
+sessionStorage, the WebSocket client instance id is scoped by page kind; the
+server replaces an existing connection presenting the same id. The persisted
+collapse/subscription-pause preference belongs to the workspace; the
+standalone page keeps that state page-local and always subscribes on open.
 
 The trace renderer uses persistent current/previous vertex buffers for the
 latest projected row. A short shader interpolation smooths new FFT frames, and

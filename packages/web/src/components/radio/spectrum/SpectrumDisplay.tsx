@@ -9,6 +9,7 @@ import { api, getBandFromFrequency } from '@tx5dr/core';
 import { useConnection, useCurrentOperatorId, useOperators, useProfiles, usePTTState, useRadioConnectionState, useRadioModeState, useRadioMeters, useCapabilityState, useCapabilityDescriptor, useSpectrum, useSplitState } from '../../../store/radioStore';
 import { useAbility, useCan, useHasMinRole } from '../../../store/authStore';
 import { createLogger } from '../../../utils/logger';
+import { openSpectrumWindow } from '../../../utils/windowManager';
 import { setPreferredSpectrumKind } from '../../../utils/spectrumPreferences';
 import { useTargetRxFrequencies, type RxFrequency } from '../../../hooks/useTargetRxFrequencies';
 import { useTxFrequencies, type TxFrequency } from '../../../hooks/useTxFrequencies';
@@ -61,13 +62,6 @@ const TCI_DIGITAL_AUTO_ZOOM_MIN_PADDING_HZ = 200;
 const TCI_DIGITAL_AUTO_ZOOM_MANUAL_INTENT_TTL_MS = 5_000;
 const TCI_DIGITAL_AUTO_ZOOM_FREQUENCY_TOLERANCE_HZ = 5_000;
 
-type ElectronWindowHelper = Window & {
-  electronAPI?: {
-    window: {
-      openSpectrumWindow: () => Promise<void>;
-    };
-  };
-};
 
 const AUDIO_WATERFALL_HISTORY_ROWS = 1024;
 const RADIO_SDR_WATERFALL_HISTORY_ROWS = WATERFALL_MAX_HISTORY_ROWS;
@@ -1169,14 +1163,13 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     actualRangeRef.current = range;
   }, []);
 
-  const isElectron = typeof window !== 'undefined' && (window as ElectronWindowHelper).electronAPI !== undefined;
   const resetOperatorsAfterOperatingStateChange = useCallback(() => {
     resetOperatorsForOperatingStateChange({
       operators,
       radioService: connection.state.radioService,
     });
   }, [connection.state.radioService, operators]);
-  const canPopOut = showPopOut && isElectron;
+  const canPopOut = showPopOut;
   const rxFrequencies = useTargetRxFrequencies();
   const txFrequencies = useTxFrequencies();
   const { currentOperatorId } = useCurrentOperatorId();
@@ -1617,8 +1610,11 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
 
   const handlePopOut = useCallback(async () => {
     try {
-      await (window as ElectronWindowHelper).electronAPI!.window.openSpectrumWindow();
-      onPopOutChange?.(true);
+      const presentation = await openSpectrumWindow();
+      // Only a host window reports its closure; browser tabs keep the inline view.
+      if (presentation === 'host-window') {
+        onPopOutChange?.(true);
+      }
     } catch (error) {
       logger.error('Failed to open spectrum window', error);
     }

@@ -82,6 +82,61 @@ export function openPluginPageWindow(options: PluginPageWindowOptions): void {
 }
 
 /**
+ * Where a standalone spectrum view was presented.
+ *
+ * - `host-window`: an Electron window that notifies the main window when it
+ *   closes, so the caller may hide its inline spectrum until then.
+ * - `browser-tab`: a browser tab with no reliable close signal; the inline
+ *   spectrum must stay mounted.
+ * - `current-page`: the current page navigated to the spectrum page (Android
+ *   WebView, or a blocked popup).
+ */
+export type SpectrumWindowPresentation = 'host-window' | 'browser-tab' | 'current-page';
+
+const SPECTRUM_BROWSER_WINDOW_NAME = 'tx5dr-spectrum';
+let spectrumBrowserWindow: Window | null = null;
+
+export function getSpectrumPageUrl(baseHref: string = document.baseURI): string {
+  return new URL('spectrum.html', baseHref).toString();
+}
+
+/**
+ * Opens the standalone spectrum page. Browsers reuse one named tab so repeated
+ * clicks focus the existing view instead of opening parallel spectrum streams.
+ * The page authenticates from the same-origin session like the main window.
+ */
+export async function openSpectrumWindow(): Promise<SpectrumWindowPresentation> {
+  const hostWindowApi = window.electronAPI?.window;
+  if (hostWindowApi?.openSpectrumWindow) {
+    await hostWindowApi.openSpectrumWindow();
+    return 'host-window';
+  }
+
+  const url = getSpectrumPageUrl();
+
+  if (isAndroid()) {
+    window.location.assign(url);
+    return 'current-page';
+  }
+
+  if (spectrumBrowserWindow && !spectrumBrowserWindow.closed) {
+    spectrumBrowserWindow.focus();
+    return 'browser-tab';
+  }
+
+  const newWindow = window.open(url, SPECTRUM_BROWSER_WINDOW_NAME);
+  if (newWindow) {
+    spectrumBrowserWindow = newWindow;
+    newWindow.focus();
+    return 'browser-tab';
+  }
+
+  logger.warn('Spectrum page popup was blocked; opening in the current tab');
+  window.location.assign(url);
+  return 'current-page';
+}
+
+/**
  * 打开通联日志窗口
  */
 export function openLogbookWindow(options: LogbookWindowOptions): void {

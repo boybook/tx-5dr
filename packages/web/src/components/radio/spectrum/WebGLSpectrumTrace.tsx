@@ -1,21 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { createLogger } from '../../../utils/logger';
 import {
-  classifyWaterfallViewportWheelAxis,
-  getWaterfallLocalZoomFactor,
   buildWaterfallRulerTicks,
-  calculateSpectrumAxisTransitionDuration,
-  getWaterfallSemanticFrequencyAtRatio,
-  getWaterfallSemanticFrequencyPositionPercent,
-  normalizeWaterfallWheelDeltaX,
-  shouldHandleWaterfallHorizontalWheel,
-  type FrequencyBandOverlay,
-  type FrequencyBandOverlayChange,
-  type PresetMarker,
-  type RxFrequency,
-  type TxBandOverlay,
-  type TxFrequency,
-  type WaterfallViewportChangePhase,
   type WaterfallViewportInteraction,
 } from './WebGLWaterfall';
 import {
@@ -28,50 +14,25 @@ import { SpectrumTraceSmoother } from '../../../spectrum/SpectrumTraceSmoother';
 
 const logger = createLogger('WebGLSpectrumTrace');
 const TRACE_MAX_DEVICE_PIXEL_RATIO = 1.5;
-const TRACE_MIN_VIEWPORT_SPAN_HZ = 200;
-const TRACE_WHEEL_IDLE_MS = 350;
-const TRACE_DRAG_THRESHOLD_PX = 4;
 const TRACE_FRAME_INTERPOLATION_MS = 50;
 
+/**
+ * Render-only spectrum trace. In the standalone presentation it is mounted as
+ * the header surface of WebGLWaterfall, whose single overlay/interaction layer
+ * spans both surfaces; the trace therefore owns no markers or gestures and only
+ * follows the shared viewport (committed range plus live previews).
+ */
 export interface WebGLSpectrumTraceProps {
   controller: SpectrumStreamController;
   className?: string;
   height?: number;
   minDb?: number;
   maxDb?: number;
-  frequencyRangeMode?: 'baseband' | 'absolute-center' | 'absolute-fixed' | 'absolute-windowed';
-  referenceFrequencyHz?: number | null;
   frequencyAxisTransform?: FrequencyAxisTransform;
   visualFrequencyOffsetHz?: number;
-  basebandInteractionRange?: { min: number; max: number };
-  interactionFrequencyMode?: 'baseband' | 'absolute';
-  interactionFrequencyRange?: { min: number; max: number } | null;
-  viewportInteraction?: WaterfallViewportInteraction;
+  /** Only the committed `range` is read; gestures belong to the waterfall. */
+  viewportInteraction?: Pick<WaterfallViewportInteraction, 'range'>;
   viewportRuntime?: SpectrumViewportRuntime;
-  rxFrequencies?: RxFrequency[];
-  txFrequencies?: TxFrequency[];
-  txBandOverlays?: TxBandOverlay[];
-  frequencyBandOverlays?: FrequencyBandOverlay[];
-  presetMarkers?: PresetMarker[];
-  onTxFrequencyChange?: (operatorId: string, frequency: number) => void;
-  onTxBandOverlayFrequencyChange?: (id: string, frequency: number) => void;
-  onFrequencyBandOverlayPreviewChange?: (id: string, change: FrequencyBandOverlayChange) => void;
-  onFrequencyBandOverlayCommit?: (id: string, change: FrequencyBandOverlayChange) => void;
-  onPresetMarkerClick?: (frequency: number) => void;
-  onDoubleClickSetFrequency?: (frequency: number) => void;
-  onRightClickSetFrequency?: (frequency: number) => void;
-}
-
-interface DragState {
-  pointerId: number;
-  startX: number;
-  startFrequency: number;
-  startWidth: number;
-  startCenter?: number;
-  kind: 'tx' | 'tx-band' | 'frequency-band';
-  id: string;
-  target?: 'center' | 'start' | 'end';
-  exceededThreshold?: boolean;
 }
 
 function isValidRange(range: { min: number; max: number } | null | undefined): range is { min: number; max: number } {
@@ -166,27 +127,10 @@ export const WebGLSpectrumTrace: React.FC<WebGLSpectrumTraceProps> = ({
   height = 140,
   minDb = -35,
   maxDb = 10,
-  frequencyRangeMode = 'absolute-center',
-  referenceFrequencyHz = null,
   frequencyAxisTransform = IDENTITY_FREQUENCY_AXIS_TRANSFORM,
   visualFrequencyOffsetHz = 0,
-  basebandInteractionRange = { min: 0, max: 3000 },
-  interactionFrequencyMode = 'baseband',
-  interactionFrequencyRange = null,
   viewportInteraction,
   viewportRuntime,
-  rxFrequencies = [],
-  txFrequencies = [],
-  txBandOverlays = [],
-  frequencyBandOverlays = [],
-  presetMarkers = [],
-  onTxFrequencyChange,
-  onTxBandOverlayFrequencyChange,
-  onFrequencyBandOverlayPreviewChange,
-  onFrequencyBandOverlayCommit,
-  onPresetMarkerClick,
-  onDoubleClickSetFrequency,
-  onRightClickSetFrequency,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -228,32 +172,11 @@ export const WebGLSpectrumTrace: React.FC<WebGLSpectrumTraceProps> = ({
   const maxDbRef = useRef(maxDb);
   const viewportInteractionRef = useRef(viewportInteraction);
   const frequencyAxisTransformRef = useRef(frequencyAxisTransform);
-  const interactionFrequencyModeRef = useRef(interactionFrequencyMode);
-  const frequencyRangeModeRef = useRef(frequencyRangeMode);
-  const referenceFrequencyRef = useRef(referenceFrequencyHz);
   const visualOffsetRef = useRef(visualFrequencyOffsetHz);
-  const interactionRangeRef = useRef(interactionFrequencyRange);
-  const basebandRangeRef = useRef(basebandInteractionRange);
-  const overlayRefs = useRef(new Map<string, HTMLDivElement>());
-  const overlayAxisTransitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rulerRef = useRef<HTMLDivElement>(null);
   const rulerPoolRef = useRef<Array<{ root: HTMLDivElement; line: HTMLDivElement; label: HTMLDivElement; lineClass: string; labelText: string }>>([]);
   const rulerSignatureRef = useRef<string | null>(null);
   const viewAxisRef = useRef<{ min: number; max: number } | null>(null);
-  const viewportGestureRef = useRef<{
-    pointerId: number;
-    startX: number;
-    startRange: { min: number; max: number };
-    lastRange: { min: number; max: number };
-  } | null>(null);
-  const pendingViewportRef = useRef<{ range: { min: number; max: number }; source: 'pan' | 'zoom' } | null>(null);
-  const viewportWheelLockRef = useRef<{ axis: 'horizontal' | 'vertical'; expiresAt: number } | null>(null);
-  const viewportWheelCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const overlayDragRef = useRef<DragState | null>(null);
-  const overlayLatestFrequencyRef = useRef<{ id: string; frequency: number } | null>(null);
-  const overlayLatestBandChangeRef = useRef<{ id: string } & FrequencyBandOverlayChange | null>(null);
-  const overlayCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const overlayOverrideRef = useRef(new Map<string, number>());
   const renderRef = useRef<() => void>(() => {});
   const smoothingStartRef = useRef<number | null>(null);
 
@@ -262,12 +185,7 @@ export const WebGLSpectrumTrace: React.FC<WebGLSpectrumTraceProps> = ({
   maxDbRef.current = maxDb;
   viewportInteractionRef.current = viewportInteraction;
   frequencyAxisTransformRef.current = frequencyAxisTransform;
-  interactionFrequencyModeRef.current = interactionFrequencyMode;
-  frequencyRangeModeRef.current = frequencyRangeMode;
-  referenceFrequencyRef.current = referenceFrequencyHz;
   visualOffsetRef.current = visualFrequencyOffsetHz;
-  interactionRangeRef.current = interactionFrequencyRange;
-  basebandRangeRef.current = basebandInteractionRange;
 
   const getSnapshot = useCallback((): SpectrumRenderSnapshot => (
     controller.getLatestRenderSnapshot()
@@ -277,114 +195,9 @@ export const WebGLSpectrumTrace: React.FC<WebGLSpectrumTraceProps> = ({
     if (isValidRange(viewAxisRef.current)) return viewAxisRef.current;
     const range = viewportInteractionRef.current?.range;
     if (isValidRange(range)) return range;
-    return getSnapshot().axis;
+    const axis = getSnapshot().axis;
+    return axis ? { min: axis.minHz, max: axis.maxHz } : null;
   }, [getSnapshot]);
-
-  const getDisplayFrequency = useCallback((frequency: number): number | null => {
-    if (!Number.isFinite(frequency)) return null;
-    if (frequencyRangeModeRef.current === 'absolute-windowed') return frequency;
-    if (frequencyRangeModeRef.current !== 'baseband') {
-      const reference = referenceFrequencyRef.current;
-      return typeof reference === 'number' && Number.isFinite(reference) ? reference + frequency : null;
-    }
-    return frequency;
-  }, []);
-
-  const getPosition = useCallback((frequency: number, axis: { min: number; max: number } | null = getCurrentAxis()): number | null => {
-    if (!axis || !isValidRange(axis)) return null;
-    const displayFrequency = interactionFrequencyModeRef.current === 'absolute'
-      ? frequency
-      : getDisplayFrequency(frequency);
-    if (displayFrequency === null) return null;
-    return getWaterfallSemanticFrequencyPositionPercent(
-      displayFrequency,
-      axis.min,
-      axis.max,
-      frequencyAxisTransformRef.current,
-      visualOffsetRef.current,
-    );
-  }, [getCurrentAxis, getDisplayFrequency]);
-
-  const getAbsolutePosition = useCallback((frequency: number, axis: { min: number; max: number } | null = getCurrentAxis()): number | null => {
-    if (!axis || !isValidRange(axis) || !Number.isFinite(frequency)) return null;
-    return getWaterfallSemanticFrequencyPositionPercent(
-      frequency,
-      axis.min,
-      axis.max,
-      frequencyAxisTransformRef.current,
-      visualOffsetRef.current,
-    );
-  }, [getCurrentAxis]);
-
-  const updateOverlayPositions = useCallback((axis: { min: number; max: number } | null = getCurrentAxis()) => {
-    if (!axis || !isValidRange(axis)) return;
-    const setPosition = (key: string, frequency: number) => {
-      const element = overlayRefs.current.get(key);
-      const position = getPosition(frequency, axis);
-      if (element && position !== null && Number.isFinite(position)) {
-        element.style.left = `${position}%`;
-      }
-    };
-
-    for (const overlay of txBandOverlays) {
-      const lineFrequency = overlayOverrideRef.current.get(`tx-band:${overlay.id}`) ?? overlay.lineFrequency;
-      const txBandLine = overlayRefs.current.get(`tx-band:${overlay.id}`);
-      const txBandPosition = getAbsolutePosition(lineFrequency, axis);
-      if (txBandLine && txBandPosition !== null && Number.isFinite(txBandPosition)) txBandLine.style.left = `${txBandPosition}%`;
-      const band = overlayRefs.current.get(`tx-band:${overlay.id}:band`);
-      if (band) {
-        const start = lineFrequency + (overlay.rangeStartFrequency - overlay.lineFrequency);
-        const end = lineFrequency + (overlay.rangeEndFrequency - overlay.lineFrequency);
-        const startPosition = getAbsolutePosition(start, axis);
-        const endPosition = getAbsolutePosition(end, axis);
-        if (startPosition !== null && endPosition !== null) {
-          const left = Math.max(0, Math.min(100, Math.min(startPosition, endPosition)));
-          const right = Math.max(0, Math.min(100, Math.max(startPosition, endPosition)));
-          band.style.left = `${left}%`;
-          band.style.width = `${Math.max(0, right - left)}%`;
-        }
-      }
-    }
-    for (const overlay of frequencyBandOverlays) {
-      const center = overlayOverrideRef.current.get(`frequency-band:${overlay.id}`) ?? overlay.centerFrequency;
-      setPosition(`frequency-band:${overlay.id}`, center);
-      const band = overlayRefs.current.get(`frequency-band:${overlay.id}:band`);
-      if (band) {
-        const startPosition = getPosition(overlay.rangeStartFrequency + (center - overlay.centerFrequency), axis);
-        const endPosition = getPosition(overlay.rangeEndFrequency + (center - overlay.centerFrequency), axis);
-        if (startPosition !== null && endPosition !== null) {
-          const left = Math.max(0, Math.min(100, Math.min(startPosition, endPosition)));
-          const right = Math.max(0, Math.min(100, Math.max(startPosition, endPosition)));
-          band.style.left = `${left}%`;
-          band.style.width = `${Math.max(0, right - left)}%`;
-        }
-      }
-    }
-    for (const marker of txFrequencies) {
-      setPosition(`tx:${marker.operatorId}`, overlayOverrideRef.current.get(`tx:${marker.operatorId}`) ?? marker.frequency);
-    }
-    for (const marker of rxFrequencies) setPosition(`rx:${marker.operatorId}`, marker.frequency);
-    for (const marker of presetMarkers) setPosition(`preset:${marker.id}`, marker.frequency);
-  }, [frequencyBandOverlays, getAbsolutePosition, getCurrentAxis, getPosition, presetMarkers, rxFrequencies, txBandOverlays, txFrequencies]);
-
-  const clearOverlayAxisTransition = useCallback(() => {
-    if (overlayAxisTransitionTimerRef.current) {
-      clearTimeout(overlayAxisTransitionTimerRef.current);
-      overlayAxisTransitionTimerRef.current = null;
-    }
-    for (const element of overlayRefs.current.values()) element.style.transition = '';
-  }, []);
-
-  const animateOverlayAxisTransition = useCallback((durationMs: number) => {
-    if (!Number.isFinite(durationMs) || durationMs <= 0 || overlayRefs.current.size === 0) return;
-    clearOverlayAxisTransition();
-    const transition = `left ${Math.round(durationMs)}ms ease, width ${Math.round(durationMs)}ms ease`;
-    for (const element of overlayRefs.current.values()) element.style.transition = transition;
-    overlayAxisTransitionTimerRef.current = setTimeout(() => {
-      overlayAxisTransitionTimerRef.current = null;
-      clearOverlayAxisTransition();
-    }, Math.ceil(durationMs) + 24);
-  }, [clearOverlayAxisTransition]);
 
   const updateRuler = useCallback((axis: { min: number; max: number }, widthPx: number) => {
     const layer = rulerRef.current;
@@ -511,10 +324,10 @@ export const WebGLSpectrumTrace: React.FC<WebGLSpectrumTraceProps> = ({
     }
     const traceValues = traceValuesRef.current ?? snapshot.values;
 
-    if (!viewportGestureRef.current && !isValidRange(viewportInteractionRef.current?.range)) {
+    if (!isValidRange(viewportInteractionRef.current?.range)) {
       viewAxisRef.current = { min: snapshot.axis.minHz, max: snapshot.axis.maxHz };
     }
-    const viewAxis = getCurrentAxis() ?? snapshot.axis;
+    const viewAxis = getCurrentAxis() ?? { min: snapshot.axis.minHz, max: snapshot.axis.maxHz };
     const pointData = ensurePointData(pointDataRef.current, traceValues);
     pointDataRef.current = pointData;
     if (snapshot.frameToken !== frameTokenRef.current || pointLengthRef.current !== traceValues.length) {
@@ -639,262 +452,14 @@ export const WebGLSpectrumTrace: React.FC<WebGLSpectrumTraceProps> = ({
     if (smoothingProgress < 1) scheduleRender();
 
     updateRuler(viewAxis, container?.clientWidth ?? 0);
-    updateOverlayPositions(viewAxis);
-  }, [ensurePointData, ensureValueData, getCurrentAxis, getSnapshot, scheduleRender, updateOverlayPositions, updateRuler]);
+  }, [ensurePointData, ensureValueData, getCurrentAxis, getSnapshot, scheduleRender, updateRuler]);
   renderRef.current = draw;
 
-  const invokeViewportChange = useCallback((range: { min: number; max: number }, source: 'pan' | 'zoom', phase: WaterfallViewportChangePhase): { min: number; max: number } => {
-    const callback = viewportInteractionRef.current?.onChange;
-    if (!callback) return range;
-    const next = callback(range, source, phase);
-    return isValidRange(next) ? { ...next } : range;
-  }, []);
-
-  const getFrequencyAtClientX = useCallback((clientX: number): number => {
-    const axis = getCurrentAxis();
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!axis || !rect || rect.width <= 0) return 0;
-    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    const displayFrequency = getWaterfallSemanticFrequencyAtRatio(
-      ratio,
-      axis.min,
-      axis.max,
-      frequencyAxisTransformRef.current,
-      visualOffsetRef.current,
-    );
-    if (interactionFrequencyModeRef.current === 'absolute' || frequencyRangeModeRef.current === 'absolute-windowed') {
-      return displayFrequency;
-    }
-    const baseband = displayFrequency - (referenceFrequencyRef.current ?? axis.min);
-    const range = basebandRangeRef.current;
-    return isValidRange(range) ? Math.max(range.min, Math.min(range.max, baseband)) : baseband;
-  }, [getCurrentAxis]);
-
-  const commitViewport = useCallback(() => {
-    const pending = pendingViewportRef.current;
-    if (!pending) return;
-    pendingViewportRef.current = null;
-    controller.setGestureViewFreeze(false);
-    const effective = invokeViewportChange(pending.range, pending.source, 'commit');
-    viewAxisRef.current = effective;
-    viewportRuntime?.setCommittedRange(effective);
-    if (viewportRuntime) requestAnimationFrame(() => viewportRuntime.clear());
-    updateOverlayPositions(effective);
-    scheduleRender();
-  }, [controller, invokeViewportChange, scheduleRender, updateOverlayPositions, viewportRuntime]);
-
-  const previewViewport = useCallback((range: { min: number; max: number }, source: 'pan' | 'zoom') => {
-    const interaction = viewportInteractionRef.current;
-    if (!interaction?.onChange || interaction.mode !== 'local-pan-zoom') return;
-    const effective = interaction.supportsPreview === true
-      ? invokeViewportChange(range, source, 'preview')
-      : invokeViewportChange(range, source, 'commit');
-    viewAxisRef.current = effective;
-    updateOverlayPositions(effective);
-    if (interaction.supportsPreview === true) {
-      if (!pendingViewportRef.current) controller.setGestureViewFreeze(true);
-      viewportRuntime?.setPreviewRange(effective);
-      pendingViewportRef.current = { range: effective, source };
-      if (viewportWheelCommitTimerRef.current) clearTimeout(viewportWheelCommitTimerRef.current);
-      viewportWheelCommitTimerRef.current = setTimeout(() => {
-        viewportWheelCommitTimerRef.current = null;
-        commitViewport();
-      }, TRACE_WHEEL_IDLE_MS);
-    }
-    scheduleRender();
-  }, [commitViewport, controller, invokeViewportChange, scheduleRender, updateOverlayPositions, viewportRuntime]);
-
-  const handleViewportPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    const interaction = viewportInteractionRef.current;
-    if (interaction?.mode !== 'local-pan-zoom' || !interaction.canPan || !interaction.onChange || event.button !== 0 || !event.isPrimary) return;
-    const target = event.target as HTMLElement | null;
-    if (target?.closest('[data-waterfall-marker-interactive="true"]')) return;
-    const axis = getCurrentAxis();
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!axis || !rect || rect.width <= 0) return;
-    event.preventDefault();
-    viewportGestureRef.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startRange: { ...axis },
-      lastRange: { ...axis },
-    };
-  }, [getCurrentAxis]);
-
   useEffect(() => {
-    const handleMove = (event: PointerEvent) => {
-      const gesture = viewportGestureRef.current;
-      if (!gesture || gesture.pointerId !== event.pointerId) return;
-      const rect = containerRef.current?.getBoundingClientRect();
-      if (!rect || rect.width <= 0) return;
-      const deltaHz = (event.clientX - gesture.startX) * (gesture.startRange.max - gesture.startRange.min) / rect.width;
-      gesture.lastRange = {
-        min: gesture.startRange.min - deltaHz,
-        max: gesture.startRange.max - deltaHz,
-      };
-      previewViewport(gesture.lastRange, 'pan');
-    };
-    const handleUp = (event: PointerEvent) => {
-      if (viewportGestureRef.current?.pointerId !== event.pointerId) return;
-      viewportGestureRef.current = null;
-      if (pendingViewportRef.current) commitViewport();
-    };
-    document.addEventListener('pointermove', handleMove);
-    document.addEventListener('pointerup', handleUp);
-    document.addEventListener('pointercancel', handleUp);
-    return () => {
-      document.removeEventListener('pointermove', handleMove);
-      document.removeEventListener('pointerup', handleUp);
-      document.removeEventListener('pointercancel', handleUp);
-    };
-  }, [commitViewport, previewViewport]);
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    const handleWheel = (event: WheelEvent) => {
-      const interaction = viewportInteractionRef.current;
-      if (interaction?.mode !== 'local-pan-zoom' || !interaction.onChange) return;
-      const now = Date.now();
-      const axis = classifyWaterfallViewportWheelAxis(event, viewportWheelLockRef.current, now);
-      if (!axis) return;
-      const current = getCurrentAxis();
-      const rect = container.getBoundingClientRect();
-      if (!current || rect.width <= 0) return;
-      if (axis === 'vertical' && interaction.canZoom && (!event.shiftKey && (event.ctrlKey || Math.abs(event.deltaY) >= Math.abs(event.deltaX)))) {
-        event.preventDefault();
-        viewportWheelLockRef.current = { axis, expiresAt: now + TRACE_WHEEL_IDLE_MS };
-        const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
-        const bounds = interaction.bounds;
-        const span = current.max - current.min;
-        const maxSpan = isValidRange(bounds) ? bounds.max - bounds.min : Number.POSITIVE_INFINITY;
-        const factor = getWaterfallLocalZoomFactor(event, {
-          isMac: typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent),
-          pageHeightPx: typeof window !== 'undefined' ? window.innerHeight : 800,
-        });
-        const nextSpan = Math.max(TRACE_MIN_VIEWPORT_SPAN_HZ, Math.min(maxSpan, span * factor));
-        const anchor = current.min + ratio * span;
-        let nextMin = anchor - ratio * nextSpan;
-        if (isValidRange(bounds)) nextMin = Math.max(bounds.min, Math.min(bounds.max - nextSpan, nextMin));
-        previewViewport({ min: nextMin, max: nextMin + nextSpan }, 'zoom');
-        return;
-      }
-      if (axis !== 'horizontal' || !interaction.canPan || !shouldHandleWaterfallHorizontalWheel(event)) return;
-      event.preventDefault();
-      viewportWheelLockRef.current = { axis, expiresAt: now + TRACE_WHEEL_IDLE_MS };
-      const rawDelta = normalizeWaterfallWheelDeltaX(event, rect.width) || (event.shiftKey ? event.deltaY : 0);
-      if (!Number.isFinite(rawDelta) || rawDelta === 0) return;
-      const deltaHz = rawDelta * (current.max - current.min) / rect.width;
-      previewViewport({ min: current.min + deltaHz, max: current.max + deltaHz }, 'pan');
-    };
-    container.addEventListener('wheel', handleWheel, { passive: false });
-    return () => container.removeEventListener('wheel', handleWheel);
-  }, [getCurrentAxis, previewViewport]);
-
-  const handleOverlayPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>, state: DragState) => {
-    if (event.button !== 0 || !event.isPrimary) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const rect = containerRef.current?.getBoundingClientRect();
-    const axis = getCurrentAxis();
-    if (!rect || !axis || rect.width <= 0) return;
-    overlayDragRef.current = state;
-  }, [getCurrentAxis]);
-
-  useEffect(() => {
-    const handleMove = (event: PointerEvent) => {
-      const drag = overlayDragRef.current;
-      if (!drag || drag.pointerId !== event.pointerId) return;
-      const axis = getCurrentAxis();
-      const rect = containerRef.current?.getBoundingClientRect();
-      if (!axis || !rect || rect.width <= 0) return;
-      const deltaHz = (event.clientX - drag.startX) * (axis.max - axis.min) / rect.width;
-      if (drag.kind === 'tx' || drag.kind === 'tx-band') {
-        if (!drag.exceededThreshold && Math.abs(event.clientX - drag.startX) < TRACE_DRAG_THRESHOLD_PX) return;
-        drag.exceededThreshold = true;
-        const frequency = drag.startFrequency + deltaHz;
-        overlayOverrideRef.current.set(`${drag.kind === 'tx' ? 'tx' : 'tx-band'}:${drag.id}`, frequency);
-        overlayLatestFrequencyRef.current = { id: drag.id, frequency };
-        updateOverlayPositions(axis);
-        if (overlayCommitTimerRef.current) clearTimeout(overlayCommitTimerRef.current);
-        overlayCommitTimerRef.current = setTimeout(() => {
-          const latest = overlayLatestFrequencyRef.current;
-          if (!latest) return;
-          if (drag.kind === 'tx') onTxFrequencyChange?.(latest.id, latest.frequency);
-          else onTxBandOverlayFrequencyChange?.(latest.id, latest.frequency);
-          overlayCommitTimerRef.current = null;
-        }, 120);
-        return;
-      }
-
-      const overlay = frequencyBandOverlays.find(item => item.id === drag.id);
-      if (!overlay) return;
-      const nextCenter = drag.startCenter! + deltaHz;
-      const nextChange: FrequencyBandOverlayChange = {
-        centerFrequency: nextCenter,
-        rangeStartFrequency: nextCenter - drag.startWidth / 2,
-        rangeEndFrequency: nextCenter + drag.startWidth / 2,
-        widthHz: drag.startWidth,
-      };
-      overlayOverrideRef.current.set(`frequency-band:${drag.id}`, nextCenter);
-      overlayLatestBandChangeRef.current = { id: drag.id, ...nextChange };
-      updateOverlayPositions(axis);
-      onFrequencyBandOverlayPreviewChange?.(drag.id, nextChange);
-    };
-    const handleUp = (event: PointerEvent) => {
-      const drag = overlayDragRef.current;
-      if (!drag || drag.pointerId !== event.pointerId) return;
-      overlayDragRef.current = null;
-      if (overlayCommitTimerRef.current) {
-        clearTimeout(overlayCommitTimerRef.current);
-        overlayCommitTimerRef.current = null;
-      }
-      if (drag.kind === 'tx' || drag.kind === 'tx-band') {
-        const latest = overlayLatestFrequencyRef.current;
-        if (latest && drag.exceededThreshold) {
-          if (drag.kind === 'tx') onTxFrequencyChange?.(latest.id, latest.frequency);
-          else onTxBandOverlayFrequencyChange?.(latest.id, latest.frequency);
-        }
-        overlayLatestFrequencyRef.current = null;
-        setTimeout(() => overlayOverrideRef.current.delete(`${drag.kind === 'tx' ? 'tx' : 'tx-band'}:${drag.id}`), 400);
-      } else {
-        const latest = overlayLatestBandChangeRef.current;
-        if (latest) {
-          const { id, ...change } = latest;
-          onFrequencyBandOverlayCommit?.(id, change);
-        }
-        overlayLatestBandChangeRef.current = null;
-        overlayOverrideRef.current.delete(`frequency-band:${drag.id}`);
-      }
-      scheduleRender();
-    };
-    document.addEventListener('pointermove', handleMove);
-    document.addEventListener('pointerup', handleUp);
-    document.addEventListener('pointercancel', handleUp);
-    return () => {
-      document.removeEventListener('pointermove', handleMove);
-      document.removeEventListener('pointerup', handleUp);
-      document.removeEventListener('pointercancel', handleUp);
-    };
-  }, [frequencyBandOverlays, getCurrentAxis, onFrequencyBandOverlayCommit, onFrequencyBandOverlayPreviewChange, onTxBandOverlayFrequencyChange, onTxFrequencyChange, scheduleRender, updateOverlayPositions]);
-
-  useEffect(() => {
-    if (!viewportInteraction?.range || viewportGestureRef.current) return;
-    const previousAxis = viewAxisRef.current;
-    if (
-      previousAxis
-      && (previousAxis.min !== viewportInteraction.range.min || previousAxis.max !== viewportInteraction.range.max)
-      && !viewportRuntime?.getPreviewRange()
-    ) {
-      animateOverlayAxisTransition(calculateSpectrumAxisTransitionDuration(
-        { minHz: previousAxis.min, maxHz: previousAxis.max, binCount: 1 },
-        { minHz: viewportInteraction.range.min, maxHz: viewportInteraction.range.max, binCount: 1 },
-      ));
-    }
+    if (!viewportInteraction?.range) return;
     viewAxisRef.current = { ...viewportInteraction.range };
-    updateOverlayPositions(viewportInteraction.range);
     scheduleRender();
-  }, [animateOverlayAxisTransition, scheduleRender, updateOverlayPositions, viewportInteraction?.range?.max, viewportInteraction?.range?.min, viewportRuntime]);
+  }, [scheduleRender, viewportInteraction?.range?.max, viewportInteraction?.range?.min]);
 
   useEffect(() => {
     const unsubscribe = controller.subscribeFrameTick(() => scheduleRender());
@@ -915,22 +480,13 @@ export const WebGLSpectrumTrace: React.FC<WebGLSpectrumTraceProps> = ({
       const preview = viewportRuntime.getPreviewRange();
       if (preview && preview.max > preview.min) {
         viewAxisRef.current = { ...preview };
-        updateOverlayPositions(preview);
       }
       scheduleRender();
     };
     const unsubscribe = viewportRuntime.subscribe(syncExternalPreview);
     syncExternalPreview();
     return unsubscribe;
-  }, [scheduleRender, updateOverlayPositions, viewportRuntime]);
-
-  useEffect(() => () => {
-    if (viewportWheelCommitTimerRef.current) clearTimeout(viewportWheelCommitTimerRef.current);
-    if (overlayCommitTimerRef.current) clearTimeout(overlayCommitTimerRef.current);
-    clearOverlayAxisTransition();
-    viewportRuntime?.clear();
-    controller.setGestureViewFreeze(false);
-  }, [clearOverlayAxisTransition, controller, viewportRuntime]);
+  }, [scheduleRender, viewportRuntime]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -1064,39 +620,12 @@ export const WebGLSpectrumTrace: React.FC<WebGLSpectrumTraceProps> = ({
     };
   }, [scheduleRender]);
 
-  const renderAxis = getCurrentAxis();
-  const markerPosition = (frequency: number) => getPosition(frequency, renderAxis);
-  const ref = (key: string) => (element: HTMLDivElement | null) => {
-    if (element) overlayRefs.current.set(key, element);
-    else overlayRefs.current.delete(key);
-  };
-
-  const commonOverlayStyle = 'absolute top-0 h-full pointer-events-auto touch-none';
-  const overlayElements = useMemo(() => ({
-    txBandOverlays,
-    frequencyBandOverlays,
-    txFrequencies,
-    rxFrequencies,
-    presetMarkers,
-  }), [frequencyBandOverlays, presetMarkers, rxFrequencies, txBandOverlays, txFrequencies]);
-
   return (
     <div
       ref={containerRef}
-      className={`relative ${className}`}
-      style={{ height: `${height}px`, touchAction: viewportInteraction?.mode === 'local-pan-zoom' ? 'none' : undefined }}
-      onPointerDown={handleViewportPointerDown}
-      onDoubleClick={(event) => {
-        if (!onDoubleClickSetFrequency) return;
-        const target = event.target as HTMLElement | null;
-        if (target?.closest('[data-waterfall-marker-interactive="true"]')) return;
-        onDoubleClickSetFrequency(getFrequencyAtClientX(event.clientX));
-      }}
-      onContextMenu={(event) => {
-        if (!onRightClickSetFrequency) return;
-        event.preventDefault();
-        onRightClickSetFrequency(getFrequencyAtClientX(event.clientX));
-      }}
+      className={`pointer-events-none relative ${className}`}
+      style={{ height: `${height}px` }}
+      aria-hidden="true"
     >
       <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" aria-hidden="true" />
       <div className="pointer-events-none absolute inset-0 z-10">
@@ -1109,112 +638,6 @@ export const WebGLSpectrumTrace: React.FC<WebGLSpectrumTraceProps> = ({
         <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent" />
       </div>
       <div ref={rulerRef} className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-6" />
-      <div className="pointer-events-none absolute inset-0 z-20">
-        {overlayElements.txBandOverlays.map((overlay) => {
-          const position = getAbsolutePosition(overlay.lineFrequency, renderAxis);
-          if (position === null) return null;
-          const start = getAbsolutePosition(overlay.rangeStartFrequency, renderAxis);
-          const end = getAbsolutePosition(overlay.rangeEndFrequency, renderAxis);
-          const draggable = Boolean(overlay.draggable && onTxBandOverlayFrequencyChange);
-          return (
-            <React.Fragment key={`trace-tx-band-${overlay.id}`}>
-              <div ref={ref(`tx-band:${overlay.id}:band`)} className="absolute top-0 h-full bg-red-500/10" style={{ left: `${Math.max(0, Math.min(100, Math.min(start ?? position, end ?? position)))}%`, width: `${Math.max(0, Math.min(100, Math.abs((end ?? position) - (start ?? position))))}%` }} />
-              <div
-                ref={ref(`tx-band:${overlay.id}`)}
-                className={`${commonOverlayStyle} ${draggable ? 'cursor-grab' : 'cursor-default'}`}
-                style={{ left: `${position}%`, transform: 'translateX(-50%)' }}
-                data-waterfall-marker-interactive="true"
-                onPointerDown={draggable ? (event) => handleOverlayPointerDown(event, {
-                  pointerId: event.pointerId,
-                  startX: event.clientX,
-                  startFrequency: overlay.lineFrequency,
-                  startWidth: Math.abs(overlay.rangeEndFrequency - overlay.rangeStartFrequency),
-                  kind: 'tx-band',
-                  id: overlay.id,
-                }) : undefined}
-              >
-                <div className="h-full w-0.5 bg-red-400/70" />
-                {overlay.label && <div className="absolute bottom-1 left-1/2 -translate-x-1/2 rounded bg-black/60 px-1 text-[10px] font-semibold text-red-300">{overlay.label}</div>}
-              </div>
-            </React.Fragment>
-          );
-        })}
-        {overlayElements.frequencyBandOverlays.map((overlay) => {
-          const position = markerPosition(overlay.centerFrequency);
-          if (position === null) return null;
-          const draggable = Boolean(overlay.draggable && onFrequencyBandOverlayCommit);
-          return (
-            <React.Fragment key={`trace-frequency-band-${overlay.id}`}>
-              <div ref={ref(`frequency-band:${overlay.id}:band`)} className="absolute top-0 h-full bg-cyan-400/10" style={{ left: `${position}%`, width: '0%' }} />
-              <div
-                ref={ref(`frequency-band:${overlay.id}`)}
-                className={`${commonOverlayStyle} ${draggable ? 'cursor-grab' : 'cursor-default'}`}
-                style={{ left: `${position}%`, transform: 'translateX(-50%)' }}
-                data-waterfall-marker-interactive="true"
-                onPointerDown={draggable ? (event) => handleOverlayPointerDown(event, {
-                  pointerId: event.pointerId,
-                  startX: event.clientX,
-                  startFrequency: overlay.centerFrequency,
-                  startCenter: overlay.centerFrequency,
-                  startWidth: Math.abs(overlay.rangeEndFrequency - overlay.rangeStartFrequency),
-                  kind: 'frequency-band',
-                  id: overlay.id,
-                  target: 'center',
-                }) : undefined}
-              >
-                <div className="h-full w-px bg-cyan-200/60" />
-                <div className="absolute bottom-1 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-black/60 px-1 text-[10px] text-cyan-200">{overlay.description ?? overlay.label}</div>
-              </div>
-            </React.Fragment>
-          );
-        })}
-        {overlayElements.txFrequencies.map((marker) => {
-          const position = markerPosition(marker.frequency);
-          if (position === null) return null;
-          const draggable = Boolean(onTxFrequencyChange);
-          return (
-            <div
-              key={`trace-tx-${marker.operatorId}`}
-              ref={ref(`tx:${marker.operatorId}`)}
-              className={`${commonOverlayStyle} ${draggable ? 'cursor-grab' : 'cursor-default'}`}
-              style={{ left: `${position}%`, transform: 'translateX(-50%)' }}
-              data-waterfall-marker-interactive="true"
-              onPointerDown={draggable ? (event) => handleOverlayPointerDown(event, {
-                pointerId: event.pointerId,
-                startX: event.clientX,
-                startFrequency: marker.frequency,
-                startWidth: 0,
-                kind: 'tx',
-                id: marker.operatorId,
-              }) : undefined}
-            >
-              <div className="h-full w-0.5 bg-red-400/70" />
-              <div className="absolute bottom-1 left-1/2 -translate-x-1/2 rounded bg-black/60 px-1 text-[10px] font-semibold text-red-300">TX</div>
-            </div>
-          );
-        })}
-        {overlayElements.rxFrequencies.map((marker) => {
-          const position = markerPosition(marker.frequency);
-          if (position === null) return null;
-          return (
-            <div key={`trace-rx-${marker.operatorId}`} ref={ref(`rx:${marker.operatorId}`)} className={`${commonOverlayStyle} cursor-default`} style={{ left: `${position}%`, transform: 'translateX(-50%)' }} data-waterfall-marker-interactive="true">
-              <div className="h-full w-0.5 bg-green-400/70" />
-              <div className="absolute bottom-1 left-1/2 -translate-x-1/2 rounded bg-black/60 px-1 text-[10px] font-semibold text-green-300">RX</div>
-            </div>
-          );
-        })}
-        {overlayElements.presetMarkers.map((marker) => {
-          const position = markerPosition(marker.frequency);
-          if (position === null) return null;
-          const clickable = Boolean(marker.clickable && onPresetMarkerClick);
-          return (
-            <div key={`trace-preset-${marker.id}`} ref={ref(`preset:${marker.id}`)} className={`${commonOverlayStyle} ${clickable ? 'cursor-pointer' : 'cursor-default'}`} style={{ left: `${position}%`, transform: 'translateX(-50%)' }} data-waterfall-marker-interactive="true" onClick={clickable ? (event) => { event.preventDefault(); event.stopPropagation(); onPresetMarkerClick?.(marker.frequency); } : undefined}>
-              <div className="h-full w-px bg-amber-300/60" />
-              <div className="absolute bottom-1 left-1/2 -translate-x-1/2 rounded bg-black/60 px-1 text-[10px] text-amber-200">{marker.label}</div>
-            </div>
-          );
-        })}
-      </div>
     </div>
   );
 };

@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { AuthProvider, useAuth } from '../store/authStore';
 import { RadioProvider, useConnection } from '../store/radioStore';
 import { LoginPage } from './LoginPage';
@@ -91,6 +92,11 @@ export const SpectrumPage: React.FC = () => {
   // keeping the trace/waterfall contrast stable on bright desktops.
   useTheme({ forcedTheme: 'dark' });
   useLanguage();
+  const { t } = useTranslation('common');
+
+  React.useEffect(() => {
+    document.title = `${t('spectrum.pageTitle')} - TX-5DR`;
+  }, [t]);
 
   return (
     <AuthProvider>

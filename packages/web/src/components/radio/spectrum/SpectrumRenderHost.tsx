@@ -1,5 +1,5 @@
 import React, { useMemo, useRef } from 'react';
-import { WebGLSpectrumTrace, type WebGLSpectrumTraceProps } from './WebGLSpectrumTrace';
+import { WebGLSpectrumTrace } from './WebGLSpectrumTrace';
 import { WebGLWaterfall } from './WebGLWaterfall';
 import { createSpectrumViewportRuntime } from '../../../spectrum/SpectrumViewportRuntime';
 
@@ -15,6 +15,8 @@ export interface SpectrumRenderHostProps {
   traceHeight?: number;
 }
 
+const TRACE_DIVIDER_HEIGHT_PX = 1;
+
 function resolveTraceHeight(height: number, requested?: number): number {
   if (typeof requested === 'number' && Number.isFinite(requested) && requested > 0) {
     return Math.min(Math.max(96, requested), Math.max(96, height - 48));
@@ -24,6 +26,7 @@ function resolveTraceHeight(height: number, requested?: number): number {
   return Math.min(220, Math.max(112, Math.round(height * 0.27)));
 }
 
+/** Height available to waterfall rows below the optional trace header. */
 export function resolveSpectrumWaterfallHeight(
   height: number,
   traceHeight: number,
@@ -32,42 +35,13 @@ export function resolveSpectrumWaterfallHeight(
   return Math.max(1, standalone ? height - traceHeight : height);
 }
 
-function createTraceProps(props: WaterfallProps, height: number, viewportRuntime?: ReturnType<typeof createSpectrumViewportRuntime>): WebGLSpectrumTraceProps {
-  return {
-    controller: props.controller,
-    height,
-    minDb: props.minDb,
-    maxDb: props.maxDb,
-    frequencyRangeMode: props.frequencyRangeMode,
-    referenceFrequencyHz: props.referenceFrequencyHz,
-    frequencyAxisTransform: props.frequencyAxisTransform,
-    visualFrequencyOffsetHz: props.visualFrequencyOffsetHz,
-    basebandInteractionRange: props.basebandInteractionRange,
-    interactionFrequencyMode: props.interactionFrequencyMode,
-    interactionFrequencyRange: props.interactionFrequencyRange,
-    viewportInteraction: props.viewportInteraction,
-    viewportRuntime: viewportRuntime ?? props.viewportRuntime,
-    rxFrequencies: props.rxFrequencies,
-    txFrequencies: props.txFrequencies,
-    txBandOverlays: props.txBandOverlays,
-    frequencyBandOverlays: props.frequencyBandOverlays,
-    presetMarkers: props.presetMarkers,
-    onTxFrequencyChange: props.onTxFrequencyChange,
-    onTxBandOverlayFrequencyChange: props.onTxBandOverlayFrequencyChange,
-    onFrequencyBandOverlayPreviewChange: props.onFrequencyBandOverlayPreviewChange,
-    onFrequencyBandOverlayCommit: props.onFrequencyBandOverlayCommit,
-    onPresetMarkerClick: props.onPresetMarkerClick,
-    onDoubleClickSetFrequency: props.onDoubleClickSetFrequency,
-    onRightClickSetFrequency: props.onRightClickSetFrequency,
-  };
-}
-
 /**
  * Owns the presentation layout while keeping one SpectrumDisplay data model.
- * Inline pages use the existing waterfall surface. The standalone window adds
- * a WebGL trace surface and moves frequency overlays to that surface; the
- * lower waterfall remains overlay-free while sharing background viewport
- * gestures.
+ * Inline pages use the existing waterfall surface. The standalone window
+ * mounts the render-only trace as the waterfall's header, so one overlay and
+ * interaction layer spans both: markers, hover probe, popovers, overlay drags,
+ * click-to-tune and viewport gestures behave identically above and below. The
+ * shared viewport runtime only carries live viewport previews to the trace.
  */
 export const SpectrumRenderHost: React.FC<SpectrumRenderHostProps> = ({
   presentation = 'waterfall',
@@ -76,56 +50,66 @@ export const SpectrumRenderHost: React.FC<SpectrumRenderHostProps> = ({
   waterfallProps,
   traceHeight: requestedTraceHeight,
 }) => {
-  const traceHeight = resolveTraceHeight(height, requestedTraceHeight);
   const standalone = presentation === 'trace-waterfall';
+  const traceHeight = resolveTraceHeight(height, requestedTraceHeight);
+  const headerHeight = standalone ? traceHeight + TRACE_DIVIDER_HEIGHT_PX : 0;
   const viewportRuntimeRef = useRef(createSpectrumViewportRuntime());
-  const traceProps = useMemo(
-    () => createTraceProps(waterfallProps, traceHeight, viewportRuntimeRef.current),
-    [traceHeight, waterfallProps],
-  );
-  const readOnlyWaterfallProps = useMemo<WaterfallProps>(() => {
-    const waterfallHeight = resolveSpectrumWaterfallHeight(height, traceHeight, standalone);
+
+  const header = useMemo(() => {
+    if (!standalone) return undefined;
+    return (
+      <div className="flex h-full flex-col">
+        <WebGLSpectrumTrace
+          controller={waterfallProps.controller}
+          height={traceHeight}
+          minDb={waterfallProps.minDb}
+          maxDb={waterfallProps.maxDb}
+          frequencyAxisTransform={waterfallProps.frequencyAxisTransform}
+          visualFrequencyOffsetHz={waterfallProps.visualFrequencyOffsetHz}
+          viewportInteraction={waterfallProps.viewportInteraction}
+          viewportRuntime={viewportRuntimeRef.current}
+          className="shrink-0 bg-transparent"
+        />
+        <div className="h-px shrink-0 bg-white/10" />
+      </div>
+    );
+  }, [
+    standalone,
+    traceHeight,
+    waterfallProps.controller,
+    waterfallProps.frequencyAxisTransform,
+    waterfallProps.maxDb,
+    waterfallProps.minDb,
+    waterfallProps.viewportInteraction,
+    waterfallProps.visualFrequencyOffsetHz,
+  ]);
+
+  const surfaceWaterfallProps = useMemo<WaterfallProps>(() => {
     if (!standalone) {
       // SpectrumRenderHost owns presentation geometry. Keep the child surface
       // on the exact same height so bottom-anchored TX/RX labels are not laid
       // out against WebGLWaterfall's default height and clipped by the host.
-      return {
-        ...waterfallProps,
-        height: waterfallHeight,
-      };
+      return { ...waterfallProps, height };
     }
+    const rowsHeight = resolveSpectrumWaterfallHeight(height, headerHeight, true);
     const waterfallRows = typeof waterfallProps.totalRows === 'number'
-      ? Math.max(1, Math.round(waterfallProps.totalRows * waterfallHeight / Math.max(height, 1)))
+      ? Math.max(1, Math.round(waterfallProps.totalRows * rowsHeight / Math.max(height, 1)))
       : waterfallProps.totalRows;
     return {
       ...waterfallProps,
-      height: waterfallHeight,
+      height,
+      header,
+      headerHeight,
       totalRows: waterfallRows,
-      rxFrequencies: [],
-      txFrequencies: [],
-      txBandOverlays: [],
-      frequencyBandOverlays: [],
-      presetMarkers: [],
-      viewportInteraction: waterfallProps.viewportInteraction,
       viewportRuntime: viewportRuntimeRef.current,
+      // Only the negotiated viewport drives both surfaces.
       enableLocalViewportPanZoom: false,
       localViewportRange: null,
       localViewportBounds: null,
       onLocalViewportChange: undefined,
-      onTxFrequencyChange: undefined,
-      onTxBandOverlayFrequencyChange: undefined,
-      onFrequencyBandOverlayPreviewChange: undefined,
-      onFrequencyBandOverlayCommit: undefined,
-      onPresetMarkerClick: undefined,
-      onDragFrequencyPreview: undefined,
-      onDragFrequencyChange: undefined,
-      onDragFrequencyActiveChange: undefined,
-      enableHorizontalWheelFrequency: false,
-      onDoubleClickSetFrequency: undefined,
-      onRightClickSetFrequency: undefined,
       className: 'bg-transparent',
     };
-  }, [height, standalone, traceHeight, waterfallProps]);
+  }, [header, headerHeight, height, standalone, waterfallProps]);
 
   if (!standalone) {
     return (
@@ -133,20 +117,14 @@ export const SpectrumRenderHost: React.FC<SpectrumRenderHostProps> = ({
         className={`relative min-h-0 shrink-0 overflow-hidden ${className}`}
         style={{ height, minHeight: height, maxHeight: height }}
       >
-        <WebGLWaterfall {...readOnlyWaterfallProps} className={className || waterfallProps.className} />
+        <WebGLWaterfall {...surfaceWaterfallProps} className={className || waterfallProps.className} />
       </div>
     );
   }
 
   return (
-    <div className={`flex min-h-0 flex-col overflow-hidden ${className}`} style={{ height }}>
-      <div className="relative shrink-0 overflow-hidden" style={{ height: traceHeight }}>
-        <WebGLSpectrumTrace {...traceProps} className="bg-transparent" />
-      </div>
-      <div className="h-px shrink-0 bg-white/10" />
-      <div className="min-h-0 flex-1">
-        <WebGLWaterfall {...readOnlyWaterfallProps} className="h-full bg-transparent" />
-      </div>
+    <div className={`relative min-h-0 overflow-hidden ${className}`} style={{ height }}>
+      <WebGLWaterfall {...surfaceWaterfallProps} className="h-full bg-transparent" />
     </div>
   );
 };
