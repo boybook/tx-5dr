@@ -2457,7 +2457,14 @@ export class RadioOperatorManager {
    * recovery gate is tracked apart from that window so neither clears the other.
    */
   beginRadioRecovery(): void {
-    if (this.radioRecovery) return;
+    if (this.radioRecovery) {
+      // A further fault before the saved intents resumed: close the gate
+      // again and keep anything armed meanwhile.
+      this.radioRecovery.resumeAt = null;
+      this.stopAllOperators(true);
+      this.discardUncommittedTransmissions(RADIO_RECOVERY_MAINTENANCE_REASON);
+      return;
+    }
     const transmitting = [...this.operators.values()].filter(operator => operator.isTransmitting);
     this.stopAllOperators(true);
     this.discardUncommittedTransmissions(RADIO_RECOVERY_MAINTENANCE_REASON);
@@ -2496,8 +2503,15 @@ export class RadioOperatorManager {
   }
 
   private getRecoveryConfiguration(operator: RadioOperator): string {
+    // Only settings that shape this operator's automation; unrelated plugins
+    // persisting their own state must not cancel recovery.
     const config = ConfigManager.getInstance();
-    return JSON.stringify({ operator: config.getOperatorConfig(operator.config.id) ?? operator.config, plugins: config.getPluginsConfig() });
+    const id = operator.config.id;
+    const plugins = config.getPluginsConfig();
+    const strategy = plugins.operatorStrategies?.[id];
+    return JSON.stringify({ operator: config.getOperatorConfig(id) ?? operator.config, strategy,
+      strategyConfig: strategy ? plugins.configs?.[strategy] : undefined,
+      operatorSettings: plugins.operatorSettings?.[id], pauses: plugins.operatorPluginPauses?.[id] });
   }
 
   private resumeRecoveredOperatorsAtSlot(slot: SlotInfo): void {

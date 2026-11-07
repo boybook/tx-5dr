@@ -35,7 +35,7 @@ describe('HamlibNativeMonitor', () => {
   it('honors backend retry budgets and longer power operations', () => {
     expect(nativeOperationBudget('getFrequency', [])).toBe(5000);
     expect(nativeOperationBudget('getFrequency', [], undefined, { timeout: 3000, retry: 3 })).toBe(13000);
-    expect(nativeOperationBudget('setPowerstat', [1])).toBe(20000);
+    expect(nativeOperationBudget('setPowerstat', [1])).toBe(60000);
     expect(nativeOperationBudget('setPowerstat', [0])).toBe(8000);
     expect(nativeOperationBudget('getFrequency', [], { type: 'serial', serial: { path: 'dummy', rigModel: 1, backendConfig: { timeout: '10000', retry: '2' } } })).toBe(31000);
   });

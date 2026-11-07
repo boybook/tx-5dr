@@ -458,6 +458,20 @@ describe('PhysicalRadioManager', () => {
     });
   });
 
+  it('rebuilds the session when the Hamlib host fails inside a power operation', async () => {
+    const connection = new EventEmitter();
+    asTestManager(manager).connection = connection as unknown as TestRadioConnection;
+    asTestManager(manager).setupConnectionEventForwarding();
+    const fault = new RadioError({ code: RadioErrorCode.CONNECTION_LOST, message: 'Hamlib native operation stalled: setPowerstat',
+      context: { hamlibHostFatal: true, stateUncertain: true } });
+    await manager.withPowerOperation('power off', async () => {
+      connection.emit('error', fault);
+      connection.emit('error', new Error('Command rejected by the rig'));
+    });
+    expect(send).toHaveBeenCalledWith({ type: 'HEALTH_CHECK_FAILED', error: fault });
+    expect(send).toHaveBeenCalledTimes(2); // STOP_RECONNECT + the host fault; the ordinary CAT error stays suppressed
+  });
+
   it('waits for an in-flight session mutation before starting a power operation', async () => {
     let releaseConnect!: () => void;
     const connectOpening = new Promise<void>((resolve) => {
@@ -1816,6 +1830,13 @@ describe('PhysicalRadioManager', () => {
       setPTT: vi.fn().mockRejectedValue(new Error('PTT activation failed: PTT deactivation failed: Command rejected by the rig')),
       getPTT: vi.fn().mockResolvedValue(false) };
     await expect((manager as any).releasePTTAfterConnect(connection)).resolves.toBeUndefined();
+  });
+
+  it('does not treat a protocol error on PTT-off as an explicit refusal', async () => {
+    const connection = { getType: () => RadioConnectionType.HAMLIB,
+      setPTT: vi.fn().mockRejectedValue(new Error('PTT activation failed: PTT deactivation failed: Protocol error')),
+      getPTT: vi.fn().mockResolvedValue(false) };
+    await expect((manager as any).releasePTTAfterConnect(connection)).rejects.toThrow('Protocol error');
   });
 
   it('does not excuse a silent PTT-off failure with a possibly cached RX readback', async () => {

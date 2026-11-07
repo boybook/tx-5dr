@@ -30,7 +30,9 @@ export function nativeOperationBudget(operation: string, args: readonly unknown[
     ? Math.max(0, timeout) * (Math.max(0, retry) + 1) + Math.max(0, delay) + 1000 : 0;
   let minimum = 5000;
   if (operation === 'open' || operation === 'vfoOperation') minimum = 10000;
-  if (operation === 'setPowerstat') minimum = args[0] === 1 ? 20000 : 8000;
+  // ICOM power-on wakes the CPU with a long preamble and retries open; a
+  // slow but progressing wake must not be mistaken for a stalled host.
+  if (operation === 'setPowerstat') minimum = args[0] === 1 ? 60000 : 8000;
   if (operation === 'waitMorse') minimum = 120000;
   return Math.max(minimum, configured);
 }

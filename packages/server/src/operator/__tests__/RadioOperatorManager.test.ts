@@ -357,6 +357,30 @@ describe('Hamlib automation recovery', () => {
     expect(operator.isTransmitting).toBe(true);
   });
 
+  it('closes the gate again when a second fault arrives before saved intents resume', async () => {
+    const { manager, operator, eventEmitter } = await recoveryFixture();
+    manager.confirmRadioRecovery();
+    manager.beginRadioRecovery();
+    eventEmitter.emit('requestTransmit', { operatorId: operator.config.id, transmission: 'CQ N0CALL AA00' } as any);
+    expect((manager as any).pendingTransmissions).toHaveLength(0);
+    eventEmitter.emit('slotStart', createSlotInfo(15000), null);
+    expect(operator.isTransmitting).toBe(false);
+    manager.confirmRadioRecovery();
+    eventEmitter.emit('slotStart', createSlotInfo(30000), null);
+    expect(operator.isTransmitting).toBe(true);
+  });
+
+  it('ignores unrelated plugin configuration writes during recovery', async () => {
+    const { manager, operator, eventEmitter } = await recoveryFixture();
+    const config = ConfigManager.getInstance();
+    const original = config.getPluginsConfig();
+    vi.spyOn(config, 'getPluginsConfig').mockReturnValue({ ...original,
+      configs: { ...original.configs, 'unrelated-sync': { enabled: true, settings: { cursor: 42 } } } } as any);
+    manager.confirmRadioRecovery();
+    eventEmitter.emit('slotStart', createSlotInfo(15000), null);
+    expect(operator.isTransmitting).toBe(true);
+  });
+
   it('restores automation after routine intent submissions advanced the operator epoch', async () => {
     const { manager, operator, eventEmitter } = await recoveryFixture();
     const coordinator = (manager as any).intentCoordinator;

@@ -127,7 +127,9 @@ export class RadioBridge {
       const attempt = args[0] as number;
       const maxAttempts = args[1] as number;
       const delayMs = args[2] as number | undefined;
-      this.recoveryStop = this.handleRadioReconnecting(attempt, maxAttempts, delayMs).catch((error) => {
+      // Chain so a later attempt cannot hide an earlier PTT force-stop from
+      // the next `connected` handler.
+      this.recoveryStop = this.recoveryStop.then(() => this.handleRadioReconnecting(attempt, maxAttempts, delayMs)).catch((error) => {
         logger.error('Failed to handle radio reconnecting event:', error);
       });
     });

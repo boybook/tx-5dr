@@ -150,10 +150,13 @@ function isExplicitOptionalRadioCapabilityError(error: unknown): boolean {
     && error.context?.recoverable === true;
 }
 
-/** The radio answered the PTT-off command with a refusal rather than going silent. */
+/**
+ * The radio answered the PTT-off command with an explicit refusal. Protocol
+ * errors are excluded: a garbled or truncated reply is not proof that the
+ * command was understood and refused.
+ */
 function isPttReleaseRejection(error: unknown): boolean {
-  if (isRecoverableOptionalRadioError(error)) return true;
-  return /command rejected|not implemented|feature not available/i.test(asError(error).message);
+  return /command rejected|not implemented|feature not available|not supported by this radio/i.test(asError(error).message);
 }
 
 function asError(error: unknown): Error {
@@ -2862,6 +2865,13 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       this.emit('error', error);
       if (error instanceof RadioError && error.context?.restartRequired === true) {
         this.radioActor?.send({ type: 'DISCONNECT', reason: 'Hamlib host requires a server restart' });
+        return;
+      }
+      // A retired Hamlib host is gone for good; even inside a power or
+      // intentional-disconnect window the session must be rebuilt, or the
+      // state machine stays CONNECTED on a dead facade with nothing to heal it.
+      if (error instanceof RadioError && error.context?.hamlibHostFatal === true) {
+        if (this.radioActor && !this.isDisconnecting) this.radioActor.send({ type: 'HEALTH_CHECK_FAILED', error });
         return;
       }
       // 用户主动切换电源期间，底层 CAT 经常出现 "Command rejected" 类错误，
