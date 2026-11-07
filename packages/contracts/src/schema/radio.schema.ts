@@ -285,6 +285,7 @@ export type FakeFrequencyConfig = z.infer<typeof FakeFrequencyConfigSchema>;
  */
 export const HamlibConfigSchema = z.object({
   type: z.enum(['none', 'network', 'serial', 'icom-wlan', 'tci']),
+  hamlibExecutionMode: z.enum(['process', 'in-process']).optional(),
 
   // 网络模式配置
   network: NetworkConfigSchema.optional(),
@@ -481,6 +482,7 @@ export enum RadioConnectionStatus {
  */
 export const ReconnectProgressSchema = z.object({
   attempt: z.number(),
+  /** 0 表示不设上限 */
   maxAttempts: z.number(),
   nextRetryMs: z.number().optional(),
 });

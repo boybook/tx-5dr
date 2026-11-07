@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { DdsFrequencyRequestSchema, DigitalModeRadioModePreferenceSchema, HamlibConfigSchema, PresetFrequencySchema, RadioInfoSchema } from '../radio.schema.js';
 
+describe('Hamlib execution mode', () => {
+  it('accepts legacy profiles and preserves both explicit modes', () => {
+    expect(HamlibConfigSchema.parse({ type: 'serial' }).hamlibExecutionMode).toBeUndefined();
+    for (const hamlibExecutionMode of ['process', 'in-process']) {
+      expect(HamlibConfigSchema.parse({ type: 'serial', hamlibExecutionMode }).hamlibExecutionMode).toBe(hamlibExecutionMode);
+    }
+    expect(() => HamlibConfigSchema.parse({ type: 'serial', hamlibExecutionMode: 'thread' })).toThrow();
+  });
+});
+
 describe('HamlibConfigSchema digital mode radio mode preference', () => {
   it('accepts legacy configs without a digital mode radio mode preference', () => {
     const parsed = HamlibConfigSchema.parse({ type: 'none' });

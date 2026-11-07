@@ -171,6 +171,29 @@ describe('radioStateMachine', () => {
       actor.stop();
     });
 
+    it('keeps retrying beyond the fast backoff schedule until the radio returns', async () => {
+      const actor = createRadioActor(mockInput);
+      actor.start();
+      actor.send({ type: 'CONNECT', config: mockConfig });
+      await waitForRadioState(actor, RadioState.CONNECTED, 1000);
+
+      vi.useFakeTimers();
+      let failures = 0;
+      mockInput.onConnect = vi.fn().mockImplementation(() => (++failures <= 8
+        ? Promise.reject(new Error('radio still offline')) : Promise.resolve()));
+      actor.send({ type: 'CONNECTION_LOST', reason: 'host stalled' });
+      // 2+4+8+16+30 s fast schedule, then a steady 60 s interval.
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(actor.getSnapshot().value).toBe(RadioState.RECONNECTING);
+      expect(getRadioContext(actor).reconnectAttempt).toBeGreaterThan(5);
+      expect(getRadioContext(actor).reconnectDelayMs).toBe(60_000);
+      await vi.advanceTimersByTimeAsync(4 * 60_000);
+      expect(actor.getSnapshot().value).toBe(RadioState.CONNECTED);
+      expect(failures).toBe(9);
+
+      actor.stop();
+    });
+
     it('cancels pending reconnect backoff before it opens a new session', async () => {
       const actor = createRadioActor(mockInput);
       actor.start();

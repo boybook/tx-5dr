@@ -28,8 +28,13 @@ import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('RadioStateMachine');
 
-/** 指数退避延迟序列（毫秒） */
-const RECONNECT_DELAYS = [2000, 4000, 8000, 16000, 30000];
+/** 指数退避延迟序列（毫秒）；末项作为无限重连的稳定间隔 */
+const RECONNECT_DELAYS = [2000, 4000, 8000, 16000, 30000, 60000];
+/**
+ * 0 表示不设上限：无人值守时电台/USB/rigctld 恢复可能远超一分钟，
+ * 放弃重连等于让整个站停下等人。用户可随时通过“停止重连”终止。
+ */
+const UNLIMITED_RECONNECT_ATTEMPTS = 0;
 
 function delayWithAbort(delayMs: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) {
@@ -182,7 +187,8 @@ export function createRadioStateMachine(
       shouldAutoReconnect: ({ context }) => context.wasEverConnected === true,
 
       /** 是否还有重试次数 */
-      hasRetriesRemaining: ({ context }) => context.reconnectAttempt < context.maxReconnectAttempts,
+      hasRetriesRemaining: ({ context }) => context.maxReconnectAttempts <= 0
+        || context.reconnectAttempt < context.maxReconnectAttempts,
     },
     delays: {
       healthCheckInterval: () => healthCheckInterval,
@@ -194,7 +200,7 @@ export function createRadioStateMachine(
       isHealthy: false,
       wasEverConnected: false,
       reconnectAttempt: 0,
-      maxReconnectAttempts: 5,
+      maxReconnectAttempts: UNLIMITED_RECONNECT_ATTEMPTS,
     },
     states: {
       /**

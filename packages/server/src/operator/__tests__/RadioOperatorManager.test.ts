@@ -282,6 +282,163 @@ function attachQSOHookSpy(manager: RadioOperatorManager) {
   };
 }
 
+describe('Hamlib automation recovery', () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  async function recoveryFixture() {
+    const fixture = createManager({ logBook: { id: 'log', name: 'Recovery', provider: { hasWorkedCallsign: vi.fn().mockResolvedValue(false) } }, clockNow: 1000 });
+    await fixture.manager.addOperator({ id: 'op-recovery', myCallsign: 'N0CALL', myGrid: 'AA00', frequency: 1500, transmitCycles: [0] });
+    const operator = fixture.manager.getOperator('op-recovery')!;
+    operator.start();
+    fixture.manager.start();
+    fixture.manager.beginRadioRecovery();
+    fixture.manager.start();
+    return { ...fixture, operator };
+  }
+
+  it('waits for safety confirmation and a new complete slot without replaying a frame', async () => {
+    const { manager, operator, eventEmitter, encodeQueue } = await recoveryFixture();
+    eventEmitter.emit('slotStart', createSlotInfo(15000), null);
+    expect(operator.isTransmitting).toBe(false);
+    manager.confirmRadioRecovery();
+    eventEmitter.emit('slotStart', createSlotInfo(0), null);
+    expect(operator.isTransmitting).toBe(false);
+    eventEmitter.emit('slotStart', createSlotInfo(15000), null);
+    expect(operator.isTransmitting).toBe(true);
+    expect(encodeQueue.push).not.toHaveBeenCalled();
+  });
+
+  it('does not restore an operator explicitly stopped during recovery', async () => {
+    const { manager, operator, eventEmitter } = await recoveryFixture();
+    manager.stopOperator(operator.config.id);
+    manager.confirmRadioRecovery();
+    eventEmitter.emit('slotStart', createSlotInfo(15000), null);
+    expect(operator.isTransmitting).toBe(false);
+  });
+
+  it('does not restore automation after global stop or profile changes', async () => {
+    const { manager, operator, eventEmitter } = await recoveryFixture();
+    manager.stopAllOperators();
+    manager.confirmRadioRecovery();
+    eventEmitter.emit('slotStart', createSlotInfo(15000), null);
+    expect(operator.isTransmitting).toBe(false);
+    operator.start(); manager.beginRadioRecovery(); manager.start();
+    vi.spyOn(ConfigManager.getInstance(), 'getActiveProfileId').mockReturnValue('different-profile');
+    manager.confirmRadioRecovery();
+    eventEmitter.emit('slotStart', createSlotInfo(30000), null);
+    expect(operator.isTransmitting).toBe(false);
+  });
+
+  it('accepts an explicit start during recovery while maintenance still withholds frames', async () => {
+    const { manager, operator, eventEmitter } = await recoveryFixture();
+    expect(() => manager.startOperator(operator.config.id)).not.toThrow();
+    expect(operator.isTransmitting).toBe(true);
+    eventEmitter.emit('requestTransmit', { operatorId: operator.config.id, transmission: 'CQ N0CALL AA00' } as any);
+    expect((manager as any).pendingTransmissions).toHaveLength(0);
+    // The explicit start replaced the saved intent; confirmation only lifts the gate.
+    manager.confirmRadioRecovery();
+    expect((manager as any).radioRecovery.intents.size).toBe(0);
+    eventEmitter.emit('requestTransmit', { operatorId: operator.config.id, transmission: 'CQ N0CALL AA00' } as any);
+    expect((manager as any).pendingTransmissions).toHaveLength(1);
+  });
+
+  it('keeps an operator started during recovery when restore cleanup stops operators again', async () => {
+    const { manager, operator, eventEmitter } = await recoveryFixture();
+    manager.startOperator(operator.config.id);
+    manager.stopAllOperators(true);
+    expect(operator.isTransmitting).toBe(false);
+    // The engine restore then stops and restarts the operator manager itself.
+    manager.startOperator(operator.config.id);
+    manager.stop();
+    manager.start();
+    expect(operator.isTransmitting).toBe(false);
+    manager.confirmRadioRecovery();
+    eventEmitter.emit('slotStart', createSlotInfo(15000), null);
+    expect(operator.isTransmitting).toBe(true);
+  });
+
+  it('closes the gate again when a second fault arrives before saved intents resume', async () => {
+    const { manager, operator, eventEmitter } = await recoveryFixture();
+    manager.confirmRadioRecovery();
+    manager.beginRadioRecovery();
+    eventEmitter.emit('requestTransmit', { operatorId: operator.config.id, transmission: 'CQ N0CALL AA00' } as any);
+    expect((manager as any).pendingTransmissions).toHaveLength(0);
+    eventEmitter.emit('slotStart', createSlotInfo(15000), null);
+    expect(operator.isTransmitting).toBe(false);
+    manager.confirmRadioRecovery();
+    eventEmitter.emit('slotStart', createSlotInfo(30000), null);
+    expect(operator.isTransmitting).toBe(true);
+  });
+
+  it('ignores unrelated plugin configuration writes during recovery', async () => {
+    const { manager, operator, eventEmitter } = await recoveryFixture();
+    const config = ConfigManager.getInstance();
+    const original = config.getPluginsConfig();
+    vi.spyOn(config, 'getPluginsConfig').mockReturnValue({ ...original,
+      configs: { ...original.configs, 'unrelated-sync': { enabled: true, settings: { cursor: 42 } } } } as any);
+    manager.confirmRadioRecovery();
+    eventEmitter.emit('slotStart', createSlotInfo(15000), null);
+    expect(operator.isTransmitting).toBe(true);
+  });
+
+  it('restores automation after routine intent submissions advanced the operator epoch', async () => {
+    const { manager, operator, eventEmitter } = await recoveryFixture();
+    const coordinator = (manager as any).intentCoordinator;
+    const epochAtFault = coordinator.getCurrentEpoch(operator.config.id);
+    await coordinator.submit(operator.config.id, 'slot-auto', () => undefined);
+    await coordinator.submit(operator.config.id, 'slot-auto', () => undefined);
+    expect(coordinator.getCurrentEpoch(operator.config.id)).toBeGreaterThan(epochAtFault);
+    manager.confirmRadioRecovery();
+    eventEmitter.emit('slotStart', createSlotInfo(15000), null);
+    expect(operator.isTransmitting).toBe(true);
+  });
+
+  it('resumes saved intents at the first running slot after a slow engine restart', async () => {
+    const { manager, operator, eventEmitter } = await recoveryFixture();
+    manager.confirmRadioRecovery();
+    manager.stop();
+    eventEmitter.emit('slotStart', createSlotInfo(15000), null);
+    expect(operator.isTransmitting).toBe(false);
+    manager.start();
+    eventEmitter.emit('slotStart', createSlotInfo(15000 * 6), null);
+    expect(operator.isTransmitting).toBe(true);
+  });
+
+  it('captures recovery inside a plugin band-switch window and keeps gating after that window ends', async () => {
+    const fixture = createManager({ logBook: { id: 'log', name: 'Band switch', provider: { hasWorkedCallsign: vi.fn().mockResolvedValue(false) } }, clockNow: 1000 });
+    await fixture.manager.addOperator({ id: 'op-band', myCallsign: 'N0CALL', myGrid: 'AA00', frequency: 1500, transmitCycles: [0] });
+    const operator = fixture.manager.getOperator('op-band')!;
+    operator.start();
+    fixture.manager.start();
+    fixture.manager.enterTransmissionMaintenance('plugin scheduled band switch');
+    fixture.manager.beginRadioRecovery();
+    fixture.manager.exitTransmissionMaintenance();
+    expect(operator.isTransmitting).toBe(false);
+    fixture.eventEmitter.emit('requestTransmit', { operatorId: 'op-band', transmission: 'CQ N0CALL AA00' } as any);
+    expect((fixture.manager as any).pendingTransmissions).toHaveLength(0);
+    fixture.manager.confirmRadioRecovery();
+    fixture.eventEmitter.emit('slotStart', createSlotInfo(15000), null);
+    expect(operator.isTransmitting).toBe(true);
+  });
+
+  it('does not reject operator starts during unrelated maintenance windows', async () => {
+    const fixture = createManager({ logBook: { id: 'log', name: 'Maintenance', provider: { hasWorkedCallsign: vi.fn().mockResolvedValue(false) } }, clockNow: 1000 });
+    await fixture.manager.addOperator({ id: 'op-maintenance', myCallsign: 'N0CALL', myGrid: 'AA00', frequency: 1500, transmitCycles: [0] });
+    fixture.manager.start();
+    fixture.manager.enterTransmissionMaintenance('plugin frequency change');
+    expect(() => fixture.manager.startOperator('op-maintenance')).not.toThrow();
+    fixture.manager.exitTransmissionMaintenance();
+  });
+
+  it('rechecks strategy gates before restoring automation', async () => {
+    const { manager, operator, eventEmitter } = await recoveryFixture();
+    manager.setPluginManager({ getOperatorTransmitGate: () => ({ allowed: false, reason: 'permission revoked' }) } as any);
+    manager.confirmRadioRecovery();
+    eventEmitter.emit('slotStart', createSlotInfo(15000), null);
+    expect(operator.isTransmitting).toBe(false);
+  });
+});
+
 function mockMaxSameTransmissionCount(limit: number) {
   return vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
     getFT8Config: () => ({ maxSameTransmissionCount: limit }),

@@ -527,7 +527,7 @@ const RadioStatus: React.FC<{ connection: ConnectionState; radioConnection: Radi
           <div className="flex items-center gap-2">
             <Spinner size="sm" color="warning" />
             <span className="text-sm text-warning">
-              {label} {t('connection.reconnecting')}{progress ? ` (${progress.attempt}/${progress.maxAttempts})` : ''}
+              {label} {t('connection.reconnecting')}{progress ? ` (${progress.maxAttempts > 0 ? `${progress.attempt}/${progress.maxAttempts}` : progress.attempt})` : ''}
             </span>
             {canOperate && (
               <span onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>

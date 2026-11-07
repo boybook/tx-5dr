@@ -49,6 +49,7 @@ import { TargetReservationCoordinator } from '../transmission/TargetReservationC
 import { buildTrackId, normalizeStreamId } from '../transmission/TransmissionIntent.js';
 
 const logger = createLogger('RadioOperatorManager');
+const RADIO_RECOVERY_MAINTENANCE_REASON = 'Hamlib recovery';
 
 type QueuedTransmitRequest = TransmitRequest & {
   strategyOrigin?: import('../transmission/TransmissionIntent.js').StrategyFactOrigin;
@@ -296,6 +297,12 @@ export class RadioOperatorManager {
   }>();
   private readonly targetReservations = new TargetReservationCoordinator();
   private transmissionMaintenanceReason: string | null = null;
+  private radioRecovery: {
+    resumeAt: number | null;
+    profileId: string | null;
+    mode: string;
+    intents: Map<string, { operator: RadioOperator; configuration: string }>;
+  } | null = null;
 
   constructor(options: RadioOperatorManagerOptions) {
     this.eventEmitter = options.eventEmitter;
@@ -341,10 +348,11 @@ export class RadioOperatorManager {
 
     // 监听发射请求
     const handleRequestTransmit = (request: TransmitRequest) => {
-      if (this.transmissionMaintenanceReason) {
+      const gateReason = this.transmissionGateReason;
+      if (gateReason) {
         logger.debug('Discarded transmit request during maintenance', {
           operatorId: request.operatorId,
-          reason: this.transmissionMaintenanceReason,
+          reason: gateReason,
         });
         return;
       }
@@ -357,9 +365,12 @@ export class RadioOperatorManager {
     };
     this.eventEmitter.on('requestTransmit', handleRequestTransmit);
     this.eventListeners.set('requestTransmit', handleRequestTransmit);
+    const resumeRecoveredOperators = (slot: SlotInfo) => this.resumeRecoveredOperatorsAtSlot(slot);
+    this.eventEmitter.on('slotStart', resumeRecoveredOperators);
+    this.eventListeners.set('slotStart', resumeRecoveredOperators);
 
     const handleRequestTransmitBatch = (request: TransmitBatchRequest) => {
-      if (this.transmissionMaintenanceReason) return;
+      if (this.transmissionGateReason) return;
       const operator = this.operators.get(request.operatorId);
       if (!operator) return;
       const standardFrequencyRestriction = this.getStandardFrequencyStreamRestriction();
@@ -1117,6 +1128,7 @@ export class RadioOperatorManager {
    */
   startOperator(operatorId: string): void {
     this.startOperatorInternal(operatorId, false);
+    this.radioRecovery?.intents.delete(operatorId);
   }
 
   /**
@@ -1145,6 +1157,8 @@ export class RadioOperatorManager {
   }
 
   private startOperatorInternal(operatorId: string, deferInitialDecision: boolean): boolean {
+    // Arming is never rejected for radio recovery: the recovery maintenance
+    // window already discards transmit requests until the session is confirmed.
     const operator = this.operators.get(operatorId);
     if (!operator) {
       throw new Error(`operator ${operatorId} not found`);
@@ -1625,7 +1639,7 @@ export class RadioOperatorManager {
    * @param slotInfo 时隙信息(包含准确的时间戳)
    */
   processPendingTransmissions(slotInfo: any): void {
-    if (this.transmissionMaintenanceReason) {
+    if (this.transmissionGateReason) {
       this.pendingTransmissions = [];
       return;
     }
@@ -2013,7 +2027,7 @@ export class RadioOperatorManager {
       commandEpoch?: number;
     },
   ): void {
-    if (this.transmissionMaintenanceReason) return;
+    if (this.transmissionGateReason) return;
     if (this._pluginManager?.isQueueExecutionSuspended?.(operatorId)) return;
 
     if (mutation.kind === 'frequency' && this.isFakeFrequencyCommittedForCurrentSlot()) {
@@ -2091,7 +2105,7 @@ export class RadioOperatorManager {
     reason?: string;
     decisionEpoch?: number;
   }): void {
-    if (this.transmissionMaintenanceReason) return;
+    if (this.transmissionGateReason) return;
     const operator = this.operators.get(operatorId);
     if (!operator || !operator.isTransmitting) {
       return;
@@ -2390,6 +2404,7 @@ export class RadioOperatorManager {
    * 停止操作员发射
    */
   stopOperator(operatorId: string): void {
+    this.radioRecovery?.intents.delete(operatorId);
     const operator = this.operators.get(operatorId);
     if (!operator) {
       throw new Error(`operator ${operatorId} not found`);
@@ -2410,11 +2425,15 @@ export class RadioOperatorManager {
    * 停止所有操作员发射
    * 通常在电台断开连接时调用
    */
-  stopAllOperators(): void {
+  stopAllOperators(preserveRadioRecovery = false): void {
+    if (!preserveRadioRecovery) this.cancelRadioRecovery();
     let stoppedCount = 0;
     
     this.operators.forEach((operator, operatorId) => {
       if (operator.isTransmitting) {
+        // A system stop during recovery (for example the engine restore
+        // cleanup) is not a user decision: keep the operator's intent.
+        if (preserveRadioRecovery) this.captureRecoveryIntent(operatorId, operator);
         const epoch = this.intentCoordinator.abortOperator(operatorId, 'all operators stopped');
         this._pluginManager?.suspendQueueExecution?.(operatorId);
         this.releaseTargetReservation(operatorId, epoch);
@@ -2432,8 +2451,101 @@ export class RadioOperatorManager {
     }
   }
 
+  /**
+   * Captures automation intent even inside another maintenance window (for
+   * example a plugin band switch, the CAT work most likely to stall). The
+   * recovery gate is tracked apart from that window so neither clears the other.
+   */
+  beginRadioRecovery(): void {
+    if (this.radioRecovery) {
+      // A further fault before the saved intents resumed: close the gate
+      // again and keep anything armed meanwhile.
+      this.radioRecovery.resumeAt = null;
+      this.stopAllOperators(true);
+      this.discardUncommittedTransmissions(RADIO_RECOVERY_MAINTENANCE_REASON);
+      return;
+    }
+    const transmitting = [...this.operators.values()].filter(operator => operator.isTransmitting);
+    this.stopAllOperators(true);
+    this.discardUncommittedTransmissions(RADIO_RECOVERY_MAINTENANCE_REASON);
+    const config = ConfigManager.getInstance();
+    this.radioRecovery = {
+      resumeAt: null, profileId: config.getActiveProfileId(), mode: this.getCurrentMode().name,
+      intents: new Map(transmitting.map(operator => [operator.config.id, {
+        operator, configuration: this.getRecoveryConfiguration(operator),
+      }])),
+    };
+  }
+
+  /**
+   * Called once the replacement session has completed bootstrap, PTT release
+   * and physical lease recovery. Ordinary transmission is no longer blocked;
+   * saved automation intents are re-armed only at the next complete slot.
+   */
+  confirmRadioRecovery(): void {
+    if (!this.radioRecovery) return;
+    const slotMs = this.getCurrentMode().slotMs;
+    this.radioRecovery.resumeAt = (Math.floor(this.clockSource.now() / slotMs) + 1) * slotMs;
+  }
+
+  cancelRadioRecovery(): void {
+    this.radioRecovery = null;
+  }
+
+  /** Maintenance or an unconfirmed radio recovery withholds every transmit path. */
+  private get transmissionGateReason(): string | null {
+    if (this.transmissionMaintenanceReason) return this.transmissionMaintenanceReason;
+    return this.radioRecovery?.resumeAt === null ? RADIO_RECOVERY_MAINTENANCE_REASON : null;
+  }
+
+  private captureRecoveryIntent(operatorId: string, operator: RadioOperator): void {
+    this.radioRecovery?.intents.set(operatorId, { operator, configuration: this.getRecoveryConfiguration(operator) });
+  }
+
+  private getRecoveryConfiguration(operator: RadioOperator): string {
+    // Only settings that shape this operator's automation; unrelated plugins
+    // persisting their own state must not cancel recovery.
+    const config = ConfigManager.getInstance();
+    const id = operator.config.id;
+    const plugins = config.getPluginsConfig();
+    const strategy = plugins.operatorStrategies?.[id];
+    return JSON.stringify({ operator: config.getOperatorConfig(id) ?? operator.config, strategy,
+      strategyConfig: strategy ? plugins.configs?.[strategy] : undefined,
+      operatorSettings: plugins.operatorSettings?.[id], pauses: plugins.operatorPluginPauses?.[id] });
+  }
+
+  private resumeRecoveredOperatorsAtSlot(slot: SlotInfo): void {
+    const recovery = this.radioRecovery;
+    // A slow engine restart (for example audio devices re-enumerating) only
+    // delays resumption; stopping the engine or changing profile/mode cancels.
+    if (!recovery || recovery.resumeAt === null || slot.startMs < recovery.resumeAt || !this.isRunning) return;
+    const config = ConfigManager.getInstance();
+    this.cancelRadioRecovery();
+    if (config.getActiveProfileId() !== recovery.profileId || this.getCurrentMode().name !== recovery.mode) return;
+    for (const [id, intent] of recovery.intents) {
+      if (this.operators.get(id) !== intent.operator || intent.operator.isTransmitting
+        || this.getRecoveryConfiguration(intent.operator) !== intent.configuration) continue;
+      try {
+        // Arm at the new boundary; fresh strategy decisions remain with the Host.
+        this.startOperatorInternal(id, true);
+        if (this._pluginManager?.hasTargetQueue?.(id)) {
+          void this._pluginManager.resumeQueueExecution(id).catch(error => {
+            this.stopOperator(id);
+            logger.warn('Assisted queue recovery was rejected', { operatorId: id, error: String(error) });
+          });
+        }
+      } catch (error) {
+        logger.warn('Operator automation recovery was rejected', { operatorId: id, error: String(error) });
+      }
+    }
+  }
+
   enterTransmissionMaintenance(reason: string): void {
     this.transmissionMaintenanceReason = reason;
+    this.discardUncommittedTransmissions(reason);
+  }
+
+  private discardUncommittedTransmissions(reason: string): void {
     this.pendingTransmissions = [];
     for (const operatorId of this.operators.keys()) {
       this.intentCoordinator.abortOperator(operatorId, reason);
@@ -2657,6 +2769,9 @@ export class RadioOperatorManager {
    */
   stop(): void {
     for (const [operatorId, operator] of this.operators) {
+      // Restoring the engine after a radio recovery first completes a forced
+      // stop; operators armed meanwhile resume with the saved intents.
+      if (operator.isTransmitting) this.captureRecoveryIntent(operatorId, operator);
       operator.stop();
       this.clearSameTransmissionGuard(operatorId);
     }

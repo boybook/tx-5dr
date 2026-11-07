@@ -1514,6 +1514,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   }
 
   async stop(): Promise<void> {
+    this.radioBridge.wasRunningBeforeDisconnect = false;
     await this.modeSwitchTail.catch(() => undefined);
     await this.stopTuneTone('engine stopped');
     return this.engineLifecycle.stop();
