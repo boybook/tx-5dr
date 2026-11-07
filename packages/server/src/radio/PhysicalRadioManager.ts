@@ -150,6 +150,12 @@ function isExplicitOptionalRadioCapabilityError(error: unknown): boolean {
     && error.context?.recoverable === true;
 }
 
+/** The radio answered the PTT-off command with a refusal rather than going silent. */
+function isPttReleaseRejection(error: unknown): boolean {
+  if (isRecoverableOptionalRadioError(error)) return true;
+  return /command rejected|not implemented|feature not available/i.test(asError(error).message);
+}
+
 function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
@@ -2677,23 +2683,57 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     }
   }
 
+  /**
+   * A Hamlib session is usable once the radio is known not to be transmitting:
+   * either the release command or the readback must prove it. A rejected
+   * release on a radio that reads back RX is logged, not fatal.
+   */
   private async releasePTTAfterConnect(connection: IRadioConnection): Promise<void> {
+    logger.debug('Post-connect safety: releasing PTT');
+    let releaseError: unknown = null;
     try {
-      logger.debug('Post-connect safety: releasing PTT');
       await connection.setPTT?.(false);
-      if (connection.getType() === RadioConnectionType.HAMLIB && this.currentConfig.pttMethod !== 'vox' && connection.getPTT) {
-        try {
-          if (await connection.getPTT()) throw new RadioError({ code: RadioErrorCode.CONNECTION_FAILED,
-            message: 'Radio still reports TX after post-connect PTT release',
-            context: { operation: 'postConnectPttRelease', stateUncertain: true } });
-        } catch (error) {
-          if (!isRecoverableOptionalRadioError(error)) throw error;
-          logger.debug('PTT readback unsupported; relying on acknowledged release');
-        }
-      }
     } catch (error) {
+      releaseError = error;
       logger.warn(`Post-connect PTT release failed: ${buildCapabilityDiagnosticMessage(error)}`);
-      if (connection.getType() === RadioConnectionType.HAMLIB) throw error;
+    }
+    if (connection.getType() !== RadioConnectionType.HAMLIB) return;
+    const softwareKeyed = this.currentConfig.pttMethod !== 'vox' && this.currentConfig.pttMethod !== 'none';
+    if (!softwareKeyed || !connection.getPTT) {
+      if (releaseError) throw releaseError;
+      return;
+    }
+    let keyed: boolean | null = null;
+    try {
+      keyed = await this.readPttAfterConnect(connection);
+    } catch (error) {
+      if (!isRecoverableOptionalRadioError(error)) throw releaseError ?? error;
+      logger.debug('PTT readback unsupported; relying on acknowledged release');
+    }
+    if (keyed) {
+      throw new RadioError({ code: RadioErrorCode.CONNECTION_FAILED,
+        message: 'Radio still reports TX after post-connect PTT release',
+        context: { operation: 'postConnectPttRelease', stateUncertain: true } });
+    }
+    if (!releaseError) return;
+    // Hamlib answers get_ptt from cached state on rigs without a readback, so
+    // RX alone cannot excuse a release that may never have reached the radio.
+    if (keyed === false && isPttReleaseRejection(releaseError)) {
+      logger.warn('Post-connect PTT release was rejected by the radio, which reports RX; continuing');
+      return;
+    }
+    throw releaseError;
+  }
+
+  /** The low-priority readback is skipped while other CAT work runs; retry briefly. */
+  private async readPttAfterConnect(connection: IRadioConnection): Promise<boolean> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await connection.getPTT!();
+      } catch (error) {
+        if (attempt >= 4 || !/radio I\/O is busy/i.test(asError(error).message)) throw error;
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
     }
   }
 

@@ -3,6 +3,9 @@ import { HamLib } from 'hamlib';
 import { HamlibRuntime } from './HamlibRuntime.js';
 import { HAMLIB_OPERATIONS, HamlibEventSchema, deserializeHamlibError, encodeHamlibResult, serializeHamlibError, type HamlibEvent, type HamlibOperation, type HamlibSnapshot } from './hamlib-protocol.js';
 import { RadioError } from '../../../utils/errors/RadioError.js';
+import { createLogger } from '../../../utils/logger.js';
+
+const logger = createLogger('HamlibEndpoint');
 
 export interface HamlibEndpointEvents {
   snapshot: (snapshot: HamlibSnapshot) => void;
@@ -19,7 +22,7 @@ export class HamlibEndpoint extends EventEmitter<HamlibEndpointEvents> {
     this.runtime.diagnostics.on('fault', error => this.emit('fault', error));
     const forward = (event: HamlibEvent['event'], args: unknown[]) => {
       this.publishSnapshot();
-      this.emit('event', HamlibEventSchema.parse({ event, args }));
+      this.emitEvent(event, args);
     };
     this.runtime.on('stateChanged', state => forward('stateChanged', [state]));
     this.runtime.on('connected', () => forward('connected', []));
@@ -28,6 +31,14 @@ export class HamlibEndpoint extends EventEmitter<HamlibEndpointEvents> {
     this.runtime.on('frequencyChanged', frequency => forward('frequencyChanged', [frequency]));
     this.runtime.on('meterData', data => forward('meterData', [data]));
     this.runtime.on('meterCapabilitiesChanged', data => forward('meterCapabilitiesChanged', [data]));
+  }
+
+  /** A malformed telemetry frame is dropped; it must not throw into Hamlib callbacks and take CAT down with it. */
+  private emitEvent(event: HamlibEvent['event'], args: unknown[]): void {
+    const parsed = HamlibEventSchema.safeParse({ event, args });
+    if (parsed.success) this.emit('event', parsed.data);
+    else if (event === 'spectrumLine' || event === 'meterData') logger.debug('Dropped invalid Hamlib telemetry', { event, error: parsed.error.message });
+    else logger.warn('Dropped invalid Hamlib event', { event, error: parsed.error.message });
   }
 
   publishSnapshot(): void { this.emit('snapshot', this.runtime.getSnapshot()); }
@@ -39,9 +50,7 @@ export class HamlibEndpoint extends EventEmitter<HamlibEndpointEvents> {
     try {
       let result: unknown;
       if (operation === 'startManagedSpectrum') {
-        await this.runtime.startManagedSpectrum(line => {
-          this.emit('event', HamlibEventSchema.parse({ event: 'spectrumLine', args: [line] }));
-        }, args[0] as Parameters<HamlibRuntime['startManagedSpectrum']>[1]);
+        await this.runtime.startManagedSpectrum(line => this.emitEvent('spectrumLine', [line]), args[0] as Parameters<HamlibRuntime['startManagedSpectrum']>[1]);
       } else if (operation === 'listSupportedRigs') {
         result = HamLib.getSupportedRigs();
       } else if (operation === 'getRigMetadata') {

@@ -46,13 +46,19 @@ process.on('message', input => {
   }, error => send({ type: 'error', id, error: serializeHamlibError(error) }));
 });
 
+// Bounds cleanup when the parent is gone and cannot escalate to SIGKILL.
+const SHUTDOWN_DEADLINE_MS = 8000;
+
 function shutdown(): void {
   if (stopping) return;
   stopping = true;
   latestFrame = null;
   clearInterval(heartbeat);
+  setTimeout(() => process.kill(process.pid, 'SIGKILL'), SHUTDOWN_DEADLINE_MS).unref();
   void endpoint.call('disconnect', ['worker shutdown']).finally(() => process.exit(0));
 }
 process.on('disconnect', shutdown);
 process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+// The parent owns the host lifecycle. A terminal Ctrl-C reaches the whole
+// process group; the parent's normal shutdown closes this worker instead.
+process.on('SIGINT', () => {});

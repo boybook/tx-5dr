@@ -148,7 +148,7 @@ export interface RadioContext {
   reconnectAttempt: number;
 
   /**
-   * 最大重连次数
+   * 最大重连次数；0 表示不设上限
    */
   maxReconnectAttempts: number;
 

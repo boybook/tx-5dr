@@ -32,24 +32,84 @@ describe('RadioBridge', () => {
     vi.restoreAllMocks();
   });
 
-  it('captures Hamlib automation intent but cannot confirm recovery while physical TX is uncertain', async () => {
+  it('holds Hamlib recovery while physical TX is uncertain and resumes once a retried release succeeds', async () => {
+    vi.useFakeTimers();
     const radioManager = createRadioManagerStub();
     const operatorManager = { beginRadioRecovery: vi.fn(), confirmRadioRecovery: vi.fn(), cancelRadioRecovery: vi.fn(), stopAllOperators: vi.fn() };
     const lifecycle = { getIsRunning: vi.fn(() => true), getEngineState: vi.fn(() => 'running'), start: vi.fn(), sendRadioDisconnected: vi.fn() };
+    let phase = 'unknown';
+    const retryUnknownStop = vi.fn().mockResolvedValue({ success: false });
     const bridge = new RadioBridge({ engineEmitter: new EventEmitter() as any, radioManager: radioManager as any,
       frequencyManager: {} as any, slotPackManager: {} as any, operatorManager: operatorManager as any,
       getTransmissionPipeline: () => ({ getIsPTTActive: () => false } as any),
-      physicalTxCoordinator: { retryUnknownStop: vi.fn().mockResolvedValue({ success: false }), getSnapshot: () => ({ phase: 'unknown' }) } as any,
+      physicalTxCoordinator: { retryUnknownStop, getSnapshot: () => ({ phase }) } as any,
       getEngineLifecycle: () => lifecycle as any, getEngineMode: () => 'digital' });
     bridge.setupListeners();
     radioManager.emit('error', new RadioError({ code: RadioErrorCode.CONNECTION_LOST, message: 'worker stalled', context: { hamlibHostFatal: true } }));
     expect(operatorManager.beginRadioRecovery).toHaveBeenCalledTimes(1);
     radioManager.emit('connected');
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await vi.advanceTimersByTimeAsync(0);
     expect(operatorManager.confirmRadioRecovery).not.toHaveBeenCalled();
-    expect(lifecycle.start).not.toHaveBeenCalled();
-    bridge.wasRunningBeforeDisconnect = false;
-    expect(operatorManager.cancelRadioRecovery).toHaveBeenCalledTimes(1);
+    expect(operatorManager.cancelRadioRecovery).not.toHaveBeenCalled();
+    // First retry still fails; the second succeeds and the flow continues.
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(retryUnknownStop).toHaveBeenLastCalledWith('radio reconnected retry');
+    expect(operatorManager.confirmRadioRecovery).not.toHaveBeenCalled();
+    phase = 'idle';
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(operatorManager.confirmRadioRecovery).toHaveBeenCalledTimes(1);
+    expect(operatorManager.cancelRadioRecovery).not.toHaveBeenCalled();
+    bridge.teardownListeners();
+  });
+
+  it('confirms Hamlib recovery while the restored engine is still starting and keeps it through restore cleanup', async () => {
+    const radioManager = createRadioManagerStub();
+    Object.assign(radioManager, { consumeIntentionalDisconnect: vi.fn(() => ({ active: false })) });
+    const operatorManager = { beginRadioRecovery: vi.fn(), confirmRadioRecovery: vi.fn(), cancelRadioRecovery: vi.fn(), stopAllOperators: vi.fn() };
+    let engineState = 'running';
+    const lifecycle = {
+      getIsRunning: vi.fn(() => engineState === 'running'),
+      getEngineState: vi.fn(() => engineState),
+      sendRadioDisconnected: vi.fn(() => { engineState = 'idle'; }),
+      // Mirrors EngineLifecycle.start(): a failed previous stop is cleaned up
+      // first (closing CAT), then START is accepted without waiting for RUNNING.
+      start: vi.fn(async () => {
+        radioManager.emit('disconnected', 'Engine stopped');
+        engineState = 'starting';
+      }),
+    };
+    const bridge = new RadioBridge({ engineEmitter: new EventEmitter() as any, radioManager: radioManager as any,
+      frequencyManager: {} as any, slotPackManager: {} as any, operatorManager: operatorManager as any,
+      getTransmissionPipeline: () => ({ getIsPTTActive: () => false } as any),
+      physicalTxCoordinator: { retryUnknownStop: vi.fn().mockResolvedValue(null), getSnapshot: () => ({ phase: 'idle' }) } as any,
+      getEngineLifecycle: () => lifecycle as any, getEngineMode: () => 'digital' });
+    bridge.setupListeners();
+
+    radioManager.emit('error', new RadioError({ code: RadioErrorCode.CONNECTION_LOST, message: 'worker stalled', context: { hamlibHostFatal: true } }));
+    radioManager.emit('reconnecting', 1, 5, 2000);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    radioManager.emit('connected');
+    await vi.waitFor(() => expect(operatorManager.confirmRadioRecovery).toHaveBeenCalledTimes(1));
+
+    expect(lifecycle.start).toHaveBeenCalledTimes(1);
+    expect(operatorManager.stopAllOperators).toHaveBeenCalledWith(true);
+    expect(operatorManager.stopAllOperators).not.toHaveBeenCalledWith(false);
+    expect(operatorManager.cancelRadioRecovery).not.toHaveBeenCalled();
+  });
+
+  it('cancels Hamlib recovery when the engine is not restored after reconnect', async () => {
+    const radioManager = createRadioManagerStub();
+    const operatorManager = { beginRadioRecovery: vi.fn(), confirmRadioRecovery: vi.fn(), cancelRadioRecovery: vi.fn(), stopAllOperators: vi.fn() };
+    const lifecycle = { getIsRunning: vi.fn(() => false), getEngineState: vi.fn(() => 'idle'), start: vi.fn(), sendRadioDisconnected: vi.fn() };
+    const bridge = new RadioBridge({ engineEmitter: new EventEmitter() as any, radioManager: radioManager as any,
+      frequencyManager: {} as any, slotPackManager: {} as any, operatorManager: operatorManager as any,
+      getTransmissionPipeline: () => ({ getIsPTTActive: () => false } as any),
+      physicalTxCoordinator: { retryUnknownStop: vi.fn().mockResolvedValue(null), getSnapshot: () => ({ phase: 'idle' }) } as any,
+      getEngineLifecycle: () => lifecycle as any, getEngineMode: () => 'digital' });
+    bridge.setupListeners();
+    radioManager.emit('connected');
+    await vi.waitFor(() => expect(operatorManager.cancelRadioRecovery).toHaveBeenCalled());
+    expect(operatorManager.confirmRadioRecovery).not.toHaveBeenCalled();
   });
 
   it('projects connected state without performing connection-time frequency writes', async () => {

@@ -6,9 +6,16 @@ import { RadioError, RadioErrorCode } from '../../../utils/errors/RadioError.js'
 
 const retiringHosts = new Set<Promise<void>>();
 export async function waitForHamlibHostRetirement(): Promise<void> { await Promise.all(retiringHosts); }
-export function trackHamlibHostRetirement(retirement: Promise<void>): void {
+/**
+ * A failed retirement keeps refusing replacement hosts until the old process
+ * is observed to exit; late confirmation (for example after an uninterruptible
+ * serial driver wait) re-enables reconnects without a server restart.
+ */
+export function trackHamlibHostRetirement(retirement: Promise<void>, exited?: Promise<void>): void {
   retiringHosts.add(retirement);
-  void retirement.then(() => retiringHosts.delete(retirement), () => {});
+  void retirement.then(() => retiringHosts.delete(retirement), () => {
+    void exited?.then(() => retiringHosts.delete(retirement));
+  });
 }
 
 export abstract class HamlibTransport extends EventEmitter<HamlibEndpointEvents> {

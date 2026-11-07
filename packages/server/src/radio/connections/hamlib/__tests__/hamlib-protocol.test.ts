@@ -15,14 +15,24 @@ describe('Hamlib protocol', () => {
     expect((result as { modeError: Error }).modeError).toBeInstanceOf(RadioError);
   });
 
+  it('reports errors whose diagnostic context is not wire-safe instead of throwing', () => {
+    const error = new RadioError({ code: RadioErrorCode.OPERATION_TIMEOUT, message: 'odd context',
+      userMessageParams: { elapsed: Number.NaN },
+      context: { elapsedMs: Number.NaN, limit: Infinity, cause: new Error('inner'), at: new Date(0), raw: Buffer.from([1]), count: 1n, nested: { fn: () => 1 } } });
+    const restored = deserializeHamlibError(serializeHamlibError(error));
+    expect(restored).toMatchObject({ code: RadioErrorCode.OPERATION_TIMEOUT, message: 'odd context',
+      userMessageParams: { elapsed: 'NaN' },
+      context: { elapsedMs: 'NaN', limit: 'Infinity', cause: 'inner', at: '1970-01-01T00:00:00.000Z', count: '1', nested: { fn: '[function]' } } });
+  });
+
   it('does not expose private runtime methods through IPC', () => {
     expect(HamlibCommandSchema.safeParse({ type: 'call', generation: 'session', id: 1, operation: 'cleanup', args: [] }).success).toBe(false);
     expect(HamlibCommandSchema.safeParse({ type: 'call', generation: 'session', id: 1, operation: 'convertError', args: [] }).success).toBe(false);
   });
 
-  it('rejects live functions in diagnostic context', () => {
-    const error = new RadioError({ code: RadioErrorCode.DEVICE_ERROR, message: 'bad context', context: { callback: () => {} } });
-    expect(() => serializeHamlibError(error)).toThrow();
+  it('never carries live functions across the host boundary', () => {
+    const error = new RadioError({ code: RadioErrorCode.DEVICE_ERROR, message: 'bad context', context: { callback: () => 'secret' } });
+    expect(serializeHamlibError(error).context).toEqual({ callback: '[function]' });
   });
 
   it('rejects spectrum lengths that exceed the actual buffer', () => {

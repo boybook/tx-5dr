@@ -3408,9 +3408,12 @@ export class HamlibRuntime
       this.lastSuccessfulOperation = Date.now();
       logger.debug(`PTT set: ${enabled ? 'TX' : 'RX'}`);
     } catch (error) {
+      // The native reason stays in the message because `cause` does not
+      // cross the Hamlib host boundary.
+      const nativeError = error instanceof Error ? error : new Error(String(error));
       throw RadioError.pttActivationFailed(
-        `PTT ${enabled ? 'activation' : 'deactivation'} failed`,
-        error instanceof Error ? error : new Error(String(error))
+        `PTT ${enabled ? 'activation' : 'deactivation'} failed: ${nativeError.message}`,
+        nativeError
       );
     }
   }

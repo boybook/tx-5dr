@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import { ProcessHamlibTransport } from '../ProcessHamlibTransport.js';
 
@@ -39,6 +39,24 @@ describe('ProcessHamlibTransport', () => {
     expect(() => process.kill(pid, 0)).toThrow();
     expect(replacement.generation).not.toBe(oldGeneration);
     await expect(replacement.call('getFrequency', [])).resolves.toBe(7100000);
+  });
+
+  it('asks the worker to disconnect the rig before terminating it', async () => {
+    const transport = host();
+    await transport.call('connect', [config('normal'), undefined]);
+    const pid = transport.diagnostics.pid as number;
+    const call = vi.spyOn(transport, 'call');
+    await transport.close();
+    expect(call).toHaveBeenCalledWith('disconnect', ['transport stopped']);
+    expect(() => process.kill(pid, 0)).toThrow();
+  });
+
+  it('does not blame a healthy worker for a stalled parent event loop', async () => {
+    const transport = host();
+    await transport.call('connect', [config('normal'), undefined]);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500);
+    await new Promise(resolve => setTimeout(resolve, 150));
+    await expect(transport.call('getFrequency', [])).resolves.toBe(7100000);
   });
 
   it('transports binary spectrum while control replies keep making progress', async () => {

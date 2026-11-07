@@ -21,11 +21,28 @@ export const HamlibErrorSchema = z.object({
   context: z.record(z.string(), diagnosticValue).optional(),
 });
 
+/** Reduces arbitrary diagnostic data to the wire shape so an odd context value cannot turn an error report into a host crash. */
+function toDiagnosticValue(value: unknown, depth = 0): DiagnosticValue {
+  if (value === null || value === undefined || typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : String(value);
+  if (value instanceof Error) return value.message;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? String(value) : value.toISOString();
+  if (typeof value === 'function') return '[function]';
+  if (depth >= 4 || typeof value !== 'object' || Buffer.isBuffer(value) || ArrayBuffer.isView(value)) return String(value);
+  if (Array.isArray(value)) return value.map(item => toDiagnosticValue(item, depth + 1));
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, toDiagnosticValue(item, depth + 1)]));
+}
+
 export function serializeHamlibError(error: unknown): z.infer<typeof HamlibErrorSchema> {
   const value = error instanceof Error ? error : new Error(String(error));
-  return HamlibErrorSchema.parse({ __hamlibError: true, name: value.name, message: value.message, stack: value.stack,
-    ...(value instanceof RadioError ? { code: value.code, severity: value.severity, userMessage: value.userMessage,
-      userMessageKey: value.userMessageKey, userMessageParams: value.userMessageParams, suggestions: value.suggestions, context: value.context } : {}) });
+  const base = { __hamlibError: true as const, name: value.name, message: value.message, stack: value.stack };
+  if (!(value instanceof RadioError)) return HamlibErrorSchema.parse(base);
+  const parsed = HamlibErrorSchema.safeParse({ ...base, code: value.code, severity: value.severity, userMessage: value.userMessage,
+    userMessageKey: value.userMessageKey, suggestions: value.suggestions,
+    userMessageParams: value.userMessageParams && Object.fromEntries(Object.entries(value.userMessageParams)
+      .map(([key, item]) => [key, typeof item === 'number' && !Number.isFinite(item) ? String(item) : item])),
+    context: value.context ? toDiagnosticValue(value.context) : undefined });
+  return parsed.success ? parsed.data : HamlibErrorSchema.parse({ ...base, code: value.code, severity: value.severity, userMessage: value.userMessage });
 }
 
 export function deserializeHamlibError(input: unknown): Error {

@@ -11,6 +11,10 @@ const logger = createLogger('HamlibProcessTransport');
 let hostSequence = 0;
 let rebuildPending = false;
 let rebuildCount = 0;
+// Covers Runtime.disconnect(): managed spectrum stop plus the native close budget.
+const GRACEFUL_DISCONNECT_MS = 7000;
+// A watchdog tick this late means the parent itself was not scheduled.
+const PARENT_STALL_MS = 1000;
 const CRITICAL_REQUESTS = new Set<HamlibOperation>(['setPTT', 'setFrequency', 'setMode', 'applyOperatingState', 'setPowerState', 'sendCWMessage', 'stopCWMessage', 'setSplitFreqMode']);
 
 export function resolveHamlibWorkerEntry(): { path: string; execArgv: string[] } {
@@ -46,6 +50,8 @@ export class ProcessHamlibTransport extends HamlibTransport {
   private failure: Error | null = null;
   private nextId = 0;
   private lastSeen = 0;
+  private lastCheck = 0;
+  private closing: Promise<void> | null = null;
   private watcher: ReturnType<typeof setInterval> | null = null;
   private readonly activities = new Map<number, { deadline: number; operation: string }>();
   private readonly pending = new Map<number, { operation: HamlibOperation; resolve: (value: unknown) => void; reject: (error: Error) => void }>();
@@ -75,6 +81,7 @@ export class ProcessHamlibTransport extends HamlibTransport {
     child.stdout?.on('data', chunk => logger.debug('Hamlib worker stdout', { text: String(chunk).trim() }));
     child.stderr?.on('data', chunk => logger.warn('Hamlib worker stderr', { text: String(chunk).trim() }));
     this.lastSeen = performance.now();
+    this.lastCheck = this.lastSeen;
     this.watcher = setInterval(() => this.checkProgress(), 100);
     this.watcher.unref();
     await new Promise<void>((resolve, reject) => {
@@ -124,6 +131,15 @@ export class ProcessHamlibTransport extends HamlibTransport {
   private checkProgress(): void {
     if (this.stopped || this.failure || !this.ready) return;
     const now = performance.now();
+    const gap = now - this.lastCheck;
+    this.lastCheck = now;
+    if (gap > PARENT_STALL_MS) {
+      // Heartbeats may already be queued behind this timer; do not blame the
+      // worker for the parent's own scheduling stall.
+      this.lastSeen = Math.max(this.lastSeen, now);
+      for (const activity of this.activities.values()) activity.deadline += gap;
+      return;
+    }
     if (now - this.lastSeen > (this.options.heartbeatTimeoutMs ?? 5000)) {
       this.fail(new Error('Hamlib worker heartbeat timed out'));
       return;
@@ -144,7 +160,7 @@ export class ProcessHamlibTransport extends HamlibTransport {
     for (const waiter of this.pending.values()) waiter.reject(this.failure);
     this.pending.clear();
     this.retirement = this.terminate();
-    trackHamlibHostRetirement(this.retirement);
+    trackHamlibHostRetirement(this.retirement, this.exit);
     void this.retirement.catch(error => {
       logger.error('Hamlib worker exit could not be confirmed; refusing another host', { error: String(error) });
     });
@@ -176,15 +192,32 @@ export class ProcessHamlibTransport extends HamlibTransport {
     if (!await waitForExit(this.exit, 2000)) throw new Error('Hamlib worker did not exit after SIGKILL');
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    this.closing ??= this.closeHost();
+    return this.closing;
+  }
+
+  private async closeHost(): Promise<void> {
     if (this.retirement) { await this.retirement; return; }
+    if (this.ready && !this.failure && this.child) {
+      // Let the Runtime stop spectrum output and close the rig before the
+      // process is signalled; a stalled close falls through to termination.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([this.call('disconnect', ['transport stopped']),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('graceful disconnect timed out')), GRACEFUL_DISCONNECT_MS); })]);
+      } catch (error) {
+        logger.warn('Hamlib worker graceful disconnect failed', { error: String(error) });
+      } finally { if (timer) clearTimeout(timer); }
+      if (this.retirement) { await this.retirement; return; }
+    }
     this.stopped = true;
     const error = new Error('Hamlib transport closed');
     this.rejectStartup?.(error);
     for (const waiter of this.pending.values()) waiter.reject(error);
     this.pending.clear();
     this.retirement = this.terminate();
-    trackHamlibHostRetirement(this.retirement);
+    trackHamlibHostRetirement(this.retirement, this.exit);
     await this.retirement;
     this.removeAllListeners();
   }

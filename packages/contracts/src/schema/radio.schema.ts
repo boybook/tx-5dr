@@ -482,6 +482,7 @@ export enum RadioConnectionStatus {
  */
 export const ReconnectProgressSchema = z.object({
   attempt: z.number(),
+  /** 0 表示不设上限 */
   maxAttempts: z.number(),
   nextRetryMs: z.number().optional(),
 });

@@ -1811,6 +1811,34 @@ describe('PhysicalRadioManager', () => {
     await expect((manager as any).releasePTTAfterConnect(connection)).rejects.toThrow('release failed');
   });
 
+  it('keeps a Hamlib session whose radio refuses PTT-off but reads back RX', async () => {
+    const connection = { getType: () => RadioConnectionType.HAMLIB,
+      setPTT: vi.fn().mockRejectedValue(new Error('PTT activation failed: PTT deactivation failed: Command rejected by the rig')),
+      getPTT: vi.fn().mockResolvedValue(false) };
+    await expect((manager as any).releasePTTAfterConnect(connection)).resolves.toBeUndefined();
+  });
+
+  it('does not excuse a silent PTT-off failure with a possibly cached RX readback', async () => {
+    const connection = { getType: () => RadioConnectionType.HAMLIB,
+      setPTT: vi.fn().mockRejectedValue(new Error('PTT activation failed: PTT deactivation failed: Communication timed out')),
+      getPTT: vi.fn().mockResolvedValue(false) };
+    await expect((manager as any).releasePTTAfterConnect(connection)).rejects.toThrow('Communication timed out');
+  });
+
+  it('retries a PTT readback that was skipped behind other CAT work', async () => {
+    vi.useFakeTimers();
+    try {
+      const getPTT = vi.fn().mockRejectedValueOnce(new Error('PTT poll skipped because radio I/O is busy')).mockResolvedValue(false);
+      const connection = { getType: () => RadioConnectionType.HAMLIB, setPTT: vi.fn().mockResolvedValue(undefined), getPTT };
+      const released = (manager as any).releasePTTAfterConnect(connection);
+      await vi.advanceTimersByTimeAsync(250);
+      await expect(released).resolves.toBeUndefined();
+      expect(getPTT).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does not finish Hamlib bootstrap when readback still reports TX', async () => {
     const connection = { getType: () => RadioConnectionType.HAMLIB, setPTT: vi.fn().mockResolvedValue(undefined), getPTT: vi.fn().mockResolvedValue(true) };
     await expect((manager as any).releasePTTAfterConnect(connection)).rejects.toMatchObject({ context: { stateUncertain: true } });
