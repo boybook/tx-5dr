@@ -37,6 +37,46 @@ plugin session persistence, UI preparation and page-session renewal after reload
    the task includes documentation delivery.
 7. Validate the actual tarball or marketplace archive, not only source imports.
 
+## Plugin API versioning and marketplace compatibility
+
+The marketplace installs a plugin version when the bundled Plugin API satisfies
+`^minPluginApiVersion` (`isPluginApiCompatible`). The loader also accepts the
+previous major as `legacy` (`PLUGIN_API_LEGACY_MAJOR_WINDOW`) so a stricter rule
+never silently disables working installations; plugins it rejects appear in
+the snapshot's `loadFailures`. Keep `getPluginApiCompatibility`, the
+`tx5dr-plugin check` CLI (a bin of `@tx5dr/plugin-api`; never document it as
+`npx tx5dr-plugin`, which would fetch an unrelated package of that name) and the
+plugin repository validator on the same rules.
+The marketplace has no release channel: Hosts install the newest non-yanked
+version compatible with their Plugin API from the full version history.
+Therefore:
+
+- Any added or changed public capability, permission, hook, slot or context
+  field requires a `@tx5dr/plugin-api` version increase in the same change.
+  A Host that carries an API under an unchanged version number is
+  indistinguishable from one that does not.
+- A breaking change requires a new major. Plugins declaring the previous major
+  then load only as `legacy`, and the major before that stops loading. Before
+  releasing such a Host, migrate and publish the official marketplace plugins,
+  and state the change in the release notes.
+- A plugin's `minPluginApiVersion` must not be lower than the `@tx5dr/plugin-api`
+  range it (or a bundled shared package) builds against. Keep the scaffold's
+  dependency range and declared floor identical.
+- Published plugin versions are immutable. Changing packaged content needs a
+  new plugin version; withdraw a bad one with `yanked` in the plugin repository
+  registry instead of replacing bytes.
+- Hosts released before schema v3 read `<channel>/index.json`. Keep that legacy
+  output until those Hosts are no longer supported; do not remove it as part of
+  an unrelated change.
+- The SDK train (`@tx5dr/contracts`, `@tx5dr/core`, `@tx5dr/plugin-api`,
+  `create-tx5dr-plugin`) shares one version, and that version is the Host's
+  plugin compatibility axis. A major increase therefore moves every published
+  plugin to `legacy` and removes plugins two majors behind. Raise the major only for a breaking change to the plugin-facing
+  surface exported by `@tx5dr/plugin-api`. Contracts/core schemas and clients
+  that only Host processes use (marketplace, route payloads, UI projections)
+  are not part of the plugin SemVer promise; change them with a minor increase
+  and record the change in the SDK release notes.
+
 If a plugin need reveals a missing Host capability, give the capability neutral
 semantics, explicit permission and validation, lifecycle ownership, public
 types/JSDoc, and tests with a generic plugin fixture. Built-in plugins receive

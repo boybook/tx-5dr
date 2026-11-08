@@ -102,7 +102,7 @@ const contest = defineFT8Contest({
 export default composeFT8ContestPlugin({
   name: 'example-ft8',
   version: '1.0.0',
-  minPluginApiVersion: '2.1.0',
+  minPluginApiVersion: '2.6.0',
   contest,
   runtime: createContestRuntime,
 });
@@ -237,7 +237,7 @@ Plugin；Host 只增加最小的通用能力。该能力必须具有中性语义
 | `apiVersion` | 新插件使用 `2` |
 | `name` | 稳定且唯一的插件 ID；发布后不要更改 |
 | `version` | 插件版本 |
-| `minPluginApiVersion` | 最低内置 `@tx5dr/plugin-api` SemVer；Marketplace 插件必填 |
+| `minPluginApiVersion` | 所需内置 `@tx5dr/plugin-api` 版本，按 `^` 语义匹配；所有插件都应声明（未声明时 Host 不做兼容检查），Marketplace 插件必填 |
 | `type` | `strategy` 或 `utility` |
 | `instanceScope` | `operator`（默认）或 `global` |
 | `description` | 插件管理页中的简短说明或翻译 key |
@@ -267,8 +267,45 @@ Host 会校验并冻结加载后的定义。不要在运行期修改 definition�
 运行时构建身份只有一个权威文件：`packages/server/src/generated/buildInfo.json`。
 Electron Main、嵌入 Server、Web bundle、遥测和诊断上报都消费这一份构建产物；其他模块不得维护版本副本。
 
-Loader 仅比较 `minPluginApiVersion <= pluginApiVersion`，不会使用产品 Host version
-决定插件是否可加载。
+兼容规则：内置 `pluginApiVersion` 满足 `^minPluginApiVersion` 时插件兼容，即不低于
+声明版本，且不跨越下一个破坏性边界（`X>0` 时为主版本，`0.Y` 时为次版本）。
+产品 Host version 不参与判断。
+
+- Marketplace 只安装兼容版本。
+- Loader 另外接受上一个主版本的插件（`PLUGIN_API_LEGACY_MAJOR_WINDOW`），标记为
+  `pluginApiCompatibility: 'legacy'` 并提示作者更新：这些插件在规则收紧前已在当前主版本
+  的 Host 上运行，直接拒绝只会让现有安装失效。窗口外的旧主版本，以及要求更新
+  Plugin API 的插件，以 `PLUGIN_API_VERSION_UNSUPPORTED` 拒绝加载。
+- 未加载的插件目录进入插件快照的 `loadFailures`，设置页的插件列表显示原因与处理方式；
+  不能只写入运行日志。
+
+作者选择版本的规则：`minPluginApiVersion` 等于所安装并据以构建的
+`@tx5dr/plugin-api` 版本，即依赖范围的下限；升级依赖以使用新 API 时同时提高二者；
+只有在对应版本的 Host 上实测过才填写更低版本。发布前运行 `npm run check`
+（scaffold 生成），或 `npm exec --package=@tx5dr/plugin-api@^2.7.0 -- tx5dr-plugin check`；它检查声明不低于构建依赖下限且主版本一致，
+与 Marketplace 校验一致。不要使用 `npx tx5dr-plugin`：npm 上没有同名包。
+
+`minPluginApiVersion` 必须不低于插件实际构建所依赖的 `@tx5dr/plugin-api` 下限，
+包括它打包进去的共享包；声明偏低会把插件发给缺少这些 API 的 Host。
+`create-tx5dr-plugin` 生成的依赖范围与声明使用同一个版本。
+
+### 3.2 Marketplace 版本解析
+
+官方市场没有发布频道。`https://dl.tx5dr.com/plugins/market/index.json`（schema v3）
+列出每个插件的全部已发布版本；每个版本带有不可变的 artifact、校验和、
+`minPluginApiVersion` 和可选的撤回标记 `yanked`。Host 选择未撤回、且与本机
+Plugin API 兼容的最高版本；没有时说明原因：需要升级 TX-5DR，或插件尚未发布
+适配当前 Plugin API 主版本的版本。安装请求可以固定用户确认过的版本，
+Host 下载后仍会校验 archive 内的静态 manifest 与该版本一致。
+
+已安装但不兼容的插件不会被加载，但其安装记录仍在磁盘上，市场页会列出它，
+并提供安装兼容版本（可能低于已装版本，需要用户确认）或卸载。降级不会删除
+plugin-data，但旧版本不保证能读取新版本写入的数据。
+
+已发布的插件版本不可替换；修正问题需要发布新版本，或在插件仓库的
+registry 中撤回旧版本。Plugin API 新增或改变公开能力时必须提升
+`@tx5dr/plugin-api` 版本，否则 Host 无法区分带有新能力的构建。
+`<channel>/index.json`（schema v2）只为读取旧频道目录的已发布 Host 保留。
 
 ## 4. Context 与 capability
 
@@ -918,6 +955,8 @@ import {
 6. hook、network、timer、page handler 的失败和 unload 都能正确清理。
 7. iframe 的 access scope、resource binding 和服务端输入校验符合实际权限需求。
 8. 插件目录只包含发布所需入口、UI、locales 和依赖产物。
+9. `minPluginApiVersion`、运行时 definition 与 `@tx5dr/plugin-api` 依赖下限一致；
+   修改已发布插件的打包内容时提升插件 `version`。
 
 ## 10. 从 v1 迁移到 v2
 

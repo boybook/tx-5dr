@@ -8,5 +8,12 @@ export function projectPluginStatus(status: PluginStatus, includeDiagnostics: bo
 }
 
 export function projectPluginSnapshot(snapshot: PluginSystemSnapshot, includeDiagnostics: boolean): PluginSystemSnapshot {
-  return { ...snapshot, plugins: snapshot.plugins.map((plugin) => projectPluginStatus(plugin, includeDiagnostics)) };
+  const projected = {
+    ...snapshot,
+    plugins: snapshot.plugins.map((plugin) => projectPluginStatus(plugin, includeDiagnostics)),
+  };
+  if (!includeDiagnostics && snapshot.loadFailures) {
+    projected.loadFailures = snapshot.loadFailures.map(({ message: _message, ...summary }) => summary);
+  }
+  return projected;
 }

@@ -128,7 +128,6 @@ import type {
   VoiceKeyerSlotUpdate,
   PluginMarketCatalogEntryResponse,
   PluginMarketCatalogResponse,
-  PluginMarketChannel,
   PluginMarketInstallResult,
   PluginRuntimeInfo,
   SystemUpdateStatus,
@@ -2735,42 +2734,39 @@ export const api = {
     return apiRequest('/plugins/runtime-info', undefined, apiBase);
   },
 
-  async getPluginMarketCatalog(
-    channel: PluginMarketChannel = 'stable',
-    apiBase?: string,
-  ): Promise<PluginMarketCatalogResponse> {
-    const params = new URLSearchParams({ channel });
-    return apiRequest(`/plugins/market/catalog?${params.toString()}`, undefined, apiBase);
+  /** Marketplace index resolved against this Host's bundled Plugin API. */
+  async getPluginMarketCatalog(apiBase?: string): Promise<PluginMarketCatalogResponse> {
+    return apiRequest('/plugins/market/catalog', undefined, apiBase);
   },
 
   async getPluginMarketCatalogEntry(
     name: string,
-    channel: PluginMarketChannel = 'stable',
     apiBase?: string,
   ): Promise<PluginMarketCatalogEntryResponse> {
-    const params = new URLSearchParams({ channel });
-    return apiRequest(`/plugins/market/catalog/${encodeURIComponent(name)}?${params.toString()}`, undefined, apiBase);
+    return apiRequest(`/plugins/market/catalog/${encodeURIComponent(name)}`, undefined, apiBase);
   },
 
+  /** Installs the newest compatible version, or exactly `version` when the user confirmed one. */
   async installPluginFromMarket(
     name: string,
-    channel: PluginMarketChannel = 'stable',
+    version?: string,
     apiBase?: string,
   ): Promise<PluginMarketInstallResult> {
     return apiRequest(`/plugins/market/${encodeURIComponent(name)}/install`, {
       method: 'POST',
-      body: JSON.stringify({ channel }),
+      body: JSON.stringify(version ? { version } : {}),
     }, apiBase);
   },
 
+  /** Replaces an installed plugin; a pinned `version` may be lower than the installed one. */
   async updatePluginFromMarket(
     name: string,
-    channel: PluginMarketChannel = 'stable',
+    version?: string,
     apiBase?: string,
   ): Promise<PluginMarketInstallResult> {
     return apiRequest(`/plugins/market/${encodeURIComponent(name)}/update`, {
       method: 'POST',
-      body: JSON.stringify({ channel }),
+      body: JSON.stringify(version ? { version } : {}),
     }, apiBase);
   },
 

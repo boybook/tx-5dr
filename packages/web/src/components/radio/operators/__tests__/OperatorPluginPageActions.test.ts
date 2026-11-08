@@ -53,6 +53,7 @@ describe('operator plugin page actions', () => {
       state: 'ready',
       generation: 1,
       plugins: [buildStrategy()],
+      loadFailures: [],
       panelMeta: [],
       panelContributions: [],
     };
@@ -85,6 +86,7 @@ describe('operator plugin page actions', () => {
       state: 'ready',
       generation: 1,
       plugins: [unbound],
+      loadFailures: [],
       panelMeta: [],
       panelContributions: [],
     };
@@ -110,6 +112,7 @@ describe('operator plugin page actions', () => {
       state: 'ready',
       generation: 1,
       plugins: [adminPage],
+      loadFailures: [],
       panelMeta: [],
       panelContributions: [],
     };

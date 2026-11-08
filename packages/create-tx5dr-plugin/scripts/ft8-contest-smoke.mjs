@@ -25,8 +25,14 @@ try {
   run(process.execPath, [cli, 'smoke-contest', '--template', 'ft8-contest'], temporaryRoot);
   const projectRoot = join(temporaryRoot, 'smoke-contest');
   const generatedPackage = JSON.parse(readFileSync(join(projectRoot, 'package.json'), 'utf8'));
+  // The declared floor must equal the Plugin API range the project builds against.
+  const pluginApiRange = generatedPackage.devDependencies?.['@tx5dr/plugin-api'] ?? '';
+  const expectedFloor = /^\^(\d+\.\d+\.\d+)$/.exec(pluginApiRange)?.[1];
+  if (!expectedFloor) {
+    throw new Error(`ft8-contest scaffold emitted an unexpected @tx5dr/plugin-api range: ${pluginApiRange}`);
+  }
   if (generatedPackage.tx5drPlugin?.entry !== 'dist/index.mjs'
-      || generatedPackage.tx5drPlugin?.minPluginApiVersion !== '2.5.0'
+      || generatedPackage.tx5drPlugin?.minPluginApiVersion !== expectedFloor
       || !generatedPackage.tx5drPlugin?.include?.some((item) => item.from === 'ui')) {
     throw new Error('ft8-contest scaffold did not emit Marketplace packaging metadata');
   }
@@ -51,7 +57,7 @@ try {
   if (loaded.default?.name !== 'smoke-contest') {
     throw new Error('isolated FT8 contest bundle did not export the generated plugin');
   }
-  if (loaded.default?.minPluginApiVersion !== '2.5.0') {
+  if (loaded.default?.minPluginApiVersion !== expectedFloor) {
     throw new Error('isolated FT8 contest bundle did not preserve the Plugin API version floor');
   }
   try {

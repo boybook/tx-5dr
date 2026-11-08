@@ -562,14 +562,20 @@ export type PluginManifest = z.infer<typeof PluginManifestSchema>;
 
 // ===== 运行时状态（推送给前端） =====
 
+/**
+ * @deprecated Marketplace channels were replaced by Plugin API version
+ * resolution. Retained only to decode install records written by older Hosts.
+ */
 export const PluginMarketChannelSchema = z.enum(['stable', 'nightly']);
+/** @deprecated See {@link PluginMarketChannelSchema}. */
 export type PluginMarketChannel = z.infer<typeof PluginMarketChannelSchema>;
 
 export const PluginSourceSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('marketplace'),
     version: z.string(),
-    channel: PluginMarketChannelSchema,
+    /** Legacy channel recorded by older Hosts; ignored by version resolution. */
+    channel: PluginMarketChannelSchema.optional(),
     artifactUrl: z.string().url(),
     sha256: z.string().regex(/^[a-f0-9]{64}$/i),
     installedAt: z.number().int().nonnegative(),
@@ -633,6 +639,13 @@ export const PluginStatusSchema = z.object({
   ui: PluginUIConfigSchema.optional(),
   locales: PluginLocalesSchema.optional(),
   source: PluginSourceSchema.optional(),
+  /** Declared Plugin API requirement, when the plugin declares one. */
+  minPluginApiVersion: SemanticVersionSchema.optional(),
+  /**
+   * `legacy` when the plugin targets the previous Plugin API major and loads
+   * through the Host's legacy window; its author should publish an update.
+   */
+  pluginApiCompatibility: z.enum(['compatible', 'legacy']).optional(),
 });
 
 /**
@@ -640,9 +653,32 @@ export const PluginStatusSchema = z.object({
  */
 export type PluginStatus = z.infer<typeof PluginStatusSchema>;
 
+/**
+ * A plugin directory the Host found but did not load. Shown to operators so a
+ * rejected plugin does not silently disappear.
+ */
+export const PluginLoadFailureSchema = z.object({
+  directoryName: z.string(),
+  pluginName: z.string().optional(),
+  version: z.string().optional(),
+  /**
+   * - `plugin-api-requires-newer-host`: update TX-5DR to run this plugin.
+   * - `plugin-api-unsupported`: the plugin targets a Plugin API major this Host
+   *   no longer loads; the plugin needs an update.
+   * - `invalid-plugin`: missing entry, import failure or invalid definition.
+   */
+  reason: z.enum(['plugin-api-requires-newer-host', 'plugin-api-unsupported', 'invalid-plugin']),
+  minPluginApiVersion: z.string().optional(),
+  source: PluginSourceSchema.optional(),
+  /** Diagnostic detail; projected to administrators only. */
+  message: z.string().optional(),
+});
+export type PluginLoadFailure = z.infer<typeof PluginLoadFailureSchema>;
+
 const PluginMarketInstallRecordInternalSchema = z.object({
   version: z.string(),
-  channel: PluginMarketChannelSchema,
+  /** Legacy channel kept only so older Hosts can read the record; ignored by resolution. */
+  channel: PluginMarketChannelSchema.optional(),
   artifactUrl: z.string().url(),
   sha256: z.string().regex(/^[a-f0-9]{64}$/i),
   installedAt: z.number().int().nonnegative(),
@@ -676,6 +712,10 @@ export const PluginSystemSnapshotSchema = z.object({
   state: PluginSystemStateSchema,
   generation: z.number().int().nonnegative(),
   plugins: z.array(PluginStatusSchema),
+  /** Plugin directories found during the last scan that did not load. */
+  loadFailures: z.array(PluginLoadFailureSchema).optional().default([]),
+  /** Plugin API version bundled by this Host; plugins declare `^` requirements against it. */
+  pluginApiVersion: SemanticVersionSchema.optional(),
   panelMeta: z.array(PluginPanelMetaPayloadSchema).optional().default([]),
   panelContributions: z.array(PluginUIPanelContributionGroupSchema).optional().default([]),
   lastError: z.string().optional(),
@@ -727,89 +767,6 @@ export const PluginMarketScreenshotSchema = z.object({
 });
 export type PluginMarketScreenshot = z.infer<typeof PluginMarketScreenshotSchema>;
 
-const PluginMarketCatalogEntryInputSchema = z.object({
-  name: z.string(),
-  title: z.string(),
-  description: z.string(),
-  readmeMarkdown: z.string().max(100 * 1024).optional(),
-  readmeSourceUrl: z.string().url().optional(),
-  locales: PluginLocalesSchema.optional(),
-  latestVersion: z.string(),
-  minPluginApiVersion: SemanticVersionSchema.optional(),
-  /** Catalog schema v1 compatibility alias; normalized on read. */
-  minHostVersion: SemanticVersionSchema.optional(),
-  author: z.string().optional(),
-  license: z.string().optional(),
-  repository: z.string().url().optional(),
-  homepage: z.string().url().optional(),
-  categories: z.array(z.string()).optional().default([]),
-  keywords: z.array(z.string()).optional().default([]),
-  permissions: z.array(PluginPermissionSchema).optional().default([]),
-  screenshots: z.array(PluginMarketScreenshotSchema).optional().default([]),
-  artifactUrl: z.string().url(),
-  sha256: z.string().regex(/^[a-f0-9]{64}$/i),
-  size: z.number().int().nonnegative(),
-  publishedAt: z.string(),
-  artifactManifestVersion: z.literal(1).optional(),
-}).superRefine((value, context) => {
-  if (!value.minPluginApiVersion && !value.minHostVersion) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['minPluginApiVersion'],
-      message: 'minPluginApiVersion is required',
-    });
-  }
-  if (value.minPluginApiVersion && value.minHostVersion
-      && value.minPluginApiVersion !== value.minHostVersion) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['minPluginApiVersion'],
-      message: 'minPluginApiVersion conflicts with legacy minHostVersion',
-    });
-  }
-});
-
-export const PluginMarketCatalogEntrySchema = PluginMarketCatalogEntryInputSchema.transform((value) => {
-  const { minHostVersion: _legacyMinimum, ...entry } = value;
-  return {
-    ...entry,
-    minPluginApiVersion: value.minPluginApiVersion ?? value.minHostVersion!,
-  };
-});
-export type PluginMarketCatalogEntry = z.infer<typeof PluginMarketCatalogEntrySchema>;
-
-const PluginMarketCatalogV2EntrySchema = PluginMarketCatalogEntryInputSchema.superRefine(
-  (value, context) => {
-    if (!value.minPluginApiVersion) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['minPluginApiVersion'],
-        message: 'catalog schema v2 requires minPluginApiVersion',
-      });
-    }
-    if (value.minHostVersion) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['minHostVersion'],
-        message: 'catalog schema v2 does not support legacy minHostVersion',
-      });
-    }
-    if (value.artifactManifestVersion !== 1) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['artifactManifestVersion'],
-        message: 'catalog schema v2 requires artifactManifestVersion 1',
-      });
-    }
-  },
-).transform((value) => {
-  const { minHostVersion: _legacyMinimum, ...entry } = value;
-  return {
-    ...entry,
-    minPluginApiVersion: value.minPluginApiVersion!,
-  };
-});
-
 export const PluginArtifactManifestSchema = z.object({
   schemaVersion: z.literal(1),
   name: z.string(),
@@ -823,34 +780,156 @@ export const PluginArtifactManifestSchema = z.object({
 });
 export type PluginArtifactManifest = z.infer<typeof PluginArtifactManifestSchema>;
 
-export const PluginMarketCatalogSchema = z.discriminatedUnion('schemaVersion', [
-  z.object({
-    schemaVersion: z.literal(1),
-    generatedAt: z.string(),
-    channel: PluginMarketChannelSchema,
-    plugins: z.array(PluginMarketCatalogEntrySchema),
-  }),
-  z.object({
-    schemaVersion: z.literal(2),
-    generatedAt: z.string(),
-    channel: PluginMarketChannelSchema,
-    plugins: z.array(PluginMarketCatalogV2EntrySchema),
-  }),
+const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/i);
+
+/**
+ * One immutable published plugin version in the marketplace index.
+ *
+ * A version is installable on a Host when it is not yanked and the Host's
+ * bundled Plugin API satisfies `^minPluginApiVersion`.
+ */
+export const PluginMarketVersionSchema = z.object({
+  version: SemanticVersionSchema,
+  minPluginApiVersion: SemanticVersionSchema,
+  artifactUrl: z.string().url(),
+  sha256: Sha256Schema,
+  size: z.number().int().nonnegative(),
+  publishedAt: z.string(),
+  permissions: z.array(PluginPermissionSchema).optional().default([]),
+  artifactManifestVersion: z.literal(1),
+  /** A yanked version stays downloadable for audit but is never selected. */
+  yanked: z.boolean().optional().default(false),
+  yankedReason: z.string().optional(),
+});
+export type PluginMarketVersion = z.infer<typeof PluginMarketVersionSchema>;
+
+const PluginMarketPluginBaseSchema = z.object({
+  name: z.string().min(1),
+  title: z.string(),
+  description: z.string(),
+  readmeMarkdown: z.string().max(100 * 1024).optional(),
+  readmeSourceUrl: z.string().url().optional(),
+  locales: PluginLocalesSchema.optional(),
+  author: z.string().optional(),
+  license: z.string().optional(),
+  repository: z.string().url().optional(),
+  homepage: z.string().url().optional(),
+  categories: z.array(z.string()).optional().default([]),
+  keywords: z.array(z.string()).optional().default([]),
+  screenshots: z.array(PluginMarketScreenshotSchema).optional().default([]),
+  /** Every published version, including yanked ones. Order is not significant. */
+  versions: z.array(PluginMarketVersionSchema).min(1),
+});
+
+/** Marketplace plugin with presentation metadata from its newest version. */
+export const PluginMarketPluginSchema = PluginMarketPluginBaseSchema.superRefine((value, context) => {
+  const seen = new Set<string>();
+  value.versions.forEach((entry, index) => {
+    if (seen.has(entry.version)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['versions', index, 'version'],
+        message: `duplicate plugin version ${entry.version}`,
+      });
+    }
+    seen.add(entry.version);
+  });
+});
+export type PluginMarketPlugin = z.infer<typeof PluginMarketPluginSchema>;
+
+/** Official marketplace index. Schema v3 has no release channel. */
+export const PluginMarketIndexSchema = z.object({
+  schemaVersion: z.literal(3),
+  generatedAt: z.string(),
+  plugins: z.array(PluginMarketPluginSchema),
+}).superRefine((value, context) => {
+  const seen = new Set<string>();
+  value.plugins.forEach((plugin, index) => {
+    if (seen.has(plugin.name)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['plugins', index, 'name'],
+        message: `duplicate plugin ${plugin.name}`,
+      });
+    }
+    seen.add(plugin.name);
+  });
+});
+export type PluginMarketIndex = z.infer<typeof PluginMarketIndexSchema>;
+
+/**
+ * Envelope used to read the index entry by entry. A Host must keep working
+ * when newer plugin versions use permissions or manifest formats it does not
+ * know yet, so unreadable versions or plugins are skipped individually instead
+ * of rejecting the whole index.
+ */
+export const PluginMarketIndexEnvelopeSchema = z.object({
+  schemaVersion: z.literal(3),
+  generatedAt: z.string(),
+  plugins: z.array(z.unknown()),
+});
+
+/** One plugin entry with its versions left unparsed; see {@link PluginMarketIndexEnvelopeSchema}. */
+export const PluginMarketPluginEnvelopeSchema = PluginMarketPluginBaseSchema.extend({
+  versions: z.array(z.unknown()),
+});
+
+/**
+ * Why a marketplace plugin has no installable version on this Host.
+ *
+ * - `compatible`: `installable` identifies the version to install.
+ * - `host-upgrade-required`: every candidate needs a newer Plugin API.
+ * - `plugin-outdated`: candidates target an older Plugin API major; upgrading
+ *   the Host cannot help until the plugin publishes a compatible version.
+ */
+export const PluginMarketAvailabilitySchema = z.enum([
+  'compatible',
+  'host-upgrade-required',
+  'plugin-outdated',
 ]);
-export type PluginMarketCatalog = z.infer<typeof PluginMarketCatalogSchema>;
+export type PluginMarketAvailability = z.infer<typeof PluginMarketAvailabilitySchema>;
+
+/** Marketplace install record found on disk, independent of whether it loaded. */
+export const PluginMarketInstalledVersionSchema = z.object({
+  version: z.string(),
+  /** Whether this Host can load the installed version; absent when unknown. */
+  compatible: z.boolean().optional(),
+  /** The installed version loads only through the legacy Plugin API window. */
+  legacy: z.boolean().optional(),
+});
+export type PluginMarketInstalledVersion = z.infer<typeof PluginMarketInstalledVersionSchema>;
+
+/** Marketplace plugin resolved against the running Host's Plugin API. */
+export const PluginMarketListingSchema = PluginMarketPluginBaseSchema.extend({
+  /** Newest non-yanked version, regardless of compatibility. */
+  latest: PluginMarketVersionSchema,
+  /** Newest non-yanked version compatible with this Host, if any. */
+  installable: PluginMarketVersionSchema.nullable(),
+  availability: PluginMarketAvailabilitySchema,
+  installed: PluginMarketInstalledVersionSchema.optional(),
+});
+export type PluginMarketListing = z.infer<typeof PluginMarketListingSchema>;
 
 export const PluginMarketCatalogResponseSchema = z.object({
-  catalog: PluginMarketCatalogSchema,
   sourceUrl: z.string().url(),
+  generatedAt: z.string(),
+  pluginApiVersion: SemanticVersionSchema,
+  plugins: z.array(PluginMarketListingSchema),
 });
 export type PluginMarketCatalogResponse = z.infer<typeof PluginMarketCatalogResponseSchema>;
 
 export const PluginMarketCatalogEntryResponseSchema = z.object({
-  plugin: PluginMarketCatalogEntrySchema,
   sourceUrl: z.string().url(),
-  channel: PluginMarketChannelSchema,
+  pluginApiVersion: SemanticVersionSchema,
+  plugin: PluginMarketListingSchema,
 });
 export type PluginMarketCatalogEntryResponse = z.infer<typeof PluginMarketCatalogEntryResponseSchema>;
+
+/** Install/update request. `version` pins the exact version the user confirmed. */
+export const PluginMarketInstallRequestSchema = z.object({
+  version: SemanticVersionSchema.optional(),
+});
+export type PluginMarketInstallRequest = z.infer<typeof PluginMarketInstallRequestSchema>;
 
 export const PluginMarketInstallRecordSchema = PluginMarketInstallRecordInternalSchema;
 export type PluginMarketInstallRecord = z.infer<typeof PluginMarketInstallRecordSchema>;

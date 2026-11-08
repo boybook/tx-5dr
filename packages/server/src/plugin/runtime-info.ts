@@ -7,7 +7,10 @@ import { SERVER_BUILD_INFO } from '../generated/buildInfo.js';
 export {
   assertPluginApiCompatible,
   comparePluginApiVersions,
+  getPluginApiCompatibility,
+  isPluginApiCompatible,
   PluginApiCompatibilityError,
+  PLUGIN_API_LEGACY_MAJOR_WINDOW,
 } from '@tx5dr/plugin-api';
 
 

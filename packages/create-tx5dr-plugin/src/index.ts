@@ -180,9 +180,35 @@ function readContestLogbookUiAssets(): Map<string, string> {
 
 // ===== Core template generation =====
 
+/** README guidance shared by generated projects on choosing the Plugin API version. */
+function generatePluginApiReadmeSection(): string {
+  return `## Plugin API version
+
+\`minPluginApiVersion\` tells TX-5DR which Plugin API this plugin needs. TX-5DR runs
+the plugin when its bundled Plugin API is at least that version and has the
+same major version (\`^${GENERATED_PLUGIN_API_FLOOR}\` means >= ${GENERATED_PLUGIN_API_FLOOR} and < ${Number(GENERATED_PLUGIN_API_FLOOR.split('.')[0]) + 1}.0.0).
+TX-5DR shows its Plugin API version in Settings > Plugins.
+
+- Keep \`minPluginApiVersion\` equal to the lower bound of the
+  \`@tx5dr/plugin-api\` range in package.json. When you upgrade
+  \`@tx5dr/plugin-api\` to use a newer API, raise both together.
+- Declare a lower version only after testing the plugin on a TX-5DR that
+  bundles that version.
+- Run \`npm run check\` before publishing; it reports mismatched declarations.
+`;
+}
+
+/**
+ * Plugin API floor for generated plugins. The dependency range and the
+ * declared `minPluginApiVersion` must name the same version: the Host accepts
+ * `^minPluginApiVersion`, so declaring a lower floor than the API the plugin
+ * builds against would offer it to Hosts that lack those APIs.
+ */
+const GENERATED_PLUGIN_API_FLOOR = '2.6.0';
+
 function generatePackageJson(config: PluginConfig): string {
   const devDeps: Record<string, string> = {
-    '@tx5dr/plugin-api': '^2.6.0',
+    '@tx5dr/plugin-api': `^${GENERATED_PLUGIN_API_FLOOR}`,
   };
 
   if (config.lang === 'ts') {
@@ -225,6 +251,8 @@ function generatePackageJson(config: PluginConfig): string {
     scripts['test'] = 'vitest run';
     scripts['link'] = 'node scripts/link.mjs';
   }
+  // Same Plugin API declaration checks as the Host and official marketplace.
+  scripts['check'] = config.lang === 'ts' ? 'npm run build && tx5dr-plugin check' : 'tx5dr-plugin check';
 
   const pkg: Record<string, unknown> = {
     name: config.name,
@@ -245,7 +273,7 @@ function generatePackageJson(config: PluginConfig): string {
       pluginName: config.name,
       title: config.name,
       description: `${config.name} FT8/FT4 contest strategy`,
-      minPluginApiVersion: '2.5.0',
+      minPluginApiVersion: GENERATED_PLUGIN_API_FLOOR,
       author: 'TX-5DR plugin author',
       license: 'GPL-3.0-only',
       categories: ['contest', 'ft8', 'ft4'],
@@ -324,6 +352,7 @@ export const plugin = definePlugin({
   apiVersion: 2,
   name: '${config.name}',
   version: '0.1.0',
+  minPluginApiVersion: '${GENERATED_PLUGIN_API_FLOOR}',
   type: 'utility',
   description: 'pluginDescription',
   // Add only the capabilities this plugin actually uses. The host omits all
@@ -459,6 +488,7 @@ export const plugin = definePlugin({
   apiVersion: 2,
   name: '${config.name}',
   version: '0.1.0',
+  minPluginApiVersion: '${GENERATED_PLUGIN_API_FLOOR}',
   type: 'strategy',
   description: 'pluginDescription',
   // Selecting a strategy is the explicit grant for declarative RF decisions.
@@ -617,7 +647,7 @@ class ContestRuntime implements StrategyRuntime {
 export const plugin = composeFT8ContestPlugin({
   name: '${config.name}',
   version: '0.1.0',
-  minPluginApiVersion: '2.5.0',
+  minPluginApiVersion: '${GENERATED_PLUGIN_API_FLOOR}',
   description: 'pluginDescription',
   permissions: CONTEST_LOGBOOK_PERMISSIONS,
   contest,
@@ -648,6 +678,7 @@ export const plugin = definePlugin({
   apiVersion: 2,
   name: '${config.name}',
   version: '0.1.0',
+  minPluginApiVersion: '${GENERATED_PLUGIN_API_FLOOR}',
   type: 'utility',
   description: 'pluginDescription',
   // Add only the capabilities this plugin actually uses.
@@ -719,6 +750,7 @@ export const plugin = definePlugin({
   apiVersion: 2,
   name: '${config.name}',
   version: '0.1.0',
+  minPluginApiVersion: '${GENERATED_PLUGIN_API_FLOOR}',
   type: 'utility',
   description: 'pluginDescription',
   permissions: [],
@@ -751,6 +783,7 @@ export const plugin = definePlugin({
   apiVersion: 2,
   name: '${config.name}',
   version: '0.1.0',
+  minPluginApiVersion: '${GENERATED_PLUGIN_API_FLOOR}',
   type: 'utility',
   description: 'pluginDescription',
   permissions: [],
@@ -819,7 +852,7 @@ describe('${config.name}', () => {
 
   it('exposes an FT8 strategy plugin', () => {
     expect(plugin.type).toBe('strategy');
-      expect(plugin.minPluginApiVersion).toBe('2.5.0');
+      expect(plugin.minPluginApiVersion).toBe('${GENERATED_PLUGIN_API_FLOOR}');
     expect(contest.operating).toMatchObject({
       humanInitiation: 'required',
       maxConcurrentQsos: 1,
@@ -1362,7 +1395,7 @@ function generateFiles(config: PluginConfig): Map<string, string> {
     if (config.template === 'ft8-contest') {
       files.set('src/index.ts', generateTsFT8ContestPlugin(config));
       for (const [relativePath, content] of readContestLogbookUiAssets()) files.set(relativePath, content);
-      files.set('README.md', `# ${config.name}\n\nFT8/FT4 contest strategy plugin for TX-5DR.\n`);
+      files.set('README.md', `# ${config.name}\n\nFT8/FT4 contest strategy plugin for TX-5DR.\n\n${generatePluginApiReadmeSection()}`);
     } else if (config.type === 'strategy') {
       files.set('src/index.ts', generateTsStrategyPlugin(config));
     } else if (hasUI(config)) {
@@ -1414,6 +1447,10 @@ function generateFiles(config: PluginConfig): Map<string, string> {
   // Link script for all templates with TS
   if (config.lang === 'ts') {
     files.set('scripts/link.mjs', generateLinkScript(config.name));
+  }
+
+  if (!files.has('README.md')) {
+    files.set('README.md', `# ${config.name}\n\nTX-5DR plugin.\n\n${generatePluginApiReadmeSection()}`);
   }
 
   return files;

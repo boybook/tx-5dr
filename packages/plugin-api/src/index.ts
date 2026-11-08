@@ -25,8 +25,12 @@ export { definePlugin } from './definition.js';
 export {
   assertPluginApiCompatible,
   comparePluginApiVersions,
+  getPluginApiCompatibility,
+  isPluginApiCompatible,
   PluginApiCompatibilityError,
+  PLUGIN_API_LEGACY_MAJOR_WINDOW,
 } from './compatibility.js';
+export type { PluginApiCompatibility } from './compatibility.js';
 export {
   PLUGIN_COMMAND_CAPABILITY_PERMISSIONS,
   PLUGIN_CONTEXT_CAPABILITY_KEYS,

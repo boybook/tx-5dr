@@ -24,6 +24,7 @@ import { faPuzzlePiece, faCircleQuestion } from '@fortawesome/free-solid-svg-ico
 import type { PluginStatus, RadioOperatorConfig } from '@tx5dr/contracts';
 import { PluginSettingsPanel } from './PluginSettingsPanel';
 import { PluginAutoDisableDetails } from './PluginAutoDisableDetails';
+import { PluginLoadFailureList } from './PluginLoadFailureList';
 import { api } from '@tx5dr/core';
 import { createLogger } from '../../utils/logger';
 import { usePluginSnapshot } from '../../hooks/usePluginSnapshot';
@@ -66,6 +67,7 @@ export const PluginList = forwardRef<PluginListRef, PluginListProps>(({
   const pluginCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const pluginSnapshot = usePluginSnapshot();
   const plugins = pluginSnapshot.plugins;
+  const loadFailures = pluginSnapshot.loadFailures ?? [];
   const [enabledDrafts, setEnabledDrafts] = useState<Record<string, boolean>>({});
   const [originalEnabledMap, setOriginalEnabledMap] = useState<Record<string, boolean>>({});
   const [globalSettingsMap, setGlobalSettingsMap] = useState<Record<string, Record<string, unknown>>>({});
@@ -340,6 +342,13 @@ export const PluginList = forwardRef<PluginListRef, PluginListProps>(({
   const utilityPlugins = displayPlugins.filter(p => p.type === 'utility');
   return (
     <div className="flex flex-col gap-3">
+      {pluginSnapshot.pluginApiVersion && (
+        <div className="text-xs text-default-400">
+          {t('plugins.hostPluginApiVersion', 'This TX-5DR bundles Plugin API {{version}}. Plugins declare the version they need with minPluginApiVersion.', {
+            version: pluginSnapshot.pluginApiVersion,
+          })}
+        </div>
+      )}
       {strategyPlugins.length > 0 && (
         <>
           <PluginSectionTitle
@@ -455,7 +464,17 @@ export const PluginList = forwardRef<PluginListRef, PluginListProps>(({
         </>
       )}
 
-      {plugins.length === 0 && (
+      {loadFailures.length > 0 && (
+        <>
+          <Divider className="my-1" />
+          <PluginLoadFailureList
+            failures={loadFailures}
+            pluginApiVersion={pluginSnapshot.pluginApiVersion}
+          />
+        </>
+      )}
+
+      {plugins.length === 0 && loadFailures.length === 0 && (
         <div className="text-sm text-default-400 text-center py-4">
           {emptyMessage ?? t('plugins.empty', 'No plugins installed yet.')}
         </div>
@@ -564,6 +583,21 @@ export const PluginCard: React.FC<PluginCardProps> = ({ plugin, selected, onSele
                   {plugin.isBuiltIn && (
                     <Chip as="span" size="sm" variant="flat" color="primary" className="text-xs h-4">
                       {t('plugins.builtin', 'Built-in')}
+                    </Chip>
+                  )}
+                  {plugin.pluginApiCompatibility === 'legacy' && (
+                    <Chip
+                      as="span"
+                      size="sm"
+                      variant="flat"
+                      color="warning"
+                      className="text-xs h-4"
+                      title={t('plugins.legacyPluginApiHint', {
+                        defaultValue: 'Built for the older Plugin API ^{{required}}. It still runs, but may misbehave; install an update from the marketplace or ask the author to update it.',
+                        required: plugin.minPluginApiVersion ?? '',
+                      })}
+                    >
+                      {t('plugins.legacyPluginApi', 'Older Plugin API')}
                     </Chip>
                   )}
                 </span>

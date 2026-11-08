@@ -85,6 +85,16 @@ workspace assumptions, and inspect its output. For marketplace changes, inspect
 the actual ZIP: it must be self-contained, checksum-verified, path-safe, and
 loadable by the Host.
 
+Plugin API version gate:
+
+- [ ] A public surface change raises `@tx5dr/plugin-api` (minor for additions,
+      major for breaking changes) in the same change.
+- [ ] A major increase lists every marketplace plugin that becomes incompatible
+      and has a migration/publication plan before the Host is released.
+- [ ] Scaffold dependency range and generated `minPluginApiVersion` match.
+- [ ] Marketplace plugins still pass `node scripts/validate-marketplace.mjs` in
+      `boybook/tx-5dr-plugins` (declared floor and immutable version checks).
+
 When public JSDoc changes, run `npm run docs:sync-plugin-api` in the site
 repository, check generation idempotence, then run its lint, tests, and build.
 

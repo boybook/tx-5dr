@@ -19,7 +19,7 @@ vi.mock('../../utils/pluginLocales', () => ({ registerPluginLocales: mocks.regis
 
 let bus: EventEmitter;
 function snapshot(generation: number): PluginSystemSnapshot {
-  return { generation, state: 'ready', plugins: [], panelMeta: [], panelContributions: [] };
+  return { generation, state: 'ready', plugins: [], loadFailures: [], panelMeta: [], panelContributions: [] };
 }
 function deferred<T>() {
   let resolve!: (value: T) => void;

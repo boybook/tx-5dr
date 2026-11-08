@@ -12,6 +12,7 @@ import type {
   PluginPanelMetaPayload,
   PluginUIPanelContributionGroup,
   PluginSource,
+  PluginLoadFailure,
   PluginStatus,
   PluginAutoDisableInfo,
   PluginSystemSnapshot,
@@ -48,6 +49,8 @@ export interface LoadedPlugin {
   source?: PluginSource;
   /** 插件加载的 i18n 资源 */
   locales?: Record<string, Record<string, string>>;
+  /** `legacy` when loaded through the previous-major Plugin API window. */
+  pluginApiCompatibility?: 'compatible' | 'legacy';
 }
 
 /**
@@ -356,6 +359,8 @@ export function toPluginStatus(plugin: LoadedPlugin, instance?: PluginInstance):
     } : undefined,
     locales: plugin.locales,
     source: plugin.source,
+    minPluginApiVersion: plugin.definition.minPluginApiVersion,
+    pluginApiCompatibility: plugin.pluginApiCompatibility,
   };
 }
 
@@ -364,12 +369,16 @@ export function toPluginSystemSnapshot(
   plugins: PluginStatus[],
   panelMeta: PluginPanelMetaPayload[],
   panelContributions: PluginUIPanelContributionGroup[],
+  loadFailures: PluginLoadFailure[] = [],
+  pluginApiVersion?: string,
 ): PluginSystemSnapshot {
   return {
     state: state.state,
     generation: state.generation,
     lastError: state.lastError,
     plugins,
+    loadFailures,
+    ...(pluginApiVersion ? { pluginApiVersion } : {}),
     panelMeta,
     panelContributions,
   };

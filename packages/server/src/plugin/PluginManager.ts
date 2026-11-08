@@ -1,6 +1,7 @@
 import type {
   DigitalRadioEngineEvents,
   PluginLogEntry,
+  PluginLoadFailure,
   PluginLogHistoryEntry,
   PluginPanelDescriptor,
   PluginPanelMetaPayload,
@@ -66,6 +67,7 @@ import { BUILTIN_MIGRATIONS } from './builtin-migrations/index.js';
 import { toPluginStatus, toPluginSystemSnapshot } from './types.js';
 import type { LoadedPlugin, PluginInstance, PluginManagerDeps, PluginSystemRuntimeState, FlushableKVStore } from './types.js';
 import { readPluginSource } from './plugin-source.js';
+import { SERVER_BUILD_INFO } from '../generated/buildInfo.js';
 import { createLogger } from '../utils/logger.js';
 import { resolvePluginPaths } from './paths.js';
 import path from 'path';
@@ -113,6 +115,8 @@ export class PluginManager {
   private static readonly MAX_PAGE_PUSH_QUEUE = 500;
   private nextInstanceGeneration = 0;
   private loadedPlugins = new Map<string, LoadedPlugin>();
+  /** Plugin directories found by the last scan that did not load. */
+  private loadFailures: PluginLoadFailure[] = [];
   // operatorId → Map<pluginName, PluginInstance>
   private instances = new Map<string, Map<string, PluginInstance>>();
   private globalInstances = new Map<string, PluginInstance>();
@@ -2244,6 +2248,8 @@ export class PluginManager {
       this.getPluginStatuses(),
       this.getPanelMetaSnapshot(),
       this.getPanelContributionSnapshot(),
+      this.loadFailures,
+      SERVER_BUILD_INFO.pluginApiVersion,
     );
   }
 
@@ -3166,6 +3172,7 @@ export class PluginManager {
 
     const { pluginDir } = this.getPluginPaths();
     const userPlugins = await this.loader.scanAndLoad(pluginDir);
+    this.loadFailures = this.loader.getLastScanFailures();
     for (const plugin of userPlugins) {
       if (discoveredPlugins.has(plugin.definition.name)) {
         this.emitPluginRuntimeLog({

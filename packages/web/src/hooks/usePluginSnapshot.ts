@@ -8,7 +8,7 @@ import { createLogger } from '../utils/logger';
 
 const logger = createLogger('PluginSnapshot');
 const EMPTY_SNAPSHOT: PluginSystemSnapshot = {
-  state: 'ready', generation: 0, plugins: [], panelMeta: [], panelContributions: [],
+  state: 'ready', generation: 0, plugins: [], loadFailures: [], panelMeta: [], panelContributions: [],
 };
 const PluginSnapshotContext = React.createContext<PluginSystemSnapshot | null>(null);
 type SnapshotUpdate = (snapshot: PluginSystemSnapshot) => PluginSystemSnapshot;

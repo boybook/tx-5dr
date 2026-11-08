@@ -4,7 +4,12 @@ import {
   type SimulationScenarioChoice,
   type SimulationScenarioDescriptor,
 } from '@tx5dr/plugin-api';
-import type { PluginPanelDescriptor, PluginRuntimeLogEntry, PluginUIPageDescriptor } from '@tx5dr/contracts';
+import type {
+  PluginLoadFailure,
+  PluginPanelDescriptor,
+  PluginRuntimeLogEntry,
+  PluginUIPageDescriptor,
+} from '@tx5dr/contracts';
 import { PluginArtifactManifestSchema, PluginManifestSchema } from '@tx5dr/contracts';
 import type { LoadedPlugin } from './types.js';
 import type { Dirent } from 'fs';
@@ -13,7 +18,8 @@ import path from 'path';
 import { pathToFileURL } from 'url';
 import { createLogger } from '../utils/logger.js';
 import { validateArchiveRelativePath } from './path-security.js';
-import { assertPluginApiCompatible } from './runtime-info.js';
+import { assertPluginApiCompatible, PluginApiCompatibilityError } from './runtime-info.js';
+import { readPluginSource } from './plugin-source.js';
 import { SERVER_BUILD_INFO } from '../generated/buildInfo.js';
 
 const logger = createLogger('PluginLoader');
@@ -439,12 +445,20 @@ function validateSpecialPanel(
  * 每个子目录视为一个插件，入口文件为 plugin.js 或 index.js
  */
 export class PluginLoader {
+  private lastScanFailures: PluginLoadFailure[] = [];
+
   constructor(
     private readonly emitRuntimeLog?: PluginLoaderRuntimeLogEmitter,
     private readonly pluginApiVersion = SERVER_BUILD_INFO.pluginApiVersion,
   ) {}
 
+  /** Plugin directories that the most recent scan found but did not load. */
+  getLastScanFailures(): PluginLoadFailure[] {
+    return this.lastScanFailures.map((failure) => ({ ...failure }));
+  }
+
   async scanAndLoad(pluginDir: string): Promise<LoadedPlugin[]> {
+    this.lastScanFailures = [];
     this.emitRuntimeLog?.({
       stage: 'scan',
       level: 'info',
@@ -509,6 +523,7 @@ export class PluginLoader {
         });
       } catch (err) {
         this.emitRuntimeLog?.(this.toFailureRuntimeLog(err, name, dirPath));
+        this.lastScanFailures.push(await this.toLoadFailure(err, name, dirPath));
         logger.error(`Failed to load plugin from ${dirPath}`, err);
       }
     }
@@ -595,15 +610,20 @@ export class PluginLoader {
     }
 
     let definition: AnyPluginDefinition;
+    let pluginApiCompatibility: 'compatible' | 'legacy';
     try {
       definition = canonicalizePluginDefinition(exportedDefinition);
-      assertPluginApiCompatible(
+      pluginApiCompatibility = assertPluginApiCompatible(
         definition.minPluginApiVersion,
         definition.name,
         this.pluginApiVersion,
+        { allowLegacy: true },
       );
       await validateInstalledArtifactManifest(dirPath, definition);
     } catch (err) {
+      const definitionVersion = typeof (exportedDefinition as { version?: unknown }).version === 'string'
+        ? (exportedDefinition as { version: string }).version
+        : undefined;
       throw new PluginLoadError(
         'validate_error',
         `Plugin definition validation failed: ${this.getErrorMessage(err)}`,
@@ -612,9 +632,29 @@ export class PluginLoader {
           directoryName,
           entryPath,
           pluginName: definitionName,
+          version: definitionVersion,
           error: this.getErrorMessage(err),
+          ...(err instanceof PluginApiCompatibilityError
+            ? { minPluginApiVersion: err.minPluginApiVersion, pluginApiCompatibility: err.compatibility }
+            : {}),
         },
       );
+    }
+
+    if (pluginApiCompatibility === 'legacy') {
+      this.emitRuntimeLog?.({
+        stage: 'validate',
+        level: 'warn',
+        message: `Plugin targets an earlier Plugin API major (^${definition.minPluginApiVersion}); `
+          + `loaded with bundled Plugin API ${this.pluginApiVersion}. Ask the author for an update.`,
+        pluginName: definition.name,
+        directoryName,
+        details: {
+          dirPath,
+          minPluginApiVersion: definition.minPluginApiVersion,
+          pluginApiVersion: this.pluginApiVersion,
+        },
+      });
     }
 
     try {
@@ -641,6 +681,7 @@ export class PluginLoader {
       isBuiltIn: false,
       dirPath,
       locales: Object.keys(locales).length > 0 ? locales : undefined,
+      pluginApiCompatibility,
     };
   }
   private async loadLocales(
@@ -732,6 +773,27 @@ export class PluginLoader {
         dirPath,
         error: this.getErrorMessage(err),
       },
+    };
+  }
+
+  private async toLoadFailure(err: unknown, directoryName: string, dirPath: string): Promise<PluginLoadFailure> {
+    const details = err instanceof PluginLoadError ? err.details ?? {} : {};
+    const compatibility = details.pluginApiCompatibility;
+    const source = await readPluginSource(dirPath).catch(() => undefined);
+    return {
+      directoryName,
+      ...(typeof details.pluginName === 'string' ? { pluginName: details.pluginName } : {}),
+      ...(typeof details.version === 'string' ? { version: details.version } : {}),
+      reason: compatibility === 'requires-newer-host'
+        ? 'plugin-api-requires-newer-host'
+        : compatibility === 'unsupported'
+          ? 'plugin-api-unsupported'
+          : 'invalid-plugin',
+      ...(typeof details.minPluginApiVersion === 'string'
+        ? { minPluginApiVersion: details.minPluginApiVersion }
+        : {}),
+      ...(source ? { source } : {}),
+      message: this.getErrorMessage(err),
     };
   }
 

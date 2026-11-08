@@ -577,6 +577,61 @@ describe('PluginLoader runtime logs', () => {
     ))).toBe(true);
   });
 
+  it('loads a previous-major plugin as legacy and reports out-of-window plugins as failures', async () => {
+    const pluginRoot = await createPluginRoot();
+    const write = async (name: string, min: string) => {
+      const pluginDir = join(pluginRoot, name);
+      await mkdir(pluginDir, { recursive: true });
+      await writeFile(join(pluginDir, 'index.mjs'), `
+        export default { name: '${name}', version: '1.0.0', minPluginApiVersion: '${min}', type: 'utility' };
+      `, 'utf8');
+    };
+    await write('legacy-plugin', '1.7.11');
+    await write('current-plugin', '2.6.0');
+    await write('ancient-plugin', '0.9.0');
+    await write('future-plugin', '2.8.0');
+    await writeFile(join(pluginRoot, 'future-plugin', '.tx5dr-source.json'), JSON.stringify({
+      schemaVersion: 1,
+      source: {
+        kind: 'marketplace',
+        version: '1.0.0',
+        artifactUrl: 'https://dl.tx5dr.com/plugins/market/artifacts/future-plugin/1.0.0.zip',
+        sha256: 'a'.repeat(64),
+        installedAt: 1,
+      },
+    }), 'utf8');
+
+    const runtimeLogs: PluginLoaderRuntimeLogEvent[] = [];
+    const loader = new PluginLoader((entry) => runtimeLogs.push(entry), '2.7.0');
+    const loaded = await loader.scanAndLoad(pluginRoot);
+
+    expect(Object.fromEntries(loaded.map((plugin) => [plugin.definition.name, plugin.pluginApiCompatibility])))
+      .toEqual({ 'legacy-plugin': 'legacy', 'current-plugin': 'compatible' });
+    expect(runtimeLogs.some((entry) => (
+      entry.level === 'warn' && entry.pluginName === 'legacy-plugin' && entry.message.includes('earlier Plugin API major')
+    ))).toBe(true);
+    const failures = loader.getLastScanFailures();
+    expect(failures).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        directoryName: 'ancient-plugin',
+        pluginName: 'ancient-plugin',
+        version: '1.0.0',
+        reason: 'plugin-api-unsupported',
+        minPluginApiVersion: '0.9.0',
+      }),
+      expect.objectContaining({
+        directoryName: 'future-plugin',
+        reason: 'plugin-api-requires-newer-host',
+        minPluginApiVersion: '2.8.0',
+        source: expect.objectContaining({ kind: 'marketplace', version: '1.0.0' }),
+      }),
+    ]));
+    expect(failures).toHaveLength(2);
+
+    await loader.scanAndLoad(join(pluginRoot, 'missing'));
+    expect(loader.getLastScanFailures()).toEqual([]);
+  });
+
   it('rejects an installed artifact whose static manifest differs from its runtime', async () => {
     const pluginRoot = await createPluginRoot();
     const pluginDir = join(pluginRoot, 'manifest-mismatch');

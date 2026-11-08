@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { resolveHostVersion } from './host-version.mjs';
 import { validateReleaseVersion } from './resolve-release-identity.mjs';
 import { readReleaseResource } from './release-http.mjs';
+import { assertPluginMarketIndexAvailable, DEFAULT_PLUGIN_MARKET_INDEX_URL } from './plugin-market-gate.mjs';
 
 async function sha256(stream) {
   const hash = crypto.createHash('sha256');
@@ -22,6 +23,9 @@ for (const name of ['OSS_ACCESS_KEY_ID', 'OSS_ACCESS_KEY_SECRET', 'OSS_BUCKET', 
 }
 if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error('Full source SHA required');
 if (run('git', ['rev-parse', 'HEAD']) !== sha) throw new Error('Checkout identity mismatch');
+// Fail before any upload: this Host's marketplace needs the schema v3 index.
+const marketPlugins = await assertPluginMarketIndexAvailable(process.env.PLUGIN_MARKET_INDEX_URL || DEFAULT_PLUGIN_MARKET_INDEX_URL);
+process.stdout.write(`Plugin marketplace index available with ${marketPlugins} plugin(s).\n`);
 const root = JSON.parse(await fs.readFile('package.json', 'utf8'));
 if (tagInput) {
   validateReleaseVersion(tagInput, root.version);

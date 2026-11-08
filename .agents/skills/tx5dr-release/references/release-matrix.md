@@ -91,6 +91,12 @@ Host release. See [Host procedure](host-release.md) for triggering and recovery.
 - Use [Plugin API change](../../tx5dr-plugin-api-change/SKILL.md) for public
   compatibility checks. Inspect exports/JSDoc, test packed consumers and scaffold
   output, registry dependency versions, and Trusted Publishing/provenance.
+- A Host release that raises the bundled `@tx5dr/plugin-api` major, or tightens
+  plugin compatibility, changes which installed plugins load. Publish the
+  migrated marketplace plugins first, confirm they appear in
+  `https://dl.tx5dr.com/plugins/market/index.json`, and state the change in the
+  Host release notes. `scripts/publish-release.mjs` refuses to publish while
+  that schema v3 index is unavailable.
 - Preserve publication order and wait for dependent versions to be visible.
   Verify registry tarballs, dist-tags and consumers; Host binaries and a Git tag
   do not prove npm publication. A dry run does not authorize a later real publish.

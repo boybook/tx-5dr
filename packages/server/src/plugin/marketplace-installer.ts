@@ -3,18 +3,21 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { pathToFileURL } from 'node:url';
 import {
   PluginArtifactManifestSchema,
   type PluginArtifactManifest,
-  type PluginMarketCatalogEntry,
-  type PluginMarketChannel,
   type PluginMarketInstallRecord,
   type PluginMarketInstallResult,
+  type PluginMarketVersion,
+  type PluginSource,
 } from '@tx5dr/contracts';
-import { canonicalizePluginDefinition } from './PluginLoader.js';
-import { fetchPluginMarketCatalog } from './marketplace.js';
-import { writePluginSource } from './plugin-source.js';
+import {
+  fetchPluginMarketIndex,
+  findPluginMarketPlugin,
+  selectPluginMarketInstallVersion,
+  type PluginMarketFetchOptions,
+} from './marketplace.js';
+import { readPluginSource, writePluginSource } from './plugin-source.js';
 import {
   resolveSafeRelativePath,
   validateArchiveRelativePath,
@@ -30,6 +33,7 @@ const ENTRY_FILE_CANDIDATES = ['plugin.js', 'plugin.mjs', 'index.js', 'index.mjs
 const ARTIFACT_MANIFEST_FILE = 'tx5dr-plugin.json';
 const MARKETPLACE_TEMP_DIR_NAME = '.plugin-market-tmp';
 const MARKETPLACE_TEMP_DIR_PREFIX = 'install-';
+const LEGACY_INSTALL_RECORD_CHANNEL = 'nightly';
 
 function ensureHexSha256(content: Uint8Array): string {
   return createHash('sha256').update(content).digest('hex');
@@ -130,12 +134,17 @@ async function resolvePluginEntryPath(pluginRoot: string): Promise<string> {
   throw new Error(`Plugin archive is missing an entry file (${ENTRY_FILE_CANDIDATES.join(', ')})`);
 }
 
-async function readArtifactManifest(pluginRoot: string): Promise<PluginArtifactManifest | undefined> {
+/** The exact marketplace artifact selected for installation. */
+type MarketplaceArtifact = PluginMarketVersion & { name: string };
+
+async function readArtifactManifest(pluginRoot: string): Promise<PluginArtifactManifest> {
   const manifestPath = path.join(pluginRoot, ARTIFACT_MANIFEST_FILE);
   try {
     return PluginArtifactManifestSchema.parse(JSON.parse(await fs.readFile(manifestPath, 'utf8')));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') return undefined;
+    if ((error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') {
+      throw new Error(`Plugin archive is missing ${ARTIFACT_MANIFEST_FILE}`);
+    }
     throw new Error(
       `Plugin archive manifest is invalid: ${error instanceof Error ? error.message : String(error)}`,
     );
@@ -144,19 +153,15 @@ async function readArtifactManifest(pluginRoot: string): Promise<PluginArtifactM
 
 function assertArtifactMetadata(
   manifest: PluginArtifactManifest,
-  expected: Pick<
-    PluginMarketCatalogEntry,
-    'name' | 'latestVersion' | 'minPluginApiVersion' | 'permissions'
-  >,
-  expectedPermissions: readonly string[],
+  expected: MarketplaceArtifact,
   pluginApiVersion: string,
 ): void {
   if (manifest.name !== expected.name) {
     throw new Error(`Plugin archive name mismatch: expected ${expected.name}, received ${manifest.name}`);
   }
-  if (manifest.version !== expected.latestVersion) {
+  if (manifest.version !== expected.version) {
     throw new Error(
-      `Plugin archive version mismatch: expected ${expected.latestVersion}, received ${manifest.version}`,
+      `Plugin archive version mismatch: expected ${expected.version}, received ${manifest.version}`,
     );
   }
   if (manifest.minPluginApiVersion !== expected.minPluginApiVersion) {
@@ -167,7 +172,7 @@ function assertArtifactMetadata(
   }
   assertPluginApiCompatible(manifest.minPluginApiVersion, manifest.name, pluginApiVersion);
   const actualPermissions = [...manifest.permissions].sort();
-  const catalogPermissions = [...expectedPermissions].sort();
+  const catalogPermissions = [...expected.permissions].sort();
   if (JSON.stringify(actualPermissions) !== JSON.stringify(catalogPermissions)) {
     throw new Error(
       `Plugin archive permission mismatch for ${expected.name}: catalog and archive declarations differ`,
@@ -175,59 +180,15 @@ function assertArtifactMetadata(
   }
 }
 
+// Installer validation reads only the static manifest; plugin code is never
+// executed before the Host loader takes ownership of the installed directory.
 async function validateExtractedPlugin(
   pluginRoot: string,
-  expected: Pick<
-    PluginMarketCatalogEntry,
-    | 'name'
-    | 'latestVersion'
-    | 'minPluginApiVersion'
-    | 'permissions'
-    | 'artifactManifestVersion'
-  >,
-  expectedPermissions: readonly string[],
+  expected: MarketplaceArtifact,
   pluginApiVersion: string,
 ): Promise<void> {
-  const entryPath = await resolvePluginEntryPath(pluginRoot);
-  const manifest = await readArtifactManifest(pluginRoot);
-  if (manifest) {
-    assertArtifactMetadata(manifest, expected, expectedPermissions, pluginApiVersion);
-    return;
-  }
-  if (expected.artifactManifestVersion === 1) {
-    throw new Error(`Plugin archive is missing ${ARTIFACT_MANIFEST_FILE}`);
-  }
-
-  // Catalog schema v1 fallback. New artifacts must use the static manifest so
-  // installer validation never executes plugin code before installation.
-  const entryUrl = pathToFileURL(path.resolve(entryPath));
-  entryUrl.searchParams.set('tx5dr_market_validate', `${Date.now()}`);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const mod: any = await import(entryUrl.href);
-  const definition = canonicalizePluginDefinition(mod.default ?? mod);
-  if (definition.name !== expected.name) {
-    throw new Error(`Plugin archive name mismatch: expected ${expected.name}, received ${definition.name}`);
-  }
-  if (definition.version !== expected.latestVersion) {
-    throw new Error(
-      `Plugin archive version mismatch: expected ${expected.latestVersion}, received ${definition.version}`,
-    );
-  }
-  if (definition.minPluginApiVersion !== undefined
-      && definition.minPluginApiVersion !== expected.minPluginApiVersion) {
-    throw new Error(
-      `Plugin archive Plugin API requirement mismatch: expected ${expected.minPluginApiVersion}, `
-      + `received ${definition.minPluginApiVersion}`,
-    );
-  }
-  assertPluginApiCompatible(expected.minPluginApiVersion, definition.name, pluginApiVersion);
-  const actualPermissions = [...(definition.permissions ?? [])].sort();
-  const catalogPermissions = [...expectedPermissions].sort();
-  if (JSON.stringify(actualPermissions) !== JSON.stringify(catalogPermissions)) {
-    throw new Error(
-      `Plugin archive permission mismatch for ${expected.name}: catalog and archive declarations differ`,
-    );
-  }
+  await resolvePluginEntryPath(pluginRoot);
+  assertArtifactMetadata(await readArtifactManifest(pluginRoot), expected, pluginApiVersion);
 }
 
 async function replacePluginDirectory(nextPluginRoot: string, destinationDir: string): Promise<void> {
@@ -255,7 +216,7 @@ async function replacePluginDirectory(nextPluginRoot: string, destinationDir: st
 }
 
 async function downloadArchiveToTempFile(
-  artifact: PluginMarketCatalogEntry,
+  artifact: MarketplaceArtifact,
   pluginDir: string,
   options: {
     fetchImpl?: typeof fetch;
@@ -274,46 +235,37 @@ async function downloadArchiveToTempFile(
   }
 
   const tempRoot = await createMarketplaceInstallWorkspace(pluginDir);
-  const archivePath = path.join(tempRoot, `${artifact.name}-${artifact.latestVersion}.zip`);
+  const archivePath = path.join(tempRoot, `${artifact.name}-${artifact.version}.zip`);
   const payload = new Uint8Array(await response.arrayBuffer());
   const checksum = ensureHexSha256(payload);
   await fs.writeFile(archivePath, payload);
   return { archivePath, checksum, tempRoot };
 }
 
-async function fetchMarketPluginEntry(
-  pluginName: string,
-  channel: PluginMarketChannel,
-  options: {
-    fetchImpl?: typeof fetch;
-    env?: NodeJS.ProcessEnv;
-  } = {},
-): Promise<PluginMarketCatalogEntry> {
-  const result = await fetchPluginMarketCatalog(channel, options);
-  const plugin = result.catalog.plugins.find((entry) => entry.name === pluginName);
-  if (!plugin) {
-    throw new Error(`Plugin not found in marketplace catalog: ${pluginName}`);
-  }
-  return plugin;
+export interface PluginMarketInstallOptions extends PluginMarketFetchOptions {
+  /** Exact version confirmed by the user; omitted selects the newest compatible one. */
+  version?: string;
+  pluginApiVersion?: string;
 }
 
+/**
+ * Installs or replaces a marketplace plugin with the version resolved for the
+ * Host's Plugin API. Replacement may be a lower version when the installed one
+ * is incompatible; callers own the user confirmation for that downgrade.
+ */
 export async function installPluginFromMarketplace(
   pluginName: string,
   pluginDir: string,
-  channel: PluginMarketChannel,
-  options: {
-    fetchImpl?: typeof fetch;
-    env?: NodeJS.ProcessEnv;
-    pluginApiVersion?: string;
-  } = {},
+  options: PluginMarketInstallOptions = {},
+  action: 'install' | 'update' = 'install',
 ): Promise<PluginMarketInstallResult> {
-  const artifact = await fetchMarketPluginEntry(pluginName, channel, options);
   const pluginApiVersion = options.pluginApiVersion ?? SERVER_BUILD_INFO.pluginApiVersion;
-  assertPluginApiCompatible(
-    artifact.minPluginApiVersion,
-    artifact.name,
-    pluginApiVersion,
-  );
+  const { index } = await fetchPluginMarketIndex(options);
+  const plugin = findPluginMarketPlugin(index, pluginName);
+  const artifact: MarketplaceArtifact = {
+    ...selectPluginMarketInstallVersion(plugin, pluginApiVersion, options.version),
+    name: plugin.name,
+  };
   const { archivePath, checksum, tempRoot } = await downloadArchiveToTempFile(artifact, pluginDir, options);
 
   try {
@@ -324,7 +276,7 @@ export async function installPluginFromMarketplace(
     const extractDir = path.join(tempRoot, 'extract');
     await extractZipArchive(archivePath, extractDir);
     const extractedRoot = await resolveExtractedPluginRoot(extractDir);
-    await validateExtractedPlugin(extractedRoot, artifact, artifact.permissions, pluginApiVersion);
+    await validateExtractedPlugin(extractedRoot, artifact, pluginApiVersion);
 
     const destinationDir = resolveSafeRelativePath(pluginDir, pluginName);
     if (!destinationDir) {
@@ -337,8 +289,11 @@ export async function installPluginFromMarketplace(
     await replacePluginDirectory(stagingDir, destinationDir);
 
     const record: PluginMarketInstallRecord = {
-      version: artifact.latestVersion,
-      channel,
+      version: artifact.version,
+      // Hosts up to v1.0.1 require this field when reading the record. Keep it
+      // so a station downgraded to such a Host still recognizes marketplace
+      // plugins; this Host ignores it. Remove once those Hosts are unsupported.
+      channel: LEGACY_INSTALL_RECORD_CHANNEL,
       artifactUrl: artifact.artifactUrl,
       sha256: artifact.sha256,
       installedAt: Date.now(),
@@ -347,10 +302,10 @@ export async function installPluginFromMarketplace(
       kind: 'marketplace',
       ...record,
     });
-    logger.info('Plugin installed from marketplace', { pluginName, version: record.version, channel });
+    logger.info('Plugin installed from marketplace', { pluginName, version: record.version, action });
     return {
       success: true,
-      action: 'install',
+      action,
       pluginName,
       record,
     };
@@ -359,21 +314,30 @@ export async function installPluginFromMarketplace(
   }
 }
 
-export async function updatePluginFromMarketplace(
-  pluginName: string,
+/**
+ * Reads the marketplace install record from disk. This is independent of the
+ * loader, so an installed plugin rejected as incompatible is still visible.
+ */
+export async function readInstalledMarketplaceSource(
   pluginDir: string,
-  channel: PluginMarketChannel,
-  options: {
-    fetchImpl?: typeof fetch;
-    env?: NodeJS.ProcessEnv;
-    pluginApiVersion?: string;
-  } = {},
-): Promise<PluginMarketInstallResult> {
-  const result = await installPluginFromMarketplace(pluginName, pluginDir, channel, options);
-  return {
-    ...result,
-    action: 'update',
-  };
+  pluginName: string,
+): Promise<PluginSource | undefined> {
+  const destinationDir = resolveSafeRelativePath(pluginDir, pluginName);
+  if (!destinationDir) return undefined;
+  const source = await readPluginSource(destinationDir);
+  return source?.kind === 'marketplace' ? source : undefined;
+}
+
+export async function readInstalledMarketplaceVersions(
+  pluginDir: string,
+  pluginNames: readonly string[],
+): Promise<Map<string, string>> {
+  const versions = new Map<string, string>();
+  await Promise.all(pluginNames.map(async (pluginName) => {
+    const source = await readInstalledMarketplaceSource(pluginDir, pluginName);
+    if (source) versions.set(pluginName, source.version);
+  }));
+  return versions;
 }
 
 export async function uninstallPluginFromMarketplace(

@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   PluginArtifactManifestSchema,
   PluginMarketCatalogResponseSchema,
-  PluginMarketCatalogSchema,
-  PluginMarketChannelSchema,
+  PluginMarketIndexSchema,
+  PluginMarketInstallRequestSchema,
+  PluginMarketPluginSchema,
+  PluginMarketVersionSchema,
   PluginManifestSchema,
   PluginPermissionSchema,
   PluginsConfigSchema,
@@ -11,158 +13,98 @@ import {
   PluginStatusSchema,
 } from '../../index.js';
 
+const SHA = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+
+function version(overrides: Record<string, unknown> = {}) {
+  return {
+    version: '1.2.3',
+    minPluginApiVersion: '2.5.0',
+    artifactUrl: 'https://dl.tx5dr.com/plugins/market/artifacts/heartbeat-demo/1.2.3.zip',
+    sha256: SHA,
+    size: 12345,
+    publishedAt: '2026-11-07T12:00:00.000Z',
+    artifactManifestVersion: 1,
+    ...overrides,
+  };
+}
+
+function plugin(overrides: Record<string, unknown> = {}) {
+  return {
+    name: 'heartbeat-demo',
+    title: 'Heartbeat Demo',
+    description: 'Example timer and quick-action plugin.',
+    readmeMarkdown: '# Heartbeat Demo',
+    locales: { zh: { pluginName: '心跳演示' } },
+    repository: 'https://github.com/boybook/tx-5dr-plugins',
+    versions: [version(), version({ version: '1.0.0', minPluginApiVersion: '1.2.0' })],
+    ...overrides,
+  };
+}
+
 describe('plugin market schema', () => {
-  it('accepts a valid stable catalog', () => {
-    const catalog = PluginMarketCatalogSchema.parse({
+  it('accepts a channel-free v3 index with version history', () => {
+    const index = PluginMarketIndexSchema.parse({
+      schemaVersion: 3,
+      generatedAt: '2026-11-07T12:00:00.000Z',
+      plugins: [plugin()],
+    });
+
+    expect(index.plugins[0]?.versions).toHaveLength(2);
+    expect(index.plugins[0]?.versions[0]).toMatchObject({ yanked: false, permissions: [] });
+    expect('channel' in index).toBe(false);
+  });
+
+  it('rejects older index schemas', () => {
+    expect(PluginMarketIndexSchema.safeParse({
       schemaVersion: 2,
-      generatedAt: '2026-04-22T12:00:00.000Z',
-      channel: 'stable',
-      plugins: [
-        {
-          name: 'heartbeat-demo',
-          title: 'Heartbeat Demo',
-          description: 'Example timer and quick-action plugin.',
-          readmeMarkdown: '# Heartbeat Demo\n\nExample timer and quick-action plugin.',
-          readmeSourceUrl: 'https://github.com/boybook/tx-5dr-plugins/blob/main/heartbeat-demo/README.md',
-          locales: {
-            en: {
-              pluginName: 'Heartbeat Demo',
-              pluginDescription: 'Example timer and quick-action plugin.',
-            },
-            zh: {
-              pluginName: '心跳演示',
-              pluginDescription: '定时器与快捷操作演示插件。',
-            },
-          },
-          latestVersion: '1.2.3',
-          minPluginApiVersion: '1.2.0',
-          artifactManifestVersion: 1,
-          author: 'TX-5DR',
-          license: 'GPL-3.0-only',
-          repository: 'https://github.com/boybook/tx-5dr-plugins',
-          homepage: 'https://tx5dr.example/plugins/heartbeat-demo',
-          categories: ['demo'],
-          keywords: ['timer', 'example'],
-          permissions: [],
-          screenshots: [
-            {
-              src: 'https://cdn.example.com/heartbeat-demo/cover.png',
-              alt: 'Heartbeat Demo screenshot',
-            },
-          ],
-          artifactUrl: 'https://cdn.example.com/plugins/heartbeat-demo-1.2.3.zip',
-          sha256: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
-          size: 12345,
-          publishedAt: '2026-04-22T12:00:00.000Z',
-        },
-      ],
-    });
-
-    expect(catalog.channel).toBe('stable');
-    expect(catalog.plugins[0]?.name).toBe('heartbeat-demo');
-    expect(catalog.plugins[0]?.readmeMarkdown).toContain('# Heartbeat Demo');
-    expect(catalog.plugins[0]?.readmeSourceUrl).toContain('/heartbeat-demo/README.md');
-    expect(catalog.plugins[0]?.minPluginApiVersion).toBe('1.2.0');
-  });
-
-  it('normalizes the catalog v1 minimum Host field as a Plugin API floor', () => {
-    const catalog = PluginMarketCatalogSchema.parse({
-      schemaVersion: 1,
-      generatedAt: '2026-04-22T12:00:00.000Z',
+      generatedAt: '2026-11-07T12:00:00.000Z',
       channel: 'nightly',
+      plugins: [],
+    }).success).toBe(false);
+  });
+
+  it('rejects duplicate plugins and duplicate versions', () => {
+    expect(PluginMarketIndexSchema.safeParse({
+      schemaVersion: 3,
+      generatedAt: '2026-11-07T12:00:00.000Z',
+      plugins: [plugin(), plugin()],
+    }).success).toBe(false);
+    expect(PluginMarketPluginSchema.safeParse(plugin({ versions: [version(), version()] })).success).toBe(false);
+  });
+
+  it('requires a static artifact manifest and a valid Plugin API floor per version', () => {
+    expect(PluginMarketVersionSchema.safeParse(version({ artifactManifestVersion: undefined })).success).toBe(false);
+    expect(PluginMarketVersionSchema.safeParse(version({ minPluginApiVersion: 'current' })).success).toBe(false);
+    expect(PluginMarketVersionSchema.safeParse(version({ version: 'next' })).success).toBe(false);
+  });
+
+  it('accepts yanked versions with a reason', () => {
+    expect(PluginMarketVersionSchema.parse(version({ yanked: true, yankedReason: 'broken upload' })))
+      .toMatchObject({ yanked: true, yankedReason: 'broken upload' });
+  });
+
+  it('accepts the resolved route response envelope', () => {
+    const response = PluginMarketCatalogResponseSchema.parse({
+      sourceUrl: 'https://dl.tx5dr.com/plugins/market/index.json',
+      generatedAt: '2026-11-07T12:00:00.000Z',
+      pluginApiVersion: '2.6.0',
       plugins: [{
-        name: 'legacy-plugin',
-        title: 'Legacy Plugin',
-        description: 'Legacy catalog entry.',
-        latestVersion: '1.0.0',
-        minHostVersion: '1.7.11',
-        artifactUrl: 'https://cdn.example.com/plugins/legacy-plugin-1.0.0.zip',
-        sha256: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
-        size: 123,
-        publishedAt: '2026-04-22T12:00:00.000Z',
+        ...plugin(),
+        latest: version(),
+        installable: null,
+        availability: 'plugin-outdated',
+        installed: { version: '1.0.0', compatible: false },
       }],
     });
 
-    expect(catalog.plugins[0]?.minPluginApiVersion).toBe('1.7.11');
-    expect('minHostVersion' in catalog.plugins[0]!).toBe(false);
+    expect(response.plugins[0]?.availability).toBe('plugin-outdated');
+    expect(response.plugins[0]?.installable).toBeNull();
   });
 
-  it('requires a static artifact manifest declaration in catalog v2', () => {
-    const result = PluginMarketCatalogSchema.safeParse({
-      schemaVersion: 2,
-      generatedAt: '2026-04-22T12:00:00.000Z',
-      channel: 'nightly',
-      plugins: [{
-        name: 'manifestless-plugin',
-        title: 'Manifestless Plugin',
-        description: 'Invalid v2 catalog entry.',
-        latestVersion: '1.0.0',
-        minPluginApiVersion: '2.1.0',
-        artifactUrl: 'https://cdn.example.com/plugins/manifestless-plugin-1.0.0.zip',
-        sha256: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
-        size: 123,
-        publishedAt: '2026-04-22T12:00:00.000Z',
-      }],
-    });
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues).toContainEqual(expect.objectContaining({
-        path: ['plugins', 0, 'artifactManifestVersion'],
-      }));
-    }
-  });
-
-  it('keeps minHostVersion limited to catalog v1 compatibility', () => {
-    const result = PluginMarketCatalogSchema.safeParse({
-      schemaVersion: 2,
-      generatedAt: '2026-04-22T12:00:00.000Z',
-      channel: 'nightly',
-      plugins: [{
-        name: 'legacy-field-plugin',
-        title: 'Legacy Field Plugin',
-        description: 'Invalid v2 catalog entry.',
-        latestVersion: '1.0.0',
-        minHostVersion: '2.1.0',
-        artifactManifestVersion: 1,
-        artifactUrl: 'https://cdn.example.com/plugins/legacy-field-plugin-1.0.0.zip',
-        sha256: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
-        size: 123,
-        publishedAt: '2026-04-22T12:00:00.000Z',
-      }],
-    });
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues).toContainEqual(expect.objectContaining({
-        path: ['plugins', 0, 'minHostVersion'],
-      }));
-    }
-  });
-
-  it('rejects unsupported channels', () => {
-    expect(() => PluginMarketChannelSchema.parse('beta')).toThrow();
-  });
-
-  it('rejects a catalog with an invalid minimum Plugin API version', () => {
-    const result = PluginMarketCatalogSchema.safeParse({
-      schemaVersion: 1,
-      generatedAt: '2026-04-22T12:00:00.000Z',
-      channel: 'stable',
-      plugins: [{
-        name: 'heartbeat-demo',
-        title: 'Heartbeat Demo',
-        description: 'Example plugin.',
-        latestVersion: '1.2.3',
-        minPluginApiVersion: 'current',
-        artifactUrl: 'https://cdn.example.com/plugins/heartbeat-demo-1.2.3.zip',
-        sha256: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
-        size: 12345,
-        publishedAt: '2026-04-22T12:00:00.000Z',
-      }],
-    });
-
-    expect(result.success).toBe(false);
+  it('accepts optional pinned install versions', () => {
+    expect(PluginMarketInstallRequestSchema.parse({})).toEqual({});
+    expect(PluginMarketInstallRequestSchema.parse({ version: '1.0.0' })).toEqual({ version: '1.0.0' });
+    expect(PluginMarketInstallRequestSchema.safeParse({ version: 'latest' }).success).toBe(false);
   });
 
   it('validates a static artifact manifest', () => {
@@ -228,20 +170,6 @@ describe('plugin market schema', () => {
     expect(config.operatorPluginPauses['operator-1']).toEqual(['scheduled-cq-autocall']);
   });
 
-  it('accepts the route response envelope', () => {
-    const response = PluginMarketCatalogResponseSchema.parse({
-      sourceUrl: 'https://tx5dr.oss-cn-hangzhou.aliyuncs.com/tx-5dr/plugins/market/stable/index.json',
-      catalog: {
-        schemaVersion: 1,
-        generatedAt: '2026-04-22T12:00:00.000Z',
-        channel: 'stable',
-        plugins: [],
-      },
-    });
-
-    expect(response.catalog.plugins).toHaveLength(0);
-  });
-
   it('accepts marketplace plugin source metadata', () => {
     const source = PluginSourceSchema.parse({
       kind: 'marketplace',
@@ -254,5 +182,17 @@ describe('plugin market schema', () => {
 
     expect(source.kind).toBe('marketplace');
     expect(source.channel).toBe('nightly');
+  });
+
+  it('accepts channel-free marketplace source metadata', () => {
+    const source = PluginSourceSchema.parse({
+      kind: 'marketplace',
+      version: '1.2.3',
+      artifactUrl: 'https://dl.tx5dr.com/plugins/market/artifacts/heartbeat-demo/1.2.3.zip',
+      sha256: SHA,
+      installedAt: 1_777_000_000_000,
+    });
+
+    expect(source.channel).toBeUndefined();
   });
 });
