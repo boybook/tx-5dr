@@ -20,7 +20,7 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     env:
       SDK_VERSION: ${{ inputs.version }}
 
@@ -150,7 +150,7 @@ jobs:
         run: yarn workspace @tx5dr/plugin-api smoke:pack
 
       - name: Test registry propagation gate
-        run: node --test scripts/tests/wait-npm-version.test.mjs
+        run: node --test scripts/tests/wait-npm-version.test.mjs scripts/tests/publish-npm-once.test.mjs
 
       - name: Publish @tx5dr/contracts
         run: |
@@ -159,7 +159,7 @@ jobs:
             npm pack --dry-run
             echo "DRY RUN: would publish @tx5dr/contracts@${{ inputs.version }}"
           else
-            npm publish --access public
+            node ../../scripts/publish-npm-once.mjs . "$SDK_VERSION"
           fi
 
       - name: Wait for @tx5dr/contracts availability
@@ -173,7 +173,7 @@ jobs:
             npm pack --dry-run
             echo "DRY RUN: would publish @tx5dr/core@${{ inputs.version }}"
           else
-            npm publish --access public
+            node ../../scripts/publish-npm-once.mjs . "$SDK_VERSION"
           fi
 
       - name: Wait for @tx5dr/core availability
@@ -187,7 +187,7 @@ jobs:
             npm pack --dry-run
             echo "DRY RUN: would publish @tx5dr/plugin-api@${{ inputs.version }}"
           else
-            npm publish --access public
+            node ../../scripts/publish-npm-once.mjs . "$SDK_VERSION"
           fi
 
       - name: Wait for @tx5dr/plugin-api availability
@@ -201,7 +201,7 @@ jobs:
             npm pack --dry-run
             echo "DRY RUN: would publish create-tx5dr-plugin@${{ inputs.version }}"
           else
-            npm publish --access public
+            node ../../scripts/publish-npm-once.mjs . "$SDK_VERSION"
           fi
 
       - name: Wait for scaffold availability

@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 export async function waitForNpmVersion(name, version, {
   fetchImpl = fetch, now = Date.now,
   pause = ms => new Promise(resolve => setTimeout(resolve, ms)),
-  timeoutMs = 120000, intervalMs = 5000,
+  timeoutMs = 600000, intervalMs = 10000,
 } = {}) {
   const deadline = now() + timeoutMs;
   let lastStatus = 'not observed';
