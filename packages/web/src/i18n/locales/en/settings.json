@@ -26,7 +26,8 @@
     "descriptionPlaceholder": "Markdown supported. Describe antenna, power, radio model, etc...",
     "descriptionDesc": "Markdown format supported",
     "saveSuccess": "Station info saved",
-    "saveFailed": "Failed to save"
+    "saveFailed": "Failed to save",
+    "pageDescription": "Callsign, location and introduction of this station."
   },
   "language": {
     "label": "Interface Language",
@@ -91,7 +92,10 @@
       "groupHeader": "Show Cycle Headers",
       "groupHeaderDesc": "Show UTC time and band before each cycle in the left decode table for screenshot context.",
       "preview": "Live Preview"
-    }
+    },
+    "pageDescription": "Interface language, alerts, and how messages are displayed.",
+    "sectionGeneral": "General",
+    "highlightSection": "Message highlighting"
   },
   "profileSetup": {
     "created": "Profile \"{{name}}\" created and activated",
@@ -866,7 +870,11 @@
     "marketInstalledLegacyDescription": "The installed {{installed}} was built for an older Plugin API. It still runs on this TX-5DR, but may misbehave.",
     "marketInstalledLegacyUpdateHint": "Update to {{version}}, which targets this Plugin API.",
     "marketInstalledLegacyNoUpdateHint": "No updated version is available yet; ask the plugin author for one.",
-    "hostPluginApiVersion": "This TX-5DR bundles Plugin API {{version}}. Plugins declare the version they need with minPluginApiVersion."
+    "hostPluginApiVersion": "This TX-5DR bundles Plugin API {{version}}. Plugins declare the version they need with minPluginApiVersion.",
+    "marketSearchShort": "Search plugins",
+    "marketDetails": "Details",
+    "marketVersionHistoryShowAll": "Show all {{count}} versions",
+    "marketInstalledAtLabel": "Installed at"
   },
   "serverHealth": {
     "title": "Server Process Health",

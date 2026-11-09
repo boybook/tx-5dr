@@ -38,6 +38,8 @@ import {
 } from '@tx5dr/contracts';
 import type { TokenInfo, CreateTokenRequest, NetworkInfo, PermissionGrant, PresetFrequency, UpdateTokenRequest } from '@tx5dr/contracts';
 import { useOperators } from '../../store/radioStore';
+import { SETTINGS_CARD_CLASS_NAMES, SETTINGS_CARD_PROPS } from '../settings/settingsCardStyles';
+import { SettingsPage } from '../settings/SettingsLayout';
 
 const ROLE_COLORS: Record<string, 'default' | 'primary' | 'warning'> = {
   viewer: 'default',
@@ -184,12 +186,12 @@ function TokenCard({ token, operators, onRevoke, onRegenerate, onShare, onEdit }
     } catch { /* ignore */ }
   }, []);
   return (
-    <Card className={token.revoked ? 'opacity-50' : ''}>
-      <CardBody className="p-3 gap-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
+    <Card {...SETTINGS_CARD_PROPS} classNames={SETTINGS_CARD_CLASS_NAMES} className={token.revoked ? 'opacity-50' : ''}>
+      <CardBody className="gap-2 px-4 py-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <div className={`w-2 h-2 rounded-full ${token.revoked ? 'bg-danger' : 'bg-success'}`} />
-            <span className="font-medium text-sm">{token.label}</span>
+            <span className="text-sm font-medium text-default-900">{token.label}</span>
             <Chip size="sm" variant="flat" color={ROLE_COLORS[token.role]}>
               {roleLabels[token.role]}
             </Chip>
@@ -199,17 +201,17 @@ function TokenCard({ token, operators, onRevoke, onRegenerate, onShare, onEdit }
               </Chip>
             )}
             {token.operatorIds.length > 0 && (
-              <span className="text-xs text-default-400">
+              <span className="text-xs text-default-500">
                 {t('auth:token.operatorCount', { count: token.operatorIds.length })}
               </span>
             )}
             {token.maxOperators !== undefined && token.role !== 'admin' && (
-              <span className="text-xs text-default-400">
+              <span className="text-xs text-default-500">
                 {t('auth:token.maxOperators', { max: token.maxOperators === 0 ? t('auth:token.unlimited') : token.maxOperators })}
               </span>
             )}
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex shrink-0 items-center gap-1">
             {token.token && !token.revoked && (
               <Button
                 size="sm"
@@ -260,7 +262,7 @@ function TokenCard({ token, operators, onRevoke, onRegenerate, onShare, onEdit }
             )}
           </div>
         </div>
-        <div className="text-xs text-default-400 flex gap-3">
+        <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-default-500">
           <span>{t('auth:token.createdAt', { date: new Date(token.createdAt).toLocaleDateString() })}</span>
           {token.lastUsedAt && (
             <span>{t('auth:token.lastUsed', { date: new Date(token.lastUsedAt).toLocaleDateString() })}</span>
@@ -281,7 +283,7 @@ function TokenCard({ token, operators, onRevoke, onRegenerate, onShare, onEdit }
         {token.permissionGrants && token.permissionGrants.length > 0 && (
           <div className="flex flex-wrap gap-1">
             {token.permissionGrants.map((grant, index) => (
-              <Chip key={`${grant.permission}-${index}`} size="sm" variant="flat" color="secondary" className="text-[10px] h-5">
+              <Chip key={`${grant.permission}-${index}`} size="sm" variant="flat" color="secondary" className="h-5 text-xs">
                 {t(`auth:permissions.${grant.permission.replace(':', '.')}`)}
               </Chip>
             ))}
@@ -289,16 +291,16 @@ function TokenCard({ token, operators, onRevoke, onRegenerate, onShare, onEdit }
         )}
         <div className="flex flex-wrap gap-1.5">
           {token.loginCredential ? (
-            <Chip size="sm" variant="flat" color="success" className="text-[10px] h-5">
+            <Chip size="sm" variant="flat" color="success" className="h-5 text-xs">
               {t('auth:token.loginCredential.cardConfigured', { username: token.loginCredential.username })}
             </Chip>
           ) : (
-            <Chip size="sm" variant="flat" color="default" className="text-[10px] h-5">
+            <Chip size="sm" variant="flat" color="default" className="h-5 text-xs">
               {t('auth:token.loginCredential.cardNotConfigured')}
             </Chip>
           )}
           {token.allowSelfLoginCredential && (
-            <Chip size="sm" variant="flat" color="primary" className="text-[10px] h-5">
+            <Chip size="sm" variant="flat" color="primary" className="h-5 text-xs">
               {t('auth:token.loginCredential.cardSelfService')}
             </Chip>
           )}
@@ -787,9 +789,9 @@ export function TokenManagement() {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold">{t('auth:token.title')}</h3>
+    <SettingsPage
+      title={t('auth:token.title')}
+      actions={(
         <Button
           size="sm"
           color="primary"
@@ -798,7 +800,8 @@ export function TokenManagement() {
         >
           {t('auth:token.createNew')}
         </Button>
-      </div>
+      )}
+    >
 
       {/* Token 列表 */}
       {(() => {
@@ -808,7 +811,7 @@ export function TokenManagement() {
         return (
           <div className="space-y-2">
             {tokens.length === 0 && (
-              <p className="text-default-400 text-sm text-center py-8">{t('auth:token.noTokens')}</p>
+              <p className="rounded-large border border-divider bg-content1 px-4 py-8 text-center text-sm text-default-500">{t('auth:token.noTokens')}</p>
             )}
             {activeTokens.map((token) => (
               <TokenCard
@@ -824,7 +827,8 @@ export function TokenManagement() {
             {revokedTokens.length > 0 && (
               <>
                 <button
-                  className="flex items-center gap-2 text-xs text-default-400 hover:text-default-600 transition-colors py-1 cursor-pointer"
+                  type="button"
+                  className="flex cursor-pointer items-center gap-2 px-1 py-1 text-xs text-default-500 transition-colors hover:text-default-700"
                   onClick={() => setShowRevoked(!showRevoked)}
                 >
                   <FontAwesomeIcon
@@ -1351,6 +1355,6 @@ export function TokenManagement() {
           </ModalFooter>
         </ModalContent>
       </Modal>
-    </div>
+    </SettingsPage>
   );
 }

@@ -5,6 +5,7 @@ import { api } from '@tx5dr/core';
 import { sanitizeGridInput, type StationInfo } from '@tx5dr/contracts';
 import { createLogger } from '../../utils/logger';
 import { useRadioActions } from '../../store/radioStore';
+import { SettingsBlock, SettingsPage, SettingsSection } from './SettingsLayout';
 
 const logger = createLogger('StationInfoSettings');
 
@@ -72,72 +73,87 @@ export const StationInfoSettings = forwardRef<StationInfoSettingsRef, StationInf
   };
 
   return (
-    <div className="flex flex-col gap-4">
-      <Input
-        label={t('stationInfo.callsign')}
-        placeholder={t('stationInfo.callsignPlaceholder')}
-        value={localInfo.callsign ?? ''}
-        onValueChange={v => setLocalInfo(prev => ({ ...prev, callsign: v }))}
-        isDisabled={isSaving}
-      />
-      <Input
-        label={t('stationInfo.name')}
-        placeholder={t('stationInfo.namePlaceholder')}
-        value={localInfo.name ?? ''}
-        onValueChange={v => setLocalInfo(prev => ({ ...prev, name: v }))}
-        isDisabled={isSaving}
-      />
-      <div className="grid grid-cols-2 gap-3">
-        <Input
-          label={t('stationInfo.qthGrid')}
-          placeholder="FN31"
-          value={localInfo.qth?.grid ?? ''}
-          onValueChange={v => updateQth('grid', v)}
-          isDisabled={isSaving}
-          description={t('stationInfo.qthGridDesc')}
-          maxLength={8}
-        />
-        <Input
-          label={t('stationInfo.qthLocation')}
-          placeholder={t('stationInfo.qthLocationPlaceholder')}
-          value={localInfo.qth?.location ?? ''}
-          onValueChange={v => updateQth('location', v)}
-          isDisabled={isSaving}
-        />
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <Input
-          label={t('stationInfo.qthLatitude')}
-          placeholder="39.9042"
-          type="number"
-          step="any"
-          value={localInfo.qth?.latitude != null ? String(localInfo.qth.latitude) : ''}
-          onValueChange={v => updateQth('latitude', v)}
-          isDisabled={isSaving}
-          description={t('stationInfo.qthLatitudeDesc')}
-        />
-        <Input
-          label={t('stationInfo.qthLongitude')}
-          placeholder="116.4074"
-          type="number"
-          step="any"
-          value={localInfo.qth?.longitude != null ? String(localInfo.qth.longitude) : ''}
-          onValueChange={v => updateQth('longitude', v)}
-          isDisabled={isSaving}
-          description={t('stationInfo.qthLongitudeDesc')}
-        />
-      </div>
-      <Textarea
-        label={t('stationInfo.description')}
-        placeholder={t('stationInfo.descriptionPlaceholder')}
-        value={localInfo.description ?? ''}
-        onValueChange={v => setLocalInfo(prev => ({ ...prev, description: v }))}
-        isDisabled={isSaving}
-        minRows={4}
-        maxRows={10}
-        description={t('stationInfo.descriptionDesc')}
-      />
-    </div>
+    <SettingsPage
+      title={t('tab.stationInfo')}
+      description={t('stationInfo.pageDescription', 'Callsign, location and introduction of this station.')}
+    >
+      <SettingsSection>
+        <SettingsBlock>
+          <div className="flex flex-col gap-3">
+            <Input
+              label={t('stationInfo.callsign')}
+              placeholder={t('stationInfo.callsignPlaceholder')}
+              value={localInfo.callsign ?? ''}
+              onValueChange={v => setLocalInfo(prev => ({ ...prev, callsign: v }))}
+              isDisabled={isSaving}
+            />
+            <Input
+              label={t('stationInfo.name')}
+              placeholder={t('stationInfo.namePlaceholder')}
+              value={localInfo.name ?? ''}
+              onValueChange={v => setLocalInfo(prev => ({ ...prev, name: v }))}
+              isDisabled={isSaving}
+            />
+          </div>
+        </SettingsBlock>
+        <SettingsBlock>
+          <div className="flex flex-col gap-3">
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                label={t('stationInfo.qthGrid')}
+                placeholder="FN31"
+                value={localInfo.qth?.grid ?? ''}
+                onValueChange={v => updateQth('grid', v)}
+                isDisabled={isSaving}
+                description={t('stationInfo.qthGridDesc')}
+                maxLength={8}
+              />
+              <Input
+                label={t('stationInfo.qthLocation')}
+                placeholder={t('stationInfo.qthLocationPlaceholder')}
+                value={localInfo.qth?.location ?? ''}
+                onValueChange={v => updateQth('location', v)}
+                isDisabled={isSaving}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                label={t('stationInfo.qthLatitude')}
+                placeholder="39.9042"
+                type="number"
+                step="any"
+                value={localInfo.qth?.latitude != null ? String(localInfo.qth.latitude) : ''}
+                onValueChange={v => updateQth('latitude', v)}
+                isDisabled={isSaving}
+                description={t('stationInfo.qthLatitudeDesc')}
+              />
+              <Input
+                label={t('stationInfo.qthLongitude')}
+                placeholder="116.4074"
+                type="number"
+                step="any"
+                value={localInfo.qth?.longitude != null ? String(localInfo.qth.longitude) : ''}
+                onValueChange={v => updateQth('longitude', v)}
+                isDisabled={isSaving}
+                description={t('stationInfo.qthLongitudeDesc')}
+              />
+            </div>
+          </div>
+        </SettingsBlock>
+        <SettingsBlock>
+          <Textarea
+            label={t('stationInfo.description')}
+            placeholder={t('stationInfo.descriptionPlaceholder')}
+            value={localInfo.description ?? ''}
+            onValueChange={v => setLocalInfo(prev => ({ ...prev, description: v }))}
+            isDisabled={isSaving}
+            minRows={4}
+            maxRows={10}
+            description={t('stationInfo.descriptionDesc')}
+          />
+        </SettingsBlock>
+      </SettingsSection>
+    </SettingsPage>
   );
 });
 

@@ -58,7 +58,7 @@ export const PluginSettingsPanel: React.FC<PluginSettingsPanelProps> = ({
   }
 
   return (
-    <Card className={embedded ? 'border border-default-200/70 bg-default-50/50 shadow-none' : undefined}>
+    <Card shadow="none" className={embedded ? 'border border-default-200/70 bg-default-50/50' : 'border border-divider bg-content1'}>
       <CardHeader className="pb-0 pt-2 px-3">
         <span className="text-xs font-medium text-default-600">
           {embedded

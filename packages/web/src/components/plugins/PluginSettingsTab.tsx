@@ -1,8 +1,16 @@
 import React, { forwardRef, useImperativeHandle, useRef, useState, useCallback, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Alert, Button, Divider, Tab, Tabs, Tooltip } from '@heroui/react';
+import { Button, Divider, Tab, Tabs, Tooltip } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faRotate, faCopy, faCheck, faFolderOpen } from '@fortawesome/free-solid-svg-icons';
+import {
+  faCheck,
+  faChevronDown,
+  faChevronUp,
+  faCopy,
+  faFolderOpen,
+  faRotate,
+  faShieldHalved,
+} from '@fortawesome/free-solid-svg-icons';
 import { PluginList, type PluginListRef } from './PluginList';
 import { PluginLogPanel } from './PluginLogPanel';
 import { PluginMarketplace } from './PluginMarketplace';
@@ -49,6 +57,7 @@ export const PluginSettingsTab = forwardRef<PluginSettingsTabRef, PluginSettings
   const [reloading, setReloading] = useState(false);
   const [runtimeInfo, setRuntimeInfo] = useState<PluginRuntimeInfo | null>(null);
   const [copiedKey, setCopiedKey] = useState<'pluginDir' | 'pluginDataDir' | null>(null);
+  const [directoryDetailsOpen, setDirectoryDetailsOpen] = useState(false);
   const [activeView, setActiveView] = useState<PluginSettingsView>('installed');
   const [selectedInstalledPluginName, setSelectedInstalledPluginName] = useState<string | null>(null);
   const [installedPluginNavigationRequest, setInstalledPluginNavigationRequest] = useState<InstalledPluginNavigationRequest | null>(null);
@@ -207,36 +216,28 @@ export const PluginSettingsTab = forwardRef<PluginSettingsTabRef, PluginSettings
   }), []);
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-3">
-        <div className="min-w-0">
-          <div className="mb-1 flex items-center gap-2 flex-wrap">
-            <h3 className="text-base font-semibold">{t('plugins.title', 'Plugin Management')}</h3>
-            {runtimeLabel && (
-              <span className="inline-flex items-center rounded-full bg-default-100 px-2 py-0.5 text-[11px] font-medium text-default-600">
-                {runtimeLabel}
-              </span>
-            )}
-          </div>
-          <p className="text-sm text-default-400">
-            {t('plugins.description', 'Manage installed automation plugins and browse the plugin marketplace.')}
-          </p>
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <Tabs
-            aria-label={t('plugins.tabTitle', 'Plugins')}
-            selectedKey={activeView}
-            onSelectionChange={(key) => setActiveView(key as PluginSettingsView)}
-            size="sm"
-            radius="full"
-            variant="solid"
-            classNames={{
-              tabList: 'w-fit',
-            }}
-          >
-            <Tab key="installed" title={t('plugins.viewInstalled', 'Installed')} />
-            <Tab key="marketplace" title={t('plugins.viewMarketplace', 'Marketplace')} />
-          </Tabs>
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
+      <div className="flex shrink-0 items-center justify-between gap-3">
+        <Tabs
+          aria-label={t('plugins.tabTitle', 'Plugins')}
+          selectedKey={activeView}
+          onSelectionChange={(key) => setActiveView(key as PluginSettingsView)}
+          size="sm"
+          radius="full"
+          variant="solid"
+          classNames={{
+            tabList: 'w-fit',
+          }}
+        >
+          <Tab key="installed" title={t('plugins.viewInstalled', 'Installed')} />
+          <Tab key="marketplace" title={t('plugins.viewMarketplace', 'Marketplace')} />
+        </Tabs>
+        <div className="flex min-w-0 items-center gap-2">
+          {runtimeLabel && (
+            <span className="truncate rounded-full bg-default-100 px-2 py-0.5 text-[11px] font-medium text-default-600">
+              {runtimeLabel}
+            </span>
+          )}
           {activeView === 'installed' && (
             <Tooltip content={t('plugins.reload', 'Reload plugins')}>
               <Button
@@ -255,9 +256,9 @@ export const PluginSettingsTab = forwardRef<PluginSettingsTabRef, PluginSettings
         </div>
       </div>
 
-      <div className={activeView === 'installed' ? 'flex flex-col gap-4' : 'hidden'}>
-        <div className="rounded-medium border border-divider bg-default-50/70 px-3 py-3">
-          <div className="flex flex-col gap-3">
+      <div className={activeView === 'installed' ? '-mx-3 -mt-2 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-3 pb-4 pt-2 [&>*]:shrink-0' : 'hidden'}>
+        <div className="rounded-medium border border-divider bg-default-50/70 px-3 py-2">
+          <div className="grid grid-cols-[max-content_minmax(0,1fr)_auto_auto] items-center gap-x-2 gap-y-1.5">
             <DirectoryField
               label={t('plugins.directoryLabel', 'Plugin directory')}
               value={runtimeInfo?.pluginDir}
@@ -270,46 +271,85 @@ export const PluginSettingsTab = forwardRef<PluginSettingsTabRef, PluginSettings
               copiedLabel={t('plugins.pathCopied', 'Copied')}
               openLabel={t('plugins.openDirectory', 'Open folder')}
             />
-            <DirectoryField
-              label={t('plugins.dataDirectoryLabel', 'Plugin data directory')}
-              value={runtimeInfo?.pluginDataDir}
-              loadingLabel={t('plugins.directoryLoading', 'Loading...')}
-              copied={copiedKey === 'pluginDataDir'}
-              canOpen={canOpenPath}
-              onCopy={() => { void handleCopyPath(runtimeInfo?.pluginDataDir, 'pluginDataDir'); }}
-              onOpen={() => { void handleOpenPath(runtimeInfo?.pluginDataDir); }}
-              copyLabel={t('plugins.copyPath', 'Copy path')}
-              copiedLabel={t('plugins.pathCopied', 'Copied')}
-              openLabel={t('plugins.openDirectory', 'Open folder')}
-            />
-            <div className="min-w-0">
-              <p className="text-xs leading-5 text-default-500">{runtimeHint}</p>
+            <div className="flex items-center">
+              {!directoryDetailsOpen && (
+                <Tooltip
+                  className="max-w-xs"
+                  content={t(
+                    'plugins.manualInstallRiskDescription',
+                    'A plugin placed in this directory can execute code with the TX-5DR host process. Only reload after you trust the source or have reviewed the code.',
+                  )}
+                >
+                  <span
+                    className="flex h-7 w-7 items-center justify-center text-warning"
+                    aria-label={t('plugins.manualInstallRiskTitle', 'Manual plugins run locally')}
+                  >
+                    <FontAwesomeIcon icon={faShieldHalved} className="text-xs" />
+                  </span>
+                </Tooltip>
+              )}
+              <Button
+                size="sm"
+                variant="light"
+                isIconOnly
+                className="h-7 w-7 min-w-7"
+                aria-expanded={directoryDetailsOpen}
+                aria-label={directoryDetailsOpen
+                  ? t('plugins.marketCollapse', 'Collapse')
+                  : t('plugins.marketExpand', 'Expand')}
+                onPress={() => setDirectoryDetailsOpen((value) => !value)}
+              >
+                <FontAwesomeIcon icon={directoryDetailsOpen ? faChevronUp : faChevronDown} className="text-xs text-default-500" />
+              </Button>
+            </div>
+            {directoryDetailsOpen && (
+              <>
+                <DirectoryField
+                  label={t('plugins.dataDirectoryLabel', 'Plugin data directory')}
+                  value={runtimeInfo?.pluginDataDir}
+                  loadingLabel={t('plugins.directoryLoading', 'Loading...')}
+                  copied={copiedKey === 'pluginDataDir'}
+                  canOpen={canOpenPath}
+                  onCopy={() => { void handleCopyPath(runtimeInfo?.pluginDataDir, 'pluginDataDir'); }}
+                  onOpen={() => { void handleOpenPath(runtimeInfo?.pluginDataDir); }}
+                  copyLabel={t('plugins.copyPath', 'Copy path')}
+                  copiedLabel={t('plugins.pathCopied', 'Copied')}
+                  openLabel={t('plugins.openDirectory', 'Open folder')}
+                />
+                <span />
+              </>
+            )}
+          </div>
+          {directoryDetailsOpen && (
+            <div className="mt-2 flex flex-col gap-1 border-t border-divider pt-2 text-xs leading-5 text-default-500">
+              <p>{runtimeHint}</p>
               {runtimeInfo?.hostPluginDirHint && (
-                <p className="mt-1 text-xs leading-5 text-default-400">
+                <p className="text-default-400">
                   {t('plugins.directoryHostHint', {
                     defaultValue: 'Official docker-compose host mapping: {{path}}',
                     path: runtimeInfo.hostPluginDirHint,
                   })}
                 </p>
               )}
-              <p className="mt-2 text-xs leading-5 text-default-400">
+              <p className="text-default-400">
                 {t(
                   'plugins.dataDirectoryHint',
                   'Plugin source files stay in the plugin directory, while runtime state and store files are written into the plugin data directory.',
                 )}
               </p>
-              <Alert
-                color="warning"
-                variant="flat"
-                className="mt-3"
-                title={t('plugins.manualInstallRiskTitle', 'Manual plugins run locally')}
-                description={t(
-                  'plugins.manualInstallRiskDescription',
-                  'A plugin placed in this directory can execute code with the TX-5DR host process. Only reload after you trust the source or have reviewed the code.',
-                )}
-              />
+              <p className="flex gap-1.5 text-warning-700">
+                <FontAwesomeIcon icon={faShieldHalved} className="mt-1 shrink-0" />
+                <span>
+                  <span className="font-semibold">{t('plugins.manualInstallRiskTitle', 'Manual plugins run locally')}</span>
+                  {' '}
+                  {t(
+                    'plugins.manualInstallRiskDescription',
+                    'A plugin placed in this directory can execute code with the TX-5DR host process. Only reload after you trust the source or have reviewed the code.',
+                  )}
+                </span>
+              </p>
             </div>
-          </div>
+          )}
         </div>
         <PluginList
           ref={pluginListRef}
@@ -324,7 +364,7 @@ export const PluginSettingsTab = forwardRef<PluginSettingsTabRef, PluginSettings
         <PluginLogPanel />
       </div>
 
-      <div className={activeView === 'marketplace' ? 'block' : 'hidden'}>
+      <div className={activeView === 'marketplace' ? 'flex min-h-0 flex-1 flex-col pb-3 sm:pb-4' : 'hidden'}>
         <PluginMarketplace
           isActive={activeView === 'marketplace'}
           onOpenInstalledPlugin={handleOpenInstalledPlugin}
@@ -361,42 +401,43 @@ const DirectoryField: React.FC<DirectoryFieldProps> = ({
   copiedLabel,
   openLabel,
 }) => (
-  <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-    <div className="min-w-0 flex-1">
-      <p className="text-[11px] font-medium uppercase tracking-wider text-default-400">
-        {label}
-      </p>
-      <code className="mt-1 block overflow-x-auto rounded bg-content1 px-2 py-1.5 text-xs text-default-700">
-        {value ?? loadingLabel}
-      </code>
-    </div>
-    <div className="flex shrink-0 items-center gap-2 self-start">
+  <>
+    <span className="whitespace-nowrap text-xs text-default-500">{label}</span>
+    <code
+      className="min-w-0 truncate rounded bg-content1 px-2 py-1 text-xs text-default-700"
+      title={value}
+    >
+      {value ?? loadingLabel}
+    </code>
+    <div className="flex items-center">
       <Tooltip content={copied ? copiedLabel : copyLabel}>
         <Button
           size="sm"
-          variant="flat"
+          variant="light"
           isIconOnly
+          className="h-7 w-7 min-w-7"
           onPress={onCopy}
           isDisabled={!value}
           aria-label={copyLabel}
         >
-          <FontAwesomeIcon icon={copied ? faCheck : faCopy} />
+          <FontAwesomeIcon icon={copied ? faCheck : faCopy} className="text-xs text-default-500" />
         </Button>
       </Tooltip>
       {canOpen && (
         <Tooltip content={openLabel}>
           <Button
             size="sm"
-            variant="flat"
+            variant="light"
             isIconOnly
+            className="h-7 w-7 min-w-7"
             onPress={onOpen}
             isDisabled={!value}
             aria-label={openLabel}
           >
-            <FontAwesomeIcon icon={faFolderOpen} />
+            <FontAwesomeIcon icon={faFolderOpen} className="text-xs text-default-500" />
           </Button>
         </Tooltip>
       )}
     </div>
-  </div>
+  </>
 );

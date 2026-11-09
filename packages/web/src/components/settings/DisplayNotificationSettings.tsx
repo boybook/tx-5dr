@@ -1,11 +1,8 @@
 import React, { useState, useEffect, forwardRef, useImperativeHandle, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  Card,
-  CardBody,
   Switch,
   Button,
-  Divider,
   Input,
   Tooltip,
   Chip,
@@ -17,6 +14,7 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faRotateLeft, faPalette } from '@fortawesome/free-solid-svg-icons';
 import { InteractiveColorPicker } from './InteractiveColorPicker';
 import { ClientNotificationSettings } from './ClientNotificationSettings';
+import { SettingsBlock, SettingsPage, SettingsRow, SettingsSection } from './SettingsLayout';
 import {
   type DisplayNotificationSettings as DisplaySettings,
   type FrameTableCycleBackgrounds,
@@ -155,11 +153,10 @@ export const DisplayNotificationSettings = forwardRef<
     const showPresets = options.showPresets ?? true;
 
     return (
-      <div className="space-y-3">
-        {/* 当前颜色显示和交互式选择器 */}
-        <div className="flex items-center gap-3">
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-2">
           <div
-            className="w-8 h-8 rounded-md border-2 border-default-200 shadow-sm"
+            className="h-8 w-8 shrink-0 rounded-medium border border-divider"
             style={{ backgroundColor: currentColor }}
           />
           <Input
@@ -175,193 +172,129 @@ export const DisplayNotificationSettings = forwardRef<
             onChange={onColorChange}
           />
         </div>
-        
+
         {showPresets && (
-          <div>
-            <p className="text-sm text-default-600 mb-2">{t('settings:display.presetColors')}</p>
-            <div className="flex flex-wrap gap-2">
-              {PRESET_COLORS.map((color) => (
-                <Tooltip key={color} content={color}>
-                  <button
-                    className={`w-6 h-6 rounded border-2 hover:scale-110 transition-transform ${
-                      currentColor === color ? 'border-default-400' : 'border-default-200'
-                    }`}
-                    style={{ backgroundColor: color }}
-                    onClick={() => onColorChange(color)}
-                  />
-                </Tooltip>
-              ))}
-            </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-default-500">{t('settings:display.presetColors')}</span>
+            {PRESET_COLORS.map((color) => (
+              <Tooltip key={color} content={color}>
+                <button
+                  type="button"
+                  aria-label={color}
+                  className={`h-5 w-5 rounded border-2 transition-transform hover:scale-110 ${
+                    currentColor === color ? 'border-default-500' : 'border-transparent'
+                  }`}
+                  style={{ backgroundColor: color }}
+                  onClick={() => onColorChange(color)}
+                />
+              </Tooltip>
+            ))}
           </div>
         )}
       </div>
     );
   };
 
-  // 渲染颜色选择器
-  const renderColorPicker = (type: HighlightType) => {
-    const currentColor = settings.highlights[type].color;
-
-    return renderColorPickerControls(currentColor, (color) => handleColorChange(type, color));
-  };
-
-  const renderFrameTableCycleColorPicker = (
-    theme: keyof FrameTableCycleBackgrounds,
-    cycle: keyof FrameTableCycleBackgrounds['light'],
-  ) => {
-    const currentColor = settings.frameTableCycleBackgrounds[theme][cycle];
-
-    return renderColorPickerControls(
-      currentColor,
-      (color) => handleFrameTableCycleBackgroundChange(theme, cycle, color),
-      { showPresets: false },
-    );
-  };
-
-  // 渲染高亮设置卡片
-  const renderHighlightCard = (type: HighlightType) => {
+  const renderHighlightRow = (type: HighlightType) => {
     const config = settings.highlights[type];
     const isEnabled = settings.enabled && config.enabled;
-    
+
     return (
-      <Card key={type} className="mb-4" shadow="none" radius="lg" classNames={{
-        base: "border border-divider bg-content1"
-      }}>
-        <CardBody className="space-y-4 p-4">
-          {/* 标题和开关 */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div
-                className="w-4 h-4 rounded"
-                style={{ 
-                  backgroundColor: isEnabled ? config.color : '#d4d4d8',
-                  opacity: isEnabled ? 1 : 0.5 
-                }}
-              />
-              <div>
-                <h4 className="font-semibold text-default-900">
-                  {highlightTypeLabels[type]}
-                </h4>
-                <p className="text-sm text-default-600">
-                  {highlightTypeDescriptions[type]}
-                </p>
-              </div>
-            </div>
-            <Switch
-              isSelected={config.enabled}
-              onValueChange={(enabled) => handleHighlightToggle(type, enabled)}
-              isDisabled={!settings.enabled}
+      <SettingsRow
+        key={type}
+        label={(
+          <span className="flex items-center gap-2">
+            <span
+              className="h-3 w-3 shrink-0 rounded-sm"
+              style={{ backgroundColor: isEnabled ? config.color : '#d4d4d8', opacity: isEnabled ? 1 : 0.5 }}
             />
-          </div>
-          
-          {/* 颜色选择器 */}
-          {config.enabled && settings.enabled && (
-            <>
-              <Divider />
-              {renderColorPicker(type)}
-            </>
-          )}
-        </CardBody>
-      </Card>
+            {highlightTypeLabels[type]}
+          </span>
+        )}
+        description={highlightTypeDescriptions[type]}
+        control={(
+          <Switch
+            size="sm"
+            isSelected={config.enabled}
+            onValueChange={(enabled) => handleHighlightToggle(type, enabled)}
+            isDisabled={!settings.enabled}
+            aria-label={highlightTypeLabels[type]}
+          />
+        )}
+      >
+        {isEnabled
+          ? renderColorPickerControls(config.color, (color) => handleColorChange(type, color))
+          : undefined}
+      </SettingsRow>
     );
   };
 
   const renderFrameTablePreview = (theme: keyof FrameTableCycleBackgrounds) => {
     const colors = settings.frameTableCycleBackgrounds[theme];
     const previewRows = [
-      {
-        cycle: 'even' as const,
-        time: '00:00',
-        message: 'CQ TEST PM95',
-        color: colors.even,
-      },
-      {
-        cycle: 'odd' as const,
-        time: '00:15',
-        message: 'TEST K1ABC -10',
-        color: colors.odd,
-      },
+      { cycle: 'even' as const, time: '00:00', message: 'CQ TEST PM95', color: colors.even },
+      { cycle: 'odd' as const, time: '00:15', message: 'TEST K1ABC -10', color: colors.odd },
     ];
 
     return (
       <div
-        className={`rounded-lg border p-3 ${theme === 'dark' ? 'border-zinc-700 bg-zinc-950 text-zinc-100' : 'border-zinc-200 bg-white text-zinc-900'}`}
+        className={`flex flex-col gap-1 rounded-medium border p-2 ${theme === 'dark' ? 'border-zinc-700 bg-zinc-950 text-zinc-100' : 'border-zinc-200 bg-white text-zinc-900'}`}
       >
-        <div className="mb-3 flex items-center justify-between">
-          <span className="text-sm font-semibold">
-            {theme === 'light' ? t('settings:display.frameTable.lightTheme') : t('settings:display.frameTable.darkTheme')}
-          </span>
-          <span className={theme === 'dark' ? 'text-xs text-zinc-400' : 'text-xs text-zinc-500'}>
-            {t('settings:display.frameTable.preview')}
-          </span>
-        </div>
-        <div className="space-y-2">
-          {previewRows.map((row) => (
-            <div
-              key={row.cycle}
-              className="grid grid-cols-[56px_44px_1fr] items-center gap-2 rounded-md px-3 py-2 font-mono text-xs"
-              style={{ backgroundColor: row.color }}
-            >
-              <span>{row.time}</span>
-              <span className="text-right">{row.cycle === 'even' ? '0' : '1'}</span>
-              <span>{row.message}</span>
-            </div>
-          ))}
-        </div>
+        {previewRows.map((row) => (
+          <div
+            key={row.cycle}
+            className="grid grid-cols-[56px_44px_1fr] items-center gap-2 rounded px-3 py-1.5 font-mono text-xs"
+            style={{ backgroundColor: row.color }}
+          >
+            <span>{row.time}</span>
+            <span className="text-right">{row.cycle === 'even' ? '0' : '1'}</span>
+            <span>{row.message}</span>
+          </div>
+        ))}
       </div>
     );
   };
 
-  const renderFrameTableCycleBackgroundCard = (
-    theme: keyof FrameTableCycleBackgrounds,
-  ) => (
-    <Card shadow="none" radius="lg" classNames={{ base: "border border-divider bg-content1" }}>
-      <CardBody className="space-y-4 p-4">
-        <div>
-          <h5 className="font-semibold text-default-900">
-            {theme === 'light' ? t('settings:display.frameTable.lightTheme') : t('settings:display.frameTable.darkTheme')}
-          </h5>
-          <p className="text-sm text-default-600">
-            {t('settings:display.frameTable.themeDescription')}
-          </p>
-        </div>
+  const renderFrameTableThemeRow = (theme: keyof FrameTableCycleBackgrounds) => (
+    <SettingsRow
+      label={theme === 'light' ? t('settings:display.frameTable.lightTheme') : t('settings:display.frameTable.darkTheme')}
+      description={t('settings:display.frameTable.themeDescription')}
+    >
+      <div className="flex flex-col gap-3">
         {renderFrameTablePreview(theme)}
-        <Divider />
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <div className="space-y-3">
-            <h6 className="text-sm font-medium text-default-800">
-              {t('settings:display.frameTable.evenCycle')}
-            </h6>
-            {renderFrameTableCycleColorPicker(theme, 'even')}
-          </div>
-          <div className="space-y-3">
-            <h6 className="text-sm font-medium text-default-800">
-              {t('settings:display.frameTable.oddCycle')}
-            </h6>
-            {renderFrameTableCycleColorPicker(theme, 'odd')}
-          </div>
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+          {(['even', 'odd'] as const).map((cycle) => (
+            <div key={cycle} className="flex flex-col gap-1.5">
+              <span className="text-xs text-default-500">
+                {cycle === 'even' ? t('settings:display.frameTable.evenCycle') : t('settings:display.frameTable.oddCycle')}
+              </span>
+              {renderColorPickerControls(
+                settings.frameTableCycleBackgrounds[theme][cycle],
+                (color) => handleFrameTableCycleBackgroundChange(theme, cycle, color),
+                { showPresets: false },
+              )}
+            </div>
+          ))}
         </div>
-      </CardBody>
-    </Card>
+      </div>
+    </SettingsRow>
   );
 
-  return (
-    <div className="space-y-6">
-      <section className="space-y-4 border-t border-divider py-4">
-        <h4 className="text-base font-semibold">{t('settings:clientNotifications.title')}</h4>
-        <ClientNotificationSettings />
-      </section>
+  const enabledHighlightTypes = orderedHighlightTypes.filter((type) => settings.highlights[type].enabled);
 
-      {/* 语言设置 */}
-      <Card shadow="none" radius="lg" classNames={{ base: "border border-divider bg-content1" }}>
-        <CardBody className="p-4">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <h4 className="font-semibold text-default-900">{t('settings:language.label')}</h4>
-            </div>
+  return (
+    <SettingsPage
+      title={t('settings:display.title')}
+      description={t('settings:display.pageDescription')}
+    >
+      <SettingsSection title={t('settings:display.sectionGeneral')}>
+        <SettingsRow
+          label={t('settings:language.label')}
+          control={(
             <Select
               size="sm"
-              className="max-w-[160px]"
+              className="w-40"
+              aria-label={t('settings:language.label')}
               selectedKeys={new Set([languageMode])}
               onSelectionChange={(keys) => {
                 const arr = Array.from(keys);
@@ -373,106 +306,48 @@ export const DisplayNotificationSettings = forwardRef<
               <SelectItem key="en">{t('settings:language.en')}</SelectItem>
               <SelectItem key="ja">{t('settings:language.ja')}</SelectItem>
             </Select>
-          </div>
-        </CardBody>
-      </Card>
+          )}
+        />
+      </SettingsSection>
 
-      {/* 页面标题和描述 */}
-      <div>
-        <h3 className="text-xl font-bold text-default-900 mb-2">{t('settings:display.title')}</h3>
-        <p className="text-default-600">
-          {t('settings:display.description')}
-        </p>
-      </div>
+      <SettingsSection title={t('settings:clientNotifications.title')}>
+        <SettingsBlock>
+          <ClientNotificationSettings />
+        </SettingsBlock>
+      </SettingsSection>
 
-      {/* 全局开关 */}
-      <Card shadow="none" radius="lg" classNames={{
-        base: "border border-divider bg-content1"
-      }}>
-        <CardBody className="p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h4 className="font-semibold text-default-900">{t('settings:display.enableHighlight')}</h4>
-              <p className="text-sm text-default-600">
-                {t('settings:display.enableHighlightDesc')}
-              </p>
-            </div>
+      <SettingsSection
+        title={t('settings:display.highlightSection')}
+        description={t('settings:display.description')}
+      >
+        <SettingsRow
+          label={t('settings:display.enableHighlight')}
+          description={t('settings:display.enableHighlightDesc')}
+          control={(
             <Switch
+              size="sm"
               isSelected={settings.enabled}
               onValueChange={handleGlobalToggle}
-              size="lg"
+              aria-label={t('settings:display.enableHighlight')}
             />
-          </div>
-        </CardBody>
-      </Card>
-
-      {/* 高亮类型设置 */}
-      <div>
-        <h4 className="font-semibold text-default-900 mb-4">{t('settings:display.highlightTypeConfig')}</h4>
-        <div className="space-y-4">
-          {orderedHighlightTypes.map(type => renderHighlightCard(type))}
-        </div>
-      </div>
-
-      {/* FrameTable 周期背景色设置 */}
-      <div>
-        <h4 className="font-semibold text-default-900 mb-2">{t('settings:display.frameTable.title')}</h4>
-        <p className="text-sm text-default-600 mb-4">
-          {t('settings:display.frameTable.description')}
-        </p>
-        <div className="space-y-4">
-          <Card shadow="none" radius="lg" classNames={{ base: "border border-divider bg-content1" }}>
-            <CardBody className="p-4">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <h5 className="font-semibold text-default-900">
-                    {t('settings:display.frameTable.groupHeader')}
-                  </h5>
-                  <p className="text-sm text-default-600">
-                    {t('settings:display.frameTable.groupHeaderDesc')}
-                  </p>
-                </div>
-                <Switch
-                  isSelected={settings.frameTableGroupHeaderEnabled}
-                  onValueChange={handleFrameTableGroupHeaderToggle}
-                />
-              </div>
-            </CardBody>
-          </Card>
-          {renderFrameTableCycleBackgroundCard('light')}
-          {renderFrameTableCycleBackgroundCard('dark')}
-        </div>
-      </div>
-
-      {/* 预览区域 */}
-      {settings.enabled && (
-        <Card shadow="none" radius="lg" classNames={{
-          base: "border border-divider bg-content1"
-        }}>
-          <CardBody className="p-4">
-            <h4 className="font-semibold text-default-900 mb-4">{t('settings:display.preview')}</h4>
-            <div className="space-y-2">
-              {orderedHighlightTypes.map(type => {
+          )}
+        />
+        {orderedHighlightTypes.map((type) => renderHighlightRow(type))}
+        {settings.enabled && enabledHighlightTypes.length > 0 && (
+          <SettingsRow label={t('settings:display.preview')}>
+            <div className="flex flex-col gap-2">
+              {enabledHighlightTypes.map((type) => {
                 const config = settings.highlights[type];
-                if (!config.enabled) return null;
-                
                 return (
                   <div key={type} className="flex items-center gap-3">
-                    <div
-                      className="w-1 h-6 rounded"
-                      style={{ backgroundColor: config.color }}
-                    />
+                    <div className="h-5 w-1 rounded" style={{ backgroundColor: config.color }} />
                     <span className="text-sm">
                       {t('settings:highlight.exampleFT8')} - {highlightTypeLabels[type]}
                     </span>
                     <Chip
                       size="sm"
-                      style={{ 
-                        backgroundColor: `${config.color}20`,
-                        color: config.color,
-                        borderColor: config.color 
-                      }}
                       variant="bordered"
+                      style={{ backgroundColor: `${config.color}20`, color: config.color, borderColor: config.color }}
                     >
                       {highlightTypeLabels[type]}
                     </Chip>
@@ -480,13 +355,33 @@ export const DisplayNotificationSettings = forwardRef<
                 );
               })}
             </div>
-          </CardBody>
-        </Card>
-      )}
+          </SettingsRow>
+        )}
+      </SettingsSection>
 
-      {/* 操作按钮 */}
-      <div className="flex justify-between items-center pt-4">
+      <SettingsSection
+        title={t('settings:display.frameTable.title')}
+        description={t('settings:display.frameTable.description')}
+      >
+        <SettingsRow
+          label={t('settings:display.frameTable.groupHeader')}
+          description={t('settings:display.frameTable.groupHeaderDesc')}
+          control={(
+            <Switch
+              size="sm"
+              isSelected={settings.frameTableGroupHeaderEnabled}
+              onValueChange={handleFrameTableGroupHeaderToggle}
+              aria-label={t('settings:display.frameTable.groupHeader')}
+            />
+          )}
+        />
+        {renderFrameTableThemeRow('light')}
+        {renderFrameTableThemeRow('dark')}
+      </SettingsSection>
+
+      <div className="flex items-center justify-between gap-4">
         <Button
+          size="sm"
           variant="flat"
           startContent={<FontAwesomeIcon icon={faRotateLeft} />}
           onPress={handleReset}
@@ -494,12 +389,11 @@ export const DisplayNotificationSettings = forwardRef<
         >
           {t('settings:display.resetToDefault')}
         </Button>
-        
-        <div className="text-sm text-default-500">
+        <span className="text-xs text-default-500">
           {hasUnsavedChanges() && t('settings:unsavedChanges')}
-        </div>
+        </span>
       </div>
-    </div>
+    </SettingsPage>
   );
 });
 

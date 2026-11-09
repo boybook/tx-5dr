@@ -26,7 +26,8 @@
     "descriptionPlaceholder": "アンテナ、電力、無線モデルなどの情報を記述できるマークダウン形式をサポートします。",
     "descriptionDesc": "マークダウン形式をサポート",
     "saveSuccess": "局情報を保存しました",
-    "saveFailed": "保存に失敗しました"
+    "saveFailed": "保存に失敗しました",
+    "pageDescription": "この局のコールサイン、位置、紹介。"
   },
   "language": {
     "label": "表示言語",
@@ -91,7 +92,10 @@
       "groupHeader": "サイクル見出しを表示",
       "groupHeaderDesc": "左側のデコード表で各サイクルの前に UTC 時刻とバンドを表示し、スクリーンショットでも状況を判別しやすくします。",
       "preview": "ライブプレビュー"
-    }
+    },
+    "pageDescription": "表示言語、通知、メッセージの表示方法。",
+    "sectionGeneral": "一般",
+    "highlightSection": "メッセージのハイライト"
   },
   "profileSetup": {
     "created": "プロファイル「{{name}}」が作成され、アクティブ化されました",
@@ -862,7 +866,11 @@
     "marketInstalledLegacyDescription": "インストール済みの {{installed}} は旧 Plugin API 向けです。この TX-5DR でも動作しますが、不具合が起きる可能性があります。",
     "marketInstalledLegacyUpdateHint": "この Plugin API に対応した {{version}} に更新できます。",
     "marketInstalledLegacyNoUpdateHint": "更新版はまだありません。プラグインの作者にお問い合わせください。",
-    "hostPluginApiVersion": "この TX-5DR の内蔵 Plugin API は {{version}} です。プラグインは minPluginApiVersion で必要なバージョンを宣言します。"
+    "hostPluginApiVersion": "この TX-5DR の内蔵 Plugin API は {{version}} です。プラグインは minPluginApiVersion で必要なバージョンを宣言します。",
+    "marketSearchShort": "プラグインを検索",
+    "marketDetails": "詳細",
+    "marketVersionHistoryShowAll": "全 {{count}} バージョンを表示",
+    "marketInstalledAtLabel": "インストール日時"
   },
   "serverHealth": {
     "title": "サーバープロセスの健全性ステータス",

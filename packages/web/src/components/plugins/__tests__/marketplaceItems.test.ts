@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PluginMarketListing, PluginMarketVersion, PluginStatus } from '@tx5dr/contracts';
-import { buildMarketItemState, isPrimaryMarketItem } from '../marketplaceItems';
+import { buildMarketItemState, getMarketItemStatus, isPrimaryMarketItem } from '../marketplaceItems';
 
 function version(value: string, min = '2.0.0'): PluginMarketVersion {
   return {
@@ -131,5 +131,23 @@ describe('marketplace item state', () => {
       isMarketplaceManaged: false,
       hasUpdate: false,
     });
+  });
+
+  it('reports the single most actionable status for a list row', () => {
+    const status = (item: PluginMarketListing, installed = new Map<string, PluginStatus>()) => (
+      getMarketItemStatus(buildMarketItemState(item, installed))
+    );
+    expect(status(listing({}))).toBeNull();
+    expect(status(listing({ installed: { version: '1.0.0', compatible: true } }), loaded('1.0.0'))).toBe('installed');
+    expect(status(listing({
+      latest: version('1.1.0'),
+      installed: { version: '1.0.0', compatible: true, legacy: true },
+    }), loaded('1.0.0'))).toBe('update');
+    expect(status(listing({ installed: { version: '1.0.0', compatible: true, legacy: true } }), loaded('1.0.0'))).toBe('legacy');
+    expect(status(listing({ installed: { version: '1.0.0', compatible: false } }))).toBe('incompatible');
+    expect(status(listing({ installable: null, availability: 'host-upgrade-required' }))).toBe('unsupported');
+    const manual = loaded('1.0.0');
+    manual.set('demo', { ...manual.get('demo')!, source: undefined });
+    expect(status(listing({}), manual)).toBe('manual');
   });
 });

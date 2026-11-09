@@ -25,6 +25,7 @@ import type { PresetFrequency } from '@tx5dr/contracts';
 import { showErrorToast } from '../../utils/errorToast';
 import { createLogger } from '../../utils/logger';
 import { FrequencyPresetAddModal } from './FrequencyPresetAddModal';
+import { SettingsPage } from './SettingsLayout';
 import { formatToneSquelch } from '../../utils/toneSquelch';
 import { formatFrequencyMHz } from '../../utils/frequencyMHz';
 
@@ -284,7 +285,7 @@ export const FrequencyPresetSettings = forwardRef<
   if (isLoading) {
     return (
       <div className="flex justify-center items-center py-12">
-        <span className="text-default-400">{t('status.loading')}</span>
+        <span className="text-sm text-default-500">{t('status.loading')}</span>
       </div>
     );
   }
@@ -292,7 +293,7 @@ export const FrequencyPresetSettings = forwardRef<
   if (error) {
     return (
       <div className="flex justify-center items-center py-12">
-        <span className="text-danger">{error}</span>
+        <span className="text-sm text-danger">{error}</span>
       </div>
     );
   }
@@ -429,73 +430,70 @@ export const FrequencyPresetSettings = forwardRef<
   };
 
   return (
-    <div className="space-y-4">
-      {/* 标题区域 */}
-      <div className="flex items-start justify-between">
-        <div>
-          <h3 className="text-lg font-semibold">{t('freqPresets.title')}</h3>
-          <p className="text-sm text-default-500 mt-1">{t('freqPresets.description')}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Chip size="sm" variant="flat" color="default">
-            {t('freqPresets.presetCount', { count: presets.length })}
-          </Chip>
-        </div>
-      </div>
-
-      {/* 模式筛选 Tabs */}
-      <Tabs
-        selectedKey={modeFilter}
-        onSelectionChange={(key) => setModeFilter(key as string)}
-        size="sm"
-      >
-        <Tab
-          key={FILTER_ALL}
-          title={
-            <div className="flex items-center gap-1.5">
-              <span>{t('freqPresets.allModes')}</span>
-              <Chip size="sm" variant="flat" color="default">{presets.length}</Chip>
-            </div>
-          }
-        />
-        {availableModes.map(mode => (
+    <SettingsPage
+      title={t('freqPresets.title')}
+      description={t('freqPresets.description')}
+      actions={(
+        <Chip size="sm" variant="flat" color="default">
+          {t('freqPresets.presetCount', { count: presets.length })}
+        </Chip>
+      )}
+    >
+      <div className="flex flex-col gap-3">
+        {/* 模式筛选 Tabs */}
+        <Tabs
+          selectedKey={modeFilter}
+          onSelectionChange={(key) => setModeFilter(key as string)}
+          size="sm"
+        >
           <Tab
-            key={mode}
+            key={FILTER_ALL}
             title={
               <div className="flex items-center gap-1.5">
-                <span>{mode}</span>
-                <Chip size="sm" variant="flat" color={mode === 'FT8' ? 'primary' : 'secondary'}>
-                  {modeCounts[mode] || 0}
-                </Chip>
+                <span>{t('freqPresets.allModes')}</span>
+                <Chip size="sm" variant="flat" color="default">{presets.length}</Chip>
               </div>
             }
           />
-        ))}
-      </Tabs>
+          {availableModes.map(mode => (
+            <Tab
+              key={mode}
+              title={
+                <div className="flex items-center gap-1.5">
+                  <span>{mode}</span>
+                  <Chip size="sm" variant="flat" color={mode === 'FT8' ? 'primary' : 'secondary'}>
+                    {modeCounts[mode] || 0}
+                  </Chip>
+                </div>
+              }
+            />
+          ))}
+        </Tabs>
 
-      {/* 预设列表 */}
-      {renderTable(filteredPresets, realIndices)}
+        {/* 预设列表 */}
+        {renderTable(filteredPresets, realIndices)}
 
-      {/* 操作按钮 */}
-      <div className="flex items-center justify-between">
-        <Button
-          size="sm"
-          variant="flat"
-          color="primary"
-          startContent={<FontAwesomeIcon icon={faPlus} />}
-          onPress={openAddModal}
-        >
-          {t('freqPresets.add')}
-        </Button>
-        <Button
-          size="sm"
-          variant="flat"
-          color="default"
-          startContent={<FontAwesomeIcon icon={faUndo} />}
-          onPress={() => setIsResetConfirmOpen(true)}
-        >
-          {t('freqPresets.resetToDefault')}
-        </Button>
+        {/* 操作按钮 */}
+        <div className="flex items-center justify-between gap-2">
+          <Button
+            size="sm"
+            variant="flat"
+            color="primary"
+            startContent={<FontAwesomeIcon icon={faPlus} />}
+            onPress={openAddModal}
+          >
+            {t('freqPresets.add')}
+          </Button>
+          <Button
+            size="sm"
+            variant="flat"
+            color="default"
+            startContent={<FontAwesomeIcon icon={faUndo} />}
+            onPress={() => setIsResetConfirmOpen(true)}
+          >
+            {t('freqPresets.resetToDefault')}
+          </Button>
+        </div>
       </div>
 
       <FrequencyPresetAddModal
@@ -517,7 +515,7 @@ export const FrequencyPresetSettings = forwardRef<
         <ModalContent>
           <ModalHeader>{t('freqPresets.resetToDefault')}</ModalHeader>
           <ModalBody>
-            <p className="text-default-600">{t('freqPresets.resetConfirm')}</p>
+            <p className="text-sm text-default-600">{t('freqPresets.resetConfirm')}</p>
           </ModalBody>
           <ModalFooter>
             <Button variant="flat" onPress={() => setIsResetConfirmOpen(false)}>
@@ -529,7 +527,7 @@ export const FrequencyPresetSettings = forwardRef<
           </ModalFooter>
         </ModalContent>
       </Modal>
-    </div>
+    </SettingsPage>
   );
 });
 

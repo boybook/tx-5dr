@@ -25,6 +25,7 @@ import {
   type ShortcutToggles,
 } from '../../utils/shortcutPreferences';
 import { createLogger } from '../../utils/logger';
+import { SettingsPage, SettingsRow, SettingsSection } from './SettingsLayout';
 
 const logger = createLogger('ShortcutSettings');
 
@@ -302,100 +303,90 @@ export const ShortcutSettings = forwardRef<ShortcutSettingsRef, ShortcutSettings
     }, []);
 
     return (
-      <div className="space-y-4">
-        <div className="space-y-1">
-          <h3 className="text-base font-semibold text-default-900">{t('shortcuts.title')}</h3>
-          <p className="text-xs leading-5 text-default-500">{t('shortcuts.description')}</p>
+      <SettingsPage title={t('shortcuts.title')} description={t('shortcuts.description')}>
+        <div className="flex flex-col gap-2">
+          <Alert color={isElectron ? 'primary' : 'warning'} variant="flat" className="text-xs">
+            {isElectron ? t('shortcuts.electronScope') : t('shortcuts.browserScope')}
+          </Alert>
+
+          {errorMessage && (
+            <Alert color="danger" variant="flat" className="text-xs">
+              {errorMessage}
+            </Alert>
+          )}
+
+          {conflicts.length > 0 && (
+            <Alert color="danger" variant="flat" className="text-xs">
+              {t('shortcuts.conflictError')}
+            </Alert>
+          )}
+
+          {failedRegistrations.length > 0 && (
+            <Alert color="warning" variant="flat" className="text-xs">
+              <div className="space-y-1">
+                <div>{t('shortcuts.registrationFailed')}</div>
+                {failedRegistrations.map(item => (
+                  <div key={`${item.actionId}-${item.accelerator}`} className="font-mono text-xs">
+                    {t(actionLabelKey(item.actionId))}: {item.accelerator} ({item.reason})
+                  </div>
+                ))}
+              </div>
+            </Alert>
+          )}
         </div>
 
-        <Alert color={isElectron ? 'primary' : 'warning'} variant="flat" className="text-xs">
-          {isElectron ? t('shortcuts.electronScope') : t('shortcuts.browserScope')}
-        </Alert>
-
-        {errorMessage && (
-          <Alert color="danger" variant="flat" className="text-xs">
-            {errorMessage}
-          </Alert>
-        )}
-
-        {conflicts.length > 0 && (
-          <Alert color="danger" variant="flat" className="text-xs">
-            {t('shortcuts.conflictError')}
-          </Alert>
-        )}
-
-        {failedRegistrations.length > 0 && (
-          <Alert color="warning" variant="flat" className="text-xs">
-            <div className="space-y-1">
-              <div>{t('shortcuts.registrationFailed')}</div>
-              {failedRegistrations.map(item => (
-                <div key={`${item.actionId}-${item.accelerator}`} className="font-mono text-xs">
-                  {t(actionLabelKey(item.actionId))}: {item.accelerator} ({item.reason})
-                </div>
-              ))}
-            </div>
-          </Alert>
-        )}
-
-        <div className="overflow-hidden rounded-medium border border-divider bg-content1">
-          <div className="divide-y divide-divider">
-            <div className="flex flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
-              <div className="min-w-0 space-y-0.5">
-                <div className="text-sm font-medium text-default-900">{t('shortcuts.masterEnabled')}</div>
-                <div className="text-xs leading-5 text-default-500">{t('shortcuts.masterEnabledDescription')}</div>
-              </div>
+        <SettingsSection>
+          <SettingsRow
+            label={t('shortcuts.masterEnabled')}
+            description={t('shortcuts.masterEnabledDescription')}
+            control={(
               <Switch
                 size="sm"
                 color="primary"
-                className="shrink-0"
                 aria-label={t('shortcuts.masterEnabled')}
                 isDisabled={isSaving}
                 isSelected={draftToggles.enabled}
                 onValueChange={(isSelected) => updateToggles({ enabled: isSelected })}
               />
-            </div>
-            <div className="flex flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
-              <div className="min-w-0 space-y-0.5">
-                <div className="text-sm font-medium text-default-900">{t('shortcuts.globalEnabled')}</div>
-                <div className="text-xs leading-5 text-default-500">
-                  {isElectron ? t('shortcuts.globalEnabledDescription') : t('shortcuts.globalEnabledBrowserDescription')}
-                </div>
-              </div>
+            )}
+          />
+          <SettingsRow
+            label={t('shortcuts.globalEnabled')}
+            description={isElectron ? t('shortcuts.globalEnabledDescription') : t('shortcuts.globalEnabledBrowserDescription')}
+            control={(
               <Switch
                 size="sm"
                 color="primary"
-                className="shrink-0"
                 aria-label={t('shortcuts.globalEnabled')}
                 isDisabled={isSaving || !isElectron || !draftToggles.enabled}
                 isSelected={draftToggles.globalEnabled}
                 onValueChange={(isSelected) => updateToggles({ globalEnabled: isSelected })}
               />
-            </div>
-          </div>
-        </div>
+            )}
+          />
+        </SettingsSection>
 
-        <div className="overflow-hidden rounded-medium border border-divider bg-content1">
-          <div className="divide-y divide-divider">
-            {SHORTCUT_GROUPS.map(group => (
-              <div key={group.titleKey}>
-                <div className="bg-default-50 px-3 py-1.5 text-[11px] font-medium uppercase tracking-wide text-default-500">
-                  {t(group.titleKey)}
-                </div>
-                <div className="divide-y divide-divider">
-                  {group.actionIds.map(actionId => {
-                    const binding = draftConfig[actionId];
-                    const isRecording = recordingActionId === actionId;
-                    return (
-                      <div key={actionId} className="flex flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="min-w-0 space-y-0.5">
-                          <div className="text-sm font-medium text-default-900">{t(actionLabelKey(actionId))}</div>
-                          <div className="text-xs leading-5 text-default-500">{t(`shortcuts.actionDescriptions.${actionId}`)}</div>
-                        </div>
-                        <div className="flex shrink-0 flex-wrap items-center gap-1.5">
-                          <Chip
-                            size="sm"
-                            variant="flat"
-                            color={binding.enabled ? 'primary' : 'default'}
+        <SettingsSection>
+          {SHORTCUT_GROUPS.map(group => (
+            <div key={group.titleKey} className="overflow-hidden first:rounded-t-large last:rounded-b-large">
+              <div className="bg-default-50 px-4 py-2 text-xs font-medium text-default-500">
+                {t(group.titleKey)}
+              </div>
+              <div className="divide-y divide-divider">
+                {group.actionIds.map(actionId => {
+                  const binding = draftConfig[actionId];
+                  const isRecording = recordingActionId === actionId;
+                  return (
+                    <div key={actionId} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium text-default-900">{t(actionLabelKey(actionId))}</div>
+                        <p className="mt-0.5 text-xs leading-5 text-default-500">{t(`shortcuts.actionDescriptions.${actionId}`)}</p>
+                      </div>
+                      <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                        <Chip
+                          size="sm"
+                          variant="flat"
+                          color={binding.enabled ? 'primary' : 'default'}
                           className="font-mono text-xs"
                         >
                           {isRecording
@@ -404,37 +395,36 @@ export const ShortcutSettings = forwardRef<ShortcutSettingsRef, ShortcutSettings
                               ? formatShortcutBinding(binding)
                               : t('shortcuts.disabled')}
                         </Chip>
-                          <Button
-                            size="sm"
-                            variant={isRecording ? 'solid' : 'flat'}
-                            color={isRecording ? 'primary' : 'default'}
-                            isDisabled={isSaving}
-                            onPress={() => handleRecordButtonPress(actionId)}
-                            className="h-7 min-w-0 px-2 text-xs"
-                            startContent={<FontAwesomeIcon icon={faKeyboard} className="text-[10px]" />}
-                          >
-                            {isRecording ? t('shortcuts.pressShortcut') : t('shortcuts.record')}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="light"
-                            isIconOnly
-                            isDisabled={isSaving}
-                            onPress={() => handleClearAction(actionId)}
-                            className="h-7 w-7 min-w-0"
-                            aria-label={t('shortcuts.clear')}
-                          >
-                            <FontAwesomeIcon icon={faTrash} className="text-[10px]" />
-                          </Button>
-                        </div>
+                        <Button
+                          size="sm"
+                          variant={isRecording ? 'solid' : 'flat'}
+                          color={isRecording ? 'primary' : 'default'}
+                          isDisabled={isSaving}
+                          onPress={() => handleRecordButtonPress(actionId)}
+                          className="h-7 min-w-0 px-2 text-xs"
+                          startContent={<FontAwesomeIcon icon={faKeyboard} className="text-xs" />}
+                        >
+                          {isRecording ? t('shortcuts.pressShortcut') : t('shortcuts.record')}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="light"
+                          isIconOnly
+                          isDisabled={isSaving}
+                          onPress={() => handleClearAction(actionId)}
+                          className="h-7 w-7 min-w-0"
+                          aria-label={t('shortcuts.clear')}
+                        >
+                          <FontAwesomeIcon icon={faTrash} className="text-xs" />
+                        </Button>
                       </div>
-                    );
-                  })}
-                </div>
+                    </div>
+                  );
+                })}
               </div>
-            ))}
-          </div>
-        </div>
+            </div>
+          ))}
+        </SettingsSection>
 
         <div className="flex flex-wrap gap-2">
           <Button
@@ -442,13 +432,12 @@ export const ShortcutSettings = forwardRef<ShortcutSettingsRef, ShortcutSettings
             variant="flat"
             onPress={handleResetDefaults}
             isDisabled={isSaving}
-            className="h-8 text-xs"
-            startContent={<FontAwesomeIcon icon={faRotateLeft} className="text-xs" />}
+            startContent={<FontAwesomeIcon icon={faRotateLeft} />}
           >
             {t('shortcuts.restoreDefaults')}
           </Button>
         </div>
-      </div>
+      </SettingsPage>
     );
   }
 );

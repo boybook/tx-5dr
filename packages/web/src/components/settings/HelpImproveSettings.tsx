@@ -1,6 +1,6 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Alert, Button, Card, CardBody, Input, Select, SelectItem, Switch, Textarea } from '@heroui/react';
+import { Alert, Button, Input, Select, SelectItem, Switch, Textarea } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faArrowRotateRight, faChartSimple, faCheckCircle, faCloudArrowUp, faShieldHalved } from '@fortawesome/free-solid-svg-icons';
 import { api, ApiError } from '@tx5dr/core';
@@ -20,6 +20,7 @@ import {
   resolveDiagnosticRange,
   type DiagnosticTimePreset,
 } from './helpImprovePolicy';
+import { SettingsBlock, SettingsPage, SettingsRow, SettingsSection } from './SettingsLayout';
 
 const logger = createLogger('HelpImproveSettings');
 
@@ -272,244 +273,256 @@ export const HelpImproveSettings = forwardRef<HelpImproveSettingsRef, HelpImprov
       : t('helpImprove.selectionUnavailable');
 
     return (
-      <div className="flex flex-col gap-6">
-        <div>
-          <h3 className="text-xl font-bold text-default-900 mb-2">{t('helpImprove.title')}</h3>
-          <p className="text-default-600">{t('helpImprove.description')}</p>
-        </div>
-
-        <Card shadow="none" radius="lg" className="border border-divider bg-content1">
-          <CardBody className="p-5 space-y-4">
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-              <div className="min-w-0 max-w-3xl">
-                <div className="flex items-center gap-2">
-                  <FontAwesomeIcon icon={faChartSimple} className="text-primary" />
-                  <h4 className="text-base font-semibold text-default-900">{t('helpImprove.telemetryTitle')}</h4>
-                </div>
-                <p className="mt-1 text-sm leading-6 text-default-600">
-                  {t('helpImprove.telemetryDescription')}
-                </p>
-              </div>
+      <SettingsPage title={t('helpImprove.title')} description={t('helpImprove.description')}>
+        <SettingsSection
+          title={(
+            <span className="flex items-center gap-2">
+              <FontAwesomeIcon icon={faChartSimple} className="text-primary" />
+              {t('helpImprove.telemetryTitle')}
+            </span>
+          )}
+          description={t('helpImprove.telemetryDescription')}
+        >
+          <SettingsRow
+            label={observabilityEnabled
+              ? t('common:system.anonymousTelemetryEnabled')
+              : t('common:system.anonymousTelemetryDisabled')}
+            control={(
               <Switch
+                size="sm"
                 isSelected={observabilityEnabled}
                 onValueChange={setObservabilityEnabled}
                 isDisabled={!observabilityStatus}
-                className="shrink-0"
-              >
-                {observabilityEnabled
-                  ? t('common:system.anonymousTelemetryEnabled')
-                  : t('common:system.anonymousTelemetryDisabled')}
-              </Switch>
-            </div>
-            {observabilityStatus?.noticeRequired && (
-              <Alert color="warning" variant="flat">
-                {t('common:system.anonymousTelemetryConsent')}
-              </Alert>
+                aria-label={t('helpImprove.telemetryTitle')}
+              />
             )}
-            {observabilityError && (
-              <Alert color="danger" variant="flat">{t('common:system.loadFailed')}</Alert>
-            )}
-            <div className="grid gap-3 rounded-medium bg-default-50 px-3 py-3 text-sm leading-6 text-default-600 dark:bg-default-100/5 lg:grid-cols-2">
+          />
+          {(observabilityStatus?.noticeRequired || observabilityError) && (
+            <SettingsBlock>
+              <div className="flex flex-col gap-2">
+                {observabilityStatus?.noticeRequired && (
+                  <Alert color="warning" variant="flat">
+                    {t('common:system.anonymousTelemetryConsent')}
+                  </Alert>
+                )}
+                {observabilityError && (
+                  <Alert color="danger" variant="flat">{t('common:system.loadFailed')}</Alert>
+                )}
+              </div>
+            </SettingsBlock>
+          )}
+          <SettingsBlock>
+            <div className="grid gap-3 lg:grid-cols-2">
               <div>
-                <p className="font-medium text-default-800">{t('common:system.anonymousTelemetryCollectedTitle')}</p>
-                <p className="mt-0.5">{t('common:system.anonymousTelemetryCollected')}</p>
+                <p className="text-sm font-medium text-default-900">{t('common:system.anonymousTelemetryCollectedTitle')}</p>
+                <p className="mt-0.5 text-xs leading-5 text-default-500">{t('common:system.anonymousTelemetryCollected')}</p>
               </div>
               <div>
-                <p className="font-medium text-default-800">{t('common:system.anonymousTelemetryNeverCollectedTitle')}</p>
-                <p className="mt-0.5">{t('common:system.anonymousTelemetryNeverCollected')}</p>
+                <p className="text-sm font-medium text-default-900">{t('common:system.anonymousTelemetryNeverCollectedTitle')}</p>
+                <p className="mt-0.5 text-xs leading-5 text-default-500">{t('common:system.anonymousTelemetryNeverCollected')}</p>
               </div>
             </div>
             {observabilityStatus && !observabilityStatus.endpointConfigured && (
-              <p className="text-xs leading-5 text-default-400">{t('common:system.anonymousTelemetryUnavailable')}</p>
+              <p className="mt-3 text-xs leading-5 text-default-500">{t('common:system.anonymousTelemetryUnavailable')}</p>
             )}
-          </CardBody>
-        </Card>
+          </SettingsBlock>
+        </SettingsSection>
 
-        <Card shadow="none" radius="lg" className="border border-divider bg-content1">
-          <CardBody className="p-5 space-y-5">
-            <div>
-              <div className="flex items-center gap-2">
-                <FontAwesomeIcon icon={faCloudArrowUp} className="text-primary" />
-                <h4 className="text-base font-semibold text-default-900">{t('helpImprove.uploadTitle')}</h4>
-              </div>
-              <p className="mt-1 text-sm leading-6 text-default-600">{t('helpImprove.uploadDescription')}</p>
-            </div>
-
-            <Alert color="warning" variant="flat" icon={<FontAwesomeIcon icon={faShieldHalved} />}>
-              {t('helpImprove.privacyNotice')}
-            </Alert>
-
-            {sourcesError && (
-              <Alert color="danger" variant="flat">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span>{t('helpImprove.status.sourcesUnavailable')}</span>
-                  <Button
-                    size="sm"
-                    color="danger"
-                    variant="flat"
-                    startContent={<FontAwesomeIcon icon={faArrowRotateRight} />}
-                    onPress={() => void retrySources()}
-                  >
-                    {t('helpImprove.retry')}
-                  </Button>
-                </div>
+        <SettingsSection
+          title={(
+            <span className="flex items-center gap-2">
+              <FontAwesomeIcon icon={faCloudArrowUp} className="text-primary" />
+              {t('helpImprove.uploadTitle')}
+            </span>
+          )}
+          description={t('helpImprove.uploadDescription')}
+        >
+          <SettingsBlock>
+            <div className="flex flex-col gap-2">
+              <Alert color="warning" variant="flat" icon={<FontAwesomeIcon icon={faShieldHalved} />}>
+                {t('helpImprove.privacyNotice')}
               </Alert>
-            )}
-            {!sourcesLoading && !sourcesError && sources.length === 0 && (
-              <Alert color="warning" variant="flat">{t('helpImprove.status.noSources')}</Alert>
-            )}
 
-            <div className="grid gap-4 md:grid-cols-2">
-              <Select
-                label={t('helpImprove.logSource')}
-                selectedKeys={sourceId ? new Set([sourceId]) : new Set()}
-                onSelectionChange={(keys) => {
-                  const next = Array.from(keys)[0];
-                  setSourceId(typeof next === 'string' ? next as DiagnosticLogSourceId : null);
-                  setUploadState(null);
-                }}
-                isDisabled={sourcesLoading || sources.length === 0 || uploading}
-                isLoading={sourcesLoading}
-                description={sourceId ? sourceDescription(sourceId) : undefined}
-              >
-                {sources.map((source) => (
-                  <SelectItem key={source.id} textValue={sourceLabel(source.id)}>
-                    <div className="flex flex-col">
-                      <span>{sourceLabel(source.id)}</span>
-                      <span className="text-xs text-default-400">{source.fileName}</span>
-                    </div>
-                  </SelectItem>
-                ))}
-              </Select>
-
-              <Select
-                label={t('helpImprove.timeRange')}
-                selectedKeys={new Set([timePreset])}
-                onSelectionChange={(keys) => {
-                  const next = Array.from(keys)[0];
-                  if (typeof next === 'string') setTimePreset(next as DiagnosticTimePreset);
-                  setUploadState(null);
-                }}
-                isDisabled={uploading}
-              >
-                {(['15m', '1h', '6h', '24h', 'custom'] as DiagnosticTimePreset[]).map((preset) => (
-                  <SelectItem key={preset}>{presetLabel(preset)}</SelectItem>
-                ))}
-              </Select>
-            </div>
-
-            {timePreset === 'custom' && (
-              <div className="grid gap-4 md:grid-cols-2">
-                <Input
-                  type="datetime-local"
-                  label={t('helpImprove.customFrom')}
-                  value={customFrom}
-                  onValueChange={(value) => { setCustomFrom(value); setUploadState(null); }}
-                  isDisabled={uploading}
-                  isInvalid={!selectedRange}
-                />
-                <Input
-                  type="datetime-local"
-                  label={t('helpImprove.customTo')}
-                  value={customTo}
-                  onValueChange={(value) => { setCustomTo(value); setUploadState(null); }}
-                  isDisabled={uploading}
-                  isInvalid={!selectedRange}
-                />
-              </div>
-            )}
-
-            {timePreset === 'custom' && !selectedRange && (
-              <p className="text-sm text-danger">{t('helpImprove.status.invalidRange')}</p>
-            )}
-
-            <div className="rounded-medium bg-default-50 px-3 py-3 dark:bg-default-100/5">
-              <p className="text-sm font-medium text-default-900">{t('helpImprove.selectionTitle')}</p>
-              <p className="mt-1 text-sm leading-5 text-default-700">{selectionText}</p>
-              <p className="mt-2 text-xs leading-5 text-default-500">
-                <span className="font-medium text-default-600">{t('helpImprove.coverageTitle')}: </span>
-                {coverageText}
-              </p>
-              {selectedRange && !rangeOverlapsAvailableLogs && (
-                <p className="mt-2 text-xs leading-5 text-warning-700 dark:text-warning-400">
-                  {t('helpImprove.selectionOutsideCoverage')}
-                </p>
+              {sourcesError && (
+                <Alert color="danger" variant="flat">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span>{t('helpImprove.status.sourcesUnavailable')}</span>
+                    <Button
+                      size="sm"
+                      color="danger"
+                      variant="flat"
+                      startContent={<FontAwesomeIcon icon={faArrowRotateRight} />}
+                      onPress={() => void retrySources()}
+                    >
+                      {t('helpImprove.retry')}
+                    </Button>
+                  </div>
+                </Alert>
+              )}
+              {!sourcesLoading && !sourcesError && sources.length === 0 && (
+                <Alert color="warning" variant="flat">{t('helpImprove.status.noSources')}</Alert>
               )}
             </div>
+          </SettingsBlock>
 
-            <Textarea
-              label={t('helpImprove.feedbackLabel')}
-              placeholder={t('helpImprove.feedbackPlaceholder')}
-              value={feedback}
-              onValueChange={(value) => { setFeedback(value); setUploadState(null); }}
-              maxLength={2000}
-              minRows={3}
-              isDisabled={uploading}
-              description={t('helpImprove.feedbackCount', { count: feedback.length })}
-            />
+          <SettingsBlock>
+            <div className="flex flex-col gap-3">
+              <div className="grid gap-3 md:grid-cols-2">
+                <Select
+                  label={t('helpImprove.logSource')}
+                  selectedKeys={sourceId ? new Set([sourceId]) : new Set()}
+                  onSelectionChange={(keys) => {
+                    const next = Array.from(keys)[0];
+                    setSourceId(typeof next === 'string' ? next as DiagnosticLogSourceId : null);
+                    setUploadState(null);
+                  }}
+                  isDisabled={sourcesLoading || sources.length === 0 || uploading}
+                  isLoading={sourcesLoading}
+                  description={sourceId ? sourceDescription(sourceId) : undefined}
+                >
+                  {sources.map((source) => (
+                    <SelectItem key={source.id} textValue={sourceLabel(source.id)}>
+                      <div className="flex flex-col">
+                        <span>{sourceLabel(source.id)}</span>
+                        <span className="text-xs text-default-400">{source.fileName}</span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </Select>
 
-            {uploadState?.kind === 'error' && (
-              <Alert color="danger" variant="flat">
-                <div className="min-w-0">
-                  <p>{uploadState.message}</p>
-                  {uploadState.details && (
-                    <div className="mt-3 border-t border-danger-200/60 pt-3 text-xs leading-5 dark:border-danger-800/50">
-                      <p className="font-semibold">{t('helpImprove.status.errorDetailsTitle')}</p>
-                      <dl className="mt-1 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1">
-                        {uploadState.details.errorId && <><dt>{t('helpImprove.status.errorId')}</dt><dd className="font-mono break-all">{uploadState.details.errorId}</dd></>}
-                        {uploadState.details.code && <><dt>{t('helpImprove.status.errorCode')}</dt><dd className="font-mono break-all">{uploadState.details.code}</dd></>}
-                        {uploadState.details.stage && <><dt>{t('helpImprove.status.errorStage')}</dt><dd className="font-mono break-all">{uploadState.details.stage}</dd></>}
-                        {uploadState.details.httpStatus !== undefined && <><dt>{t('helpImprove.status.httpStatus')}</dt><dd className="font-mono">{uploadState.details.httpStatus}</dd></>}
-                        {uploadState.details.upstreamStatus !== undefined && <><dt>{t('helpImprove.status.upstreamStatus')}</dt><dd className="font-mono">{uploadState.details.upstreamStatus}</dd></>}
-                        {uploadState.details.localErrorCode && <><dt>{t('helpImprove.status.localErrorCode')}</dt><dd className="font-mono break-all">{uploadState.details.localErrorCode}</dd></>}
-                        {uploadState.details.localErrno !== undefined && <><dt>{t('helpImprove.status.localErrno')}</dt><dd className="font-mono">{uploadState.details.localErrno}</dd></>}
-                        {uploadState.details.localErrorOperation && <><dt>{t('helpImprove.status.localErrorOperation')}</dt><dd className="font-mono break-all">{uploadState.details.localErrorOperation}</dd></>}
-                        {uploadState.details.clientRequestUrl && <><dt>{t('helpImprove.status.clientRequestUrl')}</dt><dd className="font-mono break-all">{uploadState.details.clientRequestUrl}</dd></>}
-                        {uploadState.details.localRequestUrl && <><dt>{t('helpImprove.status.localRequestUrl')}</dt><dd className="font-mono break-all">{uploadState.details.localRequestUrl}</dd></>}
-                        {uploadState.details.downstreamRequestUrl && <><dt>{t('helpImprove.status.downstreamRequestUrl')}</dt><dd className="font-mono break-all">{uploadState.details.downstreamRequestUrl}</dd></>}
-                        {uploadState.details.technicalMessage && <><dt>{t('helpImprove.status.technicalMessage')}</dt><dd className="font-mono break-words">{uploadState.details.technicalMessage}</dd></>}
-                      </dl>
-                    </div>
-                  )}
+                <Select
+                  label={t('helpImprove.timeRange')}
+                  selectedKeys={new Set([timePreset])}
+                  onSelectionChange={(keys) => {
+                    const next = Array.from(keys)[0];
+                    if (typeof next === 'string') setTimePreset(next as DiagnosticTimePreset);
+                    setUploadState(null);
+                  }}
+                  isDisabled={uploading}
+                >
+                  {(['15m', '1h', '6h', '24h', 'custom'] as DiagnosticTimePreset[]).map((preset) => (
+                    <SelectItem key={preset}>{presetLabel(preset)}</SelectItem>
+                  ))}
+                </Select>
+              </div>
+
+              {timePreset === 'custom' && (
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Input
+                    type="datetime-local"
+                    label={t('helpImprove.customFrom')}
+                    value={customFrom}
+                    onValueChange={(value) => { setCustomFrom(value); setUploadState(null); }}
+                    isDisabled={uploading}
+                    isInvalid={!selectedRange}
+                  />
+                  <Input
+                    type="datetime-local"
+                    label={t('helpImprove.customTo')}
+                    value={customTo}
+                    onValueChange={(value) => { setCustomTo(value); setUploadState(null); }}
+                    isDisabled={uploading}
+                    isInvalid={!selectedRange}
+                  />
                 </div>
-              </Alert>
-            )}
-            {uploadState?.kind === 'success' && (
-              <Alert color="success" variant="flat" icon={<FontAwesomeIcon icon={faCheckCircle} />}>
-                <div>
-                  <p className="font-medium">{t('helpImprove.status.success')}</p>
-                  <p className="mt-1 text-xs">
-                    {t('helpImprove.status.receipt', {
-                      id: uploadState.receipt.uploadId.slice(0, 8),
-                      lines: uploadState.receipt.lineCount,
-                      until: new Date(uploadState.receipt.retainedUntil).toLocaleString(),
-                    })}
-                  </p>
-                </div>
-              </Alert>
-            )}
+              )}
 
-            <div className="flex justify-end">
-              <Button
-                color="primary"
-                startContent={!uploading ? <FontAwesomeIcon icon={faCloudArrowUp} /> : undefined}
-                isLoading={uploading}
-                isDisabled={!canSubmitDiagnosticUpload({
-                  sourceId,
-                  sourcesLoading,
-                  uploading,
-                  sourceCount: sources.length,
-                  rangeIsValid: selectedRange !== null,
-                  rangeOverlapsAvailableLogs,
-                })}
-                onPress={() => void handleUpload()}
-              >
-                {uploading ? t('helpImprove.uploading') : t('helpImprove.uploadButton')}
-              </Button>
+              {timePreset === 'custom' && !selectedRange && (
+                <p className="text-xs text-danger">{t('helpImprove.status.invalidRange')}</p>
+              )}
             </div>
-          </CardBody>
-        </Card>
-      </div>
+          </SettingsBlock>
+
+          <SettingsBlock>
+            <p className="text-sm font-medium text-default-900">{t('helpImprove.selectionTitle')}</p>
+            <p className="mt-0.5 text-sm text-default-700">{selectionText}</p>
+            <p className="mt-2 text-xs leading-5 text-default-500">
+              <span className="font-medium text-default-600">{t('helpImprove.coverageTitle')}: </span>
+              {coverageText}
+            </p>
+            {selectedRange && !rangeOverlapsAvailableLogs && (
+              <p className="mt-2 text-xs leading-5 text-warning-700 dark:text-warning-400">
+                {t('helpImprove.selectionOutsideCoverage')}
+              </p>
+            )}
+          </SettingsBlock>
+
+          <SettingsBlock>
+            <div className="flex flex-col gap-3">
+              <Textarea
+                label={t('helpImprove.feedbackLabel')}
+                placeholder={t('helpImprove.feedbackPlaceholder')}
+                value={feedback}
+                onValueChange={(value) => { setFeedback(value); setUploadState(null); }}
+                maxLength={2000}
+                minRows={3}
+                isDisabled={uploading}
+                description={t('helpImprove.feedbackCount', { count: feedback.length })}
+              />
+
+              {uploadState?.kind === 'error' && (
+                <Alert color="danger" variant="flat">
+                  <div className="min-w-0">
+                    <p>{uploadState.message}</p>
+                    {uploadState.details && (
+                      <div className="mt-3 border-t border-danger-200/60 pt-3 text-xs leading-5 dark:border-danger-800/50">
+                        <p className="font-semibold">{t('helpImprove.status.errorDetailsTitle')}</p>
+                        <dl className="mt-1 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1">
+                          {uploadState.details.errorId && <><dt>{t('helpImprove.status.errorId')}</dt><dd className="font-mono break-all">{uploadState.details.errorId}</dd></>}
+                          {uploadState.details.code && <><dt>{t('helpImprove.status.errorCode')}</dt><dd className="font-mono break-all">{uploadState.details.code}</dd></>}
+                          {uploadState.details.stage && <><dt>{t('helpImprove.status.errorStage')}</dt><dd className="font-mono break-all">{uploadState.details.stage}</dd></>}
+                          {uploadState.details.httpStatus !== undefined && <><dt>{t('helpImprove.status.httpStatus')}</dt><dd className="font-mono">{uploadState.details.httpStatus}</dd></>}
+                          {uploadState.details.upstreamStatus !== undefined && <><dt>{t('helpImprove.status.upstreamStatus')}</dt><dd className="font-mono">{uploadState.details.upstreamStatus}</dd></>}
+                          {uploadState.details.localErrorCode && <><dt>{t('helpImprove.status.localErrorCode')}</dt><dd className="font-mono break-all">{uploadState.details.localErrorCode}</dd></>}
+                          {uploadState.details.localErrno !== undefined && <><dt>{t('helpImprove.status.localErrno')}</dt><dd className="font-mono">{uploadState.details.localErrno}</dd></>}
+                          {uploadState.details.localErrorOperation && <><dt>{t('helpImprove.status.localErrorOperation')}</dt><dd className="font-mono break-all">{uploadState.details.localErrorOperation}</dd></>}
+                          {uploadState.details.clientRequestUrl && <><dt>{t('helpImprove.status.clientRequestUrl')}</dt><dd className="font-mono break-all">{uploadState.details.clientRequestUrl}</dd></>}
+                          {uploadState.details.localRequestUrl && <><dt>{t('helpImprove.status.localRequestUrl')}</dt><dd className="font-mono break-all">{uploadState.details.localRequestUrl}</dd></>}
+                          {uploadState.details.downstreamRequestUrl && <><dt>{t('helpImprove.status.downstreamRequestUrl')}</dt><dd className="font-mono break-all">{uploadState.details.downstreamRequestUrl}</dd></>}
+                          {uploadState.details.technicalMessage && <><dt>{t('helpImprove.status.technicalMessage')}</dt><dd className="font-mono break-words">{uploadState.details.technicalMessage}</dd></>}
+                        </dl>
+                      </div>
+                    )}
+                  </div>
+                </Alert>
+              )}
+              {uploadState?.kind === 'success' && (
+                <Alert color="success" variant="flat" icon={<FontAwesomeIcon icon={faCheckCircle} />}>
+                  <div>
+                    <p className="font-medium">{t('helpImprove.status.success')}</p>
+                    <p className="mt-1 text-xs">
+                      {t('helpImprove.status.receipt', {
+                        id: uploadState.receipt.uploadId.slice(0, 8),
+                        lines: uploadState.receipt.lineCount,
+                        until: new Date(uploadState.receipt.retainedUntil).toLocaleString(),
+                      })}
+                    </p>
+                  </div>
+                </Alert>
+              )}
+
+              <div className="flex justify-end">
+                <Button
+                  color="primary"
+                  startContent={!uploading ? <FontAwesomeIcon icon={faCloudArrowUp} /> : undefined}
+                  isLoading={uploading}
+                  isDisabled={!canSubmitDiagnosticUpload({
+                    sourceId,
+                    sourcesLoading,
+                    uploading,
+                    sourceCount: sources.length,
+                    rangeIsValid: selectedRange !== null,
+                    rangeOverlapsAvailableLogs,
+                  })}
+                  onPress={() => void handleUpload()}
+                >
+                  {uploading ? t('helpImprove.uploading') : t('helpImprove.uploadButton')}
+                </Button>
+              </div>
+            </div>
+          </SettingsBlock>
+        </SettingsSection>
+      </SettingsPage>
     );
   },
 );

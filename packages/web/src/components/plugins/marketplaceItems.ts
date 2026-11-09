@@ -156,6 +156,29 @@ export function getActionPriority(item: MarketItemState): number {
   return 1;
 }
 
+/**
+ * The single status a compact list row shows, most actionable first. `null`
+ * means the plugin is simply available to install.
+ */
+export type MarketItemStatus =
+  | 'incompatible'
+  | 'update'
+  | 'legacy'
+  | 'installed'
+  | 'manual'
+  | 'unsupported'
+  | null;
+
+export function getMarketItemStatus(item: MarketItemState): MarketItemStatus {
+  if (item.installedIncompatible) return 'incompatible';
+  if (item.hasUpdate) return 'update';
+  if (item.installedLegacy) return 'legacy';
+  if (item.isMarketplaceManaged) return 'installed';
+  if (item.isManualInstall) return 'manual';
+  if (!item.isSupported && !item.isInstalled) return 'unsupported';
+  return null;
+}
+
 /** Installed plugins stay in the main list even when no compatible version exists. */
 export function isPrimaryMarketItem(item: MarketItemState): boolean {
   return item.isSupported || item.isInstalled;

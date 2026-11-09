@@ -11,8 +11,6 @@ import { useTranslation } from 'react-i18next';
 import {
   Alert,
   Button,
-  Card,
-  CardBody,
   Chip,
   Input,
   Select,
@@ -26,6 +24,7 @@ import { useConnection } from '../../store/radioStore';
 import { useWSEvent } from '../../hooks/useWSEvent';
 import { showErrorToast } from '../../utils/errorToast';
 import { createLogger } from '../../utils/logger';
+import { SettingsBlock, SettingsPage, SettingsRow, SettingsSection } from './SettingsLayout';
 
 const logger = createLogger('RigctldBridgeSettings');
 
@@ -210,127 +209,129 @@ export const RigctldBridgeSettings = forwardRef<
   const address = status?.address;
 
   return (
-    <Card classNames={{ base: 'border border-divider bg-content1' }}>
-      <CardBody className="p-5 space-y-4">
-        <div className="flex items-start justify-between gap-4">
-          <div className="space-y-1">
-            <h3 className="text-base font-semibold text-default-900">{t('rigctld.title')}</h3>
-            <p className="text-sm leading-6 text-default-600">{t('rigctld.description')}</p>
-          </div>
-          <Chip size="sm" color={running ? 'success' : 'default'} variant="flat">
-            {running ? t('rigctld.statusRunning') : t('rigctld.statusStopped')}
-          </Chip>
-        </div>
-
-        <Switch
-          isSelected={form.enabled}
-          isDisabled={!canEdit || loading}
-          onValueChange={(v) => setForm((f) => ({ ...f, enabled: v }))}
-        >
-          {t('rigctld.enableLabel')}
-        </Switch>
-
-        <div className="grid gap-3 md:grid-cols-2">
-          <Select
-            label={t('rigctld.bindAddressLabel')}
-            selectedKeys={new Set([form.bindMode])}
-            onChange={(e) => {
-              const value = e.target.value as FormState['bindMode'] | '';
-              if (!value) return;
-              setForm((f) => {
-                if (value === 'all') return { ...f, bindMode: 'all', bindAddress: '0.0.0.0' };
-                if (value === 'loopback')
-                  return { ...f, bindMode: 'loopback', bindAddress: '127.0.0.1' };
-                return {
-                  ...f,
-                  bindMode: 'custom',
-                  bindAddress: isBindPreset(f.bindAddress) ? '' : f.bindAddress,
-                };
-              });
-            }}
-            isDisabled={!canEdit || loading}
-          >
-            <SelectItem key="all">{t('rigctld.bindAllInterfaces')}</SelectItem>
-            <SelectItem key="loopback">{t('rigctld.bindLoopback')}</SelectItem>
-            <SelectItem key="custom">{t('rigctld.bindCustom')}</SelectItem>
-          </Select>
-
-          {form.bindMode === 'custom' && (
-            <Input
-              label={t('rigctld.bindAddressCustom')}
-              placeholder={t('rigctld.bindAddressCustomPlaceholder')}
-              value={form.bindAddress}
-              onValueChange={(v) => setForm((f) => ({ ...f, bindAddress: v }))}
+    <SettingsPage
+      title={t('rigctld.title')}
+      description={t('rigctld.description')}
+      actions={(
+        <Chip size="sm" color={running ? 'success' : 'default'} variant="flat">
+          {running ? t('rigctld.statusRunning') : t('rigctld.statusStopped')}
+        </Chip>
+      )}
+    >
+      <SettingsSection>
+        <SettingsRow
+          label={t('rigctld.enableLabel')}
+          control={(
+            <Switch
+              size="sm"
+              isSelected={form.enabled}
               isDisabled={!canEdit || loading}
+              onValueChange={(v) => setForm((f) => ({ ...f, enabled: v }))}
+              aria-label={t('rigctld.enableLabel')}
             />
           )}
+        />
 
-          <Input
-            type="number"
-            label={t('rigctld.portLabel')}
-            min={1}
-            max={65535}
-            value={String(form.port)}
-            onValueChange={(v) => {
-              const n = Number(v);
-              if (Number.isFinite(n)) setForm((f) => ({ ...f, port: n }));
-            }}
-            isDisabled={!canEdit || loading}
-          />
-        </div>
-
-        {bindWarning && form.enabled && (
-          <Alert color="warning" title={t('rigctld.lanExposureTitle')}>
-            {t('rigctld.lanExposureBody')}
-          </Alert>
-        )}
-
-        <div className="rounded-medium border border-divider bg-default-50 px-3 py-3 dark:bg-default-100/5">
-          <Switch
-            isSelected={form.readOnly}
-            isDisabled={!canEdit || loading}
-            onValueChange={(v) => setForm((f) => ({ ...f, readOnly: v }))}
-          >
-            {t('rigctld.readOnlyLabel')}
-          </Switch>
-          <p className="mt-2 text-xs leading-5 text-default-500">
-            {form.readOnly ? t('rigctld.readOnlyOnHint') : t('rigctld.readOnlyOffHint')}
-          </p>
-          {!form.readOnly && form.enabled && (
-            <Alert
-              color="danger"
-              className="mt-3"
-              title={t('rigctld.readOnlyOffDangerTitle')}
+        <SettingsBlock>
+          <div className="grid gap-3 md:grid-cols-2">
+            <Select
+              label={t('rigctld.bindAddressLabel')}
+              selectedKeys={new Set([form.bindMode])}
+              onChange={(e) => {
+                const value = e.target.value as FormState['bindMode'] | '';
+                if (!value) return;
+                setForm((f) => {
+                  if (value === 'all') return { ...f, bindMode: 'all', bindAddress: '0.0.0.0' };
+                  if (value === 'loopback')
+                    return { ...f, bindMode: 'loopback', bindAddress: '127.0.0.1' };
+                  return {
+                    ...f,
+                    bindMode: 'custom',
+                    bindAddress: isBindPreset(f.bindAddress) ? '' : f.bindAddress,
+                  };
+                });
+              }}
+              isDisabled={!canEdit || loading}
             >
-              {t('rigctld.readOnlyOffDangerBody')}
+              <SelectItem key="all">{t('rigctld.bindAllInterfaces')}</SelectItem>
+              <SelectItem key="loopback">{t('rigctld.bindLoopback')}</SelectItem>
+              <SelectItem key="custom">{t('rigctld.bindCustom')}</SelectItem>
+            </Select>
+
+            {form.bindMode === 'custom' && (
+              <Input
+                label={t('rigctld.bindAddressCustom')}
+                placeholder={t('rigctld.bindAddressCustomPlaceholder')}
+                value={form.bindAddress}
+                onValueChange={(v) => setForm((f) => ({ ...f, bindAddress: v }))}
+                isDisabled={!canEdit || loading}
+              />
+            )}
+
+            <Input
+              type="number"
+              label={t('rigctld.portLabel')}
+              min={1}
+              max={65535}
+              value={String(form.port)}
+              onValueChange={(v) => {
+                const n = Number(v);
+                if (Number.isFinite(n)) setForm((f) => ({ ...f, port: n }));
+              }}
+              isDisabled={!canEdit || loading}
+            />
+          </div>
+
+          {bindWarning && form.enabled && (
+            <Alert color="warning" className="mt-3" title={t('rigctld.lanExposureTitle')}>
+              {t('rigctld.lanExposureBody')}
             </Alert>
           )}
-        </div>
+        </SettingsBlock>
 
-        {status?.error && (
-          <Alert color="danger" title={t('rigctld.listenerErrorTitle')}>
-            {status.error}
-          </Alert>
-        )}
-
-        <div className="rounded-medium bg-default-50 px-3 py-3 dark:bg-default-100/5">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-sm font-medium text-default-900">{t('rigctld.clientsTitle')}</p>
-            <Button size="sm" variant="flat" onPress={() => { void refresh(); }} isDisabled={loading}>
-              {t('rigctld.refreshButton')}
-            </Button>
-          </div>
-          {running ? (
-            <p className="text-xs leading-5 text-default-500">
-              {address ? t('rigctld.listeningOn', { host: address.host, port: address.port }) : ''}
-            </p>
-          ) : (
-            <p className="text-xs leading-5 text-default-500">{t('rigctld.notListening')}</p>
+        <SettingsRow
+          label={t('rigctld.readOnlyLabel')}
+          description={form.readOnly ? t('rigctld.readOnlyOnHint') : t('rigctld.readOnlyOffHint')}
+          control={(
+            <Switch
+              size="sm"
+              isSelected={form.readOnly}
+              isDisabled={!canEdit || loading}
+              onValueChange={(v) => setForm((f) => ({ ...f, readOnly: v }))}
+              aria-label={t('rigctld.readOnlyLabel')}
+            />
           )}
+        >
+          {!form.readOnly && form.enabled ? (
+            <Alert color="danger" title={t('rigctld.readOnlyOffDangerTitle')}>
+              {t('rigctld.readOnlyOffDangerBody')}
+            </Alert>
+          ) : undefined}
+        </SettingsRow>
+      </SettingsSection>
+
+      {status?.error && (
+        <Alert color="danger" title={t('rigctld.listenerErrorTitle')}>
+          {status.error}
+        </Alert>
+      )}
+
+      <SettingsSection
+        title={t('rigctld.clientsTitle')}
+        description={running
+          ? (address ? t('rigctld.listeningOn', { host: address.host, port: address.port }) : '')
+          : t('rigctld.notListening')}
+        actions={(
+          <Button size="sm" variant="flat" onPress={() => { void refresh(); }} isDisabled={loading}>
+            {t('rigctld.refreshButton')}
+          </Button>
+        )}
+      >
+        <SettingsBlock>
           {clients.length === 0 ? (
-            <p className="mt-2 text-xs leading-5 text-default-400">{t('rigctld.noClients')}</p>
+            <p className="text-xs leading-5 text-default-500">{t('rigctld.noClients')}</p>
           ) : (
-            <ul className="mt-2 space-y-1 text-xs">
+            <ul className="space-y-2 text-xs">
               {clients.map((c) => (
                 <li key={c.id} className="flex flex-wrap items-center gap-2">
                   <span className="font-mono text-default-700">{c.peer}</span>
@@ -346,22 +347,23 @@ export const RigctldBridgeSettings = forwardRef<
               ))}
             </ul>
           )}
-        </div>
+        </SettingsBlock>
+      </SettingsSection>
 
-        <div className="rounded-medium bg-default-50 px-3 py-3 dark:bg-default-100/5">
-          <p className="text-sm font-medium text-default-900">{t('rigctld.clientSetupTitle')}</p>
-          <ul className="mt-2 list-disc space-y-1 pl-5 text-xs leading-5 text-default-600">
+      <SettingsSection title={t('rigctld.clientSetupTitle')}>
+        <SettingsBlock>
+          <ul className="list-disc space-y-1 pl-5 text-xs leading-5 text-default-500">
             <li>{t('rigctld.clientSetupN1MM')}</li>
             <li>{t('rigctld.clientSetupWsjtx')}</li>
             <li>{t('rigctld.clientSetupDocker')}</li>
           </ul>
-        </div>
+        </SettingsBlock>
+      </SettingsSection>
 
-        {!canEdit && (
-          <p className="text-xs text-default-500">{t('rigctld.insufficientPermission')}</p>
-        )}
-      </CardBody>
-    </Card>
+      {!canEdit && (
+        <p className="text-xs text-default-500">{t('rigctld.insufficientPermission')}</p>
+      )}
+    </SettingsPage>
   );
 });
 

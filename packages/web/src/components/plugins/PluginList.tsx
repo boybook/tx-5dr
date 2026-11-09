@@ -570,7 +570,9 @@ export const PluginCard: React.FC<PluginCardProps> = ({ plugin, selected, onSele
   return (
     <div ref={cardRef} className="w-full">
       <Card
-        className={`w-full transition-all ${selected ? 'ring-2 ring-primary' : ''}`}
+        shadow="none"
+        radius="lg"
+        className={`w-full border bg-content1 transition-colors ${selected ? 'border-primary ring-1 ring-primary' : 'border-divider'}`}
       >
         <CardBody className="py-2 px-3">
           <div className="flex items-center gap-2">

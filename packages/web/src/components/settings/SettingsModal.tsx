@@ -29,6 +29,7 @@ import { AboutPage } from '../../pages/AboutPage';
 import { useHasMinRole, useCan } from '../../store/authStore';
 import { UserRole, type RemoteAccessPreset } from '@tx5dr/contracts';
 import type { PluginSettingsTabRef } from '../plugins/PluginSettingsTab';
+import { SurfaceProvider } from '../common/SurfaceContext';
 
 const PluginSettingsTab = React.lazy(() =>
   import('../plugins/PluginSettingsTab').then(m => ({ default: m.PluginSettingsTab }))
@@ -478,6 +479,11 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
         backdrop="opaque"
         disableAnimation
         classNames={{
+          // Desktop: leave a small margin on narrow windows instead of HeroUI's
+          // large default one, and size the dialog to the window up to a cap.
+          base: isMobile
+            ? undefined
+            : 'sm:mx-3 sm:my-3 w-[calc(100vw-1.5rem)] max-w-5xl h-[min(800px,calc(100dvh-1.5rem))] max-h-[calc(100dvh-1.5rem)]',
           body: `flex flex-col p-0 min-h-0 overflow-hidden ${isMobile || usesModalFooterSave ? 'rounded-none' : 'rounded-b-large'}`,
           header: "border-b border-divider px-3 sm:px-6 py-3 sm:py-4",
           footer: "border-t border-divider px-3 sm:px-6 py-3 sm:py-4",
@@ -492,15 +498,8 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
           </ModalHeader>
           
           <ModalBody>
-            <div
-              className={`min-h-0 ${isMobile ? 'flex flex-1 flex-col' : 'flex flex-1'}`}
-              style={isMobile ? {} : usesModalFooterSave
-                ? { maxHeight: '616px' }
-                : activeTab === 'about'
-                  ? { maxHeight: 'min(689px, calc(100dvh - 213px))' }
-                  : { minHeight: 'min(689px, calc(100dvh - 213px))', maxHeight: 'min(689px, calc(100dvh - 213px))' }
-              }
-            >
+            {/* The dialog has a fixed height; tabs and content fill the body. */}
+            <div className={`min-h-0 ${isMobile ? 'flex flex-1 flex-col' : 'flex flex-1'}`}>
               {/* 标签页菜单 */}
               {/*
                 Mobile layout is a horizontal bar: the wrapper must allow the
@@ -513,7 +512,7 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
                 className={
                   isMobile
                     ? 'min-w-0 w-full px-3 py-2 border-b border-divider'
-                    : 'p-5 min-h-0 overflow-y-auto overflow-x-hidden flex-shrink-0 bg-content1 scrollbar-hide self-start'
+                    : 'py-5 pl-5 pr-0 min-h-0 overflow-y-auto overflow-x-hidden flex-shrink-0 bg-content1 scrollbar-hide self-stretch'
                 }
                 onWheel={isMobile ? (e) => {
                   const tabList = e.currentTarget.querySelector('[role="tablist"]');
@@ -521,11 +520,6 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
                     tabList.scrollLeft += e.deltaY;
                   }
                 } : undefined}
-                style={isMobile ? undefined : {
-                  maxHeight: usesModalFooterSave
-                    ? 'calc(100vh - 286px)'
-                    : 'calc(100vh - 213px)'
-                }}
               >
                 <Tabs
                   selectedKey={activeTab}
@@ -617,9 +611,20 @@ export function SettingsModal({ isOpen, onClose, initialTab, initialFrequencyPre
               </div>
 
               {/* 内容区域 */}
-              <div className="flex-1 min-h-0 overflow-auto">
-                <div className={activeTab === 'about' ? 'min-h-full' : 'min-h-full p-3 sm:p-6 pb-8 sm:pb-10'}>
-                  {renderTabContent()}
+              {/*
+                The plugins tab fills the content height and scrolls its own
+                panes, so the marketplace list and details never nest inside
+                another scrolling page.
+              */}
+              <div className={activeTab === 'plugins' ? 'flex flex-1 min-h-0 flex-col overflow-hidden' : 'flex-1 min-h-0 overflow-auto'}>
+                <div
+                  className={activeTab === 'about'
+                    ? 'min-h-full'
+                    : activeTab === 'plugins'
+                      ? 'flex flex-1 min-h-0 flex-col px-3 pt-3 sm:px-6 sm:pt-4'
+                      : 'min-h-full p-3 sm:p-6 pb-8 sm:pb-10'}
+                >
+                  <SurfaceProvider value="panel">{renderTabContent()}</SurfaceProvider>
                 </div>
               </div>
             </div>

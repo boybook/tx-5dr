@@ -4,8 +4,6 @@ import type { TFunction } from 'i18next';
 import {
   Alert,
   Button,
-  Card,
-  CardBody,
   Input,
   Select,
   SelectItem,
@@ -39,6 +37,7 @@ import { useConnection } from '../../store/radioStore';
 import { useWSEvent } from '../../hooks/useWSEvent';
 import { RemoteAccessSettingsCard } from './RemoteAccessSettingsCard';
 import { applyRemoteAccessPreset, normalizeRemoteAccessOrigins, validateRemoteAccessDraft } from './remoteAccessDraft';
+import { SettingsBlock, SettingsPage, SettingsRow, SettingsSection } from './SettingsLayout';
 
 interface DecodeWindowState {
   decodeDepth: number;
@@ -50,19 +49,13 @@ interface DecodeWindowState {
 
 type RealtimeRuntimeView = NonNullable<RealtimeSettingsResponseData['runtime']>;
 
-const SETTINGS_CARD_CLASS_NAMES = {
-  base: 'border border-divider bg-content1',
-} as const;
 
-const SETTINGS_CARD_BODY_CLASS = 'p-5 space-y-4';
-const SETTINGS_CARD_TITLE_CLASS = 'text-base font-semibold text-default-900';
-const SETTINGS_CARD_DESC_CLASS = 'text-sm leading-6 text-default-600';
 const SETTINGS_SUBTITLE_CLASS = 'text-sm font-medium text-default-900';
 const SETTINGS_SUBDESC_CLASS = 'text-xs leading-5 text-default-500';
 const SETTINGS_MUTED_CLASS = 'text-xs leading-5 text-default-400';
-const SETTINGS_PANEL_CLASS = 'rounded-medium border border-divider bg-default-50 px-3 py-3 dark:bg-default-100/5';
-const SETTINGS_SOFT_PANEL_CLASS = 'rounded-medium bg-default-50 px-3 py-3 dark:bg-default-100/5';
-const SETTINGS_METRIC_CLASS = 'rounded-medium bg-content1 px-3 py-2';
+// Sub-panels inside a section card are tinted, never bordered (no nested cards).
+const SETTINGS_PANEL_CLASS = 'rounded-medium bg-default-50 px-3 py-3 dark:bg-default-100/5';
+const SETTINGS_METRIC_CLASS = 'rounded-medium bg-content1 px-3 py-2 text-sm';
 
 interface NtpServerDraftItem {
   id: string;
@@ -1311,46 +1304,46 @@ export const SystemSettings = forwardRef<
   };
 
   const loggingCard = loggingSettings && (
-    <Card shadow="none" radius="lg" className="order-[10]" classNames={SETTINGS_CARD_CLASS_NAMES}>
-      <CardBody className={SETTINGS_CARD_BODY_CLASS}>
-        <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-          <div className="flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.loggingTitle')}</h4>
-              <Chip size="sm" color="default" variant="flat">
-                {t('system.loggingEffectiveLevel', { level: loggingSettings.effectiveLevel })}
-              </Chip>
-            </div>
-            <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>{t('system.loggingDesc')}</p>
-          </div>
-        </div>
+    <div className="order-[10]">
+      <SettingsSection
+        title={(
+          <span className="flex flex-wrap items-center gap-2">
+            {t('system.loggingTitle')}
+            <Chip size="sm" color="default" variant="flat">
+              {t('system.loggingEffectiveLevel', { level: loggingSettings.effectiveLevel })}
+            </Chip>
+          </span>
+        )}
+        description={t('system.loggingDesc')}
+      >
+        <SettingsBlock>
+          <Select
+            label={t('system.loggingLevel')}
+            selectedKeys={[logLevel]}
+            onSelectionChange={(keys) => {
+              const value = Array.from(keys)[0] as SystemLogLevel | undefined;
+              if (value && LOG_LEVEL_OPTIONS.includes(value)) {
+                setLogLevel(value);
+              }
+            }}
+            isDisabled={isSaving}
+            variant="bordered"
+            className="max-w-md"
+            description={t(`system.loggingLevel${logLevel.charAt(0).toUpperCase()}${logLevel.slice(1)}Desc`)}
+          >
+            {LOG_LEVEL_OPTIONS.map((level) => (
+              <SelectItem key={level} textValue={t(`system.loggingLevel${level.charAt(0).toUpperCase()}${level.slice(1)}`)}>
+                {t(`system.loggingLevel${level.charAt(0).toUpperCase()}${level.slice(1)}`)}
+              </SelectItem>
+            ))}
+          </Select>
+        </SettingsBlock>
 
-        <Select
-          label={t('system.loggingLevel')}
-          selectedKeys={[logLevel]}
-          onSelectionChange={(keys) => {
-            const value = Array.from(keys)[0] as SystemLogLevel | undefined;
-            if (value && LOG_LEVEL_OPTIONS.includes(value)) {
-              setLogLevel(value);
-            }
-          }}
-          isDisabled={isSaving}
-          variant="bordered"
-          className="max-w-md"
-          description={t(`system.loggingLevel${logLevel.charAt(0).toUpperCase()}${logLevel.slice(1)}Desc`)}
-        >
-          {LOG_LEVEL_OPTIONS.map((level) => (
-            <SelectItem key={level} textValue={t(`system.loggingLevel${level.charAt(0).toUpperCase()}${level.slice(1)}`)}>
-              {t(`system.loggingLevel${level.charAt(0).toUpperCase()}${level.slice(1)}`)}
-            </SelectItem>
-          ))}
-        </Select>
-
-        <div className={SETTINGS_PANEL_CLASS}>
+        <SettingsBlock>
           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div className="min-w-0 flex-1">
               <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.loggingPathTitle')}</p>
-              <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.loggingPathDesc')}</p>
+              <p className={`mt-0.5 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.loggingPathDesc')}</p>
               <p className={`mt-2 break-all font-mono ${SETTINGS_SUBDESC_CLASS}`}>{loggingSettings.logsDir}</p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -1374,32 +1367,28 @@ export const SystemSettings = forwardRef<
               )}
             </div>
           </div>
-        </div>
-      </CardBody>
-    </Card>
+        </SettingsBlock>
+      </SettingsSection>
+    </div>
   );
 
   const cpuProfileCard = cpuProfileStatus && (
-    <Card shadow="none" radius="lg" className="order-[11]" classNames={SETTINGS_CARD_CLASS_NAMES}>
-      <CardBody className={SETTINGS_CARD_BODY_CLASS}>
-        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-          <div className="flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <h4 className={SETTINGS_CARD_TITLE_CLASS}>
-                {t('system.cpuProfile.title', 'Performance Diagnostics')}
-              </h4>
-              <Chip size="sm" color={getCpuProfileChipColor(cpuProfileState)} variant="flat">
-                {getCpuProfileStateLabel(cpuProfileState, t)}
-              </Chip>
-            </div>
-            <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>
-              {t(
-                'system.cpuProfile.desc',
-                'If TX5DR feels sluggish, responds slowly, or keeps using a lot of CPU, run a diagnosis and send the result to the developers.',
-              )}
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
+    <div className="order-[11]">
+      <SettingsSection
+        title={(
+          <span className="flex flex-wrap items-center gap-2">
+            {t('system.cpuProfile.title', 'Performance Diagnostics')}
+            <Chip size="sm" color={getCpuProfileChipColor(cpuProfileState)} variant="flat">
+              {getCpuProfileStateLabel(cpuProfileState, t)}
+            </Chip>
+          </span>
+        )}
+        description={t(
+          'system.cpuProfile.desc',
+          'If TX5DR feels sluggish, responds slowly, or keeps using a lot of CPU, run a diagnosis and send the result to the developers.',
+        )}
+        actions={(
+          <>
             {cpuProfileState === 'idle' && (
               <Button
                 size="sm"
@@ -1439,111 +1428,117 @@ export const SystemSettings = forwardRef<
                 {t('system.cpuProfile.dismiss', 'Dismiss Result')}
               </Button>
             )}
-          </div>
-        </div>
-
-        <div className={SETTINGS_SOFT_PANEL_CLASS}>
-          <p className={SETTINGS_SUBTITLE_CLASS}>
-            {t('system.cpuProfile.serverOnlyTitle', 'When to use this')}
-          </p>
-          <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>
-            {t(
-              'system.cpuProfile.serverOnlyDesc',
-              'Use this when sluggishness or high CPU usage can be reproduced. Start the diagnosis, repeat the action that causes the problem, then finish it as prompted.',
-            )}
-          </p>
-        </div>
-
-        {cpuProfileState === 'idle' && (
-          <Alert
-            color="default"
-            variant="flat"
-            title={t('system.cpuProfile.idleTitle', 'Ready to record one slow moment')}
-            description={t(
-              'system.cpuProfile.idleDesc',
-              'Start here, restart TX5DR when prompted, then reproduce the sluggishness or high CPU usage.',
-            )}
-          />
+          </>
         )}
-
-        {cpuProfileState === 'armed' && (
-          <Alert
-            color="warning"
-            variant="flat"
-            title={t('system.cpuProfile.armedTitle', 'Diagnosis will start after restart')}
-            description={t(
-              'system.cpuProfile.armedDesc',
-              'Restart TX5DR normally. After it starts again, TX5DR will record the problem while you reproduce it.',
-            )}
-          />
-        )}
-
-        {cpuProfileState === 'running' && (
-          <Alert
-            color="primary"
-            variant="flat"
-            title={t('system.cpuProfile.runningTitle', 'Recording the problem now')}
-            description={t(
-              'system.cpuProfile.runningDesc',
-              'Reproduce the sluggishness, slow response, or high CPU usage now. When done, use the recommended action below to finish the diagnosis.',
-            )}
-          />
-        )}
-
-        {(cpuProfileState === 'interrupted' || cpuProfileState === 'missing') && (
-          <Alert
-            color="danger"
-            variant="flat"
-            title={t('system.cpuProfile.failedTitle', 'This diagnosis did not produce a usable result')}
-            description={t(
-              'system.cpuProfile.failedDesc',
-              'This usually happens when TX5DR did not close normally. Start again and use the buttons on this page to restart and finish.',
-            )}
-          />
-        )}
-
-        {cpuProfileState === 'env-override' && (
-          <Alert
-            color="warning"
-            variant="flat"
-            title={t('system.cpuProfile.overrideTitle', 'Diagnosis is enabled by external configuration')}
-            description={t(
-              'system.cpuProfile.overrideDesc',
-              'This environment has diagnosis enabled outside the app, so the guided flow on this page is read-only.',
-            )}
-          />
-        )}
-
-        {cpuProfileState === 'completed' && (
-          <Alert
-            color="success"
-            variant="flat"
-            title={t('system.cpuProfile.completedTitle', 'Diagnosis file generated')}
-            description={t(
-              'system.cpuProfile.completedDesc',
-              'Download or copy this file, then include what you were doing, how long the slowdown lasted, and roughly how high CPU usage was when reporting the issue.',
-            )}
-          />
-        )}
-
-        <div className="grid gap-3 md:grid-cols-2">
-          <div className={SETTINGS_PANEL_CLASS}>
-            <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.cpuProfile.runtimeLabel', 'Runtime')}</p>
-            <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{getCpuProfileRuntimeLabel(cpuProfileStatus.distribution, t)}</p>
-          </div>
-          <div className={SETTINGS_PANEL_CLASS}>
-            <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.cpuProfile.outputDirLabel', 'Output directory')}</p>
-            <p className={`mt-1 break-all font-mono ${SETTINGS_SUBDESC_CLASS}`}>{cpuProfileStatus.outputDir}</p>
-            {cpuProfileStatus.hostOutputDirHint && (
-              <p className={`mt-1 break-all font-mono ${SETTINGS_MUTED_CLASS}`}>
-                {t('system.cpuProfile.hostDirHint', 'Host path')}: {cpuProfileStatus.hostOutputDirHint}
+      >
+        <SettingsBlock>
+          <div className="space-y-3">
+            <div>
+              <p className={SETTINGS_SUBTITLE_CLASS}>
+                {t('system.cpuProfile.serverOnlyTitle', 'When to use this')}
               </p>
+              <p className={`mt-0.5 ${SETTINGS_SUBDESC_CLASS}`}>
+                {t(
+                  'system.cpuProfile.serverOnlyDesc',
+                  'Use this when sluggishness or high CPU usage can be reproduced. Start the diagnosis, repeat the action that causes the problem, then finish it as prompted.',
+                )}
+              </p>
+            </div>
+
+            {cpuProfileState === 'idle' && (
+              <Alert
+                color="default"
+                variant="flat"
+                title={t('system.cpuProfile.idleTitle', 'Ready to record one slow moment')}
+                description={t(
+                  'system.cpuProfile.idleDesc',
+                  'Start here, restart TX5DR when prompted, then reproduce the sluggishness or high CPU usage.',
+                )}
+              />
+            )}
+
+            {cpuProfileState === 'armed' && (
+              <Alert
+                color="warning"
+                variant="flat"
+                title={t('system.cpuProfile.armedTitle', 'Diagnosis will start after restart')}
+                description={t(
+                  'system.cpuProfile.armedDesc',
+                  'Restart TX5DR normally. After it starts again, TX5DR will record the problem while you reproduce it.',
+                )}
+              />
+            )}
+
+            {cpuProfileState === 'running' && (
+              <Alert
+                color="primary"
+                variant="flat"
+                title={t('system.cpuProfile.runningTitle', 'Recording the problem now')}
+                description={t(
+                  'system.cpuProfile.runningDesc',
+                  'Reproduce the sluggishness, slow response, or high CPU usage now. When done, use the recommended action below to finish the diagnosis.',
+                )}
+              />
+            )}
+
+            {(cpuProfileState === 'interrupted' || cpuProfileState === 'missing') && (
+              <Alert
+                color="danger"
+                variant="flat"
+                title={t('system.cpuProfile.failedTitle', 'This diagnosis did not produce a usable result')}
+                description={t(
+                  'system.cpuProfile.failedDesc',
+                  'This usually happens when TX5DR did not close normally. Start again and use the buttons on this page to restart and finish.',
+                )}
+              />
+            )}
+
+            {cpuProfileState === 'env-override' && (
+              <Alert
+                color="warning"
+                variant="flat"
+                title={t('system.cpuProfile.overrideTitle', 'Diagnosis is enabled by external configuration')}
+                description={t(
+                  'system.cpuProfile.overrideDesc',
+                  'This environment has diagnosis enabled outside the app, so the guided flow on this page is read-only.',
+                )}
+              />
+            )}
+
+            {cpuProfileState === 'completed' && (
+              <Alert
+                color="success"
+                variant="flat"
+                title={t('system.cpuProfile.completedTitle', 'Diagnosis file generated')}
+                description={t(
+                  'system.cpuProfile.completedDesc',
+                  'Download or copy this file, then include what you were doing, how long the slowdown lasted, and roughly how high CPU usage was when reporting the issue.',
+                )}
+              />
             )}
           </div>
-        </div>
+        </SettingsBlock>
+
+        <SettingsBlock>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className={SETTINGS_PANEL_CLASS}>
+              <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.cpuProfile.runtimeLabel', 'Runtime')}</p>
+              <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{getCpuProfileRuntimeLabel(cpuProfileStatus.distribution, t)}</p>
+            </div>
+            <div className={SETTINGS_PANEL_CLASS}>
+              <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.cpuProfile.outputDirLabel', 'Output directory')}</p>
+              <p className={`mt-1 break-all font-mono ${SETTINGS_SUBDESC_CLASS}`}>{cpuProfileStatus.outputDir}</p>
+              {cpuProfileStatus.hostOutputDirHint && (
+                <p className={`mt-1 break-all font-mono ${SETTINGS_MUTED_CLASS}`}>
+                  {t('system.cpuProfile.hostDirHint', 'Host path')}: {cpuProfileStatus.hostOutputDirHint}
+                </p>
+              )}
+            </div>
+          </div>
+        </SettingsBlock>
 
         {(cpuProfileState === 'armed' || cpuProfileState === 'running') && cpuProfilePrimaryAction && (
-          <div className={SETTINGS_PANEL_CLASS}>
+          <SettingsBlock>
             <p className={SETTINGS_SUBTITLE_CLASS}>
               {cpuProfileState === 'running'
                 ? t('system.cpuProfile.finishActionTitle', 'Recommended way to finish')
@@ -1564,11 +1559,11 @@ export const SystemSettings = forwardRef<
                   : t('system.cpuProfile.restartToStart', 'Restart App and Start Diagnosis')}
               </Button>
             )}
-          </div>
+          </SettingsBlock>
         )}
 
         {cpuProfileState === 'completed' && cpuProfileStatus.profilePath && (
-          <div className={SETTINGS_PANEL_CLASS}>
+          <SettingsBlock>
             <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
               <div className="flex-1">
                 <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.cpuProfile.profilePathLabel', 'Diagnosis file')}</p>
@@ -1610,37 +1605,31 @@ export const SystemSettings = forwardRef<
                 )}
               </div>
             </div>
-          </div>
+          </SettingsBlock>
         )}
 
         {cpuProfileState === 'completed' && (
-          <div className={SETTINGS_PANEL_CLASS}>
+          <SettingsBlock>
             <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.cpuProfile.feedbackTitle', 'When sending feedback, include')}</p>
             <div className={`mt-2 space-y-1 ${SETTINGS_SUBDESC_CLASS}`}>
               <p>{t('system.cpuProfile.feedback1', '1. The diagnosis file generated here.')}</p>
               <p>{t('system.cpuProfile.feedback2', '2. The app version and whether you use Desktop, Docker, or a server deployment.')}</p>
               <p>{t('system.cpuProfile.feedback3', '3. What you were doing when it slowed down and how long it lasted.')}</p>
             </div>
-          </div>
+          </SettingsBlock>
         )}
-      </CardBody>
-    </Card>
+      </SettingsSection>
+    </div>
   );
 
   return (
-    <div className="flex flex-col gap-6">
-      {/* 页面标题和描述 */}
-      <div className="order-0">
-        <h3 className="text-xl font-bold text-default-900 mb-2">{t('system.title')}</h3>
-        <p className="text-default-600">
-          {t('system.description')}
-        </p>
-      </div>
-
+    // Sections keep their CSS `order-*` wrappers: the visual order differs from
+    // the source order, and SettingsPage renders children in one flex column.
+    <SettingsPage title={t('system.title')} description={t('system.description')}>
       {/* 错误提示 */}
       {error && (
-        <div className="order-1 p-3 bg-danger-50 border border-danger-200 rounded-lg">
-          <p className="text-danger-700 text-sm">{error}</p>
+        <div className="order-1 rounded-medium border border-danger-200 bg-danger-50 px-4 py-3">
+          <p className="text-sm text-danger-700">{error}</p>
         </div>
       )}
 
@@ -1651,14 +1640,12 @@ export const SystemSettings = forwardRef<
         onChange={setRemoteAccessSettings}
       />
 
-      <Card shadow="none" radius="lg" className="order-[9]" classNames={SETTINGS_CARD_CLASS_NAMES}>
-        <CardBody className={SETTINGS_CARD_BODY_CLASS}>
-          <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-            <div className="flex-1">
-              <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.ntpTitle')}</h4>
-              <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>{t('system.ntpDesc')}</p>
-            </div>
-            <div className="flex gap-2">
+      <div className="order-[9]">
+        <SettingsSection
+          title={t('system.ntpTitle')}
+          description={t('system.ntpDesc')}
+          actions={(
+            <>
               <Button
                 size="sm"
                 variant="flat"
@@ -1677,857 +1664,889 @@ export const SystemSettings = forwardRef<
               >
                 {t('system.ntpAddServer')}
               </Button>
-            </div>
-          </div>
-
-          <div className={SETTINGS_SOFT_PANEL_CLASS}>
+            </>
+          )}
+        >
+          <SettingsBlock>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
               <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.ntpPriorityTitle')}</p>
               <p className={SETTINGS_SUBDESC_CLASS}>{t('system.ntpPriorityDesc')}</p>
             </div>
-            <p className={`mt-2 ${SETTINGS_MUTED_CLASS}`}>{t('system.ntpPortHint')}</p>
-          </div>
+            <p className={`mt-1 ${SETTINGS_MUTED_CLASS}`}>{t('system.ntpPortHint')}</p>
 
-          <Reorder.Group
-            axis="y"
-            values={ntpServers}
-            onReorder={setNtpServers}
-            className="space-y-2"
-            as="div"
-          >
-            {ntpServers.map((item) => (
-              <NtpServerReorderItem
-                key={item.id}
-                item={item}
-                total={ntpServers.length}
-                isSaving={isSaving}
-                onValueChange={handleNtpServerValueChange}
-                onRemove={handleRemoveNtpServer}
-                t={t}
-              />
-            ))}
-          </Reorder.Group>
-
-        </CardBody>
-      </Card>
+            <Reorder.Group
+              axis="y"
+              values={ntpServers}
+              onReorder={setNtpServers}
+              className="mt-3 space-y-2"
+              as="div"
+            >
+              {ntpServers.map((item) => (
+                <NtpServerReorderItem
+                  key={item.id}
+                  item={item}
+                  total={ntpServers.length}
+                  isSaving={isSaving}
+                  onValueChange={handleNtpServerValueChange}
+                  onRemove={handleRemoveNtpServer}
+                  t={t}
+                />
+              ))}
+            </Reorder.Group>
+          </SettingsBlock>
+        </SettingsSection>
+      </div>
 
       {isElectron && (
-        <details className="order-3 rounded-lg border border-divider bg-content1">
-          <summary className="cursor-pointer list-none px-5 py-4 text-sm font-medium text-default-700">
-            {t('system.desktopHttpsAdvancedTitle')}
-          </summary>
-          <Card shadow="none" radius="none" className="border-0" classNames={SETTINGS_CARD_CLASS_NAMES}>
-          <CardBody className={SETTINGS_CARD_BODY_CLASS}>
-            <div>
-              <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.desktopHttpsTitle')}</h4>
-              <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>{t('system.desktopHttpsDesc')}</p>
-            </div>
-
-            <Alert color="primary" variant="flat" className="text-xs">
-              {t('system.desktopHttpsPurpose')}
-            </Alert>
-
-            <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-              <div className={SETTINGS_PANEL_CLASS}>
-                <p className={SETTINGS_MUTED_CLASS}>01</p>
-                <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopHttpsScenarioDesktopTitle')}</p>
-                <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.desktopHttpsScenarioDesktopDesc')}</p>
-              </div>
-              <div className="rounded-medium border border-primary/20 bg-primary-50/60 px-3 py-3 dark:bg-primary-500/10">
-                <p className={SETTINGS_MUTED_CLASS}>02</p>
-                <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopHttpsScenarioLanTitle')}</p>
-                <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.desktopHttpsScenarioLanDesc')}</p>
-              </div>
-              <div className={SETTINGS_PANEL_CLASS}>
-                <p className={SETTINGS_MUTED_CLASS}>03</p>
-                <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopHttpsScenarioPublicTitle')}</p>
-                <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.desktopHttpsScenarioPublicDesc')}</p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
-              <div className="space-y-4">
-                <div className={`${SETTINGS_PANEL_CLASS} space-y-4`}>
-                  <div className="flex flex-col gap-3 border-b border-divider pb-4 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="space-y-1">
-                      <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopHttpsEnable')}</p>
-                      <p className={SETTINGS_SUBDESC_CLASS}>{t('system.desktopHttpsEnableDesc')}</p>
-                    </div>
-                    <Switch
-                      isSelected={desktopHttpsEnabled}
-                      onValueChange={setDesktopHttpsEnabled}
-                      isDisabled={isSaving || desktopHttpsBusy}
-                    />
+        <div className="order-3">
+          <SettingsSection>
+            <details>
+              <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium text-default-900">
+                {t('system.desktopHttpsAdvancedTitle')}
+              </summary>
+              <div className="divide-y divide-divider border-t border-divider">
+                <SettingsBlock>
+                  <div>
+                    <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopHttpsTitle')}</p>
+                    <p className={`mt-0.5 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.desktopHttpsDesc')}</p>
                   </div>
 
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    <Select
-                      selectedKeys={[desktopHttpsMode]}
-                      onSelectionChange={(keys) => {
-                        const value = Array.from(keys)[0] as DesktopHttpsMode | undefined;
-                        if (value) {
-                          setDesktopHttpsMode(value);
-                          if (value !== 'imported-pem') {
-                            setDesktopHttpsPendingCertPath(null);
-                            setDesktopHttpsPendingKeyPath(null);
-                          }
-                          setError('');
-                        }
-                      }}
-                      isDisabled={isSaving || desktopHttpsBusy}
-                      size="sm"
-                      variant="bordered"
-                      label={t('system.desktopHttpsMode')}
-                    >
-                      <SelectItem key="self-signed">{t('system.desktopHttpsModeSelfSigned')}</SelectItem>
-                      <SelectItem key="imported-pem">{t('system.desktopHttpsModeImported')}</SelectItem>
-                    </Select>
-
-                    <Input
-                      label={t('system.desktopHttpsPort')}
-                      value={desktopHttpsPort}
-                      onValueChange={setDesktopHttpsPort}
-                      isDisabled={isSaving || desktopHttpsBusy}
-                      size="sm"
-                      variant="bordered"
-                      type="number"
-                    />
-                  </div>
-
-                  <div className={`${SETTINGS_SOFT_PANEL_CLASS} space-y-3`}>
-                    <div>
-                      <p className={SETTINGS_SUBTITLE_CLASS}>
-                        {desktopHttpsMode === 'self-signed'
-                          ? t('system.desktopHttpsModeSelfSigned')
-                          : t('system.desktopHttpsModeImported')}
-                      </p>
-                      <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>
-                        {desktopHttpsMode === 'self-signed'
-                          ? t('system.desktopHttpsModeSelfSignedDesc')
-                          : t('system.desktopHttpsModeImportedDesc')}
-                      </p>
-                    </div>
-
-                    {desktopHttpsMode === 'self-signed' ? (
-                      <Alert color="primary" variant="flat" className="text-xs">
-                        {t('system.desktopHttpsSelfSignedAuto')}
-                      </Alert>
-                    ) : (
-                      <div className="space-y-3">
-                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                          <Button
-                            size="sm"
-                            variant={hasDesktopHttpsCertificateFile() ? 'solid' : 'flat'}
-                            color={hasDesktopHttpsCertificateFile() ? 'success' : 'secondary'}
-                            isDisabled={isSaving || desktopHttpsBusy}
-                            startContent={hasDesktopHttpsCertificateFile() ? <FontAwesomeIcon icon={faCheck} /> : undefined}
-                            onPress={() => void handleSelectDesktopCertificateFile()}
-                          >
-                            {hasDesktopHttpsCertificateFile()
-                              ? t('system.desktopHttpsCertSelected')
-                              : t('system.desktopHttpsSelectCertButton')}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant={hasDesktopHttpsPrivateKeyFile() ? 'solid' : 'flat'}
-                            color={hasDesktopHttpsPrivateKeyFile() ? 'success' : 'secondary'}
-                            isLoading={desktopHttpsBusy}
-                            isDisabled={isSaving || desktopHttpsBusy}
-                            startContent={hasDesktopHttpsPrivateKeyFile() ? <FontAwesomeIcon icon={faCheck} /> : undefined}
-                            onPress={() => void handleSelectDesktopCertificateKey()}
-                          >
-                            {hasDesktopHttpsPrivateKeyFile()
-                              ? t('system.desktopHttpsKeySelected')
-                              : t('system.desktopHttpsSelectKeyButton')}
-                          </Button>
-                        </div>
-                        <p className={SETTINGS_SUBDESC_CLASS}>
-                          {t('system.desktopHttpsImportSplitHint')}
-                        </p>
-                        {hasValidImportedDesktopHttpsCertificate() && (
-                          <Alert color="success" variant="flat" className="text-xs">
-                            {t('system.desktopHttpsImportVerified')}
-                          </Alert>
-                        )}
-                        {!hasValidImportedDesktopHttpsCertificate() && hasPartialDesktopHttpsImportDraft() && (
-                          <Alert color="warning" variant="flat" className="text-xs">
-                            {t('system.desktopHttpsImportPartial')}
-                          </Alert>
-                        )}
-                        {requiresImportedDesktopHttpsCertificate() && (
-                          <Alert color="warning" variant="flat" className="text-xs">
-                            {t('system.desktopHttpsImportRequired')}
-                          </Alert>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="border-t border-divider pt-4">
-                    <Switch
-                      isSelected={desktopHttpsRedirectExternalHttp}
-                      onValueChange={setDesktopHttpsRedirectExternalHttp}
-                      isDisabled={isSaving || desktopHttpsBusy}
-                      size="sm"
-                    >
-                      {t('system.desktopHttpsRedirect')}
-                    </Switch>
-                  </div>
-                </div>
-
-                {desktopHttpsMode === 'self-signed' && desktopHttpsStatus?.usingSelfSigned && (
-                  <Alert color="warning" variant="flat" className="text-xs">
-                    {t('system.desktopHttpsSelfSignedLimitations')}
+                  <Alert color="primary" variant="flat" className="mt-3 text-xs">
+                    {t('system.desktopHttpsPurpose')}
                   </Alert>
-                )}
+                </SettingsBlock>
 
-              </div>
-
-              <div className={`${SETTINGS_PANEL_CLASS} space-y-4`}>
-                <div>
-                  <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopHttpsStatusTitle')}</p>
-                  <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.desktopHttpsStatusDesc')}</p>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <Chip size="sm" color={getDesktopHttpsStatusColor(desktopHttpsStatus?.certificateStatus)} variant="flat">
-                    {t(`system.desktopHttpsCertificateStatusValue.${desktopHttpsStatus?.certificateStatus ?? 'missing'}`)}
-                  </Chip>
-                  {desktopHttpsStatus?.usingSelfSigned && (
-                    <Chip size="sm" color="warning" variant="flat">
-                      {t('system.desktopHttpsSelfSignedBadge')}
-                    </Chip>
-                  )}
-                  <Chip size="sm" color={desktopHttpsStatus?.activeScheme === 'https' ? 'success' : 'default'} variant="flat">
-                    {desktopHttpsStatus?.activeScheme?.toUpperCase() || 'HTTP'}
-                  </Chip>
-                </div>
-
-                <div className="space-y-2">
-                  <p className={SETTINGS_SUBDESC_CLASS}>{t('system.desktopHttpsAccessUrl')}</p>
-                  <p className="break-all text-sm text-default-700">
-                    {desktopHttpsBrowserUrl || t('system.desktopHttpsAccessUrlPending')}
-                  </p>
-                  {desktopHttpsStatus && (
-                    <p className={SETTINGS_SUBDESC_CLASS}>
-                      {t('system.desktopHttpsEffectivePorts', {
-                        httpPort: desktopHttpsStatus!.httpPort,
-                        httpsPort: desktopHttpsStatus!.effectiveHttpsPort ?? t('system.desktopHttpsPortInactive'),
-                      })}
-                    </p>
-                  )}
-                  <div className="flex flex-wrap gap-2">
-                    {desktopHttpsStatus?.browserAccessUrl && (
-                      <Button
-                        size="sm"
-                        variant="flat"
-                        startContent={<FontAwesomeIcon icon={desktopHttpsUrlCopied ? faCheck : faCopy} />}
-                        isDisabled={isSaving || desktopHttpsBusy}
-                        onPress={() => void copyDesktopHttpsUrl()}
-                      >
-                        {desktopHttpsUrlCopied ? t('system.desktopHttpsCopied') : t('system.desktopHttpsCopyUrl')}
-                      </Button>
-                    )}
+                <SettingsBlock>
+                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+                    <div className={SETTINGS_PANEL_CLASS}>
+                      <p className={SETTINGS_MUTED_CLASS}>01</p>
+                      <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopHttpsScenarioDesktopTitle')}</p>
+                      <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.desktopHttpsScenarioDesktopDesc')}</p>
+                    </div>
+                    <div className="rounded-medium bg-primary-50/60 px-3 py-3 dark:bg-primary-500/10">
+                      <p className={SETTINGS_MUTED_CLASS}>02</p>
+                      <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopHttpsScenarioLanTitle')}</p>
+                      <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.desktopHttpsScenarioLanDesc')}</p>
+                    </div>
+                    <div className={SETTINGS_PANEL_CLASS}>
+                      <p className={SETTINGS_MUTED_CLASS}>03</p>
+                      <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopHttpsScenarioPublicTitle')}</p>
+                      <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.desktopHttpsScenarioPublicDesc')}</p>
+                    </div>
                   </div>
-                </div>
+                </SettingsBlock>
 
-                <div className={`space-y-2 ${SETTINGS_SUBDESC_CLASS}`}>
-                  <p>{desktopHttpsCertificateMeta?.subject || t('system.desktopHttpsNoCertificate')}</p>
-                  <p>{t('system.desktopHttpsValidTo', { value: formatDateTimeValue(desktopHttpsCertificateMeta?.validTo) })}</p>
-                  <p>{desktopHttpsStatus?.shareUrls?.slice(1).join(' · ') || t('system.desktopHttpsLanHint')}</p>
-                </div>
+                <SettingsBlock>
+                  <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+                    <div className="space-y-4">
+                      <div className={`${SETTINGS_PANEL_CLASS} space-y-4`}>
+                        <div className="flex flex-col gap-3 border-b border-divider pb-4 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="space-y-1">
+                            <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopHttpsEnable')}</p>
+                            <p className={SETTINGS_SUBDESC_CLASS}>{t('system.desktopHttpsEnableDesc')}</p>
+                          </div>
+                          <Switch
+                            isSelected={desktopHttpsEnabled}
+                            onValueChange={setDesktopHttpsEnabled}
+                            isDisabled={isSaving || desktopHttpsBusy}
+                            size="sm"
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                          <Select
+                            selectedKeys={[desktopHttpsMode]}
+                            onSelectionChange={(keys) => {
+                              const value = Array.from(keys)[0] as DesktopHttpsMode | undefined;
+                              if (value) {
+                                setDesktopHttpsMode(value);
+                                if (value !== 'imported-pem') {
+                                  setDesktopHttpsPendingCertPath(null);
+                                  setDesktopHttpsPendingKeyPath(null);
+                                }
+                                setError('');
+                              }
+                            }}
+                            isDisabled={isSaving || desktopHttpsBusy}
+                            size="sm"
+                            variant="bordered"
+                            label={t('system.desktopHttpsMode')}
+                          >
+                            <SelectItem key="self-signed">{t('system.desktopHttpsModeSelfSigned')}</SelectItem>
+                            <SelectItem key="imported-pem">{t('system.desktopHttpsModeImported')}</SelectItem>
+                          </Select>
+
+                          <Input
+                            label={t('system.desktopHttpsPort')}
+                            value={desktopHttpsPort}
+                            onValueChange={setDesktopHttpsPort}
+                            isDisabled={isSaving || desktopHttpsBusy}
+                            size="sm"
+                            variant="bordered"
+                            type="number"
+                          />
+                        </div>
+
+                        <div className="space-y-3 rounded-medium bg-content1 px-3 py-3">
+                          <div>
+                            <p className={SETTINGS_SUBTITLE_CLASS}>
+                              {desktopHttpsMode === 'self-signed'
+                                ? t('system.desktopHttpsModeSelfSigned')
+                                : t('system.desktopHttpsModeImported')}
+                            </p>
+                            <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>
+                              {desktopHttpsMode === 'self-signed'
+                                ? t('system.desktopHttpsModeSelfSignedDesc')
+                                : t('system.desktopHttpsModeImportedDesc')}
+                            </p>
+                          </div>
+
+                          {desktopHttpsMode === 'self-signed' ? (
+                            <Alert color="primary" variant="flat" className="text-xs">
+                              {t('system.desktopHttpsSelfSignedAuto')}
+                            </Alert>
+                          ) : (
+                            <div className="space-y-3">
+                              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                <Button
+                                  size="sm"
+                                  variant={hasDesktopHttpsCertificateFile() ? 'solid' : 'flat'}
+                                  color={hasDesktopHttpsCertificateFile() ? 'success' : 'secondary'}
+                                  isDisabled={isSaving || desktopHttpsBusy}
+                                  startContent={hasDesktopHttpsCertificateFile() ? <FontAwesomeIcon icon={faCheck} /> : undefined}
+                                  onPress={() => void handleSelectDesktopCertificateFile()}
+                                >
+                                  {hasDesktopHttpsCertificateFile()
+                                    ? t('system.desktopHttpsCertSelected')
+                                    : t('system.desktopHttpsSelectCertButton')}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant={hasDesktopHttpsPrivateKeyFile() ? 'solid' : 'flat'}
+                                  color={hasDesktopHttpsPrivateKeyFile() ? 'success' : 'secondary'}
+                                  isLoading={desktopHttpsBusy}
+                                  isDisabled={isSaving || desktopHttpsBusy}
+                                  startContent={hasDesktopHttpsPrivateKeyFile() ? <FontAwesomeIcon icon={faCheck} /> : undefined}
+                                  onPress={() => void handleSelectDesktopCertificateKey()}
+                                >
+                                  {hasDesktopHttpsPrivateKeyFile()
+                                    ? t('system.desktopHttpsKeySelected')
+                                    : t('system.desktopHttpsSelectKeyButton')}
+                                </Button>
+                              </div>
+                              <p className={SETTINGS_SUBDESC_CLASS}>
+                                {t('system.desktopHttpsImportSplitHint')}
+                              </p>
+                              {hasValidImportedDesktopHttpsCertificate() && (
+                                <Alert color="success" variant="flat" className="text-xs">
+                                  {t('system.desktopHttpsImportVerified')}
+                                </Alert>
+                              )}
+                              {!hasValidImportedDesktopHttpsCertificate() && hasPartialDesktopHttpsImportDraft() && (
+                                <Alert color="warning" variant="flat" className="text-xs">
+                                  {t('system.desktopHttpsImportPartial')}
+                                </Alert>
+                              )}
+                              {requiresImportedDesktopHttpsCertificate() && (
+                                <Alert color="warning" variant="flat" className="text-xs">
+                                  {t('system.desktopHttpsImportRequired')}
+                                </Alert>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="border-t border-divider pt-4">
+                          <Switch
+                            isSelected={desktopHttpsRedirectExternalHttp}
+                            onValueChange={setDesktopHttpsRedirectExternalHttp}
+                            isDisabled={isSaving || desktopHttpsBusy}
+                            size="sm"
+                          >
+                            {t('system.desktopHttpsRedirect')}
+                          </Switch>
+                        </div>
+                      </div>
+
+                      {desktopHttpsMode === 'self-signed' && desktopHttpsStatus?.usingSelfSigned && (
+                        <Alert color="warning" variant="flat" className="text-xs">
+                          {t('system.desktopHttpsSelfSignedLimitations')}
+                        </Alert>
+                      )}
+
+                    </div>
+
+                    <div className={`${SETTINGS_PANEL_CLASS} space-y-4`}>
+                      <div>
+                        <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.desktopHttpsStatusTitle')}</p>
+                        <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.desktopHttpsStatusDesc')}</p>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Chip size="sm" color={getDesktopHttpsStatusColor(desktopHttpsStatus?.certificateStatus)} variant="flat">
+                          {t(`system.desktopHttpsCertificateStatusValue.${desktopHttpsStatus?.certificateStatus ?? 'missing'}`)}
+                        </Chip>
+                        {desktopHttpsStatus?.usingSelfSigned && (
+                          <Chip size="sm" color="warning" variant="flat">
+                            {t('system.desktopHttpsSelfSignedBadge')}
+                          </Chip>
+                        )}
+                        <Chip size="sm" color={desktopHttpsStatus?.activeScheme === 'https' ? 'success' : 'default'} variant="flat">
+                          {desktopHttpsStatus?.activeScheme?.toUpperCase() || 'HTTP'}
+                        </Chip>
+                      </div>
+
+                      <div className="space-y-2">
+                        <p className={SETTINGS_SUBDESC_CLASS}>{t('system.desktopHttpsAccessUrl')}</p>
+                        <p className="break-all text-sm text-default-700">
+                          {desktopHttpsBrowserUrl || t('system.desktopHttpsAccessUrlPending')}
+                        </p>
+                        {desktopHttpsStatus && (
+                          <p className={SETTINGS_SUBDESC_CLASS}>
+                            {t('system.desktopHttpsEffectivePorts', {
+                              httpPort: desktopHttpsStatus!.httpPort,
+                              httpsPort: desktopHttpsStatus!.effectiveHttpsPort ?? t('system.desktopHttpsPortInactive'),
+                            })}
+                          </p>
+                        )}
+                        <div className="flex flex-wrap gap-2">
+                          {desktopHttpsStatus?.browserAccessUrl && (
+                            <Button
+                              size="sm"
+                              variant="flat"
+                              startContent={<FontAwesomeIcon icon={desktopHttpsUrlCopied ? faCheck : faCopy} />}
+                              isDisabled={isSaving || desktopHttpsBusy}
+                              onPress={() => void copyDesktopHttpsUrl()}
+                            >
+                              {desktopHttpsUrlCopied ? t('system.desktopHttpsCopied') : t('system.desktopHttpsCopyUrl')}
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className={`space-y-2 ${SETTINGS_SUBDESC_CLASS}`}>
+                        <p>{desktopHttpsCertificateMeta?.subject || t('system.desktopHttpsNoCertificate')}</p>
+                        <p>{t('system.desktopHttpsValidTo', { value: formatDateTimeValue(desktopHttpsCertificateMeta?.validTo) })}</p>
+                        <p>{desktopHttpsStatus?.shareUrls?.slice(1).join(' · ') || t('system.desktopHttpsLanHint')}</p>
+                      </div>
+                    </div>
+                  </div>
+                </SettingsBlock>
               </div>
-            </div>
-          </CardBody>
-          </Card>
-        </details>
+            </details>
+          </SettingsSection>
+        </div>
       )}
 
-      <Card shadow="none" radius="lg" className="order-8" classNames={SETTINGS_CARD_CLASS_NAMES}>
-        <CardBody className={SETTINGS_CARD_BODY_CLASS}>
-          <div>
-            <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.realtimeSettingsCardTitle')}</h4>
-            <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>{t('system.realtimeSettingsCardDesc')}</p>
-          </div>
+      <div className="order-8">
+        <SettingsSection
+          title={t('system.realtimeSettingsCardTitle')}
+          description={t('system.realtimeSettingsCardDesc')}
+        >
+          <SettingsBlock>
+            <div className="space-y-3">
+              <Alert color="default" variant="flat" className="text-xs">
+                {t('system.realtimeSettingsSimpleGuide')}
+              </Alert>
 
-          <Alert color="default" variant="flat" className="text-xs">
-            {t('system.realtimeSettingsSimpleGuide')}
-          </Alert>
-
-          <Alert color="primary" variant="flat" className="text-xs">
-            <p>{t('system.realtimeRtcDataAudioBenefitsTitle')}</p>
-            <p className="mt-1">{t('system.realtimeRtcDataAudioBenefitsDesc')}</p>
-          </Alert>
-
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            <div className={`${SETTINGS_PANEL_CLASS} space-y-3`}>
-              <div>
-                <p className={SETTINGS_MUTED_CLASS}>01</p>
-                <h5 className={SETTINGS_SUBTITLE_CLASS}>{t('system.realtimeBrowserEntryTitle')}</h5>
-                <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.realtimeBrowserEntryDesc')}</p>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Chip size="sm" color="primary" variant="flat">rtc-data-audio</Chip>
-                <Chip
-                  size="sm"
-                  color={(runtimeHints?.signalingUrl || '').startsWith('wss:') ? 'success' : 'default'}
-                  variant="flat"
-                >
-                  {(runtimeHints?.signalingUrl || '').startsWith('wss:') ? 'WSS' : 'WS'}
-                </Chip>
-                <Chip size="sm" color="default" variant="flat">fallback: ws-compat</Chip>
-              </div>
-              <div className="space-y-2">
-                <p className={SETTINGS_SUBDESC_CLASS}>{t('system.realtimeBrowserEntryCurrentLabel')}</p>
-                <code className="block break-all text-xs leading-5 text-default-600">
-                  {runtimeHints?.signalingUrl || t('system.realtimeUrlPending')}
-                </code>
-              </div>
-              <p className={SETTINGS_MUTED_CLASS}>{t('system.realtimeBrowserEntryRtcHint')}</p>
+              <Alert color="primary" variant="flat" className="text-xs">
+                <p>{t('system.realtimeRtcDataAudioBenefitsTitle')}</p>
+                <p className="mt-1">{t('system.realtimeRtcDataAudioBenefitsDesc')}</p>
+              </Alert>
             </div>
+          </SettingsBlock>
 
-            <div className={`${SETTINGS_PANEL_CLASS} space-y-3`}>
-              <div>
-                <p className={SETTINGS_MUTED_CLASS}>02</p>
-                <h5 className={SETTINGS_SUBTITLE_CLASS}>{t('system.realtimeTransportPolicy')}</h5>
-                <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.realtimeTransportPolicyDesc')}</p>
+          <SettingsBlock>
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+              <div className={`${SETTINGS_PANEL_CLASS} space-y-3`}>
+                <div>
+                  <p className={SETTINGS_MUTED_CLASS}>01</p>
+                  <h5 className={SETTINGS_SUBTITLE_CLASS}>{t('system.realtimeBrowserEntryTitle')}</h5>
+                  <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.realtimeBrowserEntryDesc')}</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Chip size="sm" color="primary" variant="flat">rtc-data-audio</Chip>
+                  <Chip
+                    size="sm"
+                    color={(runtimeHints?.signalingUrl || '').startsWith('wss:') ? 'success' : 'default'}
+                    variant="flat"
+                  >
+                    {(runtimeHints?.signalingUrl || '').startsWith('wss:') ? 'WSS' : 'WS'}
+                  </Chip>
+                  <Chip size="sm" color="default" variant="flat">fallback: ws-compat</Chip>
+                </div>
+                <div className="space-y-2">
+                  <p className={SETTINGS_SUBDESC_CLASS}>{t('system.realtimeBrowserEntryCurrentLabel')}</p>
+                  <code className="block break-all text-xs leading-5 text-default-600">
+                    {runtimeHints?.signalingUrl || t('system.realtimeUrlPending')}
+                  </code>
+                </div>
+                <p className={SETTINGS_MUTED_CLASS}>{t('system.realtimeBrowserEntryRtcHint')}</p>
               </div>
-              <Select
-                selectedKeys={[realtimeTransportPolicy]}
-                onSelectionChange={(keys) => {
-                  const value = Array.from(keys)[0] as RealtimeTransportPolicy | undefined;
-                  if (value) {
-                    setRealtimeTransportPolicy(value);
-                  }
-                }}
-                isDisabled={isSaving}
-                size="sm"
-                variant="bordered"
-              >
-                <SelectItem key="auto">{t('system.realtimeTransportPolicyAuto')}</SelectItem>
-                <SelectItem key="force-compat">{t('system.realtimeTransportPolicyCompat')}</SelectItem>
-              </Select>
-              <p className={SETTINGS_MUTED_CLASS}>
-                {realtimeTransportPolicy === 'force-compat'
-                  ? t('system.realtimeTransportPolicyCompatHint')
-                  : t('system.realtimeTransportPolicyAutoHint')}
-              </p>
-            </div>
 
-            <div className={`${SETTINGS_PANEL_CLASS} space-y-3 xl:col-span-2`}>
-              <div>
-                <p className={SETTINGS_MUTED_CLASS}>03</p>
-                <h5 className={SETTINGS_SUBTITLE_CLASS}>{t('system.rtcDataAudioPublicUdpTitle')}</h5>
-                <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.rtcDataAudioPublicUdpDesc')}</p>
-              </div>
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_180px]">
-                <Input
-                  value={rtcDataAudioPublicHost}
-                  onValueChange={setRtcDataAudioPublicHost}
-                  placeholder={t('system.rtcDataAudioPublicHostPlaceholder')}
+              <div className={`${SETTINGS_PANEL_CLASS} space-y-3`}>
+                <div>
+                  <p className={SETTINGS_MUTED_CLASS}>02</p>
+                  <h5 className={SETTINGS_SUBTITLE_CLASS}>{t('system.realtimeTransportPolicy')}</h5>
+                  <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.realtimeTransportPolicyDesc')}</p>
+                </div>
+                <Select
+                  selectedKeys={[realtimeTransportPolicy]}
+                  onSelectionChange={(keys) => {
+                    const value = Array.from(keys)[0] as RealtimeTransportPolicy | undefined;
+                    if (value) {
+                      setRealtimeTransportPolicy(value);
+                    }
+                  }}
                   isDisabled={isSaving}
                   size="sm"
                   variant="bordered"
-                  label={t('system.rtcDataAudioPublicHostLabel')}
-                />
-                <Input
-                  value={rtcDataAudioPublicUdpPort}
-                  onValueChange={setRtcDataAudioPublicUdpPort}
-                  placeholder={String(rtcDataAudioRuntime?.localUdpPort ?? 50110)}
-                  isDisabled={isSaving}
-                  size="sm"
-                  variant="bordered"
-                  type="number"
-                  min={1}
-                  max={65535}
-                  label={t('system.rtcDataAudioPublicUdpPortLabel')}
-                />
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Chip
-                  size="sm"
-                  color={rtcDataAudioRuntime?.publicCandidateEnabled ? 'success' : 'default'}
-                  variant="flat"
                 >
-                  {rtcDataAudioRuntime?.publicCandidateEnabled
-                    ? t('system.rtcDataAudioPublicCandidateEnabled')
-                    : t('system.rtcDataAudioPublicCandidateDisabled')}
-                </Chip>
-                <Chip size="sm" color="primary" variant="flat">
-                  {t('system.rtcDataAudioLocalUdpPort', { port: rtcDataAudioRuntime?.localUdpPort ?? 50110 })}
-                </Chip>
-                <Chip size="sm" color="default" variant="flat">
-                  {t('system.rtcDataAudioPublicEndpoint', { endpoint: rtcPublicEndpointLabel })}
-                </Chip>
-              </div>
-              <p className={SETTINGS_MUTED_CLASS}>
-                {rtcDataAudioRuntime?.publicEndpoint
-                  ? t('system.rtcDataAudioPublicEndpointActive', {
-                      host: rtcDataAudioRuntime.publicEndpoint.host,
-                      port: rtcDataAudioRuntime.publicEndpoint.port,
-                    })
-                  : t('system.rtcDataAudioPublicUdpHint')}
-              </p>
-            </div>
-          </div>
-
-          <Alert color="warning" variant="flat" className="text-xs">
-            <p>{t('system.realtimeFrpHintTitle')}</p>
-            <p className="mt-1">{t('system.realtimeFrpHintDesc')}</p>
-          </Alert>
-
-          <Alert color="default" variant="flat" className="text-xs">
-            {t('system.realtimeRtcDataAudioApplyHint')}
-          </Alert>
-
-          <details className="pt-3 border-t border-divider group">
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 py-1">
-              <div>
-                <h5 className={SETTINGS_SUBTITLE_CLASS}>{t('system.realtimeAdminGuideTitle')}</h5>
-                <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.realtimeAdminGuideDesc')}</p>
-              </div>
-              <Chip size="sm" color="default" variant="flat">{t('system.realtimeAdminOnly')}</Chip>
-            </summary>
-
-            <div className="mt-4 space-y-3">
-              <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
-                <div className={`${SETTINGS_PANEL_CLASS} py-2`}>
-                  <p className={SETTINGS_SUBDESC_CLASS}>{t('system.realtimeCurrentPolicyLabel')}</p>
-                  <div className="mt-2">
-                    <Chip
-                      size="sm"
-                      color={realtimeTransportPolicy === 'force-compat' ? 'warning' : 'primary'}
-                      variant="flat"
-                    >
-                      {realtimeTransportPolicy === 'force-compat'
-                        ? t('system.realtimeTransportPolicyCompat')
-                        : t('system.realtimeTransportPolicyAuto')}
-                    </Chip>
-                  </div>
-                </div>
-
-                <div className={`${SETTINGS_PANEL_CLASS} py-2`}>
-                  <p className={SETTINGS_SUBDESC_CLASS}>{t('system.realtimeCurrentPathLabel')}</p>
-                  <div className="mt-2">
-                    <Chip
-                      size="sm"
-                      color={(realtimeRuntime?.radioReceiveTransport ?? 'ws-compat') === 'rtc-data-audio' ? 'primary' : 'warning'}
-                      variant="flat"
-                    >
-                      {getRealtimeTransportLabel(realtimeRuntime?.radioReceiveTransport ?? null, t)}
-                    </Chip>
-                  </div>
-                  <p className={`mt-2 ${SETTINGS_MUTED_CLASS}`}>{t('system.realtimeCurrentPathHint')}</p>
-                </div>
-
-                <div className={`${SETTINGS_PANEL_CLASS} py-2`}>
-                  <p className={SETTINGS_SUBDESC_CLASS}>{t('system.rtcDataAudioPublicUdpTitle')}</p>
-                  <div className="mt-2">
-                    <Chip
-                      size="sm"
-                      color={rtcDataAudioRuntime?.publicCandidateEnabled ? 'success' : 'default'}
-                      variant="flat"
-                    >
-                      {rtcDataAudioRuntime?.publicCandidateEnabled
-                        ? t('system.rtcDataAudioPublicCandidateEnabled')
-                        : t('system.rtcDataAudioPublicCandidateDisabled')}
-                    </Chip>
-                  </div>
-                  <p className={`mt-2 ${SETTINGS_MUTED_CLASS}`}>{rtcPublicEndpointLabel}</p>
-                </div>
-              </div>
-
-              <div className={SETTINGS_PANEL_CLASS}>
-                <h6 className={SETTINGS_SUBTITLE_CLASS}>{t('system.realtimePortRequirementsTitle')}</h6>
-                <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.realtimePortRequirementsDesc')}</p>
-
-                <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-2">
-                  <div className={`flex items-center justify-between gap-3 ${SETTINGS_METRIC_CLASS}`}>
-                    <span className="text-default-700">{t('system.realtimePortSignaling')}</span>
-                    <code className={SETTINGS_SUBDESC_CLASS}>/api/realtime/rtc-data-audio</code>
-                  </div>
-                  <div className={`flex items-center justify-between gap-3 ${SETTINGS_METRIC_CLASS}`}>
-                    <span className="text-default-700">{t('system.realtimePortUdp')}</span>
-                    <code className={SETTINGS_SUBDESC_CLASS}>{rtcDataAudioRuntime?.localUdpPort ?? 50110}/udp</code>
-                  </div>
-                  <div className={`flex items-center justify-between gap-3 ${SETTINGS_METRIC_CLASS}`}>
-                    <span className="text-default-700">{t('system.rtcDataAudioPublicEndpointLabel')}</span>
-                    <code className={SETTINGS_SUBDESC_CLASS}>{rtcPublicEndpointLabel}</code>
-                  </div>
-                  <div className={`flex items-center justify-between gap-3 ${SETTINGS_METRIC_CLASS}`}>
-                    <span className="text-default-700">{t('system.realtimePortCompat')}</span>
-                    <code className={SETTINGS_SUBDESC_CLASS}>{t('system.realtimeCompatEndpointValue')}</code>
-                  </div>
-                  <div className={`${SETTINGS_METRIC_CLASS} lg:col-span-2`}>
-                    <p className={SETTINGS_SUBDESC_CLASS}>{t('system.realtimeEffectiveUrlLabel')}</p>
-                    <code className="mt-1 block break-all text-xs leading-5 text-default-600">
-                      {runtimeHints?.signalingUrl || t('system.realtimeUrlPending')}
-                    </code>
-                  </div>
-                </div>
-
-                <div className={`mt-3 space-y-1 ${SETTINGS_SUBDESC_CLASS}`}>
-                  <p>{t('system.realtimePortHintRtcDataAudio')}</p>
-                  <p>{t('system.realtimePortHintCompat')}</p>
-                  <p>{t('system.realtimePortHintFallback')}</p>
-                </div>
-              </div>
-            </div>
-          </details>
-        </CardBody>
-      </Card>
-
-      {/* 发射时解码设置 */}
-      <Card shadow="none" radius="lg" className="order-4" classNames={SETTINGS_CARD_CLASS_NAMES}>
-        <CardBody className={SETTINGS_CARD_BODY_CLASS}>
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex-1">
-              <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.decodeWhileTransmitting')}</h4>
-              <div className={`${SETTINGS_CARD_DESC_CLASS} mt-1 space-y-1`}>
-                <p>
-                  <strong>{t('system.off')}（{t('system.recommended')}）</strong>：{t('system.decodeWhileTransmittingOffDesc')}
-                </p>
-                <p>
-                  <strong>{t('system.on')}（{t('system.advanced')}）</strong>：{t('system.decodeWhileTransmittingOnDesc')}
+                  <SelectItem key="auto">{t('system.realtimeTransportPolicyAuto')}</SelectItem>
+                  <SelectItem key="force-compat">{t('system.realtimeTransportPolicyCompat')}</SelectItem>
+                </Select>
+                <p className={SETTINGS_MUTED_CLASS}>
+                  {realtimeTransportPolicy === 'force-compat'
+                    ? t('system.realtimeTransportPolicyCompatHint')
+                    : t('system.realtimeTransportPolicyAutoHint')}
                 </p>
               </div>
-            </div>
-            <Switch
-              isSelected={decodeWhileTransmitting}
-              onValueChange={setDecodeWhileTransmitting}
-              isDisabled={isSaving}
-              size="lg"
-              color={decodeWhileTransmitting ? 'warning' : 'success'}
-            />
-          </div>
-        </CardBody>
-      </Card>
 
-      {/* 连续相同发射兜底 */}
-      <Card shadow="none" radius="lg" className="order-2" classNames={SETTINGS_CARD_CLASS_NAMES}>
-        <CardBody className={SETTINGS_CARD_BODY_CLASS}>
-          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-            <div className="flex-1">
-              <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.maxSameTransmissionCount')}</h4>
-              <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>
-                {t('system.maxSameTransmissionCountDesc')}
-              </p>
-            </div>
-            <Input
-              type="number"
-              min={MIN_MAX_SAME_TRANSMISSION_COUNT}
-              max={MAX_MAX_SAME_TRANSMISSION_COUNT}
-              step={1}
-              value={maxSameTransmissionCountDraft}
-              onValueChange={handleMaxSameTransmissionCountChange}
-              onBlur={commitMaxSameTransmissionCountDraft}
-              isDisabled={isSaving}
-              label={t('system.maxSameTransmissionCountField')}
-              description={t('system.maxSameTransmissionCountHint')}
-              className="w-full md:w-72"
-              variant="bordered"
-            />
-          </div>
-        </CardBody>
-      </Card>
-
-      {/* 发射时频谱分析设置 */}
-      <Card shadow="none" radius="lg" className="order-7" classNames={SETTINGS_CARD_CLASS_NAMES}>
-        <CardBody className={SETTINGS_CARD_BODY_CLASS}>
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex-1">
-              <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.spectrumWhileTransmitting')}</h4>
-              <div className={`${SETTINGS_CARD_DESC_CLASS} mt-1 space-y-1`}>
-                <p>
-                  <strong>{t('system.on')}（{t('system.recommended')}）</strong>：{t('system.spectrumWhileTransmittingOnDesc')}
-                </p>
-                <p>
-                  <strong>{t('system.off')}</strong>：{t('system.spectrumWhileTransmittingOffDesc')}
-                </p>
-              </div>
-            </div>
-            <Switch
-              isSelected={spectrumWhileTransmitting}
-              onValueChange={setSpectrumWhileTransmitting}
-              isDisabled={isSaving}
-              size="lg"
-              color={spectrumWhileTransmitting ? 'success' : 'warning'}
-            />
-          </div>
-        </CardBody>
-      </Card>
-
-      {/* 解码窗口设置 */}
-      <Card shadow="none" radius="lg" className="order-6" classNames={SETTINGS_CARD_CLASS_NAMES}>
-        <CardBody className={SETTINGS_CARD_BODY_CLASS}>
-          <div>
-            <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.decodeWindowTitle')}</h4>
-            <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>{t('system.decodeWindowDesc')}</p>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <Select
-              label={t('system.decodeDepth')}
-              selectedKeys={[String(decodeWindowState.decodeDepth)]}
-              onSelectionChange={(keys) => {
-                const value = Number(Array.from(keys)[0]);
-                if (Number.isInteger(value) && value >= 1 && value <= 3) {
-                  setDecodeWindowState(prev => ({ ...prev, decodeDepth: value }));
-                }
-              }}
-              isDisabled={isSaving}
-              variant="bordered"
-              className="flex-1"
-            >
-              <SelectItem key="1" textValue={t('system.decodeDepthFast')}>{t('system.decodeDepthFast')}</SelectItem>
-              <SelectItem key="2" textValue={t('system.decodeDepthNormal')}>{t('system.decodeDepthNormal')}</SelectItem>
-              <SelectItem key="3" textValue={t('system.decodeDepthDeep')}>{t('system.decodeDepthDeep')}</SelectItem>
-            </Select>
-          </div>
-
-          {/* FT8 解码策略 */}
-          <div className="space-y-2">
-            <div className="flex items-center gap-3">
-              <Select
-                label={t('system.ft8DecodeWindow')}
-                selectedKeys={[decodeWindowState.ft8Preset]}
-                onSelectionChange={(keys) => {
-                  const value = Array.from(keys)[0] as string;
-                  if (value) {
-                    setDecodeWindowState(prev => ({
-                      ...prev,
-                      ft8Preset: value,
-                      ft8CustomWindows: value === 'custom'
-                        ? prev.ft8CustomWindows
-                        : FT8_WINDOW_PRESETS[value] ?? prev.ft8CustomWindows,
-                    }));
-                  }
-                }}
-                isDisabled={isSaving}
-                variant="bordered"
-                className="flex-1"
-              >
-                <SelectItem key="maximum" textValue={t('system.presetMaximum')}>{t('system.presetMaximum')}</SelectItem>
-                <SelectItem key="balanced" textValue={`${t('system.presetBalanced')}${t('system.presetDefault')}`}>{t('system.presetBalanced')}{t('system.presetDefault')}</SelectItem>
-                <SelectItem key="lightweight" textValue={t('system.presetLightweight')}>{t('system.presetLightweight')}</SelectItem>
-                <SelectItem key="minimum" textValue={t('system.presetMinimum')}>{t('system.presetMinimum')}</SelectItem>
-                <SelectItem key="custom" textValue={t('system.presetCustom')}>{t('system.presetCustom')}</SelectItem>
-              </Select>
-            </div>
-            {(() => {
-              const count = getWindowCount(decodeWindowState.ft8Preset, decodeWindowState.ft8CustomWindows, FT8_WINDOW_PRESETS);
-              const cpuInfo = getCpuLoadInfo(count, t);
-              return (
-                <div className="flex items-center gap-2 text-sm text-default-500">
-                  <span>{t('system.decodesPerSlot', { count })}</span>
-                  <Chip size="sm" color={cpuInfo.color} variant="flat">{cpuInfo.label}</Chip>
+              <div className={`${SETTINGS_PANEL_CLASS} space-y-3 xl:col-span-2`}>
+                <div>
+                  <p className={SETTINGS_MUTED_CLASS}>03</p>
+                  <h5 className={SETTINGS_SUBTITLE_CLASS}>{t('system.rtcDataAudioPublicUdpTitle')}</h5>
+                  <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.rtcDataAudioPublicUdpDesc')}</p>
                 </div>
-              );
-            })()}
-          </div>
-
-          {/* FT4 解码策略 */}
-          <div className="space-y-2">
-            <div className="flex items-center gap-3">
-              <Select
-                label={t('system.ft4DecodeWindow')}
-                selectedKeys={[decodeWindowState.ft4Preset]}
-                onSelectionChange={(keys) => {
-                  const value = Array.from(keys)[0] as string;
-                  if (value) {
-                    setDecodeWindowState(prev => ({
-                      ...prev,
-                      ft4Preset: value,
-                      ft4CustomWindows: value === 'custom'
-                        ? prev.ft4CustomWindows
-                        : FT4_WINDOW_PRESETS[value] ?? prev.ft4CustomWindows,
-                    }));
-                  }
-                }}
-                isDisabled={isSaving}
-                variant="bordered"
-                className="flex-1"
-              >
-                <SelectItem key="maximum" textValue={t('system.presetMaximum')}>{t('system.presetMaximum')}</SelectItem>
-                <SelectItem key="balanced" textValue={`${t('system.presetBalanced')}${t('system.presetDefault')}`}>{t('system.presetBalanced')}{t('system.presetDefault')}</SelectItem>
-                <SelectItem key="custom" textValue={t('system.presetCustom')}>{t('system.presetCustom')}</SelectItem>
-              </Select>
-            </div>
-            {(() => {
-              const count = getWindowCount(decodeWindowState.ft4Preset, decodeWindowState.ft4CustomWindows, FT4_WINDOW_PRESETS);
-              const cpuInfo = getCpuLoadInfo(count, t);
-              return (
-                <div className="flex items-center gap-2 text-sm text-default-500">
-                  <span>{t('system.decodesPerSlot', { count })}</span>
-                  <Chip size="sm" color={cpuInfo.color} variant="flat">{cpuInfo.label}</Chip>
-                </div>
-              );
-            })()}
-          </div>
-
-          {/* FT8 自定义编辑区 */}
-          {decodeWindowState.ft8Preset === 'custom' && (
-            <div className={`${SETTINGS_PANEL_CLASS} space-y-2`}>
-              <p className={SETTINGS_SUBTITLE_CLASS}>FT8 {t('system.presetCustom')}</p>
-              {decodeWindowState.ft8CustomWindows.map((offset, idx) => (
-                <div key={idx} className="flex items-center gap-2">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_180px]">
                   <Input
-                    label={t('system.windowOffset', { idx: idx + 1 })}
-                    type="number"
-                    value={String(offset)}
-                    onValueChange={(v) => {
-                      const val = parseInt(v) || 0;
-                      setDecodeWindowState(prev => {
-                        const windows = [...prev.ft8CustomWindows];
-                        windows[idx] = Math.max(-2000, Math.min(1000, val));
-                        return { ...prev, ft8CustomWindows: windows };
-                      });
-                    }}
+                    value={rtcDataAudioPublicHost}
+                    onValueChange={setRtcDataAudioPublicHost}
+                    placeholder={t('system.rtcDataAudioPublicHostPlaceholder')}
                     isDisabled={isSaving}
                     size="sm"
                     variant="bordered"
-                    className="flex-1"
-                    endContent={<span className="text-xs text-default-400">{t('system.offsetUnit')}</span>}
+                    label={t('system.rtcDataAudioPublicHostLabel')}
                   />
+                  <Input
+                    value={rtcDataAudioPublicUdpPort}
+                    onValueChange={setRtcDataAudioPublicUdpPort}
+                    placeholder={String(rtcDataAudioRuntime?.localUdpPort ?? 50110)}
+                    isDisabled={isSaving}
+                    size="sm"
+                    variant="bordered"
+                    type="number"
+                    min={1}
+                    max={65535}
+                    label={t('system.rtcDataAudioPublicUdpPortLabel')}
+                  />
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Chip
+                    size="sm"
+                    color={rtcDataAudioRuntime?.publicCandidateEnabled ? 'success' : 'default'}
+                    variant="flat"
+                  >
+                    {rtcDataAudioRuntime?.publicCandidateEnabled
+                      ? t('system.rtcDataAudioPublicCandidateEnabled')
+                      : t('system.rtcDataAudioPublicCandidateDisabled')}
+                  </Chip>
+                  <Chip size="sm" color="primary" variant="flat">
+                    {t('system.rtcDataAudioLocalUdpPort', { port: rtcDataAudioRuntime?.localUdpPort ?? 50110 })}
+                  </Chip>
+                  <Chip size="sm" color="default" variant="flat">
+                    {t('system.rtcDataAudioPublicEndpoint', { endpoint: rtcPublicEndpointLabel })}
+                  </Chip>
+                </div>
+                <p className={SETTINGS_MUTED_CLASS}>
+                  {rtcDataAudioRuntime?.publicEndpoint
+                    ? t('system.rtcDataAudioPublicEndpointActive', {
+                        host: rtcDataAudioRuntime.publicEndpoint.host,
+                        port: rtcDataAudioRuntime.publicEndpoint.port,
+                      })
+                    : t('system.rtcDataAudioPublicUdpHint')}
+                </p>
+              </div>
+            </div>
+          </SettingsBlock>
+
+          <SettingsBlock>
+            <div className="space-y-3">
+              <Alert color="warning" variant="flat" className="text-xs">
+                <p>{t('system.realtimeFrpHintTitle')}</p>
+                <p className="mt-1">{t('system.realtimeFrpHintDesc')}</p>
+              </Alert>
+
+              <Alert color="default" variant="flat" className="text-xs">
+                {t('system.realtimeRtcDataAudioApplyHint')}
+              </Alert>
+            </div>
+          </SettingsBlock>
+
+          <SettingsBlock>
+            <details className="group">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 py-1">
+                <div>
+                  <h5 className={SETTINGS_SUBTITLE_CLASS}>{t('system.realtimeAdminGuideTitle')}</h5>
+                  <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.realtimeAdminGuideDesc')}</p>
+                </div>
+                <Chip size="sm" color="default" variant="flat">{t('system.realtimeAdminOnly')}</Chip>
+              </summary>
+
+              <div className="mt-4 space-y-3">
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
+                  <div className={`${SETTINGS_PANEL_CLASS} py-2`}>
+                    <p className={SETTINGS_SUBDESC_CLASS}>{t('system.realtimeCurrentPolicyLabel')}</p>
+                    <div className="mt-2">
+                      <Chip
+                        size="sm"
+                        color={realtimeTransportPolicy === 'force-compat' ? 'warning' : 'primary'}
+                        variant="flat"
+                      >
+                        {realtimeTransportPolicy === 'force-compat'
+                          ? t('system.realtimeTransportPolicyCompat')
+                          : t('system.realtimeTransportPolicyAuto')}
+                      </Chip>
+                    </div>
+                  </div>
+
+                  <div className={`${SETTINGS_PANEL_CLASS} py-2`}>
+                    <p className={SETTINGS_SUBDESC_CLASS}>{t('system.realtimeCurrentPathLabel')}</p>
+                    <div className="mt-2">
+                      <Chip
+                        size="sm"
+                        color={(realtimeRuntime?.radioReceiveTransport ?? 'ws-compat') === 'rtc-data-audio' ? 'primary' : 'warning'}
+                        variant="flat"
+                      >
+                        {getRealtimeTransportLabel(realtimeRuntime?.radioReceiveTransport ?? null, t)}
+                      </Chip>
+                    </div>
+                    <p className={`mt-2 ${SETTINGS_MUTED_CLASS}`}>{t('system.realtimeCurrentPathHint')}</p>
+                  </div>
+
+                  <div className={`${SETTINGS_PANEL_CLASS} py-2`}>
+                    <p className={SETTINGS_SUBDESC_CLASS}>{t('system.rtcDataAudioPublicUdpTitle')}</p>
+                    <div className="mt-2">
+                      <Chip
+                        size="sm"
+                        color={rtcDataAudioRuntime?.publicCandidateEnabled ? 'success' : 'default'}
+                        variant="flat"
+                      >
+                        {rtcDataAudioRuntime?.publicCandidateEnabled
+                          ? t('system.rtcDataAudioPublicCandidateEnabled')
+                          : t('system.rtcDataAudioPublicCandidateDisabled')}
+                      </Chip>
+                    </div>
+                    <p className={`mt-2 ${SETTINGS_MUTED_CLASS}`}>{rtcPublicEndpointLabel}</p>
+                  </div>
+                </div>
+
+                <div className={SETTINGS_PANEL_CLASS}>
+                  <h6 className={SETTINGS_SUBTITLE_CLASS}>{t('system.realtimePortRequirementsTitle')}</h6>
+                  <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.realtimePortRequirementsDesc')}</p>
+
+                  <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-2">
+                    <div className={`flex items-center justify-between gap-3 ${SETTINGS_METRIC_CLASS}`}>
+                      <span className="text-default-700">{t('system.realtimePortSignaling')}</span>
+                      <code className={SETTINGS_SUBDESC_CLASS}>/api/realtime/rtc-data-audio</code>
+                    </div>
+                    <div className={`flex items-center justify-between gap-3 ${SETTINGS_METRIC_CLASS}`}>
+                      <span className="text-default-700">{t('system.realtimePortUdp')}</span>
+                      <code className={SETTINGS_SUBDESC_CLASS}>{rtcDataAudioRuntime?.localUdpPort ?? 50110}/udp</code>
+                    </div>
+                    <div className={`flex items-center justify-between gap-3 ${SETTINGS_METRIC_CLASS}`}>
+                      <span className="text-default-700">{t('system.rtcDataAudioPublicEndpointLabel')}</span>
+                      <code className={SETTINGS_SUBDESC_CLASS}>{rtcPublicEndpointLabel}</code>
+                    </div>
+                    <div className={`flex items-center justify-between gap-3 ${SETTINGS_METRIC_CLASS}`}>
+                      <span className="text-default-700">{t('system.realtimePortCompat')}</span>
+                      <code className={SETTINGS_SUBDESC_CLASS}>{t('system.realtimeCompatEndpointValue')}</code>
+                    </div>
+                    <div className={`${SETTINGS_METRIC_CLASS} lg:col-span-2`}>
+                      <p className={SETTINGS_SUBDESC_CLASS}>{t('system.realtimeEffectiveUrlLabel')}</p>
+                      <code className="mt-1 block break-all text-xs leading-5 text-default-600">
+                        {runtimeHints?.signalingUrl || t('system.realtimeUrlPending')}
+                      </code>
+                    </div>
+                  </div>
+
+                  <div className={`mt-3 space-y-1 ${SETTINGS_SUBDESC_CLASS}`}>
+                    <p>{t('system.realtimePortHintRtcDataAudio')}</p>
+                    <p>{t('system.realtimePortHintCompat')}</p>
+                    <p>{t('system.realtimePortHintFallback')}</p>
+                  </div>
+                </div>
+              </div>
+            </details>
+          </SettingsBlock>
+        </SettingsSection>
+      </div>
+
+      {/* 发射时解码设置 */}
+      <div className="order-4">
+        <SettingsSection>
+          <SettingsRow
+            label={t('system.decodeWhileTransmitting')}
+            description={(
+              <>
+                <span className="block">
+                  <strong className="font-medium text-default-700">{t('system.off')}（{t('system.recommended')}）</strong>：{t('system.decodeWhileTransmittingOffDesc')}
+                </span>
+                <span className="mt-1 block">
+                  <strong className="font-medium text-default-700">{t('system.on')}（{t('system.advanced')}）</strong>：{t('system.decodeWhileTransmittingOnDesc')}
+                </span>
+              </>
+            )}
+            control={(
+              <Switch
+                isSelected={decodeWhileTransmitting}
+                onValueChange={setDecodeWhileTransmitting}
+                isDisabled={isSaving}
+                size="sm"
+                color={decodeWhileTransmitting ? 'warning' : 'success'}
+              />
+            )}
+          />
+        </SettingsSection>
+      </div>
+
+      {/* 连续相同发射兜底 */}
+      <div className="order-2">
+        <SettingsSection>
+          <SettingsBlock>
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium text-default-900">{t('system.maxSameTransmissionCount')}</p>
+                <p className={`mt-0.5 ${SETTINGS_SUBDESC_CLASS}`}>
+                  {t('system.maxSameTransmissionCountDesc')}
+                </p>
+              </div>
+              <Input
+                type="number"
+                min={MIN_MAX_SAME_TRANSMISSION_COUNT}
+                max={MAX_MAX_SAME_TRANSMISSION_COUNT}
+                step={1}
+                value={maxSameTransmissionCountDraft}
+                onValueChange={handleMaxSameTransmissionCountChange}
+                onBlur={commitMaxSameTransmissionCountDraft}
+                isDisabled={isSaving}
+                label={t('system.maxSameTransmissionCountField')}
+                description={t('system.maxSameTransmissionCountHint')}
+                className="w-full md:w-72"
+                variant="bordered"
+              />
+            </div>
+          </SettingsBlock>
+        </SettingsSection>
+      </div>
+
+      {/* 发射时频谱分析设置 */}
+      <div className="order-7">
+        <SettingsSection>
+          <SettingsRow
+            label={t('system.spectrumWhileTransmitting')}
+            description={(
+              <>
+                <span className="block">
+                  <strong className="font-medium text-default-700">{t('system.on')}（{t('system.recommended')}）</strong>：{t('system.spectrumWhileTransmittingOnDesc')}
+                </span>
+                <span className="mt-1 block">
+                  <strong className="font-medium text-default-700">{t('system.off')}</strong>：{t('system.spectrumWhileTransmittingOffDesc')}
+                </span>
+              </>
+            )}
+            control={(
+              <Switch
+                isSelected={spectrumWhileTransmitting}
+                onValueChange={setSpectrumWhileTransmitting}
+                isDisabled={isSaving}
+                size="sm"
+                color={spectrumWhileTransmitting ? 'success' : 'warning'}
+              />
+            )}
+          />
+        </SettingsSection>
+      </div>
+
+      {/* 解码窗口设置 */}
+      <div className="order-6">
+        <SettingsSection
+          title={t('system.decodeWindowTitle')}
+          description={t('system.decodeWindowDesc')}
+        >
+          <SettingsBlock>
+            <div className="flex items-center gap-3">
+              <Select
+                label={t('system.decodeDepth')}
+                selectedKeys={[String(decodeWindowState.decodeDepth)]}
+                onSelectionChange={(keys) => {
+                  const value = Number(Array.from(keys)[0]);
+                  if (Number.isInteger(value) && value >= 1 && value <= 3) {
+                    setDecodeWindowState(prev => ({ ...prev, decodeDepth: value }));
+                  }
+                }}
+                isDisabled={isSaving}
+                variant="bordered"
+                className="flex-1"
+              >
+                <SelectItem key="1" textValue={t('system.decodeDepthFast')}>{t('system.decodeDepthFast')}</SelectItem>
+                <SelectItem key="2" textValue={t('system.decodeDepthNormal')}>{t('system.decodeDepthNormal')}</SelectItem>
+                <SelectItem key="3" textValue={t('system.decodeDepthDeep')}>{t('system.decodeDepthDeep')}</SelectItem>
+              </Select>
+            </div>
+          </SettingsBlock>
+
+          {/* FT8 解码策略 */}
+          <SettingsBlock>
+            <div className="space-y-2">
+              <div className="flex items-center gap-3">
+                <Select
+                  label={t('system.ft8DecodeWindow')}
+                  selectedKeys={[decodeWindowState.ft8Preset]}
+                  onSelectionChange={(keys) => {
+                    const value = Array.from(keys)[0] as string;
+                    if (value) {
+                      setDecodeWindowState(prev => ({
+                        ...prev,
+                        ft8Preset: value,
+                        ft8CustomWindows: value === 'custom'
+                          ? prev.ft8CustomWindows
+                          : FT8_WINDOW_PRESETS[value] ?? prev.ft8CustomWindows,
+                      }));
+                    }
+                  }}
+                  isDisabled={isSaving}
+                  variant="bordered"
+                  className="flex-1"
+                >
+                  <SelectItem key="maximum" textValue={t('system.presetMaximum')}>{t('system.presetMaximum')}</SelectItem>
+                  <SelectItem key="balanced" textValue={`${t('system.presetBalanced')}${t('system.presetDefault')}`}>{t('system.presetBalanced')}{t('system.presetDefault')}</SelectItem>
+                  <SelectItem key="lightweight" textValue={t('system.presetLightweight')}>{t('system.presetLightweight')}</SelectItem>
+                  <SelectItem key="minimum" textValue={t('system.presetMinimum')}>{t('system.presetMinimum')}</SelectItem>
+                  <SelectItem key="custom" textValue={t('system.presetCustom')}>{t('system.presetCustom')}</SelectItem>
+                </Select>
+              </div>
+              {(() => {
+                const count = getWindowCount(decodeWindowState.ft8Preset, decodeWindowState.ft8CustomWindows, FT8_WINDOW_PRESETS);
+                const cpuInfo = getCpuLoadInfo(count, t);
+                return (
+                  <div className="flex items-center gap-2 text-xs text-default-500">
+                    <span>{t('system.decodesPerSlot', { count })}</span>
+                    <Chip size="sm" color={cpuInfo.color} variant="flat">{cpuInfo.label}</Chip>
+                  </div>
+                );
+              })()}
+            </div>
+          </SettingsBlock>
+
+          {/* FT4 解码策略 */}
+          <SettingsBlock>
+            <div className="space-y-2">
+              <div className="flex items-center gap-3">
+                <Select
+                  label={t('system.ft4DecodeWindow')}
+                  selectedKeys={[decodeWindowState.ft4Preset]}
+                  onSelectionChange={(keys) => {
+                    const value = Array.from(keys)[0] as string;
+                    if (value) {
+                      setDecodeWindowState(prev => ({
+                        ...prev,
+                        ft4Preset: value,
+                        ft4CustomWindows: value === 'custom'
+                          ? prev.ft4CustomWindows
+                          : FT4_WINDOW_PRESETS[value] ?? prev.ft4CustomWindows,
+                      }));
+                    }
+                  }}
+                  isDisabled={isSaving}
+                  variant="bordered"
+                  className="flex-1"
+                >
+                  <SelectItem key="maximum" textValue={t('system.presetMaximum')}>{t('system.presetMaximum')}</SelectItem>
+                  <SelectItem key="balanced" textValue={`${t('system.presetBalanced')}${t('system.presetDefault')}`}>{t('system.presetBalanced')}{t('system.presetDefault')}</SelectItem>
+                  <SelectItem key="custom" textValue={t('system.presetCustom')}>{t('system.presetCustom')}</SelectItem>
+                </Select>
+              </div>
+              {(() => {
+                const count = getWindowCount(decodeWindowState.ft4Preset, decodeWindowState.ft4CustomWindows, FT4_WINDOW_PRESETS);
+                const cpuInfo = getCpuLoadInfo(count, t);
+                return (
+                  <div className="flex items-center gap-2 text-xs text-default-500">
+                    <span>{t('system.decodesPerSlot', { count })}</span>
+                    <Chip size="sm" color={cpuInfo.color} variant="flat">{cpuInfo.label}</Chip>
+                  </div>
+                );
+              })()}
+            </div>
+          </SettingsBlock>
+
+          {/* FT8 自定义编辑区 */}
+          {decodeWindowState.ft8Preset === 'custom' && (
+            <SettingsBlock>
+              <div className="space-y-2">
+                <p className={SETTINGS_SUBTITLE_CLASS}>FT8 {t('system.presetCustom')}</p>
+                {decodeWindowState.ft8CustomWindows.map((offset, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <Input
+                      label={t('system.windowOffset', { idx: idx + 1 })}
+                      type="number"
+                      value={String(offset)}
+                      onValueChange={(v) => {
+                        const val = parseInt(v) || 0;
+                        setDecodeWindowState(prev => {
+                          const windows = [...prev.ft8CustomWindows];
+                          windows[idx] = Math.max(-2000, Math.min(1000, val));
+                          return { ...prev, ft8CustomWindows: windows };
+                        });
+                      }}
+                      isDisabled={isSaving}
+                      size="sm"
+                      variant="bordered"
+                      className="flex-1"
+                      endContent={<span className="text-xs text-default-400">{t('system.offsetUnit')}</span>}
+                    />
+                    <Button
+                      size="sm"
+                      variant="light"
+                      color="danger"
+                      isIconOnly
+                      isDisabled={isSaving || decodeWindowState.ft8CustomWindows.length <= 1}
+                      onPress={() => {
+                        setDecodeWindowState(prev => ({
+                          ...prev,
+                          ft8CustomWindows: prev.ft8CustomWindows.filter((_, i) => i !== idx),
+                        }));
+                      }}
+                      title={t('system.removeWindow')}
+                    >
+                      ×
+                    </Button>
+                  </div>
+                ))}
+                <div className="flex gap-2">
                   <Button
                     size="sm"
-                    variant="light"
-                    color="danger"
-                    isIconOnly
-                    isDisabled={isSaving || decodeWindowState.ft8CustomWindows.length <= 1}
+                    variant="flat"
+                    isDisabled={isSaving || decodeWindowState.ft8CustomWindows.length >= 8}
                     onPress={() => {
                       setDecodeWindowState(prev => ({
                         ...prev,
-                        ft8CustomWindows: prev.ft8CustomWindows.filter((_, i) => i !== idx),
+                        ft8CustomWindows: [...prev.ft8CustomWindows, 0],
                       }));
                     }}
-                    title={t('system.removeWindow')}
                   >
-                    ×
+                    {t('system.addWindow')}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="flat"
+                    isDisabled={isSaving}
+                    onPress={() => {
+                      setDecodeWindowState(prev => ({
+                        ...prev,
+                        ft8CustomWindows: [...FT8_WINDOW_PRESETS['balanced']],
+                      }));
+                    }}
+                  >
+                    {t('system.resetDefault')}
                   </Button>
                 </div>
-              ))}
-              <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  variant="flat"
-                  isDisabled={isSaving || decodeWindowState.ft8CustomWindows.length >= 8}
-                  onPress={() => {
-                    setDecodeWindowState(prev => ({
-                      ...prev,
-                      ft8CustomWindows: [...prev.ft8CustomWindows, 0],
-                    }));
-                  }}
-                >
-                  {t('system.addWindow')}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="flat"
-                  isDisabled={isSaving}
-                  onPress={() => {
-                    setDecodeWindowState(prev => ({
-                      ...prev,
-                      ft8CustomWindows: [...FT8_WINDOW_PRESETS['balanced']],
-                    }));
-                  }}
-                >
-                  {t('system.resetDefault')}
-                </Button>
+                {decodeWindowState.ft8CustomWindows.length >= 8 && (
+                  <p className="text-xs text-warning-600">{t('system.windowLimitReached', { max: 8 })}</p>
+                )}
               </div>
-              {decodeWindowState.ft8CustomWindows.length >= 8 && (
-                <p className="text-xs text-warning-600">{t('system.windowLimitReached', { max: 8 })}</p>
-              )}
-            </div>
+            </SettingsBlock>
           )}
 
           {/* FT4 自定义编辑区 */}
           {decodeWindowState.ft4Preset === 'custom' && (
-            <div className={`${SETTINGS_PANEL_CLASS} space-y-2`}>
-              <p className={SETTINGS_SUBTITLE_CLASS}>FT4 {t('system.presetCustom')}</p>
-              {decodeWindowState.ft4CustomWindows.map((offset, idx) => (
-                <div key={idx} className="flex items-center gap-2">
-                  <Input
-                    label={t('system.windowOffset', { idx: idx + 1 })}
-                    type="number"
-                    value={String(offset)}
-                    onValueChange={(v) => {
-                      const val = parseInt(v) || 0;
-                      setDecodeWindowState(prev => {
-                        const windows = [...prev.ft4CustomWindows];
-                        windows[idx] = Math.max(-2000, Math.min(1000, val));
-                        return { ...prev, ft4CustomWindows: windows };
-                      });
-                    }}
-                    isDisabled={isSaving}
-                    size="sm"
-                    variant="bordered"
-                    className="flex-1"
-                    endContent={<span className="text-xs text-default-400">{t('system.offsetUnit')}</span>}
-                  />
+            <SettingsBlock>
+              <div className="space-y-2">
+                <p className={SETTINGS_SUBTITLE_CLASS}>FT4 {t('system.presetCustom')}</p>
+                {decodeWindowState.ft4CustomWindows.map((offset, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <Input
+                      label={t('system.windowOffset', { idx: idx + 1 })}
+                      type="number"
+                      value={String(offset)}
+                      onValueChange={(v) => {
+                        const val = parseInt(v) || 0;
+                        setDecodeWindowState(prev => {
+                          const windows = [...prev.ft4CustomWindows];
+                          windows[idx] = Math.max(-2000, Math.min(1000, val));
+                          return { ...prev, ft4CustomWindows: windows };
+                        });
+                      }}
+                      isDisabled={isSaving}
+                      size="sm"
+                      variant="bordered"
+                      className="flex-1"
+                      endContent={<span className="text-xs text-default-400">{t('system.offsetUnit')}</span>}
+                    />
+                    <Button
+                      size="sm"
+                      variant="light"
+                      color="danger"
+                      isIconOnly
+                      isDisabled={isSaving || decodeWindowState.ft4CustomWindows.length <= 1}
+                      onPress={() => {
+                        setDecodeWindowState(prev => ({
+                          ...prev,
+                          ft4CustomWindows: prev.ft4CustomWindows.filter((_, i) => i !== idx),
+                        }));
+                      }}
+                      title={t('system.removeWindow')}
+                    >
+                      ×
+                    </Button>
+                  </div>
+                ))}
+                <div className="flex gap-2">
                   <Button
                     size="sm"
-                    variant="light"
-                    color="danger"
-                    isIconOnly
-                    isDisabled={isSaving || decodeWindowState.ft4CustomWindows.length <= 1}
+                    variant="flat"
+                    isDisabled={isSaving || decodeWindowState.ft4CustomWindows.length >= 8}
                     onPress={() => {
                       setDecodeWindowState(prev => ({
                         ...prev,
-                        ft4CustomWindows: prev.ft4CustomWindows.filter((_, i) => i !== idx),
+                        ft4CustomWindows: [...prev.ft4CustomWindows, 0],
                       }));
                     }}
-                    title={t('system.removeWindow')}
                   >
-                    ×
+                    {t('system.addWindow')}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="flat"
+                    isDisabled={isSaving}
+                    onPress={() => {
+                      setDecodeWindowState(prev => ({
+                        ...prev,
+                        ft4CustomWindows: [...FT4_WINDOW_PRESETS['balanced']],
+                      }));
+                    }}
+                  >
+                    {t('system.resetDefault')}
                   </Button>
                 </div>
-              ))}
-              <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  variant="flat"
-                  isDisabled={isSaving || decodeWindowState.ft4CustomWindows.length >= 8}
-                  onPress={() => {
-                    setDecodeWindowState(prev => ({
-                      ...prev,
-                      ft4CustomWindows: [...prev.ft4CustomWindows, 0],
-                    }));
-                  }}
-                >
-                  {t('system.addWindow')}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="flat"
-                  isDisabled={isSaving}
-                  onPress={() => {
-                    setDecodeWindowState(prev => ({
-                      ...prev,
-                      ft4CustomWindows: [...FT4_WINDOW_PRESETS['balanced']],
-                    }));
-                  }}
-                >
-                  {t('system.resetDefault')}
-                </Button>
+                {decodeWindowState.ft4CustomWindows.length >= 8 && (
+                  <p className="text-xs text-warning-600">{t('system.windowLimitReached', { max: 8 })}</p>
+                )}
               </div>
-              {decodeWindowState.ft4CustomWindows.length >= 8 && (
-                <p className="text-xs text-warning-600">{t('system.windowLimitReached', { max: 8 })}</p>
-              )}
-            </div>
+            </SettingsBlock>
           )}
-        </CardBody>
-      </Card>
+        </SettingsSection>
+      </div>
 
       {/* PSKReporter 设置 */}
-      <Card shadow="none" radius="lg" className="order-7" classNames={SETTINGS_CARD_CLASS_NAMES}>
-        <CardBody className={SETTINGS_CARD_BODY_CLASS}>
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex-1 space-y-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.pskrTitle')}</h4>
+      <div className="order-7">
+        <SettingsSection>
+          <SettingsRow
+            label={(
+              <span className="flex flex-wrap items-center gap-2">
+                {t('system.pskrTitle')}
                 {pskrConfig?.enabled && pskrStatus && (
-                  <div className="flex flex-wrap gap-1">
+                  <span className="flex flex-wrap gap-1">
                     {pskrStatus.configValid ? (
                       <Chip size="sm" color="success" variant="flat">{t('system.configValid')}</Chip>
                     ) : (
@@ -2538,186 +2557,189 @@ export const SystemSettings = forwardRef<
                         {t('system.pendingSpots', { count: pskrStatus.pendingSpots })}
                       </Chip>
                     )}
-                  </div>
+                  </span>
                 )}
-              </div>
-              <div className={SETTINGS_CARD_DESC_CLASS}>
-                <p>
-                  {t('system.pskrDesc')}{' '}
-                  <a href="https://pskreporter.info" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
-                    PSKReporter
-                  </a>
-                </p>
+              </span>
+            )}
+            description={(
+              <>
+                {t('system.pskrDesc')}{' '}
+                <a href="https://pskreporter.info" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                  PSKReporter
+                </a>
                 {pskrConfig?.enabled && pskrStatus?.activeCallsign && (
-                  <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>
+                  <span className="mt-1 block">
                     {t('system.pskrActiveInfo', {
                       callsign: pskrStatus.activeCallsign,
                       locator: pskrStatus.activeLocator || t('system.gridNotSet'),
                     })}
-                  </p>
+                  </span>
                 )}
-              </div>
-            </div>
-            <Switch
-              isSelected={pskrConfig?.enabled ?? false}
-              onValueChange={(enabled) => updatePskrConfig({ enabled })}
-              isDisabled={isSaving || !pskrConfig}
-              size="lg"
-              color={pskrConfig?.enabled ? 'success' : 'default'}
-            />
-          </div>
+              </>
+            )}
+            control={(
+              <Switch
+                isSelected={pskrConfig?.enabled ?? false}
+                onValueChange={(enabled) => updatePskrConfig({ enabled })}
+                isDisabled={isSaving || !pskrConfig}
+                size="sm"
+                color={pskrConfig?.enabled ? 'success' : 'default'}
+              />
+            )}
+          />
 
           {pskrConfig?.enabled && (
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
-              <div className={`${SETTINGS_PANEL_CLASS} space-y-4`}>
-                <div>
-                  <p className={SETTINGS_MUTED_CLASS}>01</p>
-                  <h5 className={SETTINGS_SUBTITLE_CLASS}>{t('system.receiverInfo')}</h5>
-                  <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.receiverInfoDesc')}</p>
-                </div>
-
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  <Input
-                    label={t('system.rxCallsign')}
-                    placeholder={t('system.rxCallsignPlaceholder')}
-                    value={pskrConfig.receiverCallsign}
-                    onValueChange={(v) => updatePskrConfig({ receiverCallsign: v.toUpperCase() })}
-                    isDisabled={isSaving}
-                    size="sm"
-                    variant="bordered"
-                    description={pskrStatus?.activeCallsign && !pskrConfig.receiverCallsign
-                      ? t('system.willUse', { val: pskrStatus.activeCallsign })
-                      : undefined}
-                  />
-                  <Input
-                    label={t('system.rxLocator')}
-                    placeholder={t('system.rxLocatorPlaceholder')}
-                    value={pskrConfig.receiverLocator}
-                    onValueChange={(v) => updatePskrConfig({ receiverLocator: v.toUpperCase() })}
-                    isDisabled={isSaving}
-                    size="sm"
-                    variant="bordered"
-                    description={pskrStatus?.activeLocator && !pskrConfig.receiverLocator
-                      ? t('system.willUse', { val: pskrStatus.activeLocator })
-                      : undefined}
-                  />
-                </div>
-              </div>
-
-              <div className={`${SETTINGS_PANEL_CLASS} space-y-4`}>
-                <div className="flex flex-wrap items-center justify-between gap-3">
+            <SettingsBlock>
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
+                <div className={`${SETTINGS_PANEL_CLASS} space-y-4`}>
                   <div>
-                    <p className={SETTINGS_MUTED_CLASS}>03</p>
-                    <h5 className={SETTINGS_SUBTITLE_CLASS}>{t('system.runningStatus')}</h5>
+                    <p className={SETTINGS_MUTED_CLASS}>01</p>
+                    <h5 className={SETTINGS_SUBTITLE_CLASS}>{t('system.receiverInfo')}</h5>
+                    <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.receiverInfoDesc')}</p>
                   </div>
-                  <Chip
-                    size="sm"
-                    color={pskrStatus?.isReporting ? 'primary' : 'default'}
-                    variant="flat"
-                  >
-                    {pskrStatus?.isReporting ? t('system.reporting') : t('system.waiting')}
-                  </Chip>
-                </div>
 
-                <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-                  <div className={SETTINGS_METRIC_CLASS}>
-                    <p className={SETTINGS_SUBDESC_CLASS}>{t('system.todayCount')}</p>
-                    <p className="mt-1 text-sm font-semibold text-default-900">
-                      {pskrConfig.stats?.todayReportCount ?? 0}
-                    </p>
-                  </div>
-                  <div className={SETTINGS_METRIC_CLASS}>
-                    <p className={SETTINGS_SUBDESC_CLASS}>{t('system.totalCount')}</p>
-                    <p className="mt-1 text-sm font-semibold text-default-900">
-                      {pskrConfig.stats?.totalReportCount ?? 0}
-                    </p>
-                  </div>
-                  <div className={SETTINGS_METRIC_CLASS}>
-                    <p className={SETTINGS_SUBDESC_CLASS}>{t('system.lastReport')}</p>
-                    <p className="mt-1 text-sm font-semibold text-default-900">
-                      {formatTime(pskrStatus?.lastReportTime)}
-                    </p>
-                  </div>
-                  <div className={SETTINGS_METRIC_CLASS}>
-                    <p className={SETTINGS_SUBDESC_CLASS}>{t('system.nextReport')}</p>
-                    <p className="mt-1 text-sm font-semibold text-default-900">
-                      {formatNextReport(pskrStatus?.nextReportIn)}
-                    </p>
-                  </div>
-                </div>
-
-                {pskrStatus?.lastError && (
-                  <div className="rounded-medium border border-danger-200 bg-danger-50 px-3 py-2">
-                    <p className="text-sm text-danger-700">{pskrStatus.lastError}</p>
-                  </div>
-                )}
-              </div>
-
-              <div className={`${SETTINGS_PANEL_CLASS} space-y-4 xl:col-span-2`}>
-                <div>
-                  <p className={SETTINGS_MUTED_CLASS}>02</p>
-                  <h5 className={SETTINGS_SUBTITLE_CLASS}>{t('system.optionalConfig')}</h5>
-                </div>
-
-                <Input
-                  label={t('system.antennaInfo')}
-                  placeholder={t('system.antennaInfoPlaceholder')}
-                  value={pskrConfig.antennaInformation}
-                  onValueChange={(v) => updatePskrConfig({ antennaInformation: v })}
-                  isDisabled={isSaving}
-                  size="sm"
-                  variant="bordered"
-                  maxLength={64}
-                />
-
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  <Select
-                    label={t('system.reportInterval')}
-                    selectedKeys={[String(pskrConfig.reportIntervalSeconds)]}
-                    onSelectionChange={(keys) => {
-                      const value = Array.from(keys)[0] as string;
-                      if (value) {
-                        updatePskrConfig({ reportIntervalSeconds: parseInt(value) });
-                      }
-                    }}
-                    isDisabled={isSaving}
-                    size="sm"
-                    variant="bordered"
-                  >
-                    {REPORT_INTERVAL_OPTIONS.map((opt) => (
-                      <SelectItem key={opt.value}>{opt.label}</SelectItem>
-                    ))}
-                  </Select>
-
-                  <div className={`${SETTINGS_SOFT_PANEL_CLASS} flex items-center justify-between gap-3`}>
-                    <div>
-                      <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.testServer')}</p>
-                      <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.testServerDesc')}</p>
-                    </div>
-                    <Switch
-                      isSelected={pskrConfig.useTestServer}
-                      onValueChange={(v) => updatePskrConfig({ useTestServer: v })}
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <Input
+                      label={t('system.rxCallsign')}
+                      placeholder={t('system.rxCallsignPlaceholder')}
+                      value={pskrConfig.receiverCallsign}
+                      onValueChange={(v) => updatePskrConfig({ receiverCallsign: v.toUpperCase() })}
                       isDisabled={isSaving}
                       size="sm"
-                      color="warning"
+                      variant="bordered"
+                      description={pskrStatus?.activeCallsign && !pskrConfig.receiverCallsign
+                        ? t('system.willUse', { val: pskrStatus.activeCallsign })
+                        : undefined}
+                    />
+                    <Input
+                      label={t('system.rxLocator')}
+                      placeholder={t('system.rxLocatorPlaceholder')}
+                      value={pskrConfig.receiverLocator}
+                      onValueChange={(v) => updatePskrConfig({ receiverLocator: v.toUpperCase() })}
+                      isDisabled={isSaving}
+                      size="sm"
+                      variant="bordered"
+                      description={pskrStatus?.activeLocator && !pskrConfig.receiverLocator
+                        ? t('system.willUse', { val: pskrStatus.activeLocator })
+                        : undefined}
                     />
                   </div>
                 </div>
+
+                <div className={`${SETTINGS_PANEL_CLASS} space-y-4`}>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className={SETTINGS_MUTED_CLASS}>03</p>
+                      <h5 className={SETTINGS_SUBTITLE_CLASS}>{t('system.runningStatus')}</h5>
+                    </div>
+                    <Chip
+                      size="sm"
+                      color={pskrStatus?.isReporting ? 'primary' : 'default'}
+                      variant="flat"
+                    >
+                      {pskrStatus?.isReporting ? t('system.reporting') : t('system.waiting')}
+                    </Chip>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                    <div className={SETTINGS_METRIC_CLASS}>
+                      <p className={SETTINGS_SUBDESC_CLASS}>{t('system.todayCount')}</p>
+                      <p className="mt-1 text-sm font-semibold text-default-900">
+                        {pskrConfig.stats?.todayReportCount ?? 0}
+                      </p>
+                    </div>
+                    <div className={SETTINGS_METRIC_CLASS}>
+                      <p className={SETTINGS_SUBDESC_CLASS}>{t('system.totalCount')}</p>
+                      <p className="mt-1 text-sm font-semibold text-default-900">
+                        {pskrConfig.stats?.totalReportCount ?? 0}
+                      </p>
+                    </div>
+                    <div className={SETTINGS_METRIC_CLASS}>
+                      <p className={SETTINGS_SUBDESC_CLASS}>{t('system.lastReport')}</p>
+                      <p className="mt-1 text-sm font-semibold text-default-900">
+                        {formatTime(pskrStatus?.lastReportTime)}
+                      </p>
+                    </div>
+                    <div className={SETTINGS_METRIC_CLASS}>
+                      <p className={SETTINGS_SUBDESC_CLASS}>{t('system.nextReport')}</p>
+                      <p className="mt-1 text-sm font-semibold text-default-900">
+                        {formatNextReport(pskrStatus?.nextReportIn)}
+                      </p>
+                    </div>
+                  </div>
+
+                  {pskrStatus?.lastError && (
+                    <div className="rounded-medium border border-danger-200 bg-danger-50 px-3 py-2">
+                      <p className="text-sm text-danger-700">{pskrStatus.lastError}</p>
+                    </div>
+                  )}
+                </div>
+
+                <div className={`${SETTINGS_PANEL_CLASS} space-y-4 xl:col-span-2`}>
+                  <div>
+                    <p className={SETTINGS_MUTED_CLASS}>02</p>
+                    <h5 className={SETTINGS_SUBTITLE_CLASS}>{t('system.optionalConfig')}</h5>
+                  </div>
+
+                  <Input
+                    label={t('system.antennaInfo')}
+                    placeholder={t('system.antennaInfoPlaceholder')}
+                    value={pskrConfig.antennaInformation}
+                    onValueChange={(v) => updatePskrConfig({ antennaInformation: v })}
+                    isDisabled={isSaving}
+                    size="sm"
+                    variant="bordered"
+                    maxLength={64}
+                  />
+
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <Select
+                      label={t('system.reportInterval')}
+                      selectedKeys={[String(pskrConfig.reportIntervalSeconds)]}
+                      onSelectionChange={(keys) => {
+                        const value = Array.from(keys)[0] as string;
+                        if (value) {
+                          updatePskrConfig({ reportIntervalSeconds: parseInt(value) });
+                        }
+                      }}
+                      isDisabled={isSaving}
+                      size="sm"
+                      variant="bordered"
+                    >
+                      {REPORT_INTERVAL_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.value}>{opt.label}</SelectItem>
+                      ))}
+                    </Select>
+
+                    <div className="flex items-center justify-between gap-3 rounded-medium bg-content1 px-3 py-3">
+                      <div>
+                        <p className={SETTINGS_SUBTITLE_CLASS}>{t('system.testServer')}</p>
+                        <p className={`mt-1 ${SETTINGS_SUBDESC_CLASS}`}>{t('system.testServerDesc')}</p>
+                      </div>
+                      <Switch
+                        isSelected={pskrConfig.useTestServer}
+                        onValueChange={(v) => updatePskrConfig({ useTestServer: v })}
+                        isDisabled={isSaving}
+                        size="sm"
+                        color="warning"
+                      />
+                    </div>
+                  </div>
+                </div>
               </div>
-            </div>
+            </SettingsBlock>
           )}
-        </CardBody>
-      </Card>
+        </SettingsSection>
+      </div>
 
       {/* 桌面应用设置 - 仅 Electron 环境显示 */}
       {isElectron && (
-        <>
-          <Card shadow="none" radius="lg" className="order-[12]" classNames={SETTINGS_CARD_CLASS_NAMES}>
-            <CardBody className={`${SETTINGS_CARD_BODY_CLASS} space-y-3`}>
-              <div>
-                <h4 className={SETTINGS_CARD_TITLE_CLASS}>{t('system.closeBehavior')}</h4>
-                <p className={`mt-1 ${SETTINGS_CARD_DESC_CLASS}`}>{t('system.closeBehaviorDesc')}</p>
-              </div>
+        <div className="order-[12]">
+          <SettingsSection>
+            <SettingsRow
+              label={t('system.closeBehavior')}
+              description={t('system.closeBehaviorDesc')}
+            >
               <Select
                 selectedKeys={[closeBehavior]}
                 onSelectionChange={(keys) => {
@@ -2732,9 +2754,9 @@ export const SystemSettings = forwardRef<
                 <SelectItem key="tray">{t('system.closeBehaviorTray')}</SelectItem>
                 <SelectItem key="quit">{t('system.closeBehaviorQuit')}</SelectItem>
               </Select>
-            </CardBody>
-          </Card>
-        </>
+            </SettingsRow>
+          </SettingsSection>
+        </div>
       )}
 
       {loggingCard}
@@ -2742,11 +2764,11 @@ export const SystemSettings = forwardRef<
 
       {/* 提示信息 */}
       {hasUnsavedChanges() && (
-        <div className="order-last text-sm text-default-500">
+        <div className="order-last text-xs text-default-500">
           {t('unsavedChanges')}
         </div>
       )}
-    </div>
+    </SettingsPage>
   );
 });
 

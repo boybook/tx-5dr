@@ -6,6 +6,7 @@ import type { SystemUpdateStatus } from '@tx5dr/contracts';
 import { createLogger } from '../../utils/logger';
 import type { DesktopUpdateStatus } from '../../types/electron';
 import { useUpdateNotification, type UpdateStatusWithDownloads } from './UpdateNotificationProvider';
+import { useSurfaceCardClassNames } from '../common/SurfaceContext';
 
 const logger = createLogger('DesktopUpdateCard');
 const DESKTOP_UPDATE_COMMITS_URL = 'https://github.com/boybook/tx-5dr/commits/main';
@@ -59,6 +60,7 @@ function formatVersionValue(value?: string | null): string {
 
 export function DesktopUpdateCard() {
   const { t } = useTranslation('common');
+  const cardClassNames = useSurfaceCardClassNames();
   const updateNotification = useUpdateNotification();
   const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
   const [desktopUpdateStatus, setDesktopUpdateStatus] = useState<DesktopUpdateState | null>(null);
@@ -266,7 +268,7 @@ export function DesktopUpdateCard() {
   const desktopRecentCommits = desktopUpdateStatus?.recentCommits || [];
 
   return (
-    <Card shadow="none">
+    <Card shadow="none" classNames={cardClassNames}>
       <CardBody className={`${CARD_BODY_CLASS} space-y-4`}>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>

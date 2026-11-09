@@ -6,7 +6,6 @@ import {
   Input,
   Card,
   CardBody,
-  CardHeader,
   Chip,
   Select,
   SelectItem,
@@ -31,6 +30,8 @@ import { createLogger } from '../../utils/logger';
 import {
   presentRealtimeConnectivityFailure,
 } from '../../realtime/realtimeConnectivity';
+import { SETTINGS_CARD_CLASS_NAMES, SETTINGS_CARD_PROPS } from './settingsCardStyles';
+import { SettingsBlock, SettingsPage, SettingsSection } from './SettingsLayout';
 
 const logger = createLogger('OpenWebRXSettings');
 
@@ -306,156 +307,221 @@ export function OpenWebRXSettings() {
   }
 
   return (
-    <div className="space-y-4">
-      {/* Introduction */}
-      <Alert color="default" variant="flat" title={t('openwebrx.introTitle')}>
-        {t('openwebrx.introDescription')}
-      </Alert>
+    <SettingsPage title={t('openwebrx.introTitle')} description={t('openwebrx.introDescription')}>
+      {/* Station list: header styled like a SettingsSection label; stations are separate list cards */}
+      <section className="flex flex-col gap-2">
+        <div className="flex items-end justify-between gap-4 px-1">
+          <h4 className="flex min-w-0 items-center gap-2 text-sm font-semibold text-default-900">
+            <FontAwesomeIcon icon={faSatelliteDish} className="text-default-500" />
+            {t('openwebrx.stationList')}
+          </h4>
+          {!isEditing && (
+            <Button
+              color="primary"
+              size="sm"
+              startContent={<FontAwesomeIcon icon={faPlus} />}
+              onPress={() => {
+                setIsEditing(true);
+                setEditingId(null);
+              }}
+            >
+              {t('openwebrx.addStation')}
+            </Button>
+          )}
+        </div>
 
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold">
-          <FontAwesomeIcon icon={faSatelliteDish} className="mr-2" />
-          {t('openwebrx.stationList')}
-        </h3>
-        {!isEditing && (
-          <Button
-            color="primary"
-            size="sm"
-            startContent={<FontAwesomeIcon icon={faPlus} />}
-            onPress={() => {
-              setIsEditing(true);
-              setEditingId(null);
-            }}
-          >
-            {t('openwebrx.addStation')}
-          </Button>
-        )}
-      </div>
-
-      {/* Empty state */}
-      {stations.length === 0 && !isEditing && (
-        <Card>
-          <CardBody className="text-center py-8 text-default-400">
-            {t('openwebrx.noStations')}
-          </CardBody>
-        </Card>
-      )}
-
-      {/* Station cards */}
-      {stations.map(station => {
-        const isListening = listenStationId === station.id;
-        const isTesting = testingStationId === station.id;
-        const stationTestResult = testResult?.stationId === station.id ? testResult : null;
-
-        return (
-          <div key={station.id} className="space-y-2">
-            {/* Station card */}
-            <Card>
-              <CardBody className="flex flex-row items-center justify-between gap-4">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium truncate">{station.name}</span>
-                    <Chip size="sm" variant="flat" color="primary">SDR</Chip>
-                    {isListening && (
-                      <Chip size="sm" variant="dot" color="success">
-                        {t('openwebrx.listening')}
-                      </Chip>
-                    )}
-                  </div>
-                  <p className="text-sm text-default-400 mt-1 truncate">{station.url}</p>
-                  {station.description && (
-                    <p className="text-sm text-default-500 mt-1">{station.description}</p>
-                  )}
-                </div>
-                <div className="flex gap-2 flex-shrink-0">
-                  <Button
-                    size="sm"
-                    variant="flat"
-                    isIconOnly
-                    onPress={() => handleTestConnection(station.url, station.id)}
-                    isLoading={isTesting}
-                    title={t('openwebrx.testConnection')}
-                  >
-                    <FontAwesomeIcon icon={faWifi} />
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="flat"
-                    isIconOnly
-                    color={isListening ? 'danger' : 'success'}
-                    onPress={() => handleOpenListen(station.id)}
-                    isLoading={isStartingListen && listenStationId === station.id}
-                    title={isListening ? t('openwebrx.stopListen') : t('openwebrx.startListen')}
-                  >
-                    <FontAwesomeIcon icon={isListening ? faStop : faPlay} />
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="flat"
-                    isIconOnly
-                    onPress={() => startEdit(station)}
-                    title={t('openwebrx.editStation')}
-                  >
-                    <FontAwesomeIcon icon={faPen} />
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="flat"
-                    color="danger"
-                    isIconOnly
-                    onPress={() => handleDeleteStation(station.id)}
-                    title={t('common:button.delete')}
-                  >
-                    <FontAwesomeIcon icon={faTrash} />
-                  </Button>
-                </div>
+        <div className="flex flex-col gap-3">
+          {/* Empty state */}
+          {stations.length === 0 && !isEditing && (
+            <Card {...SETTINGS_CARD_PROPS} classNames={SETTINGS_CARD_CLASS_NAMES}>
+              <CardBody className="px-4 py-8 text-center text-sm text-default-500">
+                {t('openwebrx.noStations')}
               </CardBody>
             </Card>
+          )}
 
-            {/* Test result for this station */}
-            {stationTestResult && (
-              stationTestResult.success ? (
-                <Alert color="success" variant="flat">
-                  {t('openwebrx.testSuccess', { version: stationTestResult.version, profiles: stationTestResult.profileCount })}
-                </Alert>
-              ) : (
-                <Alert color="danger" variant="flat">
-                  {t('openwebrx.testFailed', { error: stationTestResult.error })}
-                </Alert>
-              )
-            )}
+          {/* Station cards */}
+          {stations.map(station => {
+            const isListening = listenStationId === station.id;
+            const isTesting = testingStationId === station.id;
+            const stationTestResult = testResult?.stationId === station.id ? testResult : null;
 
-            {/* Inline listen panel for this station */}
-            {isListening && !listenStatus?.isListening && (
-              /* Pre-listen: select profile, frequency, then start */
-              <Card className="border border-default-200 dark:border-default-700">
-                <CardBody className="space-y-4">
-                  {isFetchingProfiles ? (
-                    <div className="flex justify-center py-4">
-                      <Spinner size="sm" />
+            return (
+              <div key={station.id} className="flex flex-col gap-2">
+                {/* Station card */}
+                <Card {...SETTINGS_CARD_PROPS} classNames={SETTINGS_CARD_CLASS_NAMES}>
+                  <CardBody className="flex flex-row items-center justify-between gap-4 px-4 py-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-sm font-medium text-default-900">{station.name}</span>
+                        <Chip size="sm" variant="flat" color="primary">SDR</Chip>
+                        {isListening && (
+                          <Chip size="sm" variant="dot" color="success">
+                            {t('openwebrx.listening')}
+                          </Chip>
+                        )}
+                      </div>
+                      <p className="mt-0.5 truncate text-xs leading-5 text-default-500">{station.url}</p>
+                      {station.description && (
+                        <p className="mt-0.5 text-xs leading-5 text-default-500">{station.description}</p>
+                      )}
                     </div>
-                  ) : (
-                    <>
-                      {/* Profile selector (required) */}
-                      <Select
-                        label={t('openwebrx.selectProfile')}
-                        placeholder={t('openwebrx.selectProfilePlaceholder')}
-                        selectedKeys={listenProfileId ? [listenProfileId] : []}
-                        onSelectionChange={(keys) => {
-                          const id = Array.from(keys)[0] as string;
-                          setListenProfileId(id || '');
-                        }}
+                    <div className="flex gap-2 flex-shrink-0">
+                      <Button
                         size="sm"
+                        variant="flat"
+                        isIconOnly
+                        onPress={() => handleTestConnection(station.url, station.id)}
+                        isLoading={isTesting}
+                        title={t('openwebrx.testConnection')}
                       >
-                        {listenProfiles.map((p: OpenWebRXProfile) => (
-                          <SelectItem key={p.id}>
-                            {p.name}
-                          </SelectItem>
-                        ))}
-                      </Select>
+                        <FontAwesomeIcon icon={faWifi} />
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="flat"
+                        isIconOnly
+                        color={isListening ? 'danger' : 'success'}
+                        onPress={() => handleOpenListen(station.id)}
+                        isLoading={isStartingListen && listenStationId === station.id}
+                        title={isListening ? t('openwebrx.stopListen') : t('openwebrx.startListen')}
+                      >
+                        <FontAwesomeIcon icon={isListening ? faStop : faPlay} />
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="flat"
+                        isIconOnly
+                        onPress={() => startEdit(station)}
+                        title={t('openwebrx.editStation')}
+                      >
+                        <FontAwesomeIcon icon={faPen} />
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="flat"
+                        color="danger"
+                        isIconOnly
+                        onPress={() => handleDeleteStation(station.id)}
+                        title={t('common:button.delete')}
+                      >
+                        <FontAwesomeIcon icon={faTrash} />
+                      </Button>
+                    </div>
+                  </CardBody>
+                </Card>
 
-                      {/* Frequency + modulation */}
+                {/* Test result for this station */}
+                {stationTestResult && (
+                  stationTestResult.success ? (
+                    <Alert color="success" variant="flat">
+                      {t('openwebrx.testSuccess', { version: stationTestResult.version, profiles: stationTestResult.profileCount })}
+                    </Alert>
+                  ) : (
+                    <Alert color="danger" variant="flat">
+                      {t('openwebrx.testFailed', { error: stationTestResult.error })}
+                    </Alert>
+                  )
+                )}
+
+                {/* Inline listen panel for this station */}
+                {isListening && !listenStatus?.isListening && (
+                  /* Pre-listen: select profile, frequency, then start */
+                  <Card {...SETTINGS_CARD_PROPS} className="border border-divider bg-default-50/50">
+                    <CardBody className="flex flex-col gap-3 px-4 py-3">
+                      {isFetchingProfiles ? (
+                        <div className="flex justify-center py-4">
+                          <Spinner size="sm" />
+                        </div>
+                      ) : (
+                        <>
+                          {/* Profile selector (required) */}
+                          <Select
+                            label={t('openwebrx.selectProfile')}
+                            placeholder={t('openwebrx.selectProfilePlaceholder')}
+                            selectedKeys={listenProfileId ? [listenProfileId] : []}
+                            onSelectionChange={(keys) => {
+                              const id = Array.from(keys)[0] as string;
+                              setListenProfileId(id || '');
+                            }}
+                            size="sm"
+                          >
+                            {listenProfiles.map((p: OpenWebRXProfile) => (
+                              <SelectItem key={p.id}>
+                                {p.name}
+                              </SelectItem>
+                            ))}
+                          </Select>
+
+                          {/* Frequency + modulation */}
+                          <div className="flex gap-3 items-end">
+                            <Input
+                              label={t('openwebrx.frequency')}
+                              placeholder="14074000"
+                              value={listenFrequency}
+                              onValueChange={setListenFrequency}
+                              description={listenFrequency ? `${(parseInt(listenFrequency) / 1000000).toFixed(3)} MHz` : ''}
+                              className="flex-1"
+                              size="sm"
+                            />
+                            <Select
+                              label={t('openwebrx.modulation')}
+                              selectedKeys={[listenModulation]}
+                              onSelectionChange={(keys) => setListenModulation(Array.from(keys)[0] as string)}
+                              className="w-28"
+                              size="sm"
+                            >
+                              <SelectItem key="usb">USB</SelectItem>
+                              <SelectItem key="lsb">LSB</SelectItem>
+                              <SelectItem key="am">AM</SelectItem>
+                              <SelectItem key="fm">FM</SelectItem>
+                              <SelectItem key="cw">CW</SelectItem>
+                            </Select>
+                          </div>
+
+                          {/* Start button */}
+                          <div className="flex justify-end">
+                            <Button
+                              color="primary"
+                              size="sm"
+                              isDisabled={!listenProfileId}
+                              isLoading={isStartingListen}
+                              startContent={<FontAwesomeIcon icon={faPlay} />}
+                              onPress={handleStartListen}
+                            >
+                              {t('openwebrx.startListen')}
+                            </Button>
+                          </div>
+                        </>
+                      )}
+                    </CardBody>
+                  </Card>
+                )}
+
+                {/* Active listen panel */}
+                {isListening && listenStatus?.isListening && (
+                  <Card {...SETTINGS_CARD_PROPS} className="border border-success-200 bg-content1 dark:border-success-800">
+                    <CardBody className="flex flex-col gap-3 px-4 py-3">
+                      {/* Connection status */}
+                      <div className="flex items-center gap-2">
+                        <Chip
+                          size="sm"
+                          color={listenStatus?.connected ? 'success' : 'danger'}
+                          variant="dot"
+                        >
+                          {listenStatus?.connected ? t('openwebrx.connected') : t('openwebrx.disconnected')}
+                        </Chip>
+                        {listenStatus?.serverVersion && (
+                          <span className="text-xs text-default-500">v{listenStatus.serverVersion}</span>
+                        )}
+                        {listenStatus?.smeterDb !== undefined && (
+                          <span className="ml-auto text-xs text-default-500">
+                            S-Meter: {listenStatus.smeterDb.toFixed(1)} dBFS
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Frequency, modulation, tune controls */}
                       <div className="flex gap-3 items-end">
                         <Input
                           label={t('openwebrx.frequency')}
@@ -479,186 +545,117 @@ export function OpenWebRXSettings() {
                           <SelectItem key="fm">FM</SelectItem>
                           <SelectItem key="cw">CW</SelectItem>
                         </Select>
-                      </div>
-
-                      {/* Start button */}
-                      <div className="flex justify-end">
                         <Button
-                          color="primary"
                           size="sm"
-                          isDisabled={!listenProfileId}
-                          isLoading={isStartingListen}
-                          startContent={<FontAwesomeIcon icon={faPlay} />}
-                          onPress={handleStartListen}
+                          variant="flat"
+                          onPress={handleTuneListen}
                         >
-                          {t('openwebrx.startListen')}
+                          {t('openwebrx.applyTune')}
                         </Button>
                       </div>
-                    </>
-                  )}
-                </CardBody>
-              </Card>
-            )}
 
-            {/* Active listen panel */}
-            {isListening && listenStatus?.isListening && (
-              <Card className="border border-success-200 dark:border-success-800">
-                <CardBody className="space-y-4">
-                  {/* Connection status */}
-                  <div className="flex items-center gap-2">
-                    <Chip
-                      size="sm"
-                      color={listenStatus?.connected ? 'success' : 'danger'}
-                      variant="dot"
-                    >
-                      {listenStatus?.connected ? t('openwebrx.connected') : t('openwebrx.disconnected')}
-                    </Chip>
-                    {listenStatus?.serverVersion && (
-                      <span className="text-sm text-default-400">v{listenStatus.serverVersion}</span>
-                    )}
-                    {listenStatus?.smeterDb !== undefined && (
-                      <span className="text-sm text-default-500 ml-auto">
-                        S-Meter: {listenStatus.smeterDb.toFixed(1)} dBFS
-                      </span>
-                    )}
-                  </div>
+                      {/* Stream info */}
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-default-500">
+                        {listenStatus?.centerFreq && (
+                          <span>
+                            {t('openwebrx.centerFreq')}: {(listenStatus.centerFreq / 1000000).toFixed(3)} MHz
+                            {listenStatus.sampleRate && ` (BW: ${(listenStatus.sampleRate / 1000).toFixed(0)} kHz)`}
+                          </span>
+                        )}
+                        {audioPlayback.isPlaying && audioPlayback.stats?.receiver?.codec && (
+                          <span>
+                            {t('openwebrx.codec')}: <span className="font-mono uppercase">{audioPlayback.stats.receiver.codec}</span>
+                          </span>
+                        )}
+                        {audioPlayback.stats && (
+                          <>
+                            <span>
+                              {t('openwebrx.latency')}: <span className="font-mono">{audioPlayback.stats.latencyMs.toFixed(0)}ms</span>
+                            </span>
+                            <span>
+                              {t('openwebrx.buffer')}: <span className="font-mono">{audioPlayback.stats.bufferFillPercent.toFixed(0)}%</span>
+                            </span>
+                          </>
+                        )}
+                      </div>
 
-                  {/* Frequency, modulation, tune controls */}
-                  <div className="flex gap-3 items-end">
-                    <Input
-                      label={t('openwebrx.frequency')}
-                      placeholder="14074000"
-                      value={listenFrequency}
-                      onValueChange={setListenFrequency}
-                      description={listenFrequency ? `${(parseInt(listenFrequency) / 1000000).toFixed(3)} MHz` : ''}
-                      className="flex-1"
-                      size="sm"
-                    />
-                    <Select
-                      label={t('openwebrx.modulation')}
-                      selectedKeys={[listenModulation]}
-                      onSelectionChange={(keys) => setListenModulation(Array.from(keys)[0] as string)}
-                      className="w-28"
-                      size="sm"
-                    >
-                      <SelectItem key="usb">USB</SelectItem>
-                      <SelectItem key="lsb">LSB</SelectItem>
-                      <SelectItem key="am">AM</SelectItem>
-                      <SelectItem key="fm">FM</SelectItem>
-                      <SelectItem key="cw">CW</SelectItem>
-                    </Select>
-                    <Button
-                      size="sm"
-                      variant="flat"
-                      onPress={handleTuneListen}
-                    >
-                      {t('openwebrx.applyTune')}
-                    </Button>
-                  </div>
-
-                  {/* Stream info */}
-                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-default-400">
-                    {listenStatus?.centerFreq && (
-                      <span>
-                        {t('openwebrx.centerFreq')}: {(listenStatus.centerFreq / 1000000).toFixed(3)} MHz
-                        {listenStatus.sampleRate && ` (BW: ${(listenStatus.sampleRate / 1000).toFixed(0)} kHz)`}
-                      </span>
-                    )}
-                    {audioPlayback.isPlaying && audioPlayback.stats?.receiver?.codec && (
-                      <span>
-                        {t('openwebrx.codec')}: <span className="font-mono uppercase">{audioPlayback.stats.receiver.codec}</span>
-                      </span>
-                    )}
-                    {audioPlayback.stats && (
-                      <>
-                        <span>
-                          {t('openwebrx.latency')}: <span className="font-mono">{audioPlayback.stats.latencyMs.toFixed(0)}ms</span>
-                        </span>
-                        <span>
-                          {t('openwebrx.buffer')}: <span className="font-mono">{audioPlayback.stats.bufferFillPercent.toFixed(0)}%</span>
-                        </span>
-                      </>
-                    )}
-                  </div>
-
-                  {/* Error */}
-                  {listenStatus?.error && (
-                    <Alert color="danger" variant="flat">
-                      {listenStatus.error}
-                    </Alert>
-                  )}
-                </CardBody>
-              </Card>
-            )}
-          </div>
-        );
-      })}
+                      {/* Error */}
+                      {listenStatus?.error && (
+                        <Alert color="danger" variant="flat">
+                          {listenStatus.error}
+                        </Alert>
+                      )}
+                    </CardBody>
+                  </Card>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </section>
 
       {/* Add/Edit Form */}
       {isEditing && (
-        <Card>
-          <CardHeader>
-            <h4 className="font-semibold">
-              {editingId ? t('openwebrx.editStation') : t('openwebrx.addStation')}
-            </h4>
-          </CardHeader>
-          <CardBody className="space-y-4">
-            <Input
-              label={t('openwebrx.stationName')}
-              placeholder={t('openwebrx.stationNamePlaceholder')}
-              value={formName}
-              onValueChange={setFormName}
-            />
-            <Input
-              label={t('openwebrx.stationUrl')}
-              placeholder="ws://host:8073"
-              value={formUrl}
-              onValueChange={setFormUrl}
-              description={t('openwebrx.urlDescription')}
-            />
-            <Textarea
-              label={t('openwebrx.stationDescription')}
-              placeholder={t('openwebrx.descriptionPlaceholder')}
-              value={formDescription}
-              onValueChange={setFormDescription}
-            />
-            {/* Form test result */}
-            {testResult && !testResult.stationId && (
-              testResult.success ? (
-                <Alert color="success" variant="flat">
-                  {t('openwebrx.testSuccess', { version: testResult.version, profiles: testResult.profileCount })}
-                </Alert>
-              ) : (
-                <Alert color="danger" variant="flat">
-                  {t('openwebrx.testFailed', { error: testResult.error })}
-                </Alert>
-              )
-            )}
-            <div className="flex gap-2 justify-end">
-              <Button variant="flat" onPress={resetForm}>
-                {t('common:button.cancel')}
-              </Button>
-              <Button
-                variant="flat"
-                onPress={() => handleTestConnection(formUrl)}
-                isLoading={testingFormUrl}
-                isDisabled={!formUrl}
-              >
-                <FontAwesomeIcon icon={faWifi} className="mr-2" />
-                {t('openwebrx.testConnection')}
-              </Button>
-              <Button
-                color="primary"
-                onPress={editingId ? handleUpdateStation : handleAddStation}
-                isDisabled={!formName || !formUrl}
-              >
-                <FontAwesomeIcon icon={faCheck} className="mr-2" />
-                {editingId ? t('common:button.save') : t('openwebrx.addStation')}
-              </Button>
+        <SettingsSection title={editingId ? t('openwebrx.editStation') : t('openwebrx.addStation')}>
+          <SettingsBlock>
+            <div className="flex flex-col gap-3">
+              <Input
+                label={t('openwebrx.stationName')}
+                placeholder={t('openwebrx.stationNamePlaceholder')}
+                value={formName}
+                onValueChange={setFormName}
+              />
+              <Input
+                label={t('openwebrx.stationUrl')}
+                placeholder="ws://host:8073"
+                value={formUrl}
+                onValueChange={setFormUrl}
+                description={t('openwebrx.urlDescription')}
+              />
+              <Textarea
+                label={t('openwebrx.stationDescription')}
+                placeholder={t('openwebrx.descriptionPlaceholder')}
+                value={formDescription}
+                onValueChange={setFormDescription}
+              />
+              {/* Form test result */}
+              {testResult && !testResult.stationId && (
+                testResult.success ? (
+                  <Alert color="success" variant="flat">
+                    {t('openwebrx.testSuccess', { version: testResult.version, profiles: testResult.profileCount })}
+                  </Alert>
+                ) : (
+                  <Alert color="danger" variant="flat">
+                    {t('openwebrx.testFailed', { error: testResult.error })}
+                  </Alert>
+                )
+              )}
+              <div className="flex gap-2 justify-end">
+                <Button variant="flat" onPress={resetForm}>
+                  {t('common:button.cancel')}
+                </Button>
+                <Button
+                  variant="flat"
+                  onPress={() => handleTestConnection(formUrl)}
+                  isLoading={testingFormUrl}
+                  isDisabled={!formUrl}
+                >
+                  <FontAwesomeIcon icon={faWifi} className="mr-2" />
+                  {t('openwebrx.testConnection')}
+                </Button>
+                <Button
+                  color="primary"
+                  onPress={editingId ? handleUpdateStation : handleAddStation}
+                  isDisabled={!formName || !formUrl}
+                >
+                  <FontAwesomeIcon icon={faCheck} className="mr-2" />
+                  {editingId ? t('common:button.save') : t('openwebrx.addStation')}
+                </Button>
+              </div>
             </div>
-          </CardBody>
-        </Card>
+          </SettingsBlock>
+        </SettingsSection>
       )}
-    </div>
+    </SettingsPage>
   );
 }

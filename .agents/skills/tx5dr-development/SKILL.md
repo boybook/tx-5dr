@@ -17,6 +17,7 @@ Read only the relevant contract and nearby implementation/tests:
 | Change | Owner and reference |
 | --- | --- |
 | Browser state, controls, rendering, reconnect | Web store/providers; [frontend rendering](../../../docs/architecture/frontend-rendering.md) and [client notifications](../../../docs/decisions/client-notifications.md) |
+| Settings dialog tabs, sections, cards, type scale | Shared layout primitives; [settings UI](references/settings-ui.md) |
 | API, WebSocket, IPC, shared values | Runtime schemas in `packages/contracts`, core transport, server routes, Electron main/preload; validate inputs and permissions at the receiver |
 | Server startup, resource lifetime, mode changes | [Server lifecycle](../../../docs/architecture/server-startup.md) |
 | Settings, logbook, plugin data, recovery | [Persistence durability](../../../docs/architecture/persistence-durability.md); successful writes must survive restart |

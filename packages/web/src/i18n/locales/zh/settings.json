@@ -26,7 +26,8 @@
     "descriptionPlaceholder": "支持 Markdown 格式，可描述天线、功率、电台型号等信息...",
     "descriptionDesc": "支持 Markdown 格式",
     "saveSuccess": "电台信息已保存",
-    "saveFailed": "保存失败"
+    "saveFailed": "保存失败",
+    "pageDescription": "本电台的呼号、位置与简介。"
   },
   "language": {
     "label": "界面语言",
@@ -91,7 +92,10 @@
       "groupHeader": "显示周期小标题",
       "groupHeaderDesc": "在左侧解码表每个周期前显示 UTC 时间和波段，方便截图识别上下文。",
       "preview": "实时预览"
-    }
+    },
+    "pageDescription": "界面语言、提醒方式和消息显示。",
+    "sectionGeneral": "通用",
+    "highlightSection": "消息高亮"
   },
   "profileSetup": {
     "created": "Profile「{{name}}」已创建并激活",
@@ -866,7 +870,11 @@
     "marketInstalledLegacyDescription": "已安装的 {{installed}} 面向旧版 Plugin API，在当前 TX-5DR 上仍可运行，但可能存在异常。",
     "marketInstalledLegacyUpdateHint": "可更新到适配当前 Plugin API 的 {{version}}。",
     "marketInstalledLegacyNoUpdateHint": "目前还没有更新版本，请联系插件作者。",
-    "hostPluginApiVersion": "当前 TX-5DR 内置 Plugin API {{version}}。插件通过 minPluginApiVersion 声明所需版本。"
+    "hostPluginApiVersion": "当前 TX-5DR 内置 Plugin API {{version}}。插件通过 minPluginApiVersion 声明所需版本。",
+    "marketSearchShort": "搜索插件",
+    "marketDetails": "详细信息",
+    "marketVersionHistoryShowAll": "显示全部 {{count}} 个版本",
+    "marketInstalledAtLabel": "安装时间"
   },
   "serverHealth": {
     "title": "服务器进程健康状态",

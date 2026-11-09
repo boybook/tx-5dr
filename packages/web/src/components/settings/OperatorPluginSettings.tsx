@@ -166,9 +166,9 @@ export const OperatorPluginSettings: React.FC<OperatorPluginSettingsProps> = ({ 
       >
         <FontAwesomeIcon
           icon={faChevronRight}
-          className={`text-default-400 text-xs transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
+          className={`text-default-500 text-xs transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
         />
-        <span className="text-xs text-default-400 uppercase tracking-wider">
+        <span className="text-xs font-medium text-default-500">
           {t('plugins.operatorSettings', 'Plugin Settings')}
         </span>
       </div>
