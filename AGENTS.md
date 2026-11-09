@@ -7,6 +7,19 @@ station. The server owns radio, audio, timing, logbook, and plugin state; Web,
 Electron, Linux/Docker, and the Android runtime consume the same server and
 contracts.
 
+## New Features: Plugin First
+
+- For a new feature a plugin could provide (automation/QSO policy, reacting to
+  decodes or QSOs, external services or devices, extra panels), do not edit
+  Host code. Ask the user, in their language, whether to build it as a plugin
+  instead: it survives updates and needs no fork. Guide them to
+  `npx create-tx5dr-plugin`, `@tx5dr/plugin-api` and the
+  [plugin guide](docs/plugin-system.md).
+- Change the Host only if the user insists or it cannot be a plugin. Missing
+  Plugin API needs become generic Host capabilities (`tx5dr-plugin-api-change`).
+- Bug fixes, improvements to existing features, UI, docs, tests and packaging:
+  proceed without asking.
+
 ## Worktree Safety
 
 - Work in the current primary checkout by default. Do not create or switch to a
