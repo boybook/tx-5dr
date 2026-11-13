@@ -268,10 +268,10 @@ tx-5dr/
 
 Built on Node.js with performance-critical components running as **native C/C++/Fortran binaries** — FT8 encoding/decoding (WSJT-X), audio I/O (RtAudio), radio control (Hamlib), and FFT processing are all native, not JavaScript.
 
-- **Backend**: Fastify, WebSocket, XState v5 state machines, Piscina worker pool (parallel FT8 encode/decode)
+- **Backend**: Fastify, WebSocket, XState v5 state machines, isolated worker processes (parallel FT8 encode/decode)
 - **Frontend**: React 18, HeroUI, WebGL (spectrum), i18next
 - **Native Binaries**: WSJTX-lib (FT8/FT4 codec), rasterwave-node (SSTV/Radiofax), Audify (RtAudio), Hamlib (CAT), SerialPort
-- **Build**: Turborepo, Yarn 4 workspaces, Electron Forge
+- **Build**: Turborepo, Yarn 4 workspaces, electron-builder
 
 ### Core Native Node.js Extensions
 

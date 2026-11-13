@@ -267,10 +267,10 @@ tx-5dr/
 
 基于 Node.js 构建，性能关键部分以**原生 C/C++/Fortran 二进制**运行 —— FT8 编解码（WSJT-X）、音频 I/O（RtAudio）、电台控制（Hamlib）、FFT 处理均为原生代码，非 JavaScript。
 
-- **后端**：Fastify、WebSocket、XState v5 状态机、Piscina 工作池（并行 FT8 编解码）
+- **后端**：Fastify、WebSocket、XState v5 状态机、独立工作进程（并行 FT8 编解码）
 - **前端**：React 18、HeroUI、WebGL（频谱）、i18next
 - **原生二进制**：WSJTX-lib（FT8/FT4 编解码）、Audify（RtAudio）、Hamlib（CAT 控制）、SerialPort
-- **构建**：Turborepo、Yarn 4 工作区、Electron Forge
+- **构建**：Turborepo、Yarn 4 工作区、electron-builder
 
 ### 核心原生 Node.js 扩展
 

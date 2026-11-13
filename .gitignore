@@ -134,3 +134,6 @@ AuthKey_*.p8
 # Ignore downloaded binaries in resources but keep structure and docs
 resources/bin/*/
 !resources/bin/.keep
+
+# Per-developer Claude Code permissions
+.claude/settings.local.json
