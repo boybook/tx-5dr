@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import fs from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -38,6 +39,12 @@ export function normalizeHostBaseVersion(value) {
   return version;
 }
 
+/** Nightly build stamp: the commit's committer time as UTC `YYYYMMDDHHmm`. */
+export function commitBuildStamp(commit) {
+  const date = execFileSync('git', ['show', '-s', '--format=%cI', commit], { cwd: PROJECT_ROOT, encoding: 'utf8' }).trim();
+  return new Date(date).toISOString().replace(/[-:T]/g, '').slice(0, 12);
+}
+
 export function resolveHostVersion({
   sourceVersion,
   channel,
@@ -71,6 +78,10 @@ export function resolveHostVersion({
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args['build-stamp-of']) {
+    process.stdout.write(`${commitBuildStamp(args['build-stamp-of'])}\n`);
+    return;
+  }
   const rootPackage = JSON.parse(await fs.readFile(ROOT_PACKAGE_PATH, 'utf8'));
   const version = resolveHostVersion({
     sourceVersion: rootPackage.version,

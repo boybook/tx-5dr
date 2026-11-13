@@ -7,15 +7,16 @@ to the repository root. Inspect their current contents before executing commands
 
 | Event | Coordinator behavior |
 | --- | --- |
-| PR targeting main | Source verification and product packaging checks; no publication |
-| Push to main | Candidate nightly builds; promote only if still the current main SHA |
-| Push to develop | Verify and keep CI artifacts; no public channel update |
+| PR targeting main, push to main or develop | Source verification; the Linux Server package is also built when packaging inputs changed; no publication |
+| Daily schedule | Build and publish nightly when the current main SHA has no `build-<nightly version>` tag yet; otherwise nothing runs. The tag appears when the GitHub Release leaves draft, so a publication that failed after that point is resumed by manual dispatch, not by the next schedule |
 | Push of `vX.Y.Z` | Validate tag/version/source, build all Host products, publish stable |
-| Manual `release.yml` | Existing `ref`, `publish=false` by default; publication still requires a valid formal tag or the current main SHA |
+| Manual `release.yml` | Existing `ref`, builds every product, `publish=false` by default; publication still requires a valid formal tag or the current main SHA |
 
 `.github/workflows/release.yml` calls the four reusable product workflows and
 owns publication. All required product jobs must pass. `resolve-release-identity.mjs`
-rejects noncanonical formal tags and mismatched source versions. Workflows use
+decides what a run verifies, builds and publishes (`planRelease`), lists the
+packaging inputs that trigger the package check, and rejects noncanonical formal
+tags and mismatched source versions. Workflows use
 the full selected SHA, not independently resolved branch heads.
 
 Root `package.json` is the Host base. `scripts/check-version-consistency.mjs`
@@ -42,13 +43,13 @@ digest. Do not claim complete interval changelogs from this ten-commit window.
    environment, native dependency or signing failure.
 3. For stable, commit the matching source versions and release notes before
    creating the immutable tag. Push only the authorized branch/tag. For nightly,
-   push main or dispatch `release.yml` with the existing main ref and
-   `publish=true`; do not manually fabricate a formal tag for a nightly build.
+   wait for the daily schedule or dispatch `release.yml` with the existing main
+   ref and `publish=true`; do not manually fabricate a formal tag for a nightly build.
 4. Record the full SHA and workflow run. Use `gh run view <run-id>` to inspect
    failed jobs and artifacts; follow that run rather than the latest unrelated
    run. No required product may be silently excluded from stable publication.
 5. After stable publication is verified, advance the main Host base version in
-   a separate source change when authorized. That push starts the next nightly
+   a separate source change when authorized. The next scheduled or dispatched nightly starts the new
    series; the formal tag and published binaries remain unchanged.
 
 A manual validation run can be dispatched with `publish=false`. Do not dispatch

@@ -2,10 +2,11 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(process.argv[2]);
 const node = process.argv[3] || process.execPath;
@@ -55,3 +56,13 @@ try {
   if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
   await fs.rm(temporary, { recursive: true, force: true });
 }
+
+// Image Radio natives must load from the product's own module tree: evaluate the
+// check inside the packaged server directory, with the node binary under test.
+const imageRadioCheck = await fs.readFile(fileURLToPath(new URL('./smoke-image-radio.cjs', import.meta.url)), 'utf8');
+process.stdout.write(execFileSync(node, ['-e', imageRadioCheck], {
+  cwd: path.join(root, 'packages/server/dist/scripts'),
+  env: { ...process.env, ...runtimeEnv, NODE_PATH: path.join(root, 'node_modules') },
+  encoding: 'utf8',
+  stdio: ['ignore', 'pipe', 'inherit'],
+}));

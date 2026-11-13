@@ -18,7 +18,8 @@ a version example is not evidence of the current configuration.
    binaries does not also publish npm, the APK or the website.
 2. Inspect `git status`, remote main/tag identity and current version sources.
    Preserve unrelated work and stage an exact allowlist. A source push to `main`
-   triggers nightly CI; a tag push triggers formal CI. Account for those effects.
+   only verifies; the daily schedule publishes nightly from the current main
+   commit, and a tag push triggers formal CI. Account for those effects.
 3. For Host releases, read [Host release procedure](references/host-release.md).
    For the requested products, read the matching sections of the
    [release matrix](references/release-matrix.md). Keep implementation invariants

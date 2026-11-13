@@ -1,0 +1,18 @@
+name: Set up Node.js and Yarn
+description: >
+  Install the Node.js version pinned in .nvmrc and activate the Yarn version
+  pinned by package.json's packageManager. Run after checkout.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version-file: .nvmrc
+    - shell: bash
+      run: |
+        corepack enable
+        yarn --version || {
+          echo "Corepack failed; installing the pinned Yarn with npm"
+          npm install -g "$(node -p "require('./package.json').packageManager")"
+          yarn --version
+        }

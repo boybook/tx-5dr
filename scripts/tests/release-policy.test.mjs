@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateReleaseVersion } from '../resolve-release-identity.mjs';
+import { planRelease, touchesPackaging, validateReleaseVersion } from '../resolve-release-identity.mjs';
 import { resolveHostVersion } from '../host-version.mjs';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
@@ -48,6 +48,35 @@ test('AppImage blockmap extraction rejects missing or corrupt embedded metadata'
 test('formal tag must match source version and cannot be a prerelease', () => {
   assert.equal(validateReleaseVersion('refs/tags/v1.0.0', '1.0.0'), 'v1.0.0');
   for (const tag of ['v1.0.1', 'v1.0.0-rc.1', '1.0.0', 'v01.0.0']) assert.throws(() => validateReleaseVersion(tag, '1.0.0'));
+});
+test('branch pushes and pull requests verify without building or publishing', () => {
+  const idle = { verify: true, build: false, smoke: false, publish: false };
+  for (const eventName of ['push', 'pull_request']) {
+    assert.deepEqual(planRelease({ eventName, isTag: false, isCurrentMain: true, packagingChanged: false }), idle);
+    assert.deepEqual(planRelease({ eventName, isTag: false, isCurrentMain: true, packagingChanged: true }), { ...idle, smoke: true });
+  }
+});
+test('scheduled nightly publishes only an unpublished current main commit', () => {
+  const all = { verify: true, build: true, smoke: false, publish: true };
+  const none = { verify: false, build: false, smoke: false, publish: false };
+  assert.deepEqual(planRelease({ eventName: 'schedule', isCurrentMain: true, nightlyPublished: false }), all);
+  assert.deepEqual(planRelease({ eventName: 'schedule', isCurrentMain: true, nightlyPublished: true }), none);
+  assert.deepEqual(planRelease({ eventName: 'schedule', isCurrentMain: false, nightlyPublished: false }), none);
+});
+test('formal tags publish and manual runs publish only on request for main or a tag', () => {
+  const built = { verify: true, build: true, smoke: false };
+  assert.deepEqual(planRelease({ eventName: 'push', isTag: true }), { ...built, publish: true });
+  assert.deepEqual(planRelease({ eventName: 'workflow_dispatch', isCurrentMain: true, publishRequested: false }), { ...built, publish: false });
+  assert.deepEqual(planRelease({ eventName: 'workflow_dispatch', isCurrentMain: true, publishRequested: true }), { ...built, publish: true });
+  assert.deepEqual(planRelease({ eventName: 'workflow_dispatch', isTag: true, publishRequested: true }), { ...built, publish: true });
+  assert.deepEqual(planRelease({ eventName: 'workflow_dispatch', isCurrentMain: false, publishRequested: true }), { ...built, publish: false });
+});
+test('packaging inputs are recognised and ordinary source changes are not', () => {
+  for (const file of ['yarn.lock', 'package.json', 'packages/server/package.json', 'scripts/package-linux.sh', '.github/workflows/release.yml', 'Dockerfile', 'linux/install.sh', 'electron-builder.config.cjs']) {
+    assert.equal(touchesPackaging([file]), true, file);
+  }
+  assert.equal(touchesPackaging(['packages/server/src/index.ts', 'docs/README.md', 'AGENTS.md', 'packages/web/src/i18n/locales/ja/radio.json']), false);
+  assert.equal(touchesPackaging([]), false);
 });
 test('nightly derives its base from source and keeps commit identity', () => {
   assert.equal(resolveHostVersion({ sourceVersion: '1.0.1', channel: 'nightly', buildStamp: '202610241200', commit: 'abcdef123456' }), '1.0.1-nightly.202610241200+gabcdef1');

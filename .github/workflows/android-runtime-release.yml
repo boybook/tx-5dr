@@ -36,16 +36,8 @@ jobs:
           ref: ${{ inputs.source_ref }}
           fetch-depth: 20
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22.23.4'
-
-      - name: Enable Corepack and setup Yarn
-        shell: bash
-        run: |
-          corepack enable
-          corepack prepare yarn@4.9.1 --activate
+      - name: Setup Node.js and Yarn
+        uses: ./.github/actions/setup-node-yarn
 
       - name: Install system dependencies
         shell: bash
@@ -75,7 +67,7 @@ jobs:
           echo "display_timestamp=$(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
           echo "short_sha=$(echo ${{ inputs.source_ref }} | cut -c1-7)" >> $GITHUB_OUTPUT
           echo "commit_title=$(git show -s --format=%s "${{ inputs.source_ref }}")" >> $GITHUB_OUTPUT
-          COMMIT_STAMP=$(git show -s --date=format-local:%Y%m%d%H%M --format=%cd "${{ inputs.source_ref }}")
+          COMMIT_STAMP=$(node scripts/host-version.mjs --build-stamp-of "${{ inputs.source_ref }}")
           echo "build_stamp=${COMMIT_STAMP}" >> $GITHUB_OUTPUT
           if [ -z "${{ inputs.version }}" ]; then
             echo "tag=nightly-android-runtime" >> $GITHUB_OUTPUT
@@ -111,7 +103,7 @@ jobs:
             --base-url "$BASE_URL" \
             --object-prefix "${{ steps.release_info.outputs.object_prefix }}"
 
-      - name: Verify packaged Image Radio runtime
+      - name: Verify packaged server and Image Radio runtime
         shell: bash
         run: |
           set -euo pipefail
@@ -125,27 +117,6 @@ jobs:
           tar -xzf "$ARCHIVE" -C "$EXTRACT_DIR"
           export NODE_PATH="$EXTRACT_DIR/node_modules"
           SOURCE_SHA="${{ inputs.source_ref }}" node scripts/smoke-packaged-server.mjs "$EXTRACT_DIR"
-          (cd "$EXTRACT_DIR/packages/server/dist/scripts" && node -e '
-            const { PNG } = require("pngjs");
-            if (typeof PNG.sync.read !== "function") throw new Error("pngjs unavailable");
-            const rasterwave = require("rasterwave-node");
-            if (rasterwave.sstvModes().length !== 31) throw new Error("rasterwave mode catalog incomplete");
-            if (typeof rasterwave.correctFaxPaper !== "function") throw new Error("radiofax correction unavailable");
-            const mode = rasterwave.sstvModes().find((item) => item.mode === "robot8Bw");
-            const pixels = new Uint8Array(mode.width * mode.height * 3);
-            const encoders = [
-              { enhancedPreamble: true, stationId: { kind: "fsk", callsign: "N0CALL" }, postImageGapMs: 500, endGuardMs: 300 },
-              { stationId: { kind: "cw", callsign: "N0CALL", wpm: 20, toneHz: 800 }, postImageGapMs: 500, endGuardMs: 300 },
-              { stationId: { kind: "none" }, endGuardMs: 300 },
-            ].map((options) => new rasterwave.SstvEncoder(pixels, mode.mode, 12000, options));
-            if (encoders.some((encoder) => encoder.progress.rasterEndSample <= 0)) throw new Error("SSTV envelope progress unavailable");
-            Promise.all([
-              ...encoders.map((encoder) => encoder.dispose()),
-              new rasterwave.SstvDecoder(12000, { outputMode: "continuousPaper", fallbackMode: "robot36", queueCapacitySamples: 24000 }, () => {}).dispose(),
-              new rasterwave.FaxDecoder(12000, { outputMode: "continuousPaper", continuousAuto: true, queueCapacitySamples: 24000 }, () => {}).dispose(),
-              rasterwave.correctFaxPaper(new Uint8Array(8), 4, 2, 0, []),
-            ]).then(() => console.log("Packaged Image Radio runtime ok")).catch((error) => { console.error(error); process.exit(1); });
-          ')
 
       - name: Prepare release assets
         shell: bash

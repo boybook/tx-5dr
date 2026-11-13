@@ -20,12 +20,12 @@ jobs:
           ref: ${{ inputs.source_ref }}
       - uses: actions/setup-node@v4
         with:
-          node-version: '22.23.4'
+          node-version-file: .nvmrc
       - id: identity
         env:
           VERSION: ${{ inputs.version }}
         run: |
-          echo "stamp=$(TZ=UTC git show -s --date=format-local:%Y%m%d%H%M --format=%cd HEAD)" >> "$GITHUB_OUTPUT"
+          echo "stamp=$(node scripts/host-version.mjs --build-stamp-of HEAD)" >> "$GITHUB_OUTPUT"
           echo "date=$(git show -s --format=%cI HEAD)" >> "$GITHUB_OUTPUT"
           echo "channel=$([ -n "$VERSION" ] && echo release || echo nightly)" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@v3

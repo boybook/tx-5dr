@@ -1,10 +1,15 @@
 name: Verify and release TX-5DR
+# Branch pushes and pull requests verify the source. Nightly publication runs on
+# the schedule (when main has an unpublished commit) or by manual dispatch with
+# publish=true; a vX.Y.Z tag publishes the formal release.
 on:
   push:
     branches: [main, develop]
     tags: ['v*']
   pull_request:
     branches: [main]
+  schedule:
+    - cron: '0 18 * * *'
   workflow_dispatch:
     inputs:
       ref:
@@ -21,11 +26,14 @@ concurrency:
   group: tx5dr-build-${{ github.ref }}-${{ inputs.ref || github.sha }}
   cancel-in-progress: false
 jobs:
-  verify:
+  plan:
     runs-on: ubuntu-24.04
     outputs:
       sha: ${{ steps.identity.outputs.sha }}
       version: ${{ steps.identity.outputs.version }}
+      verify: ${{ steps.identity.outputs.verify }}
+      build: ${{ steps.identity.outputs.build }}
+      smoke: ${{ steps.identity.outputs.smoke }}
       publish: ${{ steps.identity.outputs.publish }}
     steps:
       - uses: actions/checkout@v4
@@ -34,15 +42,26 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
-          node-version: '22.23.4'
+          node-version-file: .nvmrc
       - id: identity
         env:
           REQUEST_REF: ${{ inputs.ref || github.ref }}
-          PUBLISH_REQUEST: ${{ github.event_name == 'push' || inputs.publish }}
+          PUBLISH_REQUEST: ${{ inputs.publish }}
           EVENT_NAME: ${{ github.event_name }}
-        run: node scripts/resolve-release-identity.mjs >> "$GITHUB_OUTPUT"
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: node scripts/resolve-release-identity.mjs | tee -a "$GITHUB_OUTPUT"
+  verify:
+    needs: plan
+    if: needs.plan.outputs.verify == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-node-yarn
       - run: sudo apt-get update && sudo apt-get install -y libasound2-dev libpulse-dev libudev-dev libusb-1.0-0-dev portaudio19-dev
-      - run: corepack enable && yarn install --immutable
+      - run: yarn install --immutable
       - run: yarn check:versions && yarn check:i18n
       - run: yarn build
       - run: yarn lint
@@ -52,40 +71,44 @@ jobs:
         run: yarn workspace @tx5dr/server test
       - run: node --test scripts/tests/release-policy.test.mjs scripts/tests/release-http.test.mjs scripts/tests/publication-retry.test.mjs scripts/tests/plugin-market-gate.test.mjs
   electron:
-    needs: verify
+    needs: [plan, verify]
+    if: needs.plan.outputs.build == 'true'
     uses: ./.github/workflows/electron-release.yml
     with:
-      version: ${{ needs.verify.outputs.version }}
-      source_ref: ${{ needs.verify.outputs.sha }}
-      verify_only: ${{ needs.verify.outputs.publish != 'true' }}
+      version: ${{ needs.plan.outputs.version }}
+      source_ref: ${{ needs.plan.outputs.sha }}
+      verify_only: ${{ needs.plan.outputs.publish != 'true' }}
     secrets: inherit
   server:
-    needs: verify
+    needs: [plan, verify]
+    if: needs.plan.outputs.build == 'true' || needs.plan.outputs.smoke == 'true'
     uses: ./.github/workflows/server-release.yml
     with:
-      version: ${{ needs.verify.outputs.version }}
-      source_ref: ${{ needs.verify.outputs.sha }}
-      verify_only: ${{ needs.verify.outputs.publish != 'true' }}
+      version: ${{ needs.plan.outputs.version }}
+      source_ref: ${{ needs.plan.outputs.sha }}
+      verify_only: ${{ needs.plan.outputs.publish != 'true' }}
     secrets: inherit
   android:
-    needs: verify
+    needs: [plan, verify]
+    if: needs.plan.outputs.build == 'true'
     uses: ./.github/workflows/android-runtime-release.yml
     with:
-      version: ${{ needs.verify.outputs.version }}
-      source_ref: ${{ needs.verify.outputs.sha }}
-      verify_only: ${{ needs.verify.outputs.publish != 'true' }}
+      version: ${{ needs.plan.outputs.version }}
+      source_ref: ${{ needs.plan.outputs.sha }}
+      verify_only: ${{ needs.plan.outputs.publish != 'true' }}
     secrets: inherit
   docker:
-    needs: verify
+    needs: [plan, verify]
+    if: needs.plan.outputs.build == 'true'
     uses: ./.github/workflows/docker-release.yml
     with:
-      version: ${{ needs.verify.outputs.version }}
-      source_ref: ${{ needs.verify.outputs.sha }}
-      verify_only: ${{ needs.verify.outputs.publish != 'true' }}
+      version: ${{ needs.plan.outputs.version }}
+      source_ref: ${{ needs.plan.outputs.sha }}
+      verify_only: ${{ needs.plan.outputs.publish != 'true' }}
     secrets: inherit
   publish:
-    needs: [verify, electron, server, android, docker]
-    if: needs.verify.outputs.publish == 'true'
+    needs: [plan, verify, electron, server, android, docker]
+    if: needs.plan.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -95,11 +118,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.verify.outputs.sha }}
+          ref: ${{ needs.plan.outputs.sha }}
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
-          node-version: '22.23.4'
+          node-version-file: .nvmrc
       - uses: actions/download-artifact@v4
         with:
           path: release-inputs
@@ -113,8 +136,8 @@ jobs:
       - name: Verify and publish all products
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ needs.verify.outputs.version }}
-          SOURCE_SHA: ${{ needs.verify.outputs.sha }}
+          RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+          SOURCE_SHA: ${{ needs.plan.outputs.sha }}
           OSS_ACCESS_KEY_ID: ${{ secrets.ALIYUN_ACCESS_KEY_ID }}
           OSS_ACCESS_KEY_SECRET: ${{ secrets.ALIYUN_ACCESS_KEY_SECRET }}
           OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
