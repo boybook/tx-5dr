@@ -10,6 +10,7 @@
  *  3. 前端入口文件 i18n 导入检查
  *  4. 后端/core/electron 裸 console.* 调用（应使用 createLogger）
  *  5. 后端/core/electron 源码中的 CJK 字符串（日志消息必须为英文）
+ *  6. 前端各语言 locale 文件的 key 必须一致（缺失的 key 会静默回退到其他语言）
  *
  * 退出码：0=全部通过，1=有违规
  */
@@ -307,6 +308,52 @@ function checkBackendCJK() {
   return violations;
 }
 
+// ─── 检查 6：各语言 locale key 对齐 ─────────────────────────────────────────────
+// grid-regions.json 是按语言生成的地名数据，各语言覆盖范围本就不同，不参与对齐。
+const LOCALE_ALIGNMENT_EXCLUDED = new Set(['grid-regions.json']);
+
+function flattenLocaleKeys(value, prefix = '', out = new Set()) {
+  for (const [key, child] of Object.entries(value)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (child && typeof child === 'object' && !Array.isArray(child)) flattenLocaleKeys(child, path, out);
+    else out.add(path);
+  }
+  return out;
+}
+
+function checkLocaleKeyAlignment() {
+  const localesDir = join(ROOT, 'packages/web/src/i18n/locales');
+  const languages = readdirSync(localesDir).filter(entry => statSync(join(localesDir, entry)).isDirectory());
+  const namespaces = new Set();
+  const keysByLanguage = new Map();
+
+  for (const language of languages) {
+    const byNamespace = new Map();
+    for (const file of readdirSync(join(localesDir, language))) {
+      if (extname(file) !== '.json' || LOCALE_ALIGNMENT_EXCLUDED.has(file)) continue;
+      namespaces.add(file);
+      byNamespace.set(file, flattenLocaleKeys(JSON.parse(readFileSync(join(localesDir, language, file), 'utf8'))));
+    }
+    keysByLanguage.set(language, byNamespace);
+  }
+
+  const violations = [];
+  for (const namespace of namespaces) {
+    const allKeys = new Set();
+    for (const language of languages) {
+      for (const key of keysByLanguage.get(language).get(namespace) ?? []) allKeys.add(key);
+    }
+    for (const language of languages) {
+      const present = keysByLanguage.get(language).get(namespace) ?? new Set();
+      const issues = [...allKeys]
+        .filter(key => !present.has(key))
+        .map(key => ({ line: 0, content: `missing key: ${key}`, severity: 'error' }));
+      if (issues.length > 0) violations.push({ file: join(localesDir, language, namespace), issues });
+    }
+  }
+  return violations;
+}
+
 // ─── 汇总输出 ─────────────────────────────────────────────────────────────────
 function printViolations(title, violations, icon, countAsErrors = true) {
   if (violations.length === 0) {
@@ -372,6 +419,13 @@ totalErrors += printViolations(
   '后端/core/electron CJK 字符串（日志消息必须为英文）',
   checkBackendCJK(),
   '🌐'
+);
+
+// 6. 各语言 locale key 对齐
+totalErrors += printViolations(
+  '各语言 locale key 对齐（缺失的 key 会静默回退）',
+  checkLocaleKeyAlignment(),
+  '🗂️'
 );
 
 // ─── 统计 ─────────────────────────────────────────────────────────────────────

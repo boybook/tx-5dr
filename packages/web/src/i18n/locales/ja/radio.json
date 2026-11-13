@@ -79,7 +79,14 @@
     "setFailed": "設定に失敗しました",
     "recorded": "📝 記録された周波数",
     "recordedDetail": "{{message}} (無線が接続されていません)",
-    "confirm": "確認"
+    "confirm": "確認",
+    "splitSettingsTitle": "周波数設定",
+    "splitSettingsAria": "周波数設定を開く",
+    "splitLabelFallback": "Split",
+    "splitUnsupported": "この無線機は Split に対応していません。",
+    "splitDetecting": "無線機の機能検出を待っています。",
+    "splitPermissionRequired": "無線機の機能を操作する権限がありません。",
+    "splitReadOnly": "この無線機の Split は読み取り専用です。"
   },
   "audioSidecar": {
     "popoverTitle": "オーディオシステム",
@@ -159,7 +166,8 @@
     "transportWebrtc": "低遅延 RTC",
     "transportWsPcm": "WS対応",
     "switchToWebrtc": "低遅延 RTC に切り替える",
-    "switchToWsPcm": "WS対応に切り替える"
+    "switchToWsPcm": "WS対応に切り替える",
+    "androidNativeAudioShort": "スマホ音声"
   },
   "voiceTx": {
     "audioUplink": "音声送信",
@@ -261,7 +269,11 @@
     "microphoneDisabledDuringTx": "送信中はマイクを変更できません",
     "microphonePermissionDenied": "マイクの権限が拒否されました",
     "microphoneUnavailable": "マイクを利用できません",
-    "retryMicrophonePermission": "再試行"
+    "retryMicrophonePermission": "再試行",
+    "androidNativeAudioShort": "スマホ音声",
+    "androidMicGain": "マイクゲイン",
+    "androidMicGainHint": "スマホのマイクで送信する場合のみ有効です。レベルメーターはゲイン適用後のレベルを表示します。",
+    "androidMicGainFailed": "マイクゲインの設定に失敗しました"
   },
   "realtime": {
     "scopeRadio": "無線モニター",
@@ -1152,6 +1164,86 @@
       "awaitingConfirmation": "無線機からの確認待ち",
       "unconfirmed": "未確認",
       "confirmationTimeout": "無線機からの確認がタイムアウトしました。"
+    },
+    "auto_notch": {
+      "label": "オートノッチ",
+      "description": "持続的な妨害トーンを抑えるオートノッチフィルターを有効にします。"
+    },
+    "manual_notch": {
+      "label": "マニュアルノッチ",
+      "description": "マニュアルノッチフィルターを有効にします。"
+    },
+    "rit_enabled": {
+      "label": "RIT",
+      "description": "受信周波数の微調整（RIT）を有効にします。"
+    },
+    "xit_enabled": {
+      "label": "XIT",
+      "description": "送信周波数の微調整（XIT）を有効にします。"
+    },
+    "tone_enabled": {
+      "label": "トーンエンコード",
+      "description": "レピーター用のトーンエンコードを有効にします。"
+    },
+    "tone_squelch_enabled": {
+      "label": "トーンスケルチ",
+      "description": "対応機種でトーンスケルチのデコードを有効にします。"
+    },
+    "beep_enabled": {
+      "label": "ビープ音",
+      "description": "無線機のキー/ボタン操作音を有効または無効にします。"
+    },
+    "break_in_mode": {
+      "label": "ブレークインモード",
+      "description": "CW のブレークインモード（オフ、セミ、フル）を選択します。"
+    },
+    "split_enabled": {
+      "label": "Split",
+      "description": "受信と送信で別々の VFO 状態を使う Split 運用を有効にします。"
+    },
+    "vfo_select": {
+      "label": "VFO",
+      "description": "対応機種でアクティブな VFO を選択します。"
+    },
+    "audio_if_mode": {
+      "label": "Audio IF",
+      "description": "現在の ICOM WLAN プロファイルが提供するオーディオ IF の経路を選択します。"
+    },
+    "spectrum_data_output": {
+      "label": "スペクトラム出力",
+      "description": "対応機種で無線機のスペクトラムデータ出力を有効にします。"
+    },
+    "spectrum_hold": {
+      "label": "スペクトラムホールド",
+      "description": "無線機のスペクトラム表示を一時停止または再開します。"
+    },
+    "spectrum_speed": {
+      "label": "スペクトラム速度",
+      "description": "無線機のスペクトラムのスイープ速度を設定します。"
+    },
+    "spectrum_ref": {
+      "label": "スペクトラム基準",
+      "description": "無線機のスペクトラム基準レベル（dB）を調整します。"
+    },
+    "spectrum_average": {
+      "label": "スペクトラム平均",
+      "description": "対応機種でスペクトラムの平均化を調整します。"
+    },
+    "spectrum_vbw": {
+      "label": "スペクトラム VBW",
+      "description": "無線機のスペクトラム表示のビデオ帯域幅を選択します。"
+    },
+    "spectrum_rbw": {
+      "label": "スペクトラム RBW",
+      "description": "無線機のスペクトラム表示の分解能帯域幅を選択します。"
+    },
+    "spectrum_during_tx": {
+      "label": "送信中のスペクトラム",
+      "description": "送信中もスペクトラム出力を継続するかどうかを設定します。"
+    },
+    "spectrum_center_type": {
+      "label": "スペクトラム中心",
+      "description": "無線機のスペクトラム表示で使う中心基準を選択します。"
     }
   },
   "cw": {
@@ -1330,6 +1422,9 @@
       "backendSourceLicenseNotice": "{{name}} は、{{license}} オープンソース ソフトウェアです。オリジナルプロジェクト:",
       "cancel": "キャンセル",
       "save": "保存"
-    }
+    },
+    "realtimeTextInputPlaceholder": "リアルタイム入力：入力した文字はすぐに CW 送信キューに追加されます",
+    "textInputModeRealtime": "リアルタイム入力",
+    "textInputModeDescription": "通常モードでは Enter キーまたは送信ボタンで送信します。リアルタイムモードでは、入力した文字がすぐに送信キューに追加されます。"
   }
 }

@@ -324,7 +324,9 @@
     "tciAudioSampleRate": "TCI 音声サンプルレート",
     "tipTci": "ExpertSDR は通常 40001、Thetis/AetherSDR は通常 50001 です。自動検出では完全な TCI ハンドシェイクを検証します。",
     "tipTciAudio": "無線機の音声ストリームを使う場合は、入力/出力に TCI Audio を選択します。",
-    "tipTciCompensation": "TCI モード: ローカル接続では通常、低めの補正で十分です"
+    "tipTciCompensation": "TCI モード: ローカル接続では通常、低めの補正で十分です",
+    "fakeFrequencyTitle": "仮想周波数オフセット",
+    "fakeFrequencyDesc": "FT8/FT4 モードでのみ有効です。送信時にオーディオキャリアを無線機の最適な帯域（約 1500 Hz）に保ち、ダイヤル周波数を逆方向にずらすことで、実際の送信位置は変わりません。オーディオ周波数が高すぎる/低すぎる場合に送信出力が低下する無線機での問題を回避できます。受信表示や設定した送信周波数には影響しません。"
   },
   "audio": {
     "loading": "オーディオデバイスをロード中...",
@@ -870,7 +872,9 @@
     "marketSearchShort": "プラグインを検索",
     "marketDetails": "詳細",
     "marketVersionHistoryShowAll": "全 {{count}} バージョンを表示",
-    "marketInstalledAtLabel": "インストール日時"
+    "marketInstalledAtLabel": "インストール日時",
+    "marketReadme": "README",
+    "marketReadmeSource": "README のソースを表示"
   },
   "serverHealth": {
     "title": "サーバープロセスの健全性ステータス",
