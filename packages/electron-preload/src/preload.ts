@@ -217,26 +217,21 @@ interface StartupErrorAction {
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-const shortcutCommandListeners = new WeakMap<
-  (payload: ShortcutCommandPayload) => void,
-  (_event: unknown, payload: ShortcutCommandPayload) => void
->();
-const shortcutRecordedListeners = new WeakMap<
-  (payload: ShortcutRecordedPayload) => void,
-  (_event: unknown, payload: ShortcutRecordedPayload) => void
->();
-const shortcutRecordingCancelledListeners = new WeakMap<
-  (payload: ShortcutRecordingCancelledPayload) => void,
-  (_event: unknown, payload: ShortcutRecordingCancelledPayload) => void
->();
-const voicePttShortcutCommandListeners = new WeakMap<
-  (payload: VoicePttShortcutCommandPayload) => void,
-  (_event: unknown, payload: VoicePttShortcutCommandPayload) => void
->();
-const updaterStatusListeners = new WeakMap<
-  (status: DesktopUpdateStatus) => void,
-  (_event: unknown, status: DesktopUpdateStatus) => void
->();
+/**
+ * Subscribes to a main-process push channel and returns its disposer.
+ *
+ * Functions passed through contextBridge are re-proxied on every call, so the
+ * renderer cannot unsubscribe by passing the same callback again: identity-keyed
+ * off*() methods never matched and leaked one listener per re-subscription.
+ * The IPC event object is also kept out of the renderer world.
+ */
+function subscribe<T>(channel: string, callback: (payload: T) => void): () => void {
+  const listener = (_event: unknown, payload: T) => callback(payload);
+  ipcRenderer.on(channel, listener);
+  return () => {
+    ipcRenderer.removeListener(channel, listener);
+  };
+}
 
 /**
  * Electron Preload 脚本
@@ -339,18 +334,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     download: (request: { identity: string; allowDowngrade: boolean }): Promise<DesktopUpdateStatus> => ipcRenderer.invoke('updater:download', request),
     installAndRestart: (request: { identity: string; allowDowngrade: boolean }): Promise<DesktopUpdateStatus> => ipcRenderer.invoke('updater:installAndRestart', request),
     openDownload: (url?: string): Promise<void> => ipcRenderer.invoke('updater:openDownload', url),
-    onStatus: (callback: (status: DesktopUpdateStatus) => void) => {
-      if (updaterStatusListeners.has(callback)) return;
-      const listener = (_event: unknown, status: DesktopUpdateStatus) => callback(status);
-      updaterStatusListeners.set(callback, listener);
-      ipcRenderer.on('updater:status', listener);
-    },
-    offStatus: (callback: (status: DesktopUpdateStatus) => void) => {
-      const listener = updaterStatusListeners.get(callback);
-      if (!listener) return;
-      ipcRenderer.removeListener('updater:status', listener);
-      updaterStatusListeners.delete(callback);
-    },
+    onStatus: (callback: (status: DesktopUpdateStatus) => void): (() => void) =>
+      subscribe('updater:status', callback),
   },
 
   startupLogs: {
@@ -397,18 +382,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openSpectrumWindow: () => ipcRenderer.invoke('window:openSpectrumWindow'),
 
     /**
-     * 监听频谱窗口关闭事件
+     * 监听频谱窗口关闭事件，返回取消监听函数
      */
-    onSpectrumWindowClosed: (callback: () => void) => {
-      ipcRenderer.on('spectrum-window-closed', callback);
-    },
-
-    /**
-     * 取消监听频谱窗口关闭事件
-     */
-    offSpectrumWindowClosed: (callback: () => void) => {
-      ipcRenderer.removeListener('spectrum-window-closed', callback);
-    }
+    onSpectrumWindowClosed: (callback: () => void): (() => void) =>
+      subscribe('spectrum-window-closed', () => callback()),
   },
 
   // 系统集成
@@ -451,59 +428,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     register: (config?: ShortcutConfig): Promise<ShortcutRegistrationStatus> => ipcRenderer.invoke('shortcuts:register', config),
     startRecording: (actionId: ShortcutActionId): Promise<void> => ipcRenderer.invoke('shortcuts:startRecording', actionId),
     stopRecording: (): Promise<void> => ipcRenderer.invoke('shortcuts:stopRecording'),
-    onCommand: (callback: (payload: ShortcutCommandPayload) => void) => {
-      if (shortcutCommandListeners.has(callback)) return;
-      const listener = (_event: unknown, payload: ShortcutCommandPayload) => callback(payload);
-      shortcutCommandListeners.set(callback, listener);
-      ipcRenderer.on('shortcut:command', listener);
-    },
-    offCommand: (callback: (payload: ShortcutCommandPayload) => void) => {
-      const listener = shortcutCommandListeners.get(callback);
-      if (!listener) return;
-      ipcRenderer.removeListener('shortcut:command', listener);
-      shortcutCommandListeners.delete(callback);
-    },
-    onRecorded: (callback: (payload: ShortcutRecordedPayload) => void) => {
-      if (shortcutRecordedListeners.has(callback)) return;
-      const listener = (_event: unknown, payload: ShortcutRecordedPayload) => callback(payload);
-      shortcutRecordedListeners.set(callback, listener);
-      ipcRenderer.on('shortcut:recorded', listener);
-    },
-    offRecorded: (callback: (payload: ShortcutRecordedPayload) => void) => {
-      const listener = shortcutRecordedListeners.get(callback);
-      if (!listener) return;
-      ipcRenderer.removeListener('shortcut:recorded', listener);
-      shortcutRecordedListeners.delete(callback);
-    },
-    onRecordingCancelled: (callback: (payload: ShortcutRecordingCancelledPayload) => void) => {
-      if (shortcutRecordingCancelledListeners.has(callback)) return;
-      const listener = (_event: unknown, payload: ShortcutRecordingCancelledPayload) => callback(payload);
-      shortcutRecordingCancelledListeners.set(callback, listener);
-      ipcRenderer.on('shortcut:recording-cancelled', listener);
-    },
-    offRecordingCancelled: (callback: (payload: ShortcutRecordingCancelledPayload) => void) => {
-      const listener = shortcutRecordingCancelledListeners.get(callback);
-      if (!listener) return;
-      ipcRenderer.removeListener('shortcut:recording-cancelled', listener);
-      shortcutRecordingCancelledListeners.delete(callback);
-    },
+    onCommand: (callback: (payload: ShortcutCommandPayload) => void): (() => void) =>
+      subscribe('shortcut:command', callback),
+    onRecorded: (callback: (payload: ShortcutRecordedPayload) => void): (() => void) =>
+      subscribe('shortcut:recorded', callback),
+    onRecordingCancelled: (callback: (payload: ShortcutRecordingCancelledPayload) => void): (() => void) =>
+      subscribe('shortcut:recording-cancelled', callback),
   },
 
   voicePttShortcut: {
     setConfig: (config: VoicePttShortcutConfigPayload): Promise<void> =>
       ipcRenderer.invoke('voicePttShortcut:setConfig', config),
-    onCommand: (callback: (payload: VoicePttShortcutCommandPayload) => void) => {
-      if (voicePttShortcutCommandListeners.has(callback)) return;
-      const listener = (_event: unknown, payload: VoicePttShortcutCommandPayload) => callback(payload);
-      voicePttShortcutCommandListeners.set(callback, listener);
-      ipcRenderer.on('voice-ptt-shortcut:command', listener);
-    },
-    offCommand: (callback: (payload: VoicePttShortcutCommandPayload) => void) => {
-      const listener = voicePttShortcutCommandListeners.get(callback);
-      if (!listener) return;
-      ipcRenderer.removeListener('voice-ptt-shortcut:command', listener);
-      voicePttShortcutCommandListeners.delete(callback);
-    },
+    onCommand: (callback: (payload: VoicePttShortcutCommandPayload) => void): (() => void) =>
+      subscribe('voice-ptt-shortcut:command', callback),
   },
 
   https: {
@@ -562,8 +499,7 @@ declare global {
     download(request: { identity: string; allowDowngrade: boolean }): Promise<DesktopUpdateStatus>;
         installAndRestart(request: { identity: string; allowDowngrade: boolean }): Promise<DesktopUpdateStatus>;
         openDownload(url?: string): Promise<void>;
-        onStatus(callback: (status: DesktopUpdateStatus) => void): void;
-        offStatus(callback: (status: DesktopUpdateStatus) => void): void;
+        onStatus(callback: (status: DesktopUpdateStatus) => void): () => void;
       };
       startupLogs: {
         openFolder(): Promise<void>;
@@ -575,8 +511,7 @@ declare global {
         openLogbookWindow(queryString: string): Promise<void>;
         openPluginPageWindow(queryString: string): Promise<void>;
         openSpectrumWindow(): Promise<void>;
-        onSpectrumWindowClosed(callback: () => void): void;
-        offSpectrumWindowClosed(callback: () => void): void;
+        onSpectrumWindowClosed(callback: () => void): () => void;
       };
       shell: {
         openExternal(url: string): Promise<void>;
@@ -598,17 +533,13 @@ declare global {
         register(config?: ShortcutConfig): Promise<ShortcutRegistrationStatus>;
         startRecording(actionId: ShortcutActionId): Promise<void>;
         stopRecording(): Promise<void>;
-        onCommand(callback: (payload: ShortcutCommandPayload) => void): void;
-        offCommand(callback: (payload: ShortcutCommandPayload) => void): void;
-        onRecorded(callback: (payload: ShortcutRecordedPayload) => void): void;
-        offRecorded(callback: (payload: ShortcutRecordedPayload) => void): void;
-        onRecordingCancelled(callback: (payload: ShortcutRecordingCancelledPayload) => void): void;
-        offRecordingCancelled(callback: (payload: ShortcutRecordingCancelledPayload) => void): void;
+        onCommand(callback: (payload: ShortcutCommandPayload) => void): () => void;
+        onRecorded(callback: (payload: ShortcutRecordedPayload) => void): () => void;
+        onRecordingCancelled(callback: (payload: ShortcutRecordingCancelledPayload) => void): () => void;
       };
       voicePttShortcut: {
         setConfig(config: VoicePttShortcutConfigPayload): Promise<void>;
-        onCommand(callback: (payload: VoicePttShortcutCommandPayload) => void): void;
-        offCommand(callback: (payload: VoicePttShortcutCommandPayload) => void): void;
+        onCommand(callback: (payload: VoicePttShortcutCommandPayload) => void): () => void;
       };
       https: {
         getStatus(): Promise<DesktopHttpsStatus>;

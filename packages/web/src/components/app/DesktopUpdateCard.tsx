@@ -122,10 +122,7 @@ export function DesktopUpdateCard() {
       setDesktopUpdateStatus(status as DesktopUpdateState);
       setDesktopUpdateError(status.errorMessage || '');
     };
-    window.electronAPI.updater.onStatus(handleStatus);
-    return () => {
-      window.electronAPI?.updater?.offStatus?.(handleStatus);
-    };
+    return window.electronAPI.updater.onStatus(handleStatus);
   }, []);
 
   const handleCheckDesktopUpdate = useCallback(async () => {

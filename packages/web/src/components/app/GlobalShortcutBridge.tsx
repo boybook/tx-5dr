@@ -240,8 +240,7 @@ export function GlobalShortcutBridge() {
       runAction(payload.actionId);
     };
 
-    electronShortcuts.onCommand(handleCommand);
-    return () => electronShortcuts.offCommand(handleCommand);
+    return electronShortcuts.onCommand(handleCommand);
   }, [runAction, transport]);
 
   useEffect(() => {
