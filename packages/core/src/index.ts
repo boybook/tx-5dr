@@ -3,12 +3,10 @@ export * from './realtime/wsCompatProtocol.js';
 export * from './realtime/RealtimeJitterEstimator.js';
 
 export * from './parser/ft8-message-parser.js';
-export * from './cycle/cycle-manager.js';
 
 // 时钟系统导出
 export * from './clock/ClockSource.js';
 export * from './clock/ClockSourceSystem.js';
-export * from './clock/ClockSourceMock.js';
 export * from './clock/SlotClock.js';
 export * from './clock/SlotScheduler.js';
 export * from './clock/DecodeSessionCancellation.js';
@@ -25,7 +23,6 @@ export type { WSClientConfig } from './websocket/WSClient.js';
 // 工具导出
 export * from './callsign/callsign.js';
 export * from './callsign/grid-location.js';
-export * from './callsign/dxcc-online-validator.js';
 export * from './utils/cycleUtils.js';
 export * from './utils/standardDigitalFrequency.js';
 

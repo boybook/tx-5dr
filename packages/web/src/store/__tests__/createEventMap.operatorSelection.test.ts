@@ -54,7 +54,6 @@ function createEventMapForTest(authOverrides: Partial<AuthState> = {}) {
   const connectionDispatch = vi.fn();
   const radioDispatch = vi.fn();
   const slotPacksDispatch = vi.fn();
-  const logbookDispatch = vi.fn();
   const radioService = {
     getSystemStatus: vi.fn(),
     subscribeSpectrum: vi.fn(),
@@ -68,7 +67,6 @@ function createEventMapForTest(authOverrides: Partial<AuthState> = {}) {
     connectionDispatch,
     radioDispatch,
     slotPacksDispatch,
-    logbookDispatch,
     authStateRef: { current: createAuthState(authOverrides) },
     radioService,
     radioServiceRef: { current: null },
@@ -95,7 +93,6 @@ function createEventMapForTest(authOverrides: Partial<AuthState> = {}) {
     connectionDispatch,
     radioDispatch,
     slotPacksDispatch,
-    logbookDispatch,
     eventMap,
     radioService,
   };

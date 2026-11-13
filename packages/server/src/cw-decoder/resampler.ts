@@ -18,7 +18,3 @@ export function resampleLinear(input: Float32Array, inputRate: number, outputRat
   }
   return output;
 }
-
-export function resample12kTo9600(input: Float32Array): Float32Array {
-  return resampleLinear(input, 12_000, 9_600);
-}

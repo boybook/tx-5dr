@@ -27,7 +27,6 @@ import type {
   RadioOperatorListResponse,
   RadioOperatorDetailResponse,
   RadioOperatorActionResponse,
-  RadioOperatorStatusResponse,
   LogBookListResponse,
   LogBookDetailResponse,
   LogBookActionResponse,
@@ -43,10 +42,7 @@ import type {
   LogbookConditionalMutationHeaders,
   LogbookIdempotentMutationHeaders,
   CreateLogBookRequest,
-  UpdateLogBookRequest,
   LogBookQSOQueryOptions,
-  LogBookRecentGlobeQuery,
-  LogBookRecentGlobeResponse,
   LogBookWorkedGridQuery,
   LogBookWorkedGridResponse,
   LogBookExportOptions,
@@ -65,8 +61,6 @@ import type {
   SerialPortsResponse,
   TestResponse,
   RadioStatusResponse,
-  ConnectRadioResponse,
-  DisconnectRadioResponse,
   FrequencyListResponse,
   LastFrequencyResponse,
   SetFrequencyResponse,
@@ -126,7 +120,6 @@ import type {
   VoiceKeyerPanel,
   VoiceKeyerPanelUpdate,
   VoiceKeyerSlotUpdate,
-  PluginMarketCatalogEntryResponse,
   PluginMarketCatalogResponse,
   PluginMarketInstallResult,
   PluginRuntimeInfo,
@@ -937,17 +930,6 @@ export const api = {
     );
   },
 
-  /**
-   * 重置音频设备设置
-   */
-  async resetAudioSettings(apiBase?: string): Promise<AudioDeviceSettingsResponse> {
-    return apiRequest<AudioDeviceSettingsResponse>(
-      '/audio/settings/reset',
-      { method: 'POST' },
-      apiBase
-    );
-  },
-
   async getSpectrumSettings(apiBase?: string): Promise<SpectrumSettingsResponse> {
     return apiRequest<SpectrumSettingsResponse>('/audio/spectrum-settings', undefined, apiBase);
   },
@@ -1039,14 +1021,6 @@ export const api = {
     return apiRequest<RadioStatusResponse>('/radio/status', undefined, apiBase);
   },
 
-  async connectRadio(apiBase?: string): Promise<ConnectRadioResponse> {
-    return apiRequest<ConnectRadioResponse>('/radio/connect', { method: 'POST' }, apiBase);
-  },
-
-  async disconnectRadio(apiBase?: string): Promise<DisconnectRadioResponse> {
-    return apiRequest<DisconnectRadioResponse>('/radio/disconnect', { method: 'POST' }, apiBase);
-  },
-
   async getPresetFrequencies(apiBase?: string): Promise<FrequencyListResponse> {
     return apiRequest<FrequencyListResponse>('/radio/frequencies', undefined, apiBase);
   },
@@ -1070,12 +1044,6 @@ export const api = {
     }, apiBase);
   },
 
-  async getImageArtifacts(query: { family?: 'sstv' | 'fax'; direction?: 'rx' | 'tx'; operatorId?: string; limit?: number; offset?: number } = {}, apiBase?: string): Promise<{ success: boolean; artifacts: import('@tx5dr/contracts').ImageArtifact[] }> {
-    const params = new URLSearchParams();
-    for (const [key, value] of Object.entries(query)) if (value !== undefined) params.set(key, String(value));
-    return apiRequest(`/image-radio/artifacts${params.size ? `?${params}` : ''}`, undefined, apiBase);
-  },
-
   async getImageHistory(query: { family?: 'sstv' | 'fax'; direction?: 'all' | 'rx' | 'tx'; operatorId?: string; limit?: number; cursor?: string } = {}, apiBase?: string): Promise<{ success: boolean; entries: import('@tx5dr/contracts').ImageHistoryEntry[]; nextCursor?: string }> {
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(query)) if (value !== undefined) params.set(key, String(value));
@@ -1092,14 +1060,6 @@ export const api = {
 
   async getImageArtifactBlob(id: string, apiBase?: string): Promise<Blob> {
     return apiBlobRequest(`/image-radio/artifacts/${encodePathSegment(id)}/image`, undefined, apiBase);
-  },
-
-  async updateImageArtifact(id: string, patch: { pinned?: boolean; qsoId?: string }, apiBase?: string): Promise<{ success: boolean; artifact: import('@tx5dr/contracts').ImageArtifact }> {
-    return apiRequest(`/image-radio/artifacts/${encodePathSegment(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }, apiBase);
-  },
-
-  async deleteImageArtifact(id: string, apiBase?: string): Promise<{ success: boolean }> {
-    return apiRequest(`/image-radio/artifacts/${encodePathSegment(id)}`, { method: 'DELETE' }, apiBase);
   },
 
   async getImagePaperManifest(apiBase?: string): Promise<{ success: boolean; manifest: { session: import('@tx5dr/contracts').ImageSessionSummary; boundaries: import('@tx5dr/contracts').ImagePaperBoundary[]; segments: Array<{ boundaryId: string; startLine: number; endLine: number; width: number; pixelFormat: import('@tx5dr/contracts').ImagePixelFormat; snapshotUrl: string; calibration?: import('@tx5dr/contracts').ImageFaxCalibration }> } }> {
@@ -1578,17 +1538,6 @@ export const api = {
     );
   },
 
-  /**
-   * 获取操作员运行状态
-   */
-  async getOperatorStatus(id: string, apiBase?: string): Promise<RadioOperatorStatusResponse> {
-    return apiRequest<RadioOperatorStatusResponse>(
-      `/operators/${encodeURIComponent(id)}/status`,
-      undefined,
-      apiBase
-    );
-  },
-
   // ========== 日志本管理API ==========
 
   /**
@@ -1731,24 +1680,6 @@ export const api = {
   },
 
   /**
-   * 更新日志本信息
-   */
-  async updateLogBook(
-    id: string,
-    updates: UpdateLogBookRequest,
-    apiBase?: string
-  ): Promise<LogBookActionResponse> {
-    return apiRequest<LogBookActionResponse>(
-      `/logbooks/${encodePathSegment(id)}`,
-      {
-        method: 'PUT',
-        body: JSON.stringify(updates),
-      },
-      apiBase
-    );
-  },
-
-  /**
    * 删除日志本
    */
   async deleteLogBook(id: string, apiBase?: string): Promise<LogBookActionResponse> {
@@ -1819,35 +1750,6 @@ export const api = {
     return await res.json();
   },
 
-  /**
-   * 获取日志页地球视图所需的最近QSO数据
-   */
-  async getLogBookRecentGlobe(id: string, options?: LogBookRecentGlobeQuery, apiBase?: string): Promise<LogBookRecentGlobeResponse> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const params = new URLSearchParams();
-
-    if (options) {
-      Object.entries(options).forEach(([key, value]) => {
-        if (value !== undefined && value !== null) {
-          params.append(key, String(value));
-        }
-      });
-    }
-
-    const url = `${baseUrl}/logbooks/${encodePathSegment(id)}/recent-globe${params.toString() ? '?' + params.toString() : ''}`;
-    const res = await fetch(url, { headers: getAuthHeaders() });
-
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => null);
-      if (errorData) {
-        throw handleApiError(errorData, res.status);
-      }
-      throw new Error(`Failed to query recent logbook globe data: ${res.status} ${res.statusText}`);
-    }
-
-    return await res.json();
-  },
-
   async getLogBookWorkedGrids(
     id: string,
     options?: LogBookWorkedGridQuery,
@@ -1901,28 +1803,6 @@ export const api = {
     }
     
     return await res.text();
-  },
-
-  /**
-   * 导入数据到日志本
-   */
-  async importToLogBook(id: string, adifContent: string, apiBase?: string): Promise<LogBookImportResponse> {
-    const baseUrl = apiBase || getConfiguredApiBase();
-    const res = await fetch(`${baseUrl}/logbooks/${encodePathSegment(id)}/import`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...getAuthHeaders(),
-      },
-      body: JSON.stringify({ adifContent }),
-    });
-
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.message || `Failed to import data: ${res.status} ${res.statusText}`);
-    }
-
-    return await res.json();
   },
 
   async importLogBookFile(id: string, file: File, apiBase?: string): Promise<LogBookImportResponse> {
@@ -2100,28 +1980,6 @@ export const api = {
     return apiRequest<{ success: boolean; data: PSKReporterStatus }>(
       '/pskreporter/status',
       undefined,
-      apiBase
-    );
-  },
-
-  /**
-   * 手动触发 PSKReporter 上报
-   */
-  async triggerPSKReport(apiBase?: string): Promise<{ success: boolean; message: string; data: PSKReporterStatus }> {
-    return apiRequest<{ success: boolean; message: string; data: PSKReporterStatus }>(
-      '/pskreporter/report',
-      { method: 'POST' },
-      apiBase
-    );
-  },
-
-  /**
-   * 重置 PSKReporter 统计信息
-   */
-  async resetPSKReporterStats(apiBase?: string): Promise<{ success: boolean; message: string }> {
-    return apiRequest<{ success: boolean; message: string }>(
-      '/pskreporter/reset-stats',
-      { method: 'POST' },
       apiBase
     );
   },
@@ -2739,13 +2597,6 @@ export const api = {
     return apiRequest('/plugins/market/catalog', undefined, apiBase);
   },
 
-  async getPluginMarketCatalogEntry(
-    name: string,
-    apiBase?: string,
-  ): Promise<PluginMarketCatalogEntryResponse> {
-    return apiRequest(`/plugins/market/catalog/${encodeURIComponent(name)}`, undefined, apiBase);
-  },
-
   /** Installs the newest compatible version, or exactly `version` when the user confirmed one. */
   async installPluginFromMarket(
     name: string,
@@ -2844,7 +2695,6 @@ export const {
   getAudioSettings,
   updateAudioSettings,
   resolveAudioSettings,
-  resetAudioSettings,
   getSpectrumSettings,
   updateSpectrumSettings,
   getTciSpectrumSettings,
@@ -2863,20 +2713,17 @@ export const {
   deleteOperator,
   startOperator,
   stopOperator,
-  getOperatorStatus,
   // 日志本管理函数
   getLogBooks,
   getLogBook,
   retryOpenLogBook,
   createLogBook,
-  updateLogBook,
   deleteLogBook,
   connectOperatorToLogBook,
   disconnectOperatorFromLogBook,
   getLogBookQSOs,
   getLogBookWorkedGrids,
   exportLogBook,
-  importToLogBook,
   importLogBookFile,
   createQSO,
   updateQSO,
@@ -2904,8 +2751,6 @@ export const {
   ,getPSKReporterConfig
   ,updatePSKReporterConfig
   ,getPSKReporterStatus
-  ,triggerPSKReport
-  ,resetPSKReporterStats
   // rigctld bridge 函数
   ,getRigctldStatus
   ,updateRigctldConfig
@@ -2943,7 +2788,6 @@ export const {
   ,getPlugins
   ,getPluginRuntimeInfo
   ,getPluginMarketCatalog
-  ,getPluginMarketCatalogEntry
   ,installPluginFromMarket
   ,updatePluginFromMarket
   ,uninstallPluginFromMarket

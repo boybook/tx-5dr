@@ -1,10 +1,7 @@
-import type React from 'react';
 import type {
   SlotPack,
   ModeDescriptor,
   OperatorStatus,
-  QSORecord,
-  LogBookStatistics,
   MeterData,
   MeterCapabilities,
   TunerCapabilities,
@@ -211,29 +208,3 @@ export type SlotPacksAction =
   | { type: 'commitSync' }
   | { type: 'CLEAR_DATA' };
 
-export interface LogbookState {
-  qsosByOperator: Map<string, QSORecord[]>;
-  statisticsByLogbook: Map<string, LogBookStatistics>;
-  lastUpdateTime: Date | null;
-}
-
-export type LogbookAction =
-  | { type: 'qsoRecordAdded'; payload: { operatorId: string; logBookId: string; qsoRecord: QSORecord } }
-  | { type: 'qsoRecordUpdated'; payload: { operatorId: string; logBookId: string; qsoRecord: QSORecord } }
-  | { type: 'logbookUpdated'; payload: { logBookId: string; statistics: LogBookStatistics; operatorId?: string } }
-  | { type: 'loadQSOs'; payload: { operatorId: string; qsos: QSORecord[] } }
-  | { type: 'CLEAR_LOGBOOK_DATA' };
-
-export interface CombinedState {
-  connection: ConnectionState;
-  radio: RadioState;
-  slotPacks: SlotPacksState;
-  logbook: LogbookState;
-}
-
-export interface CombinedDispatch {
-  connectionDispatch: React.Dispatch<ConnectionAction>;
-  radioDispatch: React.Dispatch<RadioAction>;
-  slotPacksDispatch: React.Dispatch<SlotPacksAction>;
-  logbookDispatch: React.Dispatch<LogbookAction>;
-}

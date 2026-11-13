@@ -196,16 +196,3 @@ function openWebLogbookWindow(queryString: string): void {
     window.location.href = logbookUrl;
   }
 }
-
-/**
- * 获取当前操作员的通联日志URL
- */
-export function getLogbookUrl(operatorId: string, logBookId?: string): string {
-  const params = new URLSearchParams({
-    operatorId,
-    ...(logBookId && { logBookId }),
-  });
-  
-  const baseUrl = window.location.origin;
-  return `${baseUrl}/logbook.html?${params.toString()}`;
-}

@@ -25,8 +25,6 @@ import { RadioConnectionStatus } from '@tx5dr/contracts';
 import type {
   ConnectionAction,
   ConnectionState,
-  LogbookAction,
-  LogbookState,
   RadioAction,
   RadioErrorRecord,
   RadioState,
@@ -74,11 +72,6 @@ export const SplitContext = createContext<Pick<RadioState,
 export const SlotPacksContext = createContext<{
   state: SlotPacksState;
   dispatch: React.Dispatch<SlotPacksAction>;
-} | undefined>(undefined);
-
-export const LogbookContext = createContext<{
-  state: LogbookState;
-  dispatch: React.Dispatch<LogbookAction>;
 } | undefined>(undefined);
 
 export const OperatorsContext = createContext<{

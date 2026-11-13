@@ -2,7 +2,6 @@ import { useCallback, useContext } from 'react';
 import type {
   CapabilityDescriptor,
   CapabilityState,
-  QSORecord,
   SpectrumKind,
 } from '@tx5dr/contracts';
 import {
@@ -11,7 +10,6 @@ import {
   CapabilityDescriptorsContext,
   CapabilityStatesContext,
   ConnectionContext,
-  LogbookContext,
   MyRelatedTimelineContext,
   OperatorsContext,
   OperatorSelectionContext,
@@ -32,30 +30,6 @@ import {
   SlotPacksContext,
   StationInfoContext,
 } from './contexts';
-
-export const useRadio = () => {
-  const connection = useContext(ConnectionContext);
-  const radio = useContext(RadioStateContext);
-  const slotPacks = useContext(SlotPacksContext);
-  const logbook = useContext(LogbookContext);
-  if (!connection || !radio || !slotPacks || !logbook) {
-    throw new Error('useRadio must be used within a RadioProvider');
-  }
-  return {
-    state: {
-      connection: connection.state,
-      radio: radio.state,
-      slotPacks: slotPacks.state,
-      logbook: logbook.state,
-    },
-    dispatch: {
-      connectionDispatch: connection.dispatch,
-      radioDispatch: radio.dispatch,
-      slotPacksDispatch: slotPacks.dispatch,
-      logbookDispatch: logbook.dispatch,
-    },
-  };
-};
 
 export const useConnection = () => {
   const context = useContext(ConnectionContext);
@@ -113,26 +87,6 @@ export const useCurrentOperatorId = () => {
   const context = useContext(OperatorSelectionContext);
   if (!context) throw new Error('useCurrentOperatorId must be used within RadioProvider');
   return context;
-};
-
-export const useLogbook = () => {
-  const context = useContext(LogbookContext);
-  if (!context) throw new Error('useLogbook must be used within RadioProvider');
-  return {
-    state: context.state,
-    dispatch: context.dispatch,
-    getQSOsForOperator: (operatorId: string) => context.state.qsosByOperator.get(operatorId) || [],
-    getStatisticsForLogbook: (logBookId: string) => context.state.statisticsByLogbook.get(logBookId),
-    addQSORecord: (data: { operatorId: string; logBookId: string; qsoRecord: QSORecord }) => {
-      context.dispatch({ type: 'qsoRecordAdded', payload: data });
-    },
-    updateQSORecord: (data: { operatorId: string; logBookId: string; qsoRecord: QSORecord }) => {
-      context.dispatch({ type: 'qsoRecordUpdated', payload: data });
-    },
-    loadQSOs: (operatorId: string, qsos: QSORecord[]) => {
-      context.dispatch({ type: 'loadQSOs', payload: { operatorId, qsos } });
-    },
-  };
 };
 
 export const useProfiles = () => {

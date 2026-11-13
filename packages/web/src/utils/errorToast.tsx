@@ -209,28 +209,6 @@ export function showErrorToast(options: ErrorToastOptions): void {
 }
 
 /**
- * 快捷方法：显示信息提示
- */
-export function showInfoToast(message: string, suggestions?: string[]): void {
-  showErrorToast({
-    userMessage: message,
-    suggestions,
-    severity: 'info'
-  });
-}
-
-/**
- * 快捷方法：显示警告提示
- */
-export function showWarningToast(message: string, suggestions?: string[]): void {
-  showErrorToast({
-    userMessage: message,
-    suggestions,
-    severity: 'warning'
-  });
-}
-
-/**
  * 快捷方法：显示错误提示
  */
 export function showError(message: string, suggestions?: string[]): void {
@@ -241,34 +219,7 @@ export function showError(message: string, suggestions?: string[]): void {
   });
 }
 
-/**
- * 快捷方法：显示严重错误提示
- */
-export function showCriticalError(message: string, suggestions?: string[]): void {
-  showErrorToast({
-    userMessage: message,
-    suggestions,
-    severity: 'critical'
-  });
-}
-
 // ========== 错误代码特殊处理辅助函数 ==========
-
-/**
- * 创建"前往设置"操作
- */
-export function createGoToSettingsAction(navigate: (path: string) => void, tab?: string) {
-  return {
-    label: i18n.t('common:action.goToSettings'),
-    handler: () => {
-      if (tab) {
-        navigate(`/?settingsTab=${tab}`);
-      } else {
-        navigate('/?settings=true');
-      }
-    }
-  };
-}
 
 /**
  * 创建"刷新状态"操作
@@ -320,20 +271,4 @@ export function isRetryableError(code?: string): boolean {
   ];
 
   return retryableCodes.includes(code as ErrorCode);
-}
-
-/**
- * 检查错误代码是否需要前往设置
- */
-export function needsSettingsAction(code?: string): boolean {
-  if (!code) return false;
-
-  const settingsCodes: ErrorCode[] = [
-    'DEVICE_NOT_FOUND',
-    'CONFIG_ERROR',
-    'INVALID_FREQUENCY',
-    'INVALID_MODE'
-  ];
-
-  return settingsCodes.includes(code as ErrorCode);
 }

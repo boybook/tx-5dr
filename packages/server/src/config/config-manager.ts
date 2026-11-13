@@ -1228,10 +1228,6 @@ export class ConfigManager {
     await this.saveConfig();
   }
 
-  getSpectrumPreset(): SpectrumPreset {
-    return this.config.spectrum.preset;
-  }
-
   getSpectrumSettings(): { preset: SpectrumPreset; customSettings?: SpectrumCustomSettings; tciIqSampleRate?: number; tciSpectrum?: TciSpectrumSettings } {
     return {
       preset: this.config.spectrum.preset,
@@ -1274,10 +1270,6 @@ export class ConfigManager {
       this.config.spectrum.tciSpectrum = previous;
       throw error;
     }
-  }
-
-  async updateSpectrumPreset(preset: SpectrumPreset): Promise<void> {
-    await this.updateSpectrumSettings(preset);
   }
 
   async updateSpectrumSettings(preset: SpectrumPreset, customSettings?: SpectrumCustomSettings): Promise<void> {
@@ -1348,21 +1340,6 @@ export class ConfigManager {
   }
 
   /**
-   * 获取服务器配置
-   */
-  getServerConfig() {
-    return { ...this.config.server };
-  }
-
-  /**
-   * 更新服务器配置
-   */
-  async updateServerConfig(serverConfig: Partial<AppConfig['server']>): Promise<void> {
-    this.config.server = { ...this.config.server, ...serverConfig };
-    await this.saveConfig();
-  }
-
-  /**
    * 获取电台(Hamlib)配置（从 activeProfile 派生）
    */
   getRadioConfig(): HamlibConfig {
@@ -1380,14 +1357,6 @@ export class ConfigManager {
       profile.updatedAt = Date.now();
       await this.saveConfig();
     }
-  }
-
-  /**
-   * 重置配置为默认值
-   */
-  async resetConfig(): Promise<void> {
-    this.config = { ...DEFAULT_CONFIG };
-    await this.saveConfig();
   }
 
   /**
@@ -1455,74 +1424,6 @@ export class ConfigManager {
   }
 
   /**
-   * 验证配置的有效性
-   */
-  validateConfig(): { isValid: boolean; errors: string[] } {
-    const errors: string[] = [];
-
-    // 验证FT8配置
-    if (!this.config.ft8.myCallsign) {
-      errors.push('Callsign cannot be empty');
-    }
-
-    if (!this.config.ft8.myGrid) {
-      errors.push('Grid locator cannot be empty');
-    }
-
-    if (this.config.ft8.frequency <= 0) {
-      errors.push('Frequency must be greater than 0');
-    }
-
-    if (this.config.ft8.transmitPower <= 0 || this.config.ft8.transmitPower > 100) {
-      errors.push('Transmit power must be between 1 and 100');
-    }
-
-    // 验证操作员配置
-    this.config.operators.forEach((operator, index) => {
-      if (!operator.myCallsign) {
-        errors.push(`Operator ${index + 1}: callsign cannot be empty`);
-      }
-      if (operator.frequency < 200 || operator.frequency > 4000) {
-        errors.push(`Operator ${index + 1}: frequency must be between 200 and 4000 Hz`);
-      }
-      if (!operator.transmitCycles || operator.transmitCycles.length === 0) {
-        errors.push(`Operator ${index + 1}: transmit cycles cannot be empty`);
-      }
-    });
-
-    // 检查操作员ID唯一性
-    const operatorIds = this.config.operators.map(op => op.id);
-    const duplicateIds = operatorIds.filter((id, index) => operatorIds.indexOf(id) !== index);
-    if (duplicateIds.length > 0) {
-      errors.push(`Duplicate operator IDs: ${duplicateIds.join(', ')}`);
-    }
-
-    // 验证服务器配置
-    if (this.config.server.port <= 0 || this.config.server.port > 65535) {
-      errors.push('Port number must be between 1 and 65535');
-    }
-
-    return {
-      isValid: errors.length === 0,
-      errors,
-    };
-  }
-
-  /**
-   * 获取配置文件路径
-   */
-  getConfigPath(): string {
-    return this.configPath;
-  }
-
-  /**
-   * 设置配置文件路径
-   */
-  setConfigPath(path: string): void {
-    this.configPath = path;
-  }
-
-  /**
    * 获取最后选择的频率
    */
   getLastSelectedFrequency(): AppConfig['lastSelectedFrequency'] {
@@ -1577,22 +1478,6 @@ export class ConfigManager {
   }
 
   /**
-   * 清除最后选择的频率
-   */
-  async clearLastSelectedFrequency(): Promise<void> {
-    await this.setRuntimeValue('lastSelectedFrequency', null);
-    await this.mirrorOperatingFieldToActiveProfile({ lastSelectedFrequency: null });
-  }
-
-  /**
-   * 清除最后选择的语音频率
-   */
-  async clearLastVoiceFrequency(): Promise<void> {
-    await this.setRuntimeValue('lastVoiceFrequency', null);
-    await this.mirrorOperatingFieldToActiveProfile({ lastVoiceFrequency: null });
-  }
-
-  /**
    * 获取最后选择的 CW 频率
    */
   getLastCWFrequency(): AppConfig['lastCWFrequency'] {
@@ -1614,14 +1499,6 @@ export class ConfigManager {
     await this.setRuntimeValue('lastCWFrequency', next);
     await this.mirrorOperatingFieldToActiveProfile({ lastCWFrequency: next });
     logger.debug(`Last CW frequency saved: ${frequencyConfig.description || frequencyConfig.frequency}Hz`);
-  }
-
-  /**
-   * 清除最后选择的 CW 频率
-   */
-  async clearLastCWFrequency(): Promise<void> {
-    await this.setRuntimeValue('lastCWFrequency', null);
-    await this.mirrorOperatingFieldToActiveProfile({ lastCWFrequency: null });
   }
 
   getLastImageFrequency(): AppConfig['lastImageFrequency'] {
@@ -1775,30 +1652,6 @@ export class ConfigManager {
   }
 
   /**
-   * 获取最后设置的音量增益
-   */
-  getLastVolumeGain(): AppConfig['lastVolumeGain'] {
-    const runtimeValue = this.getRuntimeValue('lastVolumeGain');
-    const value = runtimeValue !== undefined ? runtimeValue : this.config.lastVolumeGain;
-    return value ? { ...value } : null;
-  }
-
-  /**
-   * 更新最后设置的音量增益
-   */
-  async updateLastVolumeGain(gain: number, gainDb: number): Promise<void> {
-    await this.setRuntimeValue('lastVolumeGain', { gain, gainDb });
-    logger.debug(`Last volume gain saved: ${gainDb.toFixed(1)}dB (${gain.toFixed(3)})`);
-  }
-
-  /**
-   * 清除最后设置的音量增益
-   */
-  async clearLastVolumeGain(): Promise<void> {
-    await this.setRuntimeValue('lastVolumeGain', null);
-  }
-
-  /**
    * 获取指定模式+频段的音量增益
    */
   getVolumeGainForSlot(modeCategory: string, band: string): { gain: number; gainDb: number } | null {
@@ -1858,15 +1711,6 @@ export class ConfigManager {
    */
   async updatePSKReporterStats(stats: Partial<PSKReporterConfig['stats']>): Promise<void> {
     await this.setRuntimeValue('pskreporterStats', { ...this.getPSKReporterConfig().stats, ...stats });
-  }
-
-  /**
-   * 重置 PSKReporter 配置为默认值
-   */
-  async resetPSKReporterConfig(): Promise<void> {
-    this.config.pskreporter = { ...DEFAULT_CONFIG.pskreporter };
-    await this.setRuntimeValue('pskreporterStats', { ...DEFAULT_CONFIG.pskreporter.stats });
-    await this.saveConfig();
   }
 
   /**
@@ -2122,10 +1966,6 @@ export class ConfigManager {
     await this.saveConfig();
   }
 
-  getOperatorStrategy(operatorId: string): string {
-    return this.config.plugins?.operatorStrategies?.[operatorId] ?? 'standard-qso';
-  }
-
   async setOperatorStrategy(operatorId: string, pluginName: string): Promise<void> {
     if (!this.config.plugins) {
       this.config.plugins = { configs: {}, operatorStrategies: {}, operatorSettings: {}, operatorPluginPauses: {} };
@@ -2161,10 +2001,6 @@ export class ConfigManager {
     this.config.plugins.operatorSettings[operatorId][pluginName] = settings;
     await this.saveConfig();
     logger.info('Operator plugin settings updated', { operatorId, pluginName });
-  }
-
-  getOperatorPluginPauses(operatorId: string): string[] {
-    return this.config.plugins?.operatorPluginPauses?.[operatorId] ?? [];
   }
 
   async setOperatorPluginPauses(operatorId: string, pluginNames: string[]): Promise<void> {

@@ -34,7 +34,6 @@ function createHarness(paused: boolean) {
     connectionDispatch: vi.fn(),
     radioDispatch: vi.fn(),
     slotPacksDispatch: vi.fn(),
-    logbookDispatch: vi.fn(),
     authStateRef: { current: authState },
     radioService: radioService as never,
     radioServiceRef: { current: null },

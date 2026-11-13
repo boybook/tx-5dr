@@ -4,13 +4,11 @@ import type {
   CoreCapabilityDiagnostics,
   CoreRadioCapabilities,
 
-  LogBookStatistics,
   MeterCapabilities,
   MeterData,
   ModeDescriptor,
   OperatorStatus,
   ProfileChangedEvent,
-  QSORecord,
   RadioErrorEventData,
   RadioProfile,
   SlotPack,
@@ -56,7 +54,6 @@ import type {
   ConnectionHealthInfo,
   DecodeErrorData,
   ErrorEventData,
-  LogbookAction,
   RadioAction,
   RadioErrorRecord,
   RadioState,
@@ -119,7 +116,6 @@ interface CreateRadioEventMapDeps {
   connectionDispatch: React.Dispatch<ConnectionAction>;
   radioDispatch: React.Dispatch<RadioAction>;
   slotPacksDispatch: React.Dispatch<SlotPacksAction>;
-  logbookDispatch: React.Dispatch<LogbookAction>;
   authStateRef: React.MutableRefObject<AuthState>;
   radioService: RadioService;
   radioServiceRef: React.MutableRefObject<RadioService | null>;
@@ -140,7 +136,6 @@ export function createRadioEventMap({
   connectionDispatch,
   radioDispatch,
   slotPacksDispatch,
-  logbookDispatch,
   authStateRef,
   radioService,
   radioServiceRef,
@@ -462,21 +457,6 @@ export function createRadioEventMap({
 
       logger.debug('Received legacy slotPacksReset, clearing local slot history');
       slotPacksDispatch({ type: 'CLEAR_DATA' });
-    },
-    qsoRecordAdded: (data: unknown) => {
-      const qsoData = data as { operatorId: string; logBookId: string; qsoRecord: QSORecord };
-      logger.debug('QSO record added:', qsoData);
-      logbookDispatch({ type: 'qsoRecordAdded', payload: qsoData });
-    },
-    qsoRecordUpdated: (data: unknown) => {
-      const qsoData = data as { operatorId: string; logBookId: string; qsoRecord: QSORecord };
-      logger.debug('QSO record updated:', qsoData);
-      logbookDispatch({ type: 'qsoRecordUpdated', payload: qsoData });
-    },
-    logbookUpdated: (data: unknown) => {
-      const logbookData = data as { logBookId: string; statistics: LogBookStatistics; operatorId?: string };
-      logger.debug('Logbook updated:', logbookData);
-      logbookDispatch({ type: 'logbookUpdated', payload: logbookData });
     },
     logbookHealthChanged: (data: unknown) => {
       logger.warn('Logbook health changed:', data);

@@ -1,5 +1,4 @@
 import type {
-  LogBookRecentGlobeResponse,
   LogBookWorkedGridItem,
   OperatorStatus,
   QSORecord,
@@ -105,7 +104,6 @@ export interface WorkedGridGlobeModel {
   };
 }
 
-const globalGridPolygonCache = new Map<2 | 4, WorkedGridPolygon[]>();
 const maidenheadGridLineCache = new Map<2 | 4, WorkedGridLine[]>();
 
 export interface WorkedGridLine {
@@ -138,42 +136,6 @@ function createGridPolygon(grid: string, precision: 2 | 4, count: number, kind: 
       ]],
     },
   };
-}
-
-export function getGlobalGridPolygons(precision: 2 | 4): WorkedGridPolygon[] {
-  const cached = globalGridPolygonCache.get(precision);
-  if (cached) {
-    return cached;
-  }
-
-  const polygons: WorkedGridPolygon[] = [];
-
-  for (let lonField = 0; lonField < 18; lonField += 1) {
-    for (let latField = 0; latField < 18; latField += 1) {
-      const twoCharGrid = `${String.fromCharCode(65 + lonField)}${String.fromCharCode(65 + latField)}`;
-
-      if (precision === 2) {
-        const polygon = createGridPolygon(twoCharGrid, 2, 0, 'grid-base');
-        if (polygon) {
-          polygons.push(polygon);
-        }
-        continue;
-      }
-
-      for (let lonSquare = 0; lonSquare < 10; lonSquare += 1) {
-        for (let latSquare = 0; latSquare < 10; latSquare += 1) {
-          const fourCharGrid = `${twoCharGrid}${lonSquare}${latSquare}`;
-          const polygon = createGridPolygon(fourCharGrid, 4, 0, 'grid-base');
-          if (polygon) {
-            polygons.push(polygon);
-          }
-        }
-      }
-    }
-  }
-
-  globalGridPolygonCache.set(precision, polygons);
-  return polygons;
 }
 
 export function getMaidenheadGridLines(precision: 2 | 4): WorkedGridLine[] {
@@ -283,147 +245,6 @@ function buildHighlightedRemoteRing(lat: number, lng: number): GlobeRing {
     maxRadius: 4.4,
     propagationSpeed: 2.8,
     repeatPeriod: 1400,
-  };
-}
-
-export function buildRecentQSOGlobeModel(
-  payload: LogBookRecentGlobeResponse['data'],
-): RecentQSOGlobeModel {
-  const homePoint = payload.home
-    ? {
-      lat: payload.home.latitude,
-      lng: payload.home.longitude,
-      size: 0.75,
-      color: HOME_POINT_COLOR,
-      grid: payload.home.grid || '',
-      count: 1,
-      callsigns: [],
-      isHome: true,
-    }
-    : null;
-
-  const pointMap = new Map<string, GlobeStationPoint>();
-  const arcs: GlobeArc[] = [];
-  const rings: GlobeRing[] = [];
-  let farthestDistanceKm = 0;
-  const highlightedItem = payload.items.reduce<typeof payload.items[number] | null>((latest, item) => {
-    if (!isRecentQsoHighlightCandidate(item.startTime)) {
-      return latest;
-    }
-
-    if (!latest || item.startTime > latest.startTime) {
-      return item;
-    }
-
-    return latest;
-  }, null);
-  const highlightedGrid = highlightedItem?.grid ?? null;
-
-  for (const item of payload.items) {
-    const coords = gridToCoordinates(item.grid);
-    if (!coords) {
-      continue;
-    }
-
-    const isHighlightedItem = highlightedItem?.id === item.id;
-
-    const existingPoint = pointMap.get(item.grid);
-    if (existingPoint) {
-      existingPoint.count += 1;
-      existingPoint.size = Math.min(1.9, 0.42 + existingPoint.count * 0.14);
-      if (!existingPoint.callsigns.includes(item.callsign) && existingPoint.callsigns.length < 4) {
-        existingPoint.callsigns.push(item.callsign);
-      }
-    } else {
-      pointMap.set(item.grid, {
-        lat: coords.lat,
-        lng: coords.lon,
-        size: 0.56,
-        color: REMOTE_POINT_COLOR,
-        grid: item.grid,
-        count: 1,
-        callsigns: [item.callsign],
-      });
-    }
-
-    if (isHighlightedItem) {
-      const highlightedPoint = pointMap.get(item.grid);
-      if (highlightedPoint) {
-        highlightedPoint.color = HIGHLIGHT_POINT_COLOR;
-        highlightedPoint.size = Math.max(highlightedPoint.size, 0.9);
-      }
-    }
-
-    if (homePoint) {
-      const distanceKm = haversineDistanceKm(homePoint.lat, homePoint.lng, coords.lat, coords.lon);
-      farthestDistanceKm = Math.max(farthestDistanceKm, distanceKm);
-      arcs.push({
-        startLat: homePoint.lat,
-        startLng: homePoint.lng,
-        endLat: coords.lat,
-        endLng: coords.lon,
-        color: isHighlightedItem
-          ? `rgba(${HIGHLIGHT_ARC_COLOR}, ${getHighlightArcOpacity(item.startTime)})`
-          : `rgba(${ARC_BASE_COLOR}, ${getArcOpacity(item.startTime, payload.meta.hours)})`,
-        altitude: getRenderedArcAltitude(distanceKm, isHighlightedItem),
-        stroke: isHighlightedItem
-          ? (distanceKm > 8000 ? 1.1 : 0.9)
-          : (distanceKm > 8000 ? 0.75 : 0.5),
-        grid: item.grid,
-        callsign: item.callsign,
-        startTime: item.startTime,
-        mode: item.mode,
-        frequency: item.frequency,
-      });
-    }
-  }
-
-  if (homePoint) {
-    rings.push({
-      lat: homePoint.lat,
-      lng: homePoint.lng,
-      color: ['rgba(249, 115, 22, 0.65)', 'rgba(249, 115, 22, 0.08)'],
-      maxRadius: 4.8,
-      propagationSpeed: 2.2,
-      repeatPeriod: 1600,
-    });
-  }
-
-  if (highlightedGrid) {
-    const highlightedPoint = pointMap.get(highlightedGrid);
-    if (highlightedPoint) {
-      rings.push(buildHighlightedRemoteRing(highlightedPoint.lat, highlightedPoint.lng));
-    }
-  }
-
-  Array.from(pointMap.values())
-    .filter((point) => point.grid !== highlightedGrid)
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 4)
-    .forEach((point, index) => {
-      rings.push({
-        lat: point.lat,
-        lng: point.lng,
-        color: ['rgba(96, 165, 250, 0.45)', 'rgba(96, 165, 250, 0.02)'],
-        maxRadius: 2.2 + index * 0.5,
-        propagationSpeed: 1.2 + index * 0.25,
-        repeatPeriod: 2600 + index * 260,
-      });
-    });
-
-  return {
-    homePoint,
-    remotePoints: Array.from(pointMap.values()),
-    arcs,
-    rings,
-    summary: {
-      qsoCount: payload.items.length,
-      uniqueGridCount: pointMap.size,
-      latestQsoTime: payload.items[0]?.startTime,
-      farthestDistanceKm: homePoint && farthestDistanceKm > 0 ? farthestDistanceKm : undefined,
-      droppedInvalidGrid: payload.meta.droppedInvalidGrid,
-      limited: payload.meta.limited,
-    },
   };
 }
 

@@ -100,40 +100,11 @@ export function setOperatorEnabled(operatorId: string, enabled: boolean): void {
 }
 
 /**
- * 设置所有操作员的启用状态
- */
-export function setAllOperatorsEnabled(operatorIds: string[], enabled: boolean): void {
-  if (enabled) {
-    // 启用所有操作员 = 清空黑名单
-    setOperatorPreferences({
-      hiddenOperatorIds: [],
-      selectedOperatorId: getOperatorPreferences().selectedOperatorId,
-      lastUpdated: Date.now()
-    });
-  } else {
-    // 禁用所有操作员 = 全部加入黑名单
-    setOperatorPreferences({
-      hiddenOperatorIds: [...operatorIds],
-      selectedOperatorId: getOperatorPreferences().selectedOperatorId,
-      lastUpdated: Date.now()
-    });
-  }
-}
-
-/**
  * 获取被隐藏的操作员ID列表
  */
 export function getHiddenOperatorIds(): string[] {
   const preferences = getOperatorPreferences();
   return preferences.hiddenOperatorIds;
-}
-
-/**
- * 检查是否有主动隐藏的操作员
- */
-export function hasHiddenOperators(): boolean {
-  const preferences = getOperatorPreferences();
-  return preferences.hiddenOperatorIds.length > 0;
 }
 
 /**

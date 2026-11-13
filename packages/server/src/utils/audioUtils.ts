@@ -371,19 +371,6 @@ function resampleAudioSimple(
 }
 
 /**
- * 专门用于 FT8/FT4 的重采样函数（48kHz -> 12kHz）
- * @param samples 输入音频样本（48kHz）
- * @param quality 重采样质量，默认中等质量（平衡性能和质量）
- * @returns 重采样后的音频数据（12kHz）
- */
-export async function resampleTo12kHz(
-  samples: Float32Array,
-  quality: number = 1 // SRC_SINC_MEDIUM_QUALITY
-): Promise<Float32Array> {
-  return resampleAudioProfessional(samples, 48000, 12000, 1, quality);
-}
-
-/**
  * 清理重采样器缓存
  */
 export function clearResamplerCache(): void {
@@ -393,25 +380,3 @@ export function clearResamplerCache(): void {
   resamplerCache.clear();
   logger.debug('Rust resampler cache cleared');
 }
-
-/**
- * 批量重采样函数，支持多种目标采样率
- * @param samples 输入音频样本
- * @param inputSampleRate 输入采样率
- * @param targetRates 目标采样率数组
- * @returns 重采样结果的映射
- */
-export async function batchResample(
-  samples: Float32Array,
-  inputSampleRate: number,
-  targetRates: number[]
-): Promise<Map<number, Float32Array>> {
-  const results = new Map<number, Float32Array>();
-  
-  for (const targetRate of targetRates) {
-    const resampled = await resampleAudioProfessional(samples, inputSampleRate, targetRate);
-    results.set(targetRate, resampled);
-  }
-  
-  return results;
-} 

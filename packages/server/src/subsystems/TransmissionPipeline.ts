@@ -4,7 +4,6 @@ import type { ClockSourceSystem } from '@tx5dr/core';
 import type { AudioStreamManager } from '../audio/AudioStreamManager.js';
 import type { AudioMixer, MixedAudio } from '../audio/AudioMixer.js';
 import type { SpectrumScheduler } from '../audio/SpectrumScheduler.js';
-import { TransmissionTracker, TransmissionPhase } from '../transmission/TransmissionTracker.js';
 import type { WSJTXEncodeWorkQueue, EncodeRequest } from '../decode/WSJTXEncodeWorkQueue.js';
 import type { RadioOperatorManager } from '../operator/RadioOperatorManager.js';
 import type { DigitalFrameCoordinator } from '../transmission/DigitalFrameCoordinator.js';
@@ -35,7 +34,6 @@ export interface TransmissionPipelineDeps {
   audioMixer: AudioMixer;
   audioStreamManager: AudioStreamManager;
   spectrumScheduler: SpectrumScheduler;
-  transmissionTracker: TransmissionTracker;
   encodeQueue: WSJTXEncodeWorkQueue;
   operatorManager: RadioOperatorManager;
   digitalFrameCoordinator: DigitalFrameCoordinator;
@@ -362,12 +360,6 @@ export class TransmissionPipeline {
     });
     if (!accepted) return;
 
-    this.deps.transmissionTracker.updatePhase(result.operatorId, TransmissionPhase.MIXING, {});
-    this.deps.transmissionTracker.updatePhase(result.operatorId, TransmissionPhase.READY, {
-      audioData: result.audioData,
-      sampleRate: result.sampleRate,
-      duration: result.duration,
-    });
 
     const mode = this.deps.getCurrentMode();
     const now = this.deps.clockSource.now();
@@ -388,7 +380,6 @@ export class TransmissionPipeline {
         audioFrequencyHz: request.frequency,
       },
     );
-    this.deps.transmissionTracker.recordAudioAddedToMixer(result.operatorId);
 
     const frame = this.deps.digitalFrameCoordinator.getFrame(request.frameId);
     if (frame?.phase !== 'ready') return;

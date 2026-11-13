@@ -1,7 +1,6 @@
 import type {
   RealtimeAudioCodecCapabilities,
   RealtimeAudioCodecPreference,
-  ResolvedRealtimeAudioCodecPolicy,
 } from '@tx5dr/contracts';
 import { decodeRealtimeEncodedAudioFrame, type RealtimeEncodedAudioFrame } from '@tx5dr/core';
 import { createLogger } from '../utils/logger';
@@ -60,10 +59,6 @@ async function probeRealtimeAudioCodecCapabilities(): Promise<RealtimeAudioCodec
       decodeSampleRates: opus.decodeSampleRates,
     },
   };
-}
-
-export function isOpusPolicy(policy?: ResolvedRealtimeAudioCodecPolicy | null): boolean {
-  return policy?.resolvedCodec === 'opus';
 }
 
 export class BrowserOpusDecoder {

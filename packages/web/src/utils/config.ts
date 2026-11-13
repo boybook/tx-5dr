@@ -62,17 +62,6 @@ export function getApiBaseUrl(): string {
 }
 
 /**
- * 获取完整的API端点URL
- */
-export function getApiUrl(endpoint: string = ''): string {
-  const baseUrl = getApiBaseUrl();
-  const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-  const result = baseUrl + cleanEndpoint;
-  logger.debug('API endpoint URL:', result);
-  return result;
-}
-
-/**
  * 获取WebSocket URL
  * 开发环境：通过Vite代理
  * 生产环境：使用相对路径
@@ -130,10 +119,3 @@ export function normalizeWsUrl(serverUrl: string): string {
   }
   return serverUrl;
 }
-
-/**
- * 获取当前环境
- */
-export function getEnvironment(): 'development' | 'production' {
-  return import.meta.env.DEV ? 'development' : 'production';
-} 

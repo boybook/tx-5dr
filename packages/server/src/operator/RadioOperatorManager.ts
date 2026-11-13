@@ -144,7 +144,6 @@ export interface RadioOperatorManagerOptions {
   getCurrentMode: () => ModeDescriptor;
   setRadioFrequency: (freq: number) => void;
   slotPackManager: SlotPackManager;
-  transmissionTracker?: any; // TransmissionTracker实例
   // 获取物理电台当前基频（Hz）；若无法获取，返回null
   getRadioFrequency?: () => Promise<number | null>;
   // 获取最近已知电台基频（Hz）；自动决策热路径使用它避免等待硬件I/O
@@ -171,7 +170,6 @@ export class RadioOperatorManager {
   private slotPackManager: SlotPackManager;
   private isRunning: boolean = false;
   private logManager: LogManager;
-  private transmissionTracker: any; // TransmissionTracker实例
   private getRadioFrequency?: () => Promise<number | null>;
   private getKnownRadioFrequency?: () => number | null;
   private getFakeFrequencyEnabled?: () => boolean;
@@ -315,7 +313,6 @@ export class RadioOperatorManager {
     this.logManager.setApplicationEventSink((event, data) => {
       this.eventEmitter.emit(event as any, data as any);
     });
-    this.transmissionTracker = options.transmissionTracker;
     this.getRadioFrequency = options.getRadioFrequency;
     this.getKnownRadioFrequency = options.getKnownRadioFrequency;
     this.getFakeFrequencyEnabled = options.getFakeFrequencyEnabled;
@@ -1889,10 +1886,6 @@ export class RadioOperatorManager {
       const trackId = buildTrackId(operatorId, streamId);
       const intent = prepared.intents.find((candidate) => candidate.trackId === trackId)!;
       const requestId = `${prepared.frame.frameId}:${trackId}:${intent.decisionEpoch}`;
-      if (this.transmissionTracker) {
-        this.transmissionTracker.startTransmission(operatorId, slotId, playbackStartMs);
-        this.transmissionTracker.updatePhase(operatorId, 'preparing' as any);
-      }
 
       const encodeFrequency = slotShiftHz !== 0
         ? Math.max(0, Math.round(frequency - slotShiftHz))

@@ -11,7 +11,6 @@ describe('createRadioEventMap voice frequency sync', () => {
     const connectionDispatch = vi.fn();
     const radioDispatch = vi.fn();
     const slotPacksDispatch = vi.fn();
-    const logbookDispatch = vi.fn();
 
     const authState: AuthState = {
       initialized: true,
@@ -31,7 +30,6 @@ describe('createRadioEventMap voice frequency sync', () => {
       connectionDispatch,
       radioDispatch,
       slotPacksDispatch,
-      logbookDispatch,
       authStateRef: { current: authState },
       radioService: {
         getSystemStatus: vi.fn(),
@@ -79,7 +77,6 @@ describe('createRadioEventMap voice frequency sync', () => {
     const connectionDispatch = vi.fn();
     const radioDispatch = vi.fn();
     const slotPacksDispatch = vi.fn();
-    const logbookDispatch = vi.fn();
 
     const authState: AuthState = {
       initialized: true,
@@ -99,7 +96,6 @@ describe('createRadioEventMap voice frequency sync', () => {
       connectionDispatch,
       radioDispatch,
       slotPacksDispatch,
-      logbookDispatch,
       authStateRef: { current: authState },
       radioService: {
         getSystemStatus: vi.fn(),
@@ -146,6 +142,5 @@ describe('createRadioEventMap voice frequency sync', () => {
     });
     expect(slotPacksDispatch).toHaveBeenCalledWith({ type: 'CLEAR_DATA' });
     expect(connectionDispatch).not.toHaveBeenCalled();
-    expect(logbookDispatch).not.toHaveBeenCalled();
   });
 });

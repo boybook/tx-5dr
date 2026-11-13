@@ -1438,18 +1438,4 @@ export class AudioDeviceManager {
     });
   }
 
-  /**
-   * 验证设备是否存在
-   */
-  async validateDevice(deviceId: string): Promise<boolean> {
-    try {
-      const device = await this.getDeviceById(deviceId);
-      const exists = device !== null;
-      logger.debug(`Validate device ${deviceId}: ${exists ? 'found' : 'not found'}`);
-      return exists;
-    } catch (error) {
-      logger.error(`Failed to validate device ${deviceId}`, error);
-      return false;
-    }
-  }
 }

@@ -214,28 +214,6 @@ export function requireCallsignAccess() {
 
 // normalizeCallsign 已迁移到 ../utils/callsign.ts 共享模块
 
-/**
- * @deprecated Use requireOperatorAbility() instead
- * 要求对指定操作员有访问权限
- */
-export function requireOperatorAccess(getOperatorId: (request: FastifyRequest) => string) {
-  return async (request: FastifyRequest, reply: FastifyReply) => {
-    if (!request.authUser) {
-      return reply.code(401).send({
-        success: false,
-        error: { code: 'UNAUTHORIZED', message: 'Authentication required', userMessage: 'Please login first' },
-      });
-    }
-    const operatorId = getOperatorId(request);
-    if (!AuthManager.hasOperatorAccess(request.authUser.role, request.authUser.operatorIds, operatorId)) {
-      return reply.code(403).send({
-        success: false,
-        error: { code: 'FORBIDDEN', message: 'No operator access', userMessage: 'You do not have access to this operator' },
-      });
-    }
-  };
-}
-
 // ===== CASL-based permission middleware =====
 
 const UNAUTHORIZED_RESPONSE = {

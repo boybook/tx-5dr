@@ -110,27 +110,6 @@ export function getLuminance(r: number, g: number, b: number): number {
 }
 
 /**
- * 计算两个颜色之间的对比度
- */
-export function getContrastRatio(color1: { r: number; g: number; b: number }, color2: { r: number; g: number; b: number }): number {
-  const lum1 = getLuminance(color1.r, color1.g, color1.b);
-  const lum2 = getLuminance(color2.r, color2.g, color2.b);
-  const brightest = Math.max(lum1, lum2);
-  const darkest = Math.min(lum1, lum2);
-  return (brightest + 0.05) / (darkest + 0.05);
-}
-
-/**
- * 判断颜色是否为深色
- */
-export function isDarkColor(hex: string): boolean {
-  const rgb = hexToRgb(hex);
-  if (!rgb) return false;
-  const luminance = getLuminance(rgb.r, rgb.g, rgb.b);
-  return luminance < 0.5;
-}
-
-/**
  * 加深颜色，用于文字显示
  * @param hex 原始颜色
  * @param factor 加深程度 (0-1)，值越大越深
@@ -164,17 +143,6 @@ export function lightenColor(hex: string, factor: number = 0.3): string {
   
   const newRgb = hslToRgb(hsl.h, hsl.s, newLightness);
   return rgbToHex(newRgb.r, newRgb.g, newRgb.b);
-}
-
-/**
- * 获取适合的文字颜色（黑色或白色）
- */
-export function getTextColor(backgroundColor: string): string {
-  const rgb = hexToRgb(backgroundColor);
-  if (!rgb) return '#000000';
-
-  const luminance = getLuminance(rgb.r, rgb.g, rgb.b);
-  return luminance > 0.5 ? '#000000' : '#ffffff';
 }
 
 /**
@@ -216,22 +184,3 @@ export function getBadgeColors(baseColor: string, isSpecialMessage: boolean = fa
     };
   }
 }
-
-/**
- * 为行背景生成hover颜色
- * @param baseColor 基础颜色
- * @param cycle 周期类型
- */
-export function getRowHoverColor(baseColor: string, cycle: 'even' | 'odd'): string {
-  const rgb = hexToRgb(baseColor);
-  if (!rgb) return baseColor;
-
-  const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
-  
-  // 根据周期调整hover效果
-  const lightnessAdjustment = cycle === 'even' ? 0.05 : 0.1;
-  const newLightness = Math.min(hsl.l + lightnessAdjustment * 100, 90);
-  
-  const newRgb = hslToRgb(hsl.h, hsl.s, newLightness);
-  return rgbToHex(newRgb.r, newRgb.g, newRgb.b);
-} 

@@ -114,16 +114,11 @@ function createHarness(options: {
     requeuePhysicalFrameAfterOutputFailure: vi.fn((): string[] => []),
   };
   const intentCoordinator = new OperatorIntentCoordinator();
-  const transmissionTracker = {
-    updatePhase: vi.fn(),
-    recordAudioAddedToMixer: vi.fn(),
-  };
   const deps = {
     engineEmitter,
     audioMixer,
     audioStreamManager: { playAudio, stopCurrentPlayback },
     spectrumScheduler: { setPTTActive: vi.fn() },
-    transmissionTracker,
     encodeQueue,
     operatorManager,
     digitalFrameCoordinator,

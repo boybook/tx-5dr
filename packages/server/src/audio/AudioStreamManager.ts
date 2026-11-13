@@ -851,13 +851,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
   }
 
   /**
-   * 获取当前采样率
-   */
-  getCurrentSampleRate(): number {
-    return this.outputSampleRate;
-  }
-
-  /**
    * 重新加载音频配置
    * 注意：需要重启音频流才能生效
    */
@@ -1036,13 +1029,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
       // 返回空数组作为后备
       return new Float32Array(0);
     }
-  }
-  
-  /**
-   * 清空音频缓冲区
-   */
-  clearBuffer(): void {
-    this.audioProvider.clear();
   }
   
   /**
@@ -2258,10 +2244,6 @@ export class AudioStreamManager extends EventEmitter<AudioStreamEvents> {
    */
   public isPlaying(kind?: PlaybackKind): boolean {
     return this.playing && (!kind || this.currentPlaybackKind === kind);
-  }
-
-  public getCurrentPlaybackKind(): PlaybackKind | null {
-    return this.playing ? this.currentPlaybackKind : null;
   }
 
   /**

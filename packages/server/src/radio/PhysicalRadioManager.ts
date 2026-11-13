@@ -20,7 +20,6 @@ import type {
   HamlibConfig,
   MeterCapabilities,
   RadioInfo,
-  ReconnectProgress,
   CapabilityDescriptor,
   CapabilityState,
   CapabilityValue,
@@ -839,7 +838,6 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
         logger.info(`Disconnecting: ${reason || 'user request'}`);
 
         this.stopFrequencyMonitoring();
-        this.stopTunerMonitoring();
 
         // 先主动清理连接资源
         if (this.connection) {
@@ -872,20 +870,6 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
    */
   stopReconnect(): void {
     this.radioActor?.send({ type: 'STOP_RECONNECT' });
-  }
-
-  /**
-   * 获取重连进度
-   */
-  getReconnectProgress(): ReconnectProgress | undefined {
-    if (!this.radioActor) return undefined;
-    const ctx = getRadioContext(this.radioActor);
-    if (ctx.reconnectAttempt === 0) return undefined;
-    return {
-      attempt: ctx.reconnectAttempt,
-      maxAttempts: ctx.maxReconnectAttempts,
-      nextRetryMs: ctx.reconnectDelayMs,
-    };
   }
 
   /**
@@ -2311,47 +2295,6 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   }
 
   /**
-   * 获取信号强度
-   */
-  async getSignalStrength(): Promise<number> {
-    if (!this.connection) {
-      throw new Error('radio not connected');
-    }
-
-    try {
-      // IRadioConnection 接口目前没有 getSignalStrength，需要扩展
-      throw new Error('getSignalStrength not implemented');
-    } catch (error) {
-      this.handleConnectionError(error as Error);
-      throw new Error(`get signal strength failed: ${(error as Error).message}`);
-    }
-  }
-
-  /**
-   * 获取电台状态
-   */
-  async getRadioStatus(): Promise<{
-    frequency: number;
-    mode: RadioModeInfo;
-    signalStrength?: number;
-  }> {
-    if (!this.connection) {
-      throw new Error('radio not connected');
-    }
-
-    try {
-      const frequency = await this.getFrequency();
-      // mode 和 signalStrength 需要接口扩展
-      return {
-        frequency,
-        mode: { mode: 'UNKNOWN', bandwidth: 'UNKNOWN' },
-      };
-    } catch (error) {
-      throw new Error(`get radio status failed: ${(error as Error).message}`);
-    }
-  }
-
-  /**
    * 获取 ICOM WLAN 连接（用于音频适配器）
    *
    * 重构后：直接返回 IcomWlanConnection 实例
@@ -2746,7 +2689,6 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     this.txAudioPolicyWarningKey = null;
     connection.startBackgroundTasks?.();
     this.startFrequencyMonitoring();
-    void this.startTunerMonitoring();
   }
 
   private async bootstrapConnectedSession(connection: IRadioConnection): Promise<void> {
@@ -2785,7 +2727,6 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     this.preconnectedSessionToAdopt = null;
     this.stopFrequencyMonitoring();
-    this.stopTunerMonitoring();
     this.capabilityManager.onDisconnected();
     this.cachedTunerCapabilities = null;
     this.resetCoreCapabilities();
@@ -2815,7 +2756,6 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
 
     this.preconnectedSessionToAdopt = null;
     this.stopFrequencyMonitoring();
-    this.stopTunerMonitoring();
 
     if (this.radioActor) {
       this.radioActor.stop();
@@ -3014,7 +2954,6 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   private cleanupAfterDisconnect(): void {
     this.preconnectedSessionToAdopt = null;
     this.stopFrequencyMonitoring();
-    this.stopTunerMonitoring();
     this.capabilityManager.onDisconnected();
     this.cachedTunerCapabilities = null;
     this.resetCoreCapabilities();
@@ -3664,12 +3603,6 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     }
   }
 
-  // ==================== 天调状态监控（已迁移至 RadioCapabilityManager，此处已清理）====================
-
-  /** @deprecated Tuner polling moved to RadioCapabilityManager. No-op stubs for safe refactor. */
-  private startTunerMonitoring(): void { /* no-op: replaced by RadioCapabilityManager */ }
-  /** @deprecated */
-  private stopTunerMonitoring(): void { /* no-op: replaced by RadioCapabilityManager */ }
 
   private queuePostFrequencyCapabilityRefresh(reason: string): void {
     this.postFrequencyCapabilityRefresh = this.postFrequencyCapabilityRefresh
