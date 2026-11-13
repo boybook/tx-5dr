@@ -3,7 +3,7 @@
 FROM node:22-trixie-slim AS builder-base
 
 # 设置环境变量
-ENV YARN_VERSION=4.9.1
+ENV YARN_VERSION=4.18.1
 ENV DEBIAN_FRONTEND=noninteractive
 ENV NODE_ENV=production
 ARG VCS_REF=development

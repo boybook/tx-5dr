@@ -18,7 +18,7 @@ if command -v apt-get >/dev/null 2>&1; then
 fi
 
 corepack enable
-corepack prepare yarn@4.9.1 --activate
+corepack prepare yarn@4.18.1 --activate
 yarn install --immutable --network-timeout 300000
 '''
 
