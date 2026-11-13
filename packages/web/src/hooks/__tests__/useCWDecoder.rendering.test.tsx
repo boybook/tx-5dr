@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { act, cleanup, render } from '@testing-library/react';
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CWDecoderProvider, useCWDecoder, useCWDecoderTuning } from '../useCWDecoder';
 

@@ -2,7 +2,7 @@
 import React from 'react';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import type { PluginSystemSnapshot } from '@tx5dr/contracts';
 import { PluginSnapshotProvider, usePluginSnapshot } from '../usePluginSnapshot';
 

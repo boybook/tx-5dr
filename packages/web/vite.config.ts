@@ -84,14 +84,6 @@ export default defineConfig({
     global: 'globalThis',
     'import.meta.env.PACKAGE_VERSION': JSON.stringify(hostBuildVersion),
   },
-  resolve: {
-    alias: {
-      events: 'events',
-    },
-  },
-  optimizeDeps: {
-    include: ['events'],
-  },
   server: {
     port: Number.isFinite(configuredWebPort) ? configuredWebPort : DEFAULT_WEB_PORT,
     host: '0.0.0.0',

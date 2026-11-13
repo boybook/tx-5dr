@@ -18,16 +18,16 @@
     "@tx5dr/server": "workspace:*",
     "electron-log": "^5.4.3",
     "electron-updater": "6.8.11",
-    "esbuild": "^0.28.2"
+    "node-forge": "^1.4.2"
   },
   "devDependencies": {
     "@tx5dr/electron-preload": "workspace:*",
     "@tx5dr/shared-config": "workspace:*",
     "@types/node": "^20.0.0",
+    "@types/node-forge": "^1",
     "electron": "^45.2.1",
     "eslint": "^8.0.0",
     "typescript": "^5.0.0",
-    "vitest": "^4.1.12",
-    "wait-on": "^7.0.0"
+    "vitest": "^4.1.12"
   }
 }
