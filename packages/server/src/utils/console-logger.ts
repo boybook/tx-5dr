@@ -5,6 +5,44 @@ import * as path from 'path';
 import { getLogFilePath } from './app-paths.js';
 import { redactSensitiveLogValue, redactSensitiveText } from './sensitive-log.js';
 
+const ERROR_INTRINSIC_KEYS = new Set(['name', 'message', 'stack']);
+
+function errorExtras(error: Error): Record<string, unknown> {
+  const extras: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(error)) {
+    if (!ERROR_INTRINSIC_KEYS.has(key)) extras[key] = value;
+  }
+  const { cause } = error as { cause?: unknown };
+  if (cause !== undefined) extras.cause = cause;
+  return extras;
+}
+
+// Error's name/message/stack are non-enumerable, so plain JSON.stringify
+// would reduce every error to `{}` or `{"name":"..."}` in the log file.
+function errorJsonReplacer(_key: string, value: unknown): unknown {
+  if (value instanceof Error) {
+    return { name: value.name, message: value.message, ...errorExtras(value), stack: value.stack };
+  }
+  return value;
+}
+
+function formatLogArg(arg: unknown): string {
+  if (arg instanceof Error) {
+    const head = arg.stack || `${arg.name}: ${arg.message}`;
+    const extras = errorExtras(arg);
+    if (Object.keys(extras).length === 0) return head;
+    try { return `${head}\n${JSON.stringify(extras, errorJsonReplacer)}`; } catch { return head; }
+  }
+  if (typeof arg === 'object' && arg !== null) {
+    try { return JSON.stringify(arg, errorJsonReplacer); } catch { return String(arg); }
+  }
+  return String(arg);
+}
+
+export function formatLogArgs(args: unknown[]): string {
+  return args.map(formatLogArg).join(' ');
+}
+
 /**
  * File logger with console interception.
  * Overrides console.* methods to write all output to a local log file,
@@ -113,12 +151,7 @@ export class ConsoleLogger {
   }
 
   private formatArgs(args: any[]): string {
-    return args.map(arg => {
-      if (typeof arg === 'object' && arg !== null) {
-        try { return JSON.stringify(arg); } catch { return String(arg); }
-      }
-      return String(arg);
-    }).join(' ');
+    return formatLogArgs(args);
   }
 
   private formatLogEntry(level: string, category: string, message: string): string {

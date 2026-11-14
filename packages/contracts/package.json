@@ -27,8 +27,8 @@
   },
   "devDependencies": {
     "@tx5dr/shared-config": "workspace:*",
-    "eslint": "^8.0.0",
-    "typescript": "^5.0.0",
+    "eslint": "^8.57.1",
+    "typescript": "^5.8.3",
     "vitest": "^4.1.12"
   }
 }

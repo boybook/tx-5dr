@@ -42,8 +42,19 @@ export function redactSensitiveLogValue(value: unknown, seen = new WeakSet<objec
 
   if (value instanceof Error) {
     const error = new Error(redactSensitiveText(value.message));
-    error.name = value.name;
+    Object.defineProperty(error, 'name', { value: value.name, enumerable: false, writable: true, configurable: true });
     error.stack = value.stack ? redactSensitiveText(value.stack) : undefined;
+    // Preserve diagnostic fields such as `code`, `errno` or domain context.
+    for (const [key, item] of Object.entries(value)) {
+      if (key === 'name' || key === 'message' || key === 'stack' || key === 'cause') continue;
+      (error as unknown as Record<string, unknown>)[key] = SENSITIVE_KEYS.has(key.toLowerCase())
+        ? '<redacted>'
+        : redactSensitiveLogValue(item, seen);
+    }
+    const { cause } = value as { cause?: unknown };
+    if (cause !== undefined) {
+      (error as { cause?: unknown }).cause = redactSensitiveLogValue(cause, seen);
+    }
     return error;
   }
 

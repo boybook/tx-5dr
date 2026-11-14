@@ -488,10 +488,10 @@ export const VoicePTTButton: React.FC<VoicePTTButtonProps> = ({ voiceCaptureCont
     void electronVoicePttShortcut
       .setConfig({ enabled: true, preset: shortcutPreset })
       .catch((error: unknown) => logger.warn('Failed to enable Electron Voice PTT shortcut capture', error));
-    electronVoicePttShortcut.onCommand(handleCommand);
+    const disposeCommand = electronVoicePttShortcut.onCommand(handleCommand);
 
     return () => {
-      electronVoicePttShortcut.offCommand(handleCommand);
+      disposeCommand();
       void electronVoicePttShortcut
         .setConfig({ enabled: false, preset: shortcutPreset })
         .catch((error: unknown) => logger.warn('Failed to disable Electron Voice PTT shortcut capture', error));

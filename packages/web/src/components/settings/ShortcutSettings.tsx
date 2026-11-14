@@ -224,8 +224,8 @@ export const ShortcutSettings = forwardRef<ShortcutSettingsRef, ShortcutSettings
           setRecordingActionId(null);
         };
 
-        electronShortcuts.onRecorded(handleRecorded);
-        electronShortcuts.onRecordingCancelled(handleCancelled);
+        const disposeRecorded = electronShortcuts.onRecorded(handleRecorded);
+        const disposeCancelled = electronShortcuts.onRecordingCancelled(handleCancelled);
         void electronShortcuts.startRecording(recordingActionId).catch((error) => {
           logger.warn('Failed to start Electron shortcut recording', error);
           setErrorMessage(t('shortcuts.saveFailed'));
@@ -233,8 +233,8 @@ export const ShortcutSettings = forwardRef<ShortcutSettingsRef, ShortcutSettings
         });
 
         return () => {
-          electronShortcuts.offRecorded(handleRecorded);
-          electronShortcuts.offRecordingCancelled(handleCancelled);
+          disposeRecorded();
+          disposeCancelled();
           void electronShortcuts.stopRecording().catch((error) => {
             logger.warn('Failed to stop Electron shortcut recording', error);
           });

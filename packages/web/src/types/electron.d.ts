@@ -187,8 +187,7 @@ interface ElectronAPI {
     download(request: { identity: string; allowDowngrade: boolean }): Promise<DesktopUpdateStatus>;
     installAndRestart(request: { identity: string; allowDowngrade: boolean }): Promise<DesktopUpdateStatus>;
     openDownload(url?: string): Promise<void>;
-    onStatus(callback: (status: DesktopUpdateStatus) => void): void;
-    offStatus(callback: (status: DesktopUpdateStatus) => void): void;
+    onStatus(callback: (status: DesktopUpdateStatus) => void): () => void;
   };
   startupLogs?: {
     openFolder(): Promise<void>;
@@ -199,8 +198,7 @@ interface ElectronAPI {
     openLogbookWindow(queryString: string): Promise<void>;
     openPluginPageWindow(queryString: string): Promise<void>;
     openSpectrumWindow(): Promise<void>;
-    onSpectrumWindowClosed(callback: () => void): void;
-    offSpectrumWindowClosed(callback: () => void): void;
+    onSpectrumWindowClosed(callback: () => void): () => void;
   };
   shell?: {
     openExternal(url: string): Promise<void>;
@@ -219,17 +217,13 @@ interface ElectronAPI {
     register(config?: ShortcutConfig): Promise<ShortcutRegistrationStatus>;
     startRecording(actionId: ShortcutActionId): Promise<void>;
     stopRecording(): Promise<void>;
-    onCommand(callback: (payload: ShortcutCommandPayload) => void): void;
-    offCommand(callback: (payload: ShortcutCommandPayload) => void): void;
-    onRecorded(callback: (payload: ShortcutRecordedPayload) => void): void;
-    offRecorded(callback: (payload: ShortcutRecordedPayload) => void): void;
-    onRecordingCancelled(callback: (payload: ShortcutRecordingCancelledPayload) => void): void;
-    offRecordingCancelled(callback: (payload: ShortcutRecordingCancelledPayload) => void): void;
+    onCommand(callback: (payload: ShortcutCommandPayload) => void): () => void;
+    onRecorded(callback: (payload: ShortcutRecordedPayload) => void): () => void;
+    onRecordingCancelled(callback: (payload: ShortcutRecordingCancelledPayload) => void): () => void;
   };
   voicePttShortcut?: {
     setConfig(config: VoicePttShortcutConfigPayload): Promise<void>;
-    onCommand(callback: (payload: VoicePttShortcutCommandPayload) => void): void;
-    offCommand(callback: (payload: VoicePttShortcutCommandPayload) => void): void;
+    onCommand(callback: (payload: VoicePttShortcutCommandPayload) => void): () => void;
   };
   https?: {
     getStatus(): Promise<DesktopHttpsStatus>;

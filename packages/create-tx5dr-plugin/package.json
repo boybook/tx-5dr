@@ -30,6 +30,6 @@
     "@tx5dr/plugin-api": "^2.7.0"
   },
   "devDependencies": {
-    "typescript": "^5.0.0"
+    "typescript": "^5.8.3"
   }
 }

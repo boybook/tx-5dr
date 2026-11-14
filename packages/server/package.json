@@ -65,9 +65,9 @@
     "@types/node-wav": "^0",
     "@types/pngjs": "^6.0.5",
     "autocannon": "^8.0.0",
-    "eslint": "^8.0.0",
-    "tsx": "^4.0.0",
-    "typescript": "^5.0.0",
+    "eslint": "^8.57.1",
+    "tsx": "^4.23.15",
+    "typescript": "^5.8.3",
     "vitest": "^4.1.12"
   }
 }

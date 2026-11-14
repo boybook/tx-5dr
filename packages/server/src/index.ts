@@ -152,8 +152,10 @@ async function listenWithPortNegotiation(
 
 async function start() {
   try {
-    // 初始化 XState Inspector（必须在引擎启动前，否则状态机 actor 无法连接）
-    if (process.env.NODE_ENV === 'development') {
+    // 初始化 XState Inspector（必须在引擎启动前，否则状态机 actor 无法连接）。
+    // Sky inspector 会把状态机事件发送到 Stately 的远程服务，连接失败时还会持续产生
+    // 未捕获异常，因此只在开发者显式设置 TX5DR_XSTATE_INSPECT=1 时启用。
+    if (process.env.NODE_ENV === 'development' && process.env.TX5DR_XSTATE_INSPECT === '1') {
       try {
         const { createSkyInspector } = await import('@statelyai/inspect');
         const inspector = createSkyInspector({

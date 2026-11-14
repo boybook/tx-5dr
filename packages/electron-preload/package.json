@@ -13,8 +13,8 @@
   "devDependencies": {
     "@tx5dr/shared-config": "workspace:*",
     "@types/node": "^20.0.0",
-    "electron": "^45.2.1",
-    "eslint": "^8.0.0",
-    "typescript": "^5.0.0"
+    "electron": "^45.3.2",
+    "eslint": "^8.57.1",
+    "typescript": "^5.8.3"
   }
 }

@@ -49,13 +49,7 @@ export const LeftLayout: React.FC = React.memo(() => {
   // 注意：SpectrumDisplay 弹出后会被卸载，只有 LeftLayout 始终存活，因此监听必须在此处
   useEffect(() => {
     if (!isElectron() || !isSpectrumPopedOut) return;
-    const handleClosed = () => setIsSpectrumPopedOut(false);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (window as any).electronAPI.window.onSpectrumWindowClosed(handleClosed);
-    return () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (window as any).electronAPI.window.offSpectrumWindowClosed(handleClosed);
-    };
+    return window.electronAPI?.window?.onSpectrumWindowClosed(() => setIsSpectrumPopedOut(false));
   }, [isSpectrumPopedOut]);
 
   // 监听屏幕宽度变化

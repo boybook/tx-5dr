@@ -1053,7 +1053,8 @@ function buildWebChildEnv(serverPort: number): Record<string, string> {
     HOST: remoteAccessPreset === 'local' ? '127.0.0.1' : '0.0.0.0',
     TX5DR_CLIENT_TOOLS_LOG_FILE: getClientToolsLogPath(),
     TX5DR_CLIENT_TOOLS_READY_FILE: getClientToolsReadyPath(),
-    TX5DR_NETWORK_ACCESS_FILE: getClientToolsReadyPath(),
+    // TX5DR_NETWORK_ACCESS_FILE is an Android bridge input (`addresses`). Pointing the
+    // gateway at its own ready file made it read a missing/stale file on every start.
     TX5DR_PORT_SCAN_STEPS: String(DEFAULT_PORT_SCAN_STEPS),
   };
 
@@ -2017,7 +2018,10 @@ function wireChildProcess(name: string, child: import('node:child_process').Chil
   child.stderr?.on('data', (data: Buffer) => {
     const lines = data.toString().trimEnd();
     if (lines) {
-      logger.error(`[child:${name}] ${lines}`);
+      // stderr carries console.warn, console.error and runtime warnings alike, so it is
+      // not a severity signal. Children keep leveled logs in their own files, and exits
+      // are reported with the recent stderr lines below.
+      logger.warn(`[child:${name}] ${lines}`);
       for (const line of lines.split('\n')) {
         recentStderr.push(line);
         if (recentStderr.length > MAX_STDERR_LINES) recentStderr.shift();
@@ -2680,8 +2684,9 @@ async function createMainWindowOnly(options: CreateMainWindowOptions = {}): Prom
     logger.error('renderer process gone', details);
   });
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  mainWindow.webContents.on('console-message', (_event: any, level: any, message: any, _line: any, _sourceId: any) => {
+  // Single-argument form: Electron flags the positional (event, level, message, ...)
+  // listener as deprecated and removes it in a later major.
+  mainWindow.webContents.on('console-message', ({ level, message }) => {
     logger.debug(`console [${level}]: ${message}`);
   });
 
@@ -3300,12 +3305,14 @@ async function createWindow() {
 
     logger.info(`ports selected: server=${serverPort}, web=${webPort}, rtcDataAudioUdp=${process.env.RTC_DATA_AUDIO_UDP_PORT || '50110'}`);
 
-    logger.warn('running native module check...');
+    logger.info('running native module check...');
     const nativeCheck = await runNativeModuleCheck(serverEntry);
+    const loadedNativeModules = nativeCheck.modules.filter(mod => mod.ok).map(mod => mod.name);
+    if (loadedNativeModules.length > 0) {
+      logger.info(`native modules ok: ${loadedNativeModules.join(', ')}`);
+    }
     for (const mod of nativeCheck.modules) {
-      if (mod.ok) {
-        logger.warn(`native module ok: ${mod.name}`);
-      } else {
+      if (!mod.ok) {
         logger.error(`native module failed: ${mod.name} — ${mod.error}`);
       }
     }
@@ -3347,7 +3354,7 @@ Failed to load: ${failedModules.map(m => m.name).join(', ')}`
         return;
       }
     }
-    logger.warn('native module check complete');
+    logger.info('native module check complete');
 
     let serverReady: ServerReadyState | null = null;
     while (serverReady === null) {

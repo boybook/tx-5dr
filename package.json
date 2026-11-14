@@ -45,12 +45,12 @@
   },
   "devDependencies": {
     "@electron/rebuild": "^4.2.1",
-    "electron": "^45.2.1",
-    "electron-builder": "26.18.0",
+    "electron": "^45.3.2",
+    "electron-builder": "26.18.1",
     "png-to-ico": "^2.1.8",
-    "turbo": "^2.9.14"
+    "turbo": "^2.11.11"
   },
-  "packageManager": "yarn@4.9.1",
+  "packageManager": "yarn@4.18.1",
   "dependenciesMeta": {
     "hamlib": {
       "built": false
