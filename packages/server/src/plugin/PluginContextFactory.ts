@@ -1,3 +1,4 @@
+import { rttyRadioMode } from '@tx5dr/contracts';
 import path from 'path';
 import { createSocket } from 'node:dgram';
 import { createRequire } from 'node:module';
@@ -850,6 +851,8 @@ export class PluginContextFactory {
           return configManager.getLastVoiceFrequency();
         case 'cw':
           return configManager.getLastCWFrequency();
+        case 'rtty':
+          return configManager.getLastRTTYFrequency();
         case 'digital':
         default:
           return configManager.getLastSelectedFrequency();
@@ -862,6 +865,8 @@ export class PluginContextFactory {
           return MODES.VOICE;
         case 'cw':
           return MODES.CW;
+        case 'rtty':
+          return MODES.RTTY;
         case 'digital':
         default:
           return deps.getCurrentMode();
@@ -886,6 +891,9 @@ export class PluginContextFactory {
       if (getEngineMode() === 'cw') {
         return 'CW';
       }
+      if (getEngineMode() === 'rtty') {
+        return rttyRadioMode(configManager.getRttyConfig());
+      }
       return undefined;
     };
 
@@ -897,7 +905,9 @@ export class PluginContextFactory {
         ? (radioMode ?? 'USB')
         : engineMode === 'cw'
           ? 'CW'
-          : descriptor.name;
+          : engineMode === 'rtty'
+            ? 'RTTY'
+            : descriptor.name;
       const projected = toAdifMode({ mode: baseMode });
 
       return {

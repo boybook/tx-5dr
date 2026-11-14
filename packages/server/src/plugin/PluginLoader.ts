@@ -289,8 +289,8 @@ function validateSimulationScenarios(def: AnyPluginDefinition): void {
       throw new Error(`Simulation scenario id must be non-empty and unique: ${scenario.id ?? ''}`);
     }
     scenarioIds.add(scenario.id);
-    if (scenario.modes.length === 0 || scenario.modes.some((mode) => mode !== 'FT8' && mode !== 'FT4')) {
-      throw new Error(`Simulation scenario "${scenario.id}" must declare FT8 and/or FT4`);
+    if (scenario.modes.length === 0 || scenario.modes.some((mode) => mode !== 'FT8' && mode !== 'FT4' && mode !== 'RTTY')) {
+      throw new Error(`Simulation scenario "${scenario.id}" must declare FT8, FT4 and/or RTTY`);
     }
     if (!scenario.states[scenario.initialState]) {
       throw new Error(`Simulation scenario "${scenario.id}" references missing initial state "${scenario.initialState}"`);

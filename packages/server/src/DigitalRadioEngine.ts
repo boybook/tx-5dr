@@ -26,6 +26,11 @@ import {
   type TuneToneStartPayload,
   type TuneToneStatus,
   type CWKeyerStatus,
+  type KeyboardPlaceholderValues,
+  type RttyConfig,
+  rttyRadioMode,
+  rttyTonesInRange,
+  RttyConfigSchema,
   type CWDecoderBackendDescriptor,
   type CWDecoderRuntimeBackend,
   type PresetFrequency,
@@ -102,6 +107,9 @@ import { VoiceSessionManager } from './voice/VoiceSessionManager.js';
 import { VoiceKeyerManager } from './voice/VoiceKeyerManager.js';
 import { AndroidOperatorAudioService } from './voice/AndroidOperatorAudioService.js';
 import { CWKeyerManager } from './cw/CWKeyerManager.js';
+import { RttyService, createRttyMessagePanels } from './rtty/index.js';
+import type { MessagePanelStore } from './keyboard/MessagePanelStore.js';
+import { normalizeKeyboardPlaceholderValues, replaceKeyboardPlaceholders } from './keyboard/placeholders.js';
 import { CWDecoderManager, DEFAULT_CW_DECODER_CONFIG, type CWDecoderStatus as ServerCWDecoderStatus, type CWDecoderConfig as ServerCWDecoderConfig } from './cw-decoder/index.js';
 import { EngineState } from './state-machines/types.js';
 import { PluginManager } from './plugin/PluginManager.js';
@@ -245,6 +253,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   private resourceManager: ResourceManager;
   private imagePersistence: ImagePersistenceCoordinator | null = null;
   private imageRadioService: ImageRadioService | null = null;
+  private rttyService: RttyService | null = null;
+  private readonly rttyPanels: MessagePanelStore = createRttyMessagePanels();
   private imageArtifactStore: ImageArtifactStore | null = null;
   private imageComposerBackgroundStore: ImageComposerBackgroundStore | null = null;
   private imageHistoryStore: ImageHistoryStore | null = null;
@@ -837,6 +847,101 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     return this.imageRadioService;
   }
 
+  public getRttyService(): RttyService | null {
+    return this.rttyService;
+  }
+
+  public getRttyPanels(): MessagePanelStore {
+    return this.rttyPanels;
+  }
+
+  public getRttyConfig(): RttyConfig {
+    return ConfigManager.getInstance().getRttyConfig();
+  }
+
+  public async updateRttyConfig(patch: Partial<RttyConfig>): Promise<RttyConfig> {
+    const configManager = ConfigManager.getInstance();
+    const previous = configManager.getRttyConfig();
+    const signalFields: Array<keyof RttyConfig> = ['baud', 'shiftHz', 'stopBits', 'sideband', 'centerHz', 'reverse', 'characterSet', 'idle'];
+    if (this.rttyService?.getTxStatus().active
+      && signalFields.some((field) => field in patch && patch[field] !== previous[field])) {
+      // Changing tones or the radio sideband mid-transmission would invert or detune the RF signal.
+      throw new Error('RTTY_BUSY_TRANSMITTING');
+    }
+    // Validate before saving: a stored config the modem rejects would leave the receiver stale.
+    if (!rttyTonesInRange(RttyConfigSchema.parse({ ...previous, ...patch }))) throw new Error('RTTY_INVALID_TONES');
+    const next = await configManager.updateRttyConfig(patch);
+    await this.rttyService?.applyConfig(next, previous);
+    if (this.engineMode === 'rtty' && previous.sideband !== next.sideband && this.radioManager.isConnected()) {
+      // The sideband selects the radio data mode (LSB-D / USB-D).
+      await this.applyModeOperatingState({
+        mode: rttyRadioMode(next),
+        bandwidth: 'nochange',
+        options: { intent: 'digital' },
+        tolerateModeFailure: true,
+      }).catch((error) => logger.warn('Failed to apply RTTY sideband to the radio', error));
+    }
+    this.emit('rttyConfigChanged', next);
+    return next;
+  }
+
+  /** Resolves keyboard placeholders and appends text to the RTTY transmit buffer. */
+  public rttyAppend(
+    clientId: string,
+    label: string,
+    text: string,
+    options: { start?: boolean; finishAfter?: boolean; placeholderValues?: KeyboardPlaceholderValues; operatorId?: string },
+  ): void {
+    const service = this.requireRttyService();
+    const values = normalizeKeyboardPlaceholderValues(options.placeholderValues);
+    const resolved = replaceKeyboardPlaceholders(text, values, 'RTTY');
+    service.append(clientId, label, resolved, {
+      start: options.start,
+      finishAfter: options.finishAfter,
+      operatorId: options.operatorId,
+    });
+  }
+
+  /** Sends a stored RTTY message slot. A new transmission starts on a fresh line. */
+  public async rttyPlayMessage(
+    clientId: string,
+    label: string,
+    callsign: string,
+    slotId: string,
+    placeholderValues?: KeyboardPlaceholderValues,
+    operatorId?: string,
+    repeat?: boolean,
+  ): Promise<void> {
+    const service = this.requireRttyService();
+    if (repeat === false) {
+      service.cancelRepeat(slotId);
+      return;
+    }
+    const slot = await this.rttyPanels.getSlot(callsign, slotId);
+    if (!slot.text.trim()) throw new Error('RTTY message slot has no text');
+    const values = normalizeKeyboardPlaceholderValues(placeholderValues, this.rttyPanels.requireCallsign(callsign));
+    const resolved = replaceKeyboardPlaceholders(slot.text, values, 'RTTY').trim();
+    if (repeat) {
+      // A repeated message always returns to receive so answers can be heard.
+      service.startRepeat({
+        clientId,
+        label,
+        messageId: slotId,
+        intervalSec: slot.repeatIntervalSec,
+        text: resolved.replace(/\{RX\}/gi, '').trim(),
+        operatorId,
+      });
+      return;
+    }
+    const startsTransmission = !service.getTxStatus().active;
+    service.append(clientId, label, `${startsTransmission ? '\n' : ' '}${resolved}\n`, { messageId: slotId, operatorId });
+  }
+
+  private requireRttyService(): RttyService {
+    if (!this.rttyService || this.engineMode !== 'rtty') throw new Error('RTTY mode is not active');
+    return this.rttyService;
+  }
+
   public getImageArtifactStore(): ImageArtifactStore | null {
     return this.imageArtifactStore;
   }
@@ -973,6 +1078,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     }
     if (this.engineMode === 'image') {
       return configManager.getLastImageFrequency()?.radioMode ?? null;
+    }
+    if (this.engineMode === 'rtty') {
+      return configManager.getLastRTTYFrequency()?.radioMode ?? rttyRadioMode(configManager.getRttyConfig());
     }
     return configManager.getLastSelectedFrequency()?.radioMode ?? null;
   }
@@ -1262,6 +1370,25 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       () => this.radioManager.getConfig().type === 'none',
       () => this.imagePersistence!.getStatus(),
     );
+    this.rttyService = new RttyService({
+      audioStream: this.audioStreamManager,
+      physicalTx: this.physicalTxCoordinator,
+      getConfig: () => ConfigManager.getInstance().getRttyConfig(),
+      getFrequency: () => this.radioManager.getConfig().type === 'none' ? null
+        : this.radioManager.getKnownFrequency() ?? ConfigManager.getInstance().getLastRTTYFrequency()?.frequency ?? 0,
+      isRadioReady: () => this.radioManager.getConfig().type === 'none' || this.radioManager.isConnected(),
+    });
+    this.on('radioStatusChanged', () => this.rttyService?.refreshAvailability());
+    this.rttyService.on('txStatus', (status) => this.emit('rttyTxStatus', status));
+    this.rttyService.on('decoderStatus', (status) => this.emit('rttyDecoderStatus', status));
+    this.rttyService.on('decoderEvent', (event) => this.emit('rttyDecoderEvent', event));
+    this.rttyService.on('scanUpdate', (update) => this.emit('rttyScanUpdate', update));
+    this.on('frequencyChanged', () => {
+      void this.rttyService?.handleOperatingStateChanged('radio frequency changed');
+    });
+    this.on('radioStatusChanged', (data) => {
+      if (!data.connected) void this.rttyService?.abort('radio disconnected');
+    });
     this.imageRadioService.on('status', (status) => this.emit('imageRadioStatus', status));
     this.imageRadioService.on('rxEvent', (event) => this.emit('imageRxEvent', event));
     this.imageRadioService.on('txStatus', (status) => this.emit('sstvTxStatus', status));
@@ -1384,6 +1511,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       getAudioVolumeController: () => this.audioVolumeController,
       getAudioSidecar: () => this.audioSidecar,
       getImageRadioService: () => this.imageRadioService,
+      getRttyService: () => this.rttyService,
       getStatus: () => this.getStatus(),
     });
     this.engineLifecycle.setVoiceSessionManager(this.voiceSessionManager);
@@ -1440,7 +1568,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     if (lastEngineMode === 'digital' && lastDigitalModeName && lastDigitalModeName !== this.currentMode.name) {
       const targetMode = Object.values(MODES).find(m => m.name === lastDigitalModeName);
-      if (targetMode && targetMode.name !== 'VOICE' && targetMode.name !== 'CW') {
+      if (targetMode && targetMode.name !== 'VOICE' && targetMode.name !== 'CW' && targetMode.name !== 'RTTY') {
         this.currentMode = targetMode;
         this.applyDecodeWindowOverrides();
         this.syncCurrentModeToRuntimeComponents('restore-digital-mode');
@@ -1458,6 +1586,11 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       this.currentMode = MODES.CW;
       this.syncCurrentModeToRuntimeComponents('restore-cw-mode');
       logger.info('Restored last engine mode: cw');
+    } else if (lastEngineMode === 'rtty') {
+      this.engineMode = 'rtty';
+      this.currentMode = MODES.RTTY;
+      this.syncCurrentModeToRuntimeComponents('restore-rtty-mode');
+      logger.info('Restored last engine mode: rtty');
     } else if (lastEngineMode === 'image') {
       this.engineMode = 'image';
       this.currentMode = configManager.getLastImageFrequency()?.mode === 'FAX' ? MODES.FAX : MODES.SSTV;
@@ -1690,6 +1823,18 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         return;
       }
 
+      if (typeof mode === 'object' && mode.name === 'RTTY') {
+        if (this.engineMode === 'rtty') {
+          await this.runWithModeChangeGate(async () => {
+            if (this.radioManager.isConnected()) await this.radioManager.getFrequency?.();
+            this.emitStatusSnapshot();
+          });
+          return;
+        }
+        await this.runWithModeChangeGate(() => this.switchEngineMode('rtty', MODES.RTTY));
+        return;
+      }
+
       if (typeof mode === 'object' && (mode.name === 'SSTV' || mode.name === 'FAX')) {
         if (this.engineMode === 'image' && this.currentMode.name === mode.name) {
           await this.runWithModeChangeGate(async () => {
@@ -1718,7 +1863,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       }
 
 
-      if (this.engineMode === 'image') {
+      if (this.engineMode === 'image' || this.engineMode === 'rtty') {
         await this.runWithModeChangeGate(() => this.switchEngineMode('digital', digitalMode));
         return;
       }
@@ -2226,7 +2371,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         }
       : null;
     let engineState = this.engineLifecycle?.getEngineState() ?? EngineState.IDLE;
-    let shouldResumeAfterSwitch = engineState === EngineState.RUNNING || engineState === EngineState.STARTING || targetEngineMode === 'image';
+    // Image and RTTY receive whenever their mode is selected.
+    let shouldResumeAfterSwitch = engineState === EngineState.RUNNING || engineState === EngineState.STARTING
+      || targetEngineMode === 'image' || targetEngineMode === 'rtty';
     // CW keying can lazy-init its own manager, but RX monitor/decoder still
     // need the engine audio chain. Preserve the user's running/idle intent.
     const comingFromCW = this.engineMode === 'cw';
@@ -2234,6 +2381,10 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
     if (this.engineMode === 'voice' && targetEngineMode !== 'voice') {
       await this.voiceKeyerManager?.stopActive('leaving voice mode');
+    }
+
+    if (this.engineMode === 'rtty' && targetEngineMode !== 'rtty') {
+      await this.rttyService?.abort('leaving rtty mode');
     }
 
     if (comingFromCW) {
@@ -2423,6 +2574,8 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       return this.restoreLastVoiceOperatingState(configManager, expectedConnectionGeneration);
     } else if (engineMode === 'cw') {
       return this.restoreLastCWOperatingState(configManager, expectedConnectionGeneration);
+    } else if (engineMode === 'rtty') {
+      return this.restoreLastRTTYOperatingState(configManager, expectedConnectionGeneration);
     } else if (engineMode === 'image') {
       const saved = configManager.getLastImageFrequency();
       if (!this.radioManager.isConnected()) {
@@ -2600,6 +2753,59 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
         : { status: 'applied' };
     } catch (error) {
       logger.warn(`Failed to restore last voice operating state: ${(error as Error).message}`);
+      return { status: 'failed', detail: (error as Error).message };
+    }
+  }
+
+  private async restoreLastRTTYOperatingState(
+    configManager: ConfigManager,
+    expectedConnectionGeneration?: number,
+  ): Promise<OperatingStateSyncResult | null> {
+    if (!this.radioManager.isConnected()) {
+      return { status: 'skipped-offline' };
+    }
+    const saved = configManager.getLastRTTYFrequency();
+    const targetRadioMode = rttyRadioMode(configManager.getRttyConfig());
+    const targetFrequency = saved?.frequency
+      ?? this.radioManager.getLastConfirmedFrequency?.()
+      ?? await this.radioManager.getFrequency();
+    if (!targetFrequency || targetFrequency <= 0) {
+      return { status: 'failed', detail: 'current radio frequency is unavailable' };
+    }
+    try {
+      const applyResult = await this.applyModeOperatingState({
+        ...(saved?.frequency ? { frequency: targetFrequency } : {}),
+        mode: targetRadioMode,
+        bandwidth: 'nochange',
+        options: { intent: 'digital' },
+        tolerateModeFailure: true,
+      }, expectedConnectionGeneration);
+      const band = saved?.band || this.resolveBandLabel(targetFrequency);
+      const description = saved?.description || `${(targetFrequency / 1_000_000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`;
+      this.emitProgramFrequencyState({
+        frequency: targetFrequency,
+        mode: 'RTTY',
+        band,
+        description,
+        radioMode: targetRadioMode,
+        radioConnected: true,
+        confirmation: applyResult.frequencyConfirmed === false ? 'mismatch' : 'confirmed',
+        ...(applyResult.observedFrequency !== undefined ? { observedFrequency: applyResult.observedFrequency } : {}),
+        requestedFrequency: targetFrequency,
+        ...(applyResult.operationId ? { operationId: applyResult.operationId } : {}),
+        modeConfirmation: this.resolveModeConfirmation(applyResult, targetRadioMode),
+      });
+      if (!saved && applyResult.modeApplied) {
+        await configManager.updateLastRTTYFrequency({ frequency: targetFrequency, radioMode: targetRadioMode, band, description });
+      }
+      if (applyResult.frequencyConfirmed === false) {
+        return { status: 'partially-applied', detail: 'radio frequency write was not confirmed by readback' };
+      }
+      return applyResult.modeError || applyResult.modeConfirmed === false
+        ? { status: 'partially-applied', detail: applyResult.modeError?.message ?? 'radio mode write was not confirmed by readback' }
+        : { status: 'applied' };
+    } catch (error) {
+      logger.warn(`Failed to restore RTTY operating state: ${(error as Error).message}`);
       return { status: 'failed', detail: (error as Error).message };
     }
   }
@@ -3006,7 +3212,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
   public getStatus() {
     const isRunning = this.engineLifecycle?.getIsRunning() ?? false;
     // Voice and CW modes have no decode slot loop, so mirror engine running state.
-    const isActuallyDecoding = this.engineMode === 'voice' || this.engineMode === 'cw' || this.engineMode === 'image'
+    const isActuallyDecoding = this.engineMode === 'voice' || this.engineMode === 'cw' || this.engineMode === 'image' || this.engineMode === 'rtty'
       ? isRunning
       : isRunning && (this.slotClock?.isRunning ?? false);
 

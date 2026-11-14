@@ -1,3 +1,5 @@
+import { rttyRadioMode } from '@tx5dr/contracts';
+import type { EngineMode } from '@tx5dr/contracts';
 import { assertRadioExecution, prepareRadioTransmission } from './RadioExecutionPolicy.js';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // PhysicalRadioManager - 电台连接管理需要使用any类型以处理不同连接类型的事件
@@ -3033,7 +3035,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
   }
 
   private async getSavedStartupOperatingState(): Promise<{
-    engineMode: 'digital' | 'voice' | 'cw' | 'image';
+    engineMode: EngineMode;
     frequency: number;
     request: ApplyOperatingStateRequest;
   } | null> {
@@ -3077,6 +3079,25 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
       };
     }
 
+    if (engineMode === 'rtty') {
+      const lastRtty = this.configManager.getLastRTTYFrequency();
+      const frequency = lastRtty?.frequency || await this.getFrequency().catch(() => 0);
+      if (!this.validateSavedStartupFrequency(frequency, 'rtty')) {
+        return null;
+      }
+      return {
+        engineMode,
+        frequency,
+        request: {
+          ...(lastRtty?.frequency ? { frequency } : {}),
+          mode: rttyRadioMode(this.configManager.getRttyConfig()),
+          bandwidth: 'nochange',
+          options: { intent: 'digital' },
+          tolerateModeFailure: true,
+        },
+      };
+    }
+
     if (engineMode === 'image') {
       const lastImage = this.configManager.getLastImageFrequency();
       if (!lastImage || !this.validateSavedStartupFrequency(lastImage.frequency, 'image')) return null;
@@ -3111,7 +3132,7 @@ export class PhysicalRadioManager extends EventEmitter<PhysicalRadioManagerEvent
     };
   }
 
-  private validateSavedStartupFrequency(frequency: number, engineMode: 'digital' | 'voice' | 'cw' | 'image'): boolean {
+  private validateSavedStartupFrequency(frequency: number, engineMode: EngineMode): boolean {
     if (!isFrequencyInHamlibRange(frequency)) {
       logger.warn(
         `Invalid saved ${engineMode} frequency detected: ${frequency} Hz `

@@ -945,7 +945,24 @@
     "timeRange15m": "15分",
     "timeRange30m": "30分",
     "noData": "データを待っています...",
-    "workerPools": "ワーカープール"
+    "workerPools": "ワーカープール",
+    "rtty": {
+      "title": "RTTY",
+      "history": "再デコード用履歴",
+      "backlog": "滞留（チャンク / サンプル）",
+      "lost": "欠落音声 · オーバーラン",
+      "replays": "再デコード",
+      "restarts": "デコーダー再起動",
+      "txSessions": "送信回数 · エラー",
+      "lastTxError": "直近の送信エラー",
+      "state": {
+        "disabled": "オフ",
+        "unavailable": "利用不可",
+        "listening": "受信中",
+        "muted": "送信中",
+        "error": "エラー"
+      }
+    }
   },
   "openwebrx": {
     "tabTitle": "WebSDR",

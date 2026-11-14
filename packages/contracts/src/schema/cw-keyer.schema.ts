@@ -1,4 +1,12 @@
 import { z } from 'zod';
+import {
+  KeyboardMessagePanelSchema,
+  KeyboardMessagePanelUpdateSchema,
+  KeyboardMessageSlotSchema,
+  KeyboardMessageSlotSwapSchema,
+  KeyboardMessageSlotUpdateSchema,
+  KeyboardPlaceholderValuesSchema,
+} from './keyboard-message.schema.js';
 
 /**
  * CW 键控器配置
@@ -59,36 +67,14 @@ export type CWKeyerStatus = z.infer<typeof CWKeyerStatusSchema>;
 /**
  * CW 报文槽位
  */
-export const CWMessageSlotSchema = z.object({
-  /** 槽位唯一 ID */
-  id: z.string(),
-  /** 显示序号 (1-based) */
-  index: z.number().int().min(1),
-  /** 报文标签 */
-  label: z.string(),
-  /** 报文文本内容 */
-  text: z.string(),
-  /** 是否启用循环播放 */
-  repeatEnabled: z.boolean(),
-  /** 循环播放间隔（秒） */
-  repeatIntervalSec: z.number().int().min(1).max(300),
-});
+export const CWMessageSlotSchema = KeyboardMessageSlotSchema;
 
 export type CWMessageSlot = z.infer<typeof CWMessageSlotSchema>;
 
 /**
  * CW 报文面板
  */
-export const CWMessagePanelSchema = z.object({
-  /** 呼号 */
-  callsign: z.string(),
-  /** 当前槽位数 */
-  slotCount: z.number().int().min(3).max(12),
-  /** 最大槽位数 */
-  maxSlotCount: z.number().int().min(12),
-  /** 槽位列表 */
-  slots: z.array(CWMessageSlotSchema),
-});
+export const CWMessagePanelSchema = KeyboardMessagePanelSchema;
 
 export type CWMessagePanel = z.infer<typeof CWMessagePanelSchema>;
 
@@ -105,16 +91,7 @@ export type CWKeyAction = z.infer<typeof CWKeyActionSchema>;
 /**
  * CW 报文占位符值（由前端根据当前 UI 上下文提供）
  */
-export const CWPlaceholderValuesSchema = z.object({
-  /** 当前操作员呼号，用于 {MYCALL} */
-  myCall: z.string().optional(),
-  /** 当前通联对象呼号，用于 {HISCALL} */
-  hisCall: z.string().optional(),
-  /** 发送的 RST 信号报告，用于 {TRST} */
-  trst: z.string().optional(),
-  /** 接收的 RST 信号报告，用于 {RRST} */
-  rrst: z.string().optional(),
-});
+export const CWPlaceholderValuesSchema = KeyboardPlaceholderValuesSchema;
 
 export type CWPlaceholderValues = z.infer<typeof CWPlaceholderValuesSchema>;
 
@@ -153,30 +130,20 @@ export type CWPlayMessage = z.infer<typeof CWPlayMessageSchema>;
 /**
  * CW 报文槽位更新
  */
-export const CWMessageSlotUpdateSchema = z.object({
-  label: z.string().max(32).optional(),
-  text: z.string().max(500).optional(),
-  repeatEnabled: z.boolean().optional(),
-  repeatIntervalSec: z.number().int().min(1).max(300).optional(),
-});
+export const CWMessageSlotUpdateSchema = KeyboardMessageSlotUpdateSchema;
 
 export type CWMessageSlotUpdate = z.infer<typeof CWMessageSlotUpdateSchema>;
 
 /**
  * CW 报文面板更新
  */
-export const CWMessagePanelUpdateSchema = z.object({
-  slotCount: z.number().int().min(3).max(12),
-});
+export const CWMessagePanelUpdateSchema = KeyboardMessagePanelUpdateSchema;
 
 export type CWMessagePanelUpdate = z.infer<typeof CWMessagePanelUpdateSchema>;
 
 /**
  * CW 报文槽位交换请求
  */
-export const CWMessageSlotSwapSchema = z.object({
-  slotIdA: z.string(),
-  slotIdB: z.string(),
-});
+export const CWMessageSlotSwapSchema = KeyboardMessageSlotSwapSchema;
 
 export type CWMessageSlotSwap = z.infer<typeof CWMessageSlotSwapSchema>;

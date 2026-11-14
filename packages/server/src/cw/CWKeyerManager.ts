@@ -17,15 +17,12 @@ import { ConfigManager } from '../config/config-manager.js';
 import type { PhysicalRadioManager } from '../radio/PhysicalRadioManager.js';
 import type { PhysicalTxCoordinator } from '../transmission/PhysicalTxCoordinator.js';
 import { createLogger } from '../utils/logger.js';
+import { MessagePanelStore, type MessagePanelPreset } from '../keyboard/MessagePanelStore.js';
+import { normalizeKeyboardPlaceholderValues, replaceKeyboardPlaceholders } from '../keyboard/placeholders.js';
 
 const logger = createLogger('CWKeyerManager');
 
-const DEFAULT_SLOT_COUNT = 8;
-const MAX_SLOT_COUNT = 12;
-const MIN_SLOT_COUNT = 3;
-const DEFAULT_REPEAT_INTERVAL_SEC = 5;
-
-const DEFAULT_CW_MESSAGE_SLOTS: Array<Pick<CWMessageSlot, 'label' | 'text' | 'repeatIntervalSec'>> = [
+const DEFAULT_CW_MESSAGE_SLOTS: MessagePanelPreset[] = [
   {
     label: 'CQ',
     text: 'CQ CQ DE {MYCALL} {MYCALL} K',
@@ -67,13 +64,6 @@ const DEFAULT_CW_MESSAGE_SLOTS: Array<Pick<CWMessageSlot, 'label' | 'text' | 're
     repeatIntervalSec: 5,
   },
 ];
-
-interface StoredCWManifest {
-  version: 1;
-  callsign: string;
-  slotCount: number;
-  slots: CWMessageSlot[];
-}
 
 interface ActiveKeying {
   clientId: string;
@@ -137,6 +127,12 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
   private configLoadPromise: Promise<void> | null = null;
   private physicalLeaseId: string | null = null;
   private rootDir: string | null = null;
+  private readonly panels = new MessagePanelStore({
+    getRootDir: () => this.getRootDir(),
+    presets: DEFAULT_CW_MESSAGE_SLOTS,
+    fallbackLabel: (index) => `CW${index}`,
+    modeLabel: 'CW',
+  });
   private config: CWKeyerConfig = {
     backend: 'cat',
     keyPort: '',
@@ -480,25 +476,19 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
   // ========== 预设报文管理 ==========
 
   static normalizeCallsign(callsign: string): string {
-    return callsign.trim().toUpperCase();
+    return MessagePanelStore.normalizeCallsign(callsign);
   }
 
   static safeCallsign(callsign: string): string {
-    return encodeURIComponent(CWKeyerManager.normalizeCallsign(callsign));
+    return MessagePanelStore.safeCallsign(callsign);
   }
 
   async getPanel(callsign: string): Promise<CWMessagePanel> {
-    const normalized = this.requireCallsign(callsign);
-    const manifest = await this.readManifest(normalized);
-    return this.toPanel(manifest);
+    return this.panels.getPanel(callsign);
   }
 
   async updatePanel(callsign: string, slotCount: number): Promise<CWMessagePanel> {
-    const normalized = this.requireCallsign(callsign);
-    const manifest = await this.readManifest(normalized);
-    manifest.slotCount = Math.max(MIN_SLOT_COUNT, Math.min(MAX_SLOT_COUNT, Math.round(slotCount)));
-    await this.writeManifest(manifest);
-    return this.toPanel(manifest);
+    return this.panels.updatePanel(callsign, slotCount);
   }
 
   async updateSlot(
@@ -506,58 +496,15 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     slotId: string,
     update: { label?: string; text?: string; repeatEnabled?: boolean; repeatIntervalSec?: number },
   ): Promise<CWMessagePanel> {
-    const normalized = this.requireCallsign(callsign);
-    const manifest = await this.readManifest(normalized);
-    const slot = this.requireSlot(manifest, slotId);
-
-    if (typeof update.label === 'string') {
-      slot.label = update.label.trim().slice(0, 32) || `M${slot.index}`;
-    }
-    if (typeof update.text === 'string') {
-      slot.text = update.text.trim().slice(0, 500);
-    }
-    if (typeof update.repeatEnabled === 'boolean') {
-      slot.repeatEnabled = update.repeatEnabled;
-    }
-    if (typeof update.repeatIntervalSec === 'number') {
-      slot.repeatIntervalSec = Math.max(1, Math.min(300, Math.round(update.repeatIntervalSec)));
-    }
-
-    await this.writeManifest(manifest);
-    return this.toPanel(manifest);
+    return this.panels.updateSlot(callsign, slotId, update);
   }
 
   async deleteSlotText(callsign: string, slotId: string): Promise<CWMessagePanel> {
-    const normalized = this.requireCallsign(callsign);
-    const manifest = await this.readManifest(normalized);
-    const slot = this.requireSlot(manifest, slotId);
-    slot.text = '';
-    await this.writeManifest(manifest);
-    return this.toPanel(manifest);
+    return this.panels.deleteSlotText(callsign, slotId);
   }
 
   async swapSlots(callsign: string, slotIdA: string, slotIdB: string): Promise<CWMessagePanel> {
-    const normalized = this.requireCallsign(callsign);
-    const manifest = await this.readManifest(normalized);
-    const slotA = this.requireSlot(manifest, slotIdA);
-    const slotB = this.requireSlot(manifest, slotIdB);
-
-    // Swap content fields
-    const tmpLabel = slotA.label;
-    const tmpText = slotA.text;
-    const tmpRepeatEnabled = slotA.repeatEnabled;
-    const tmpRepeatIntervalSec = slotA.repeatIntervalSec;
-    slotA.label = slotB.label;
-    slotA.text = slotB.text;
-    slotA.repeatEnabled = slotB.repeatEnabled;
-    slotA.repeatIntervalSec = slotB.repeatIntervalSec;
-    slotB.label = tmpLabel;
-    slotB.text = tmpText;
-    slotB.repeatEnabled = tmpRepeatEnabled;
-    slotB.repeatIntervalSec = tmpRepeatIntervalSec;
-
-    await this.writeManifest(manifest);
-    return this.toPanel(manifest);
+    return this.panels.swapSlots(callsign, slotIdA, slotIdB);
   }
 
   // ========== 预设报文播放 ==========
@@ -572,14 +519,13 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     placeholderValues?: CWPlaceholderValues,
   ): Promise<void> {
     await this.ensureConfigLoaded();
-    const normalized = this.requireCallsign(callsign);
+    const normalized = this.panels.requireCallsign(callsign);
 
     if (this.active) {
       await this.stopActive('replaced by message playback');
     }
 
-    const manifest = await this.readManifest(normalized);
-    const slot = this.requireSlot(manifest, slotId);
+    const slot = await this.panels.getSlot(normalized, slotId);
     if (!slot.text) {
       throw new Error('CW message slot has no text');
     }
@@ -737,13 +683,7 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
 
   private async getActiveSlot(active: ActiveKeying): Promise<CWMessageSlot | null> {
     if (!active.messageId || !active.callsign) return null;
-    try {
-      const manifest = await this.readManifest(active.callsign);
-      return manifest.slots.find((slot) => slot.id === active.messageId) ?? null;
-    } catch (error) {
-      logger.warn('Failed to read active CW slot', { error: (error as Error).message });
-      return null;
-    }
+    return this.panels.findSlot(active.callsign, active.messageId);
   }
 
   private async acquirePhysicalLease(reason: string, interrupt: () => Promise<void>): Promise<void> {
@@ -804,50 +744,14 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
 
   /** 替换 CW 报文中的占位符，如 {MYCALL} / {HISCALL} / {TRST} / {RRST} */
   private replacePlaceholders(text: string, values: CWPlaceholderValues): string {
-    const unresolved = new Set<string>();
-    const replaced = text.replace(/\{(MYCALL|HISCALL|TRST|RRST)\}/gi, (source, name: string) => {
-      const key = name.toUpperCase();
-      let value: string | undefined;
-      switch (key) {
-        case 'MYCALL':
-          value = values.myCall;
-          break;
-        case 'HISCALL':
-          value = values.hisCall;
-          break;
-        case 'TRST':
-          value = values.trst;
-          break;
-        case 'RRST':
-          value = values.rrst;
-          break;
-      }
-      if (!value?.trim()) {
-        unresolved.add(key);
-        return source;
-      }
-      return value.trim().toUpperCase();
-    });
-    if (unresolved.size > 0) {
-      throw new Error(`CW message placeholder value is missing: ${Array.from(unresolved).join(', ')}`);
-    }
-    return replaced;
+    return replaceKeyboardPlaceholders(text, values, 'CW');
   }
 
   private normalizePlaceholderValues(
     values: CWPlaceholderValues | undefined,
     fallbackMyCall?: string | null,
   ): CWPlaceholderValues {
-    const myCall = typeof values?.myCall === 'string' ? values.myCall : '';
-    const hisCall = typeof values?.hisCall === 'string' ? values.hisCall : '';
-    const trst = typeof values?.trst === 'string' ? values.trst : '';
-    const rrst = typeof values?.rrst === 'string' ? values.rrst : '';
-    return {
-      myCall: (myCall || fallbackMyCall || '').trim().toUpperCase() || undefined,
-      hisCall: hisCall.trim().toUpperCase() || undefined,
-      trst: trst.trim().toUpperCase() || undefined,
-      rrst: rrst.trim().toUpperCase() || undefined,
-    };
+    return normalizeKeyboardPlaceholderValues(values, fallbackMyCall);
   }
 
   private getBackend(): CWKeyerBackend {
@@ -962,6 +866,14 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
     );
   }
 
+  private async getRootDir(): Promise<string> {
+    if (!this.rootDir) {
+      this.rootDir = await getDataFilePath('cw-keyer');
+      await fs.mkdir(this.rootDir, { recursive: true });
+    }
+    return this.rootDir;
+  }
+
   private async getConfigPath(): Promise<string> {
     return join(await this.getRootDir(), 'config.json');
   }
@@ -1037,117 +949,5 @@ export class CWKeyerManager extends EventEmitter<CWKeyerManagerEvents> {
       lastText: currentText ?? this.lastText,
       ...this.statusBackendFields(),
     };
-  }
-
-  // ========== 报文存储 ==========
-
-  private async getRootDir(): Promise<string> {
-    if (!this.rootDir) {
-      this.rootDir = await getDataFilePath('cw-keyer');
-      await fs.mkdir(this.rootDir, { recursive: true });
-    }
-    return this.rootDir;
-  }
-
-  private async getCallsignDir(callsign: string): Promise<string> {
-    return join(await this.getRootDir(), CWKeyerManager.safeCallsign(callsign));
-  }
-
-  private async getManifestPath(callsign: string): Promise<string> {
-    return join(await this.getCallsignDir(callsign), 'manifest.json');
-  }
-
-  private async readManifest(callsign: string): Promise<StoredCWManifest> {
-    const manifestPath = await this.getManifestPath(callsign);
-    try {
-      const raw = await fs.readFile(manifestPath, 'utf8');
-      const parsed = JSON.parse(raw);
-      return this.normalizeManifest(parsed, callsign);
-    } catch {
-      const manifest = this.createDefaultManifest(callsign);
-      await this.writeManifest(manifest);
-      return manifest;
-    }
-  }
-
-  private async writeManifest(manifest: StoredCWManifest): Promise<void> {
-    const manifestPath = await this.getManifestPath(manifest.callsign);
-    await fs.mkdir(dirname(manifestPath), { recursive: true });
-    await fs.writeFile(
-      manifestPath,
-      JSON.stringify(this.normalizeManifest(manifest, manifest.callsign), null, 2),
-      'utf8',
-    );
-  }
-
-  private normalizeManifest(raw: Partial<StoredCWManifest>, callsign: string): StoredCWManifest {
-    const defaults = this.createDefaultManifest(callsign);
-    const rawSlots = Array.isArray(raw.slots) ? raw.slots : [];
-    const slots = defaults.slots.map((slot) => {
-      const existing = rawSlots.find((c) => c?.id === slot.id);
-      return {
-        id: slot.id,
-        index: slot.index,
-        label: typeof existing?.label === 'string' && existing.label.trim()
-          ? existing.label.trim().slice(0, 32) : slot.label,
-        text: typeof existing?.text === 'string' ? existing.text.trim().slice(0, 500) : '',
-        repeatEnabled: Boolean(existing?.repeatEnabled),
-        repeatIntervalSec: Math.max(
-          1,
-          Math.min(300, Math.round(Number(existing?.repeatIntervalSec ?? DEFAULT_REPEAT_INTERVAL_SEC))),
-        ),
-      };
-    });
-
-    return {
-      version: 1,
-      callsign,
-      slotCount: Math.max(MIN_SLOT_COUNT, Math.min(MAX_SLOT_COUNT, Math.round(Number(raw.slotCount ?? DEFAULT_SLOT_COUNT)))),
-      slots,
-    };
-  }
-
-  private createDefaultManifest(callsign: string): StoredCWManifest {
-    return {
-      version: 1,
-      callsign,
-      slotCount: DEFAULT_SLOT_COUNT,
-      slots: Array.from({ length: MAX_SLOT_COUNT }, (_, index) => {
-        const preset = DEFAULT_CW_MESSAGE_SLOTS[index];
-        return {
-          id: String(index + 1),
-          index: index + 1,
-          label: preset?.label ?? `CW${index + 1}`,
-          text: preset?.text ?? '',
-          repeatEnabled: false,
-          repeatIntervalSec: preset?.repeatIntervalSec ?? DEFAULT_REPEAT_INTERVAL_SEC,
-        };
-      }),
-    };
-  }
-
-  private toPanel(manifest: StoredCWManifest): CWMessagePanel {
-    return {
-      callsign: manifest.callsign,
-      slotCount: manifest.slotCount,
-      maxSlotCount: MAX_SLOT_COUNT,
-      slots: manifest.slots,
-    };
-  }
-
-  private requireSlot(manifest: { slots: CWMessageSlot[] }, slotId: string): CWMessageSlot {
-    const slot = manifest.slots.find((c) => c.id === slotId);
-    if (!slot) {
-      throw new Error(`Unknown CW message slot: ${slotId}`);
-    }
-    return slot;
-  }
-
-  private requireCallsign(callsign: string): string {
-    const normalized = CWKeyerManager.normalizeCallsign(callsign);
-    if (!normalized) {
-      throw new Error('Callsign is required');
-    }
-    return normalized;
   }
 }

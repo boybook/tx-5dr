@@ -69,6 +69,14 @@ export const MODES = {
     transmitTiming: 0,
     encodeAdvance: 0,
   } as ModeDescriptor,
+  RTTY: {
+    name: 'RTTY',
+    slotMs: 0,            // RTTY 键盘模式无时隙概念
+    toleranceMs: 0,
+    windowTiming: [],
+    transmitTiming: 0,
+    encodeAdvance: 0,
+  } as ModeDescriptor,
   SSTV: {
     name: 'SSTV',
     slotMs: 0,

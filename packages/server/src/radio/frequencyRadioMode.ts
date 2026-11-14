@@ -1,7 +1,7 @@
 import type { DigitalModeRadioModePreference } from '@tx5dr/contracts';
 import type { ApplyOperatingStateRequest, SetRadioModeOptions } from './connections/IRadioConnection.js';
 
-type EngineMode = 'digital' | 'voice' | 'cw' | 'image';
+import type { EngineMode } from '@tx5dr/contracts';
 
 export interface FrequencyRadioModeResolution {
   displayRadioMode?: string;

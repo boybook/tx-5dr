@@ -31,6 +31,10 @@ The architecture invariant is maintained in
 | Station automatically answers a remote CQ | `yarn test:station --case ft8-responder` |
 | FT4 timing and exchange | `yarn test:station --case ft4-caller` |
 | No false completion when the peer stays silent | `yarn test:station --case ft8-silence` |
+| RTTY keyboard QSO, station calls CQ | `yarn test:station --case rtty-caller` |
+| RTTY keyboard QSO, station answers a CQ | `yarn test:station --case rtty-responder` |
+| RTTY QSO with 0 dB channel noise | `yarn test:station --case rtty-noise` |
+| RTTY transmit stops when the sending client disconnects | `yarn test:station --case rtty-disconnect` |
 | Deliberately validate the complete supported station matrix | `yarn test:station` |
 
 FT8 slots take 15 real seconds; FT4 slots take 7.5. A QSO spans several receive
@@ -125,8 +129,9 @@ yarn test:station --hardware /absolute/path/profile.json --callsign YOURCALL --g
 The operator must install a dummy load, manually select minimum power and enter
 `ARM` in an interactive terminal for the displayed device, frequency and mode.
 Do not grant approval yourself, use unattended input, infer a dummy load from
-CAT connectivity, or change RF power automatically. The current hardware scope
-is digital TX; CW/tuner and unrelated operations remain denied by that session.
+CAT connectivity, or change RF power automatically. The hardware scope follows
+the case: digital TX for FT8/FT4 cases, RTTY TX for `rtty-*` cases (radio in its
+data mode); CW/tuner and unrelated operations remain denied by that session.
 Permission expires on owner loss, connection/configuration change or deadline.
 
 Use readback when the adapter supports it; otherwise report manual confirmation.

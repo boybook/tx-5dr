@@ -45,6 +45,8 @@ function seededRandom(seed: number): () => number {
 export class PeerSession {
   readonly sessionId = randomUUID();
   private readonly mode;
+  /** Slotted WSJT-X mode; keyboard modes use their own peer session. */
+  private readonly digitalMode: 'FT8' | 'FT4';
   private readonly scenarioEngine: SimulationScenarioEngine;
   private readonly decodePool = new WSJTXDecodeProcessPool({ workerCount: 1 });
   private readonly encodeQueue = new WSJTXEncodeWorkQueue(1);
@@ -61,12 +63,15 @@ export class PeerSession {
   private readonly tracePath: string;
 
   constructor(private readonly options: PeerSessionOptions) {
-    this.mode = MODES[options.config.mode];
+    const mode = options.config.mode;
+    if (mode !== 'FT8' && mode !== 'FT4') throw new Error(`PeerSession does not simulate ${mode}`);
+    this.digitalMode = mode;
+    this.mode = MODES[mode];
     this.tracePath = path.join(options.artifactDir, 'peer.jsonl');
     const scenarios = new Map(options.scenarios.map(s => [s.id, s]));
     this.scenarioEngine = new SimulationScenarioEngine(options.config.seed, options.config.peers.map(peer => {
       const scenario = scenarios.get(peer.scenarioId);
-      if (!scenario || !scenario.modes.includes(options.config.mode)) throw new Error(`Peer scenario unavailable: ${peer.scenarioId}`);
+      if (!scenario || !scenario.modes.includes(mode)) throw new Error(`Peer scenario unavailable: ${peer.scenarioId}`);
       if (peer.identityPool && !scenario.identityPool?.length) throw new Error('Scenario has no identity pool');
       this.channelRandom.set(peer.id, seededRandom(hashSeed(`${options.config.seed}:${peer.id}`)));
       return { ...peer, scenario, identityPool: peer.identityPool === 'scenario' ? scenario.identityPool : undefined };
@@ -76,7 +81,7 @@ export class PeerSession {
     if (this.running || this.cancellation.signal.aborted) throw new Error('Peer session cannot be restarted');
     await fs.mkdir(path.dirname(this.tracePath), { recursive: true });
     this.running = true;
-    await this.decodePool.decode({ slotId: 'peer-readiness', mode: this.options.config.mode, windowIdx: 0,
+    await this.decodePool.decode({ slotId: 'peer-readiness', mode: this.digitalMode, windowIdx: 0,
       pcm: new Float32Array(this.mode.slotMs * SAMPLE_RATE / 1000).buffer, sampleRate: SAMPLE_RATE,
       timestamp: this.options.now(), windowOffsetMs: 0 });
     await this.encodeReply('readiness', 'CQ BG5DRB OL32', 1000);
@@ -158,7 +163,7 @@ export class PeerSession {
     this.tail = this.tail.then(async () => { if (this.running) await work(); }).catch(error => { if (this.running) this.options.fail(error as Error); });
   }
   private async decode(pcm: Float32Array, slot: number, host: boolean): Promise<void> {
-    const result = await this.decodePool.decode({ slotId: `peer-${slot}`, mode: this.options.config.mode, windowIdx: 0,
+    const result = await this.decodePool.decode({ slotId: `peer-${slot}`, mode: this.digitalMode, windowIdx: 0,
       pcm: pcm.buffer as ArrayBuffer, sampleRate: SAMPLE_RATE, timestamp: slot, windowOffsetMs: 0 });
     if (!this.running || !this.channelMatches()) return;
     const identities = this.scenarioEngine.getSnapshots();

@@ -418,7 +418,7 @@ export interface RadioOperatingMode {
   readonly engineMode: EngineMode;
 
   /**
-   * ADIF-compatible main mode, for example `SSB`, `FM`, `CW`, `FT8` or `MFSK`.
+   * ADIF-compatible main mode, for example `SSB`, `FM`, `CW`, `RTTY`, `FT8` or `MFSK`.
    */
   readonly mode: string;
 

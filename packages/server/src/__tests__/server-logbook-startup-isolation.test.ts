@@ -161,6 +161,7 @@ vi.mock('../routes/mode.js', () => emptyRouteModule('modeRoutes'));
 vi.mock('../routes/slotpack.js', () => emptyRouteModule('slotpackRoutes'));
 vi.mock('../routes/voice.js', () => emptyRouteModule('voiceRoutes'));
 vi.mock('../routes/cw.js', () => emptyRouteModule('cwRoutes'));
+vi.mock('../routes/rtty.js', () => emptyRouteModule('rttyRoutes'));
 vi.mock('../routes/callsigns.js', () => emptyRouteModule('callsignRoutes'));
 vi.mock('../routes/plugins.js', () => emptyRouteModule('pluginRoutes'));
 vi.mock('../routes/auth.js', () => emptyRouteModule('authRoutes'));

@@ -945,7 +945,24 @@
     "timeRange15m": "15 分钟",
     "timeRange30m": "30 分钟",
     "noData": "等待数据...",
-    "workerPools": "Worker 池"
+    "workerPools": "Worker 池",
+    "rtty": {
+      "title": "RTTY",
+      "history": "可回溯音频",
+      "backlog": "积压（块 / 样本）",
+      "lost": "丢失音频 · 溢出次数",
+      "replays": "重解次数",
+      "restarts": "解码器重启",
+      "txSessions": "发射次数 · 错误",
+      "lastTxError": "最近一次发射错误",
+      "state": {
+        "disabled": "未启用",
+        "unavailable": "不可用",
+        "listening": "监听中",
+        "muted": "发射中",
+        "error": "错误"
+      }
+    }
   },
   "openwebrx": {
     "tabTitle": "WebSDR",

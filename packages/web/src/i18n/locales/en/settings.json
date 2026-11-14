@@ -945,7 +945,24 @@
     "timeRange15m": "15 min",
     "timeRange30m": "30 min",
     "noData": "Waiting for data...",
-    "workerPools": "Worker Pools"
+    "workerPools": "Worker Pools",
+    "rtty": {
+      "title": "RTTY",
+      "history": "Re-decode history",
+      "backlog": "Backlog (chunks / samples)",
+      "lost": "Lost audio · overruns",
+      "replays": "Re-decodes",
+      "restarts": "Decoder restarts",
+      "txSessions": "Transmissions · errors",
+      "lastTxError": "Last transmit error",
+      "state": {
+        "disabled": "Off",
+        "unavailable": "Unavailable",
+        "listening": "Listening",
+        "muted": "Transmitting",
+        "error": "Error"
+      }
+    }
   },
   "openwebrx": {
     "tabTitle": "WebSDR",

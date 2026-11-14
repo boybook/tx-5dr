@@ -1,3 +1,4 @@
+import { RttyDecoderStateSchema } from './rtty.schema.js';
 import { z } from 'zod';
 
 export const ProcessMemorySchema = z.object({
@@ -103,6 +104,31 @@ export const WorkerPoolTelemetrySnapshotSchema = z.object({
 
 export const WorkerPoolTelemetryListSchema = z.array(WorkerPoolTelemetrySnapshotSchema);
 
+/** RTTY receive/transmit counters (present while the RTTY service runs). */
+export const RttyTelemetrySnapshotSchema = z.object({
+  rx: z.object({
+    state: RttyDecoderStateSchema,
+    sampleRate: z.number().nullable(),
+    historySeconds: z.number().nonnegative(),
+    samplesDecoded: z.number().nonnegative(),
+    samplesLost: z.number().nonnegative(),
+    overruns: z.number().int().nonnegative(),
+    restarts: z.number().int().nonnegative(),
+    replays: z.number().int().nonnegative(),
+    lastReplayMs: z.number().nonnegative().nullable(),
+    backlogChunks: z.number().int().nonnegative(),
+    nativeQueuedSamples: z.number().nonnegative(),
+    scannerChannels: z.number().int().nonnegative().optional(),
+    scannerDroppedChunks: z.number().int().nonnegative().optional(),
+  }),
+  tx: z.object({
+    phase: z.string(),
+    sessions: z.number().int().nonnegative(),
+    errors: z.number().int().nonnegative(),
+    lastError: z.string().nullable(),
+  }),
+});
+
 export const ProcessSnapshotSchema = z.object({
   timestamp: z.number(),
   uptimeSeconds: z.number(),
@@ -112,6 +138,7 @@ export const ProcessSnapshotSchema = z.object({
   eventLoop: EventLoopDelaySchema,
   decodeWorkers: DecodeWorkerTelemetrySnapshotSchema.optional(),
   workerPools: WorkerPoolTelemetryListSchema.optional(),
+  rtty: RttyTelemetrySnapshotSchema.optional(),
 });
 
 export const ProcessSnapshotHistorySchema = z.object({
@@ -132,5 +159,6 @@ export type WorkerPoolTelemetryWorker = z.infer<typeof WorkerPoolTelemetryWorker
 export type WorkerPoolTelemetrySummary = z.infer<typeof WorkerPoolTelemetrySummarySchema>;
 export type WorkerPoolTelemetrySnapshot = z.infer<typeof WorkerPoolTelemetrySnapshotSchema>;
 export type WorkerPoolTelemetryList = z.infer<typeof WorkerPoolTelemetryListSchema>;
+export type RttyTelemetrySnapshot = z.infer<typeof RttyTelemetrySnapshotSchema>;
 export type ProcessSnapshot = z.infer<typeof ProcessSnapshotSchema>;
 export type ProcessSnapshotHistory = z.infer<typeof ProcessSnapshotHistorySchema>;

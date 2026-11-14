@@ -1,3 +1,4 @@
+import type { EngineMode } from '@tx5dr/contracts';
 import { EventEmitter } from 'eventemitter3';
 import type {
   SpectrumFrame,
@@ -490,7 +491,8 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     const digitalWindow = await this.buildDigitalWindowState(display, standardFrequencyHz);
     const engineMode = this.engine.getEngineMode();
     const isVoiceMode = engineMode === 'voice';
-    const isCwMode = engineMode === 'cw';
+    // RTTY tunes the radio like CW: fine steps around the dial frequency.
+    const isCwMode = engineMode === 'cw' || engineMode === 'rtty';
     const isImageMode = engineMode === 'image';
     const sourceMode = this.mapRadioDisplayModeToSourceMode(display.mode);
     const isFixed = sourceMode === 'fixed' || sourceMode === 'scroll-fixed';
@@ -627,7 +629,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
     split,
     canSetRadioFrequency,
   }: {
-    engineMode: 'digital' | 'voice' | 'cw' | 'image';
+    engineMode: EngineMode;
     viewMode: 'wide' | 'radio-center';
     currentRadioFrequency: number | null;
     voice: VoiceState;
@@ -689,7 +691,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
       return overlays;
     }
 
-    if (engineMode === 'cw') {
+    if (engineMode === 'cw' || engineMode === 'rtty') {
       addOverlay(
         split.enabled ? 'cw-current-rx' : 'cw-current-tx',
         split.enabled ? 'RX' : 'TX',
@@ -1464,7 +1466,7 @@ export class SpectrumSessionCoordinator extends EventEmitter<SpectrumSessionCoor
 
   private async ensureNonDigitalRadioFollowMode(): Promise<void> {
     const engineMode = this.engine.getEngineMode();
-    if (engineMode !== 'voice' && engineMode !== 'cw') {
+    if (engineMode !== 'voice' && engineMode !== 'cw' && engineMode !== 'rtty') {
       return;
     }
 

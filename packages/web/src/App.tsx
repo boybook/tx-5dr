@@ -29,12 +29,15 @@ import { ObservabilityConsentBanner } from './components/app/ObservabilityConsen
 import { useLanguage } from './hooks/useLanguage';
 import { shouldShowServerStatusPage } from './store/radio/connectionView';
 import { useTranslation } from 'react-i18next';
-import { faImages, faPaperPlane, faSatelliteDish } from '@fortawesome/free-solid-svg-icons';
+import { RttyProvider } from './hooks/useRtty';
+import { faBook, faImages, faPaperPlane, faSatelliteDish, faTerminal } from '@fortawesome/free-solid-svg-icons';
 
 const VoiceLeftLayout = lazy(() => import('./layout/VoiceLeftLayout').then(module => ({ default: module.VoiceLeftLayout })));
 const VoiceRightLayout = lazy(() => import('./layout/VoiceRightLayout').then(module => ({ default: module.VoiceRightLayout })));
 const CWLeftLayout = lazy(() => import('./layout/CWLeftLayout').then(module => ({ default: module.CWLeftLayout })));
 const CWRightLayout = lazy(() => import('./layout/CWRightLayout').then(module => ({ default: module.CWRightLayout })));
+const RttyLeftLayout = lazy(() => import('./layout/RttyLeftLayout').then(module => ({ default: module.RttyLeftLayout })));
+const RttyRightLayout = lazy(() => import('./layout/RttyRightLayout').then(module => ({ default: module.RttyRightLayout })));
 const ImageLeftLayout = lazy(() => import('./layout/ImageLeftLayout').then(module => ({ default: module.ImageLeftLayout })));
 const ImageRightLayout = lazy(() => import('./layout/ImageRightLayout').then(module => ({ default: module.ImageRightLayout })));
 
@@ -69,6 +72,7 @@ function AppContent() {
 
   const isVoiceMode = engineMode === 'voice';
   const isCWMode = engineMode === 'cw';
+  const isRttyMode = engineMode === 'rtty';
   const isImageMode = engineMode === 'image';
 
   return (
@@ -85,9 +89,11 @@ function AppContent() {
         />
       )}
 
+      {/* Always mounted (so the layout is not remounted on mode switches); subscribes only in RTTY mode. */}
+      <RttyProvider enabled={isRttyMode}>
       <SplitLayout
-        leftContent={<ModePane mode={engineMode}>{isVoiceMode ? <VoiceLeftLayout /> : isCWMode ? <CWLeftLayout /> : isImageMode ? <ImageLeftLayout /> : <LeftLayout />}</ModePane>}
-        rightContent={<ModePane mode={engineMode}>{isVoiceMode ? <VoiceRightLayout /> : isCWMode ? <CWRightLayout /> : isImageMode ? <ImageRightLayout /> : <RightLayout />}</ModePane>}
+        leftContent={<ModePane mode={engineMode}>{isVoiceMode ? <VoiceLeftLayout /> : isCWMode ? <CWLeftLayout /> : isRttyMode ? <RttyLeftLayout /> : isImageMode ? <ImageLeftLayout /> : <LeftLayout />}</ModePane>}
+        rightContent={<ModePane mode={engineMode}>{isVoiceMode ? <VoiceRightLayout /> : isCWMode ? <CWRightLayout /> : isRttyMode ? <RttyRightLayout /> : isImageMode ? <ImageRightLayout /> : <RightLayout />}</ModePane>}
         extraContent={activeOperatorId ? (
           <MainRightPluginPane
             operatorId={activeOperatorId}
@@ -98,15 +104,16 @@ function AppContent() {
         defaultLeftWidth={isVoiceMode ? 30 : 50}
         minLeftWidth={25}
         maxLeftWidth={isVoiceMode ? 50 : 75}
-        leftLabel={isImageMode ? t('receive') : undefined}
-        rightLabel={isImageMode ? (currentMode?.name === 'FAX' ? t('history') : t('transmit')) : undefined}
-        leftIcon={isImageMode ? faSatelliteDish : undefined}
-        rightIcon={isImageMode ? (currentMode?.name === 'FAX' ? faImages : faPaperPlane) : undefined}
+        leftLabel={isImageMode ? t('receive') : isRttyMode ? t('radio:rtty.mobile.terminalTab') : undefined}
+        rightLabel={isImageMode ? (currentMode?.name === 'FAX' ? t('history') : t('transmit')) : isRttyMode ? t('radio:rtty.mobile.logTab') : undefined}
+        leftIcon={isImageMode ? faSatelliteDish : isRttyMode ? faTerminal : undefined}
+        rightIcon={isImageMode ? (currentMode?.name === 'FAX' ? faImages : faPaperPlane) : isRttyMode ? faBook : undefined}
         defaultExtraWidth={26}
         minExtraWidth={18}
         maxExtraWidth={38}
         className="!h-auto min-h-0 flex-1"
       />
+      </RttyProvider>
 
       <ObservabilityConsentBanner enabled={isAdmin && !showSetupOverlay} />
 

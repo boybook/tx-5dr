@@ -100,6 +100,13 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   [WSMessageType.CW_DECODER_STATUS]: 'cwDecoderStatusChanged',
   [WSMessageType.CW_DECODER_EVENT]: 'cwDecoderEvent',
 
+  // RTTY 事件
+  [WSMessageType.RTTY_TX_STATUS]: 'rttyTxStatus',
+  [WSMessageType.RTTY_CONFIG_CHANGED]: 'rttyConfigChanged',
+  [WSMessageType.RTTY_DECODER_STATUS]: 'rttyDecoderStatus',
+  [WSMessageType.RTTY_DECODER_EVENT]: 'rttyDecoderEvent',
+  [WSMessageType.RTTY_SCAN_UPDATE]: 'rttyScanUpdate',
+
   // 进程监控事件
   [WSMessageType.PROCESS_SNAPSHOT]: 'processSnapshot',
   [WSMessageType.PROCESS_SNAPSHOT_HISTORY]: 'processSnapshotHistory',

@@ -119,6 +119,12 @@ interface SpectrumDisplayProps {
   frequencyBandOverlays?: FrequencyBandOverlay[];
   onFrequencyBandOverlayPreviewChange?: (id: string, change: FrequencyBandOverlayChange) => void;
   onFrequencyBandOverlayCommit?: (id: string, change: FrequencyBandOverlayChange) => void;
+  /**
+   * Audio spectrum only: double-click or right-click picks an audio frequency
+   * (e.g. tune the RTTY receiver onto a signal). Takes precedence over the
+   * default right-click action.
+   */
+  onAudioFrequencyPick?: (frequencyHz: number) => void;
   showPopOut?: boolean;
   onPopOutChange?: (isPopedOut: boolean) => void;
   onCollapsedChange?: (isCollapsed: boolean) => void;
@@ -409,7 +415,7 @@ export function getRadioSdrDragFrequencyStepHz(engineMode: EngineMode): number |
   if (engineMode === 'voice') {
     return RADIO_SDR_VOICE_DRAG_FREQUENCY_STEP_HZ;
   }
-  if (engineMode === 'cw') {
+  if (engineMode === 'cw' || engineMode === 'rtty') {
     return RADIO_SDR_CW_DRAG_FREQUENCY_STEP_HZ;
   }
   return null;
@@ -441,10 +447,10 @@ export function buildRadioSdrFrequencyRequest({
     };
   }
 
-  if (engineMode === 'cw') {
+  if (engineMode === 'cw' || engineMode === 'rtty') {
     return {
       frequency: roundedFrequency,
-      mode: 'CW',
+      mode: engineMode === 'rtty' ? 'RTTY' : 'CW',
       band: getBandFromFrequency(roundedFrequency),
       description,
     };
@@ -1048,6 +1054,7 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
   frequencyBandOverlays = [],
   onFrequencyBandOverlayPreviewChange,
   onFrequencyBandOverlayCommit,
+  onAudioFrequencyPick,
   showPopOut = true,
   onPopOutChange,
   onCollapsedChange,
@@ -1231,7 +1238,8 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
     engineState,
   });
   const isVoiceMode = engineMode === 'voice';
-  const isCwMode = engineMode === 'cw';
+  // RTTY tunes like CW: no digital TX/RX markers, fine tuning steps.
+  const isCwMode = engineMode === 'cw' || engineMode === 'rtty';
   const isTciDigitalMode = isTciRadioSdr && engineMode === 'digital'
     && (currentMode?.name === 'FT8' || currentMode?.name === 'FT4');
   const sourceMode = sessionState?.sourceMode ?? 'unknown';
@@ -3028,10 +3036,14 @@ export const SpectrumDisplay: React.FC<SpectrumDisplayProps> = ({
           onDragFrequencyChange: canDragRadioSdrFrequency ? handleRadioSdrFrequencyDragCommit : undefined,
           onDoubleClickSetFrequency: strategyFrequencyPick && isAudioSpectrumSelected
             ? handleStrategyFrequencyPick
+            : onAudioFrequencyPick && isAudioSpectrumSelected
+              ? onAudioFrequencyPick
             : frequencyGestureTarget === 'radio-frequency' && canDoubleClickSetFrequency && canWriteFrequency
               ? handleRadioFrequencyGesture
               : undefined,
-          onRightClickSetFrequency: isOpenWebRXSdrSelected
+          onRightClickSetFrequency: onAudioFrequencyPick && isAudioSpectrumSelected
+            ? onAudioFrequencyPick
+            : isOpenWebRXSdrSelected
             ? (isOpenWebRXDetailMode ? handleRightClickSetFrequency : undefined)
             : frequencyGestureTarget === 'radio-frequency'
               ? (canRightClickSetFrequency && canWriteFrequency ? handleRadioFrequencyGesture : undefined)

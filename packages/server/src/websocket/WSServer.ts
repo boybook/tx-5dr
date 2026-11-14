@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // WebSocket服务器 - 事件处理和消息传递需要使用any类型以保持灵活性
 
+import { RttyPlayMessageSchema, RttyTxAppendSchema, RttyTxRetractSchema } from '@tx5dr/contracts';
 import { ServerMessageKey, WSMessageType, RadioConnectionStatus, UserRole, WriteCapabilityPayloadSchema, WriteCapabilityGroupPayloadSchema, SetSplitFrequencyPayloadSchema, TuneToneStartPayloadSchema, SstvTxStartCommandSchema, SstvTxCancelCommandSchema, FaxCalibrationSetCommandSchema, FaxCalibrationResetCommandSchema, SpectrumViewportSchema, SLOT_PACK_HISTORY_LIMIT, type AppAction, type AppSubject } from '@tx5dr/contracts';
 import type {
   ClockStatusSummary,
@@ -489,6 +490,11 @@ export class WSServer extends WSMessageHandler {
       [WSMessageType.CW_TEXT_INPUT]: (data, id) => this.handleCWTextInput(id, data),
       [WSMessageType.CW_PLAY_MESSAGE]: (data, id) => this.handleCWPlayMessage(id, data),
       [WSMessageType.CW_STOP_MESSAGE]: () => this.handleCWStopMessage(),
+      [WSMessageType.RTTY_TX_APPEND]: (data, id) => this.handleRttyTxAppend(id, data),
+      [WSMessageType.RTTY_TX_RETRACT]: (data, id) => this.handleRttyTxRetract(id, data),
+      [WSMessageType.RTTY_TX_FINISH]: (_data, id) => this.handleRttyTxFinish(id),
+      [WSMessageType.RTTY_TX_ABORT]: () => this.handleRttyTxAbort(),
+      [WSMessageType.RTTY_PLAY_MESSAGE]: (data, id) => this.handleRttyPlayMessage(id, data),
       [WSMessageType.OPENWEBRX_PROFILE_SELECT_RESPONSE]: async (data: any) => {
         const adapter = this.digitalRadioEngine.getOpenWebRXAudioAdapter();
         if (!adapter) {
@@ -847,6 +853,22 @@ export class WSServer extends WSMessageHandler {
       logger.debug('cw decoder event', data);
       this.broadcastToMinRole(UserRole.VIEWER, WSMessageType.CW_DECODER_EVENT, data);
     });
+
+    this.digitalRadioEngine.on('rttyTxStatus', (data) => {
+      this.broadcast(WSMessageType.RTTY_TX_STATUS, data);
+    });
+    this.digitalRadioEngine.on('rttyConfigChanged', (data) => {
+      this.broadcast(WSMessageType.RTTY_CONFIG_CHANGED, data);
+    });
+    this.digitalRadioEngine.on('rttyDecoderStatus', (data) => {
+      this.broadcastToMinRole(UserRole.VIEWER, WSMessageType.RTTY_DECODER_STATUS, data);
+    });
+    this.digitalRadioEngine.on('rttyDecoderEvent', (data) => {
+      this.broadcastToMinRole(UserRole.VIEWER, WSMessageType.RTTY_DECODER_EVENT, data);
+    });
+    this.digitalRadioEngine.on('rttyScanUpdate', (data) => {
+      this.broadcastToMinRole(UserRole.VIEWER, WSMessageType.RTTY_SCAN_UPDATE, data);
+    });
   }
 
   private shouldBroadcastRadioConnectedToast(connected: boolean): boolean {
@@ -902,6 +924,12 @@ export class WSServer extends WSMessageHandler {
     [WSMessageType.CW_TEXT_INPUT]: { ability: { action: 'manage', subject: 'Transmission' } },
     [WSMessageType.CW_PLAY_MESSAGE]: { ability: { action: 'manage', subject: 'Transmission' } },
     [WSMessageType.CW_STOP_MESSAGE]: { minRole: UserRole.OPERATOR },
+    [WSMessageType.RTTY_TX_APPEND]: { ability: { action: 'manage', subject: 'Transmission' } },
+    [WSMessageType.RTTY_PLAY_MESSAGE]: { ability: { action: 'manage', subject: 'Transmission' } },
+    [WSMessageType.RTTY_TX_RETRACT]: { minRole: UserRole.OPERATOR },
+    [WSMessageType.RTTY_TX_FINISH]: { minRole: UserRole.OPERATOR },
+    // Stopping a transmission is always allowed to operators (fail closed).
+    [WSMessageType.RTTY_TX_ABORT]: { minRole: UserRole.OPERATOR },
     [WSMessageType.VOICE_SET_RADIO_MODE]: { ability: { action: 'manage', subject: 'Operator' } },
     [WSMessageType.START_OPERATOR]: { ability: { action: 'manage', subject: 'Operator' } },
     [WSMessageType.STOP_OPERATOR]: { ability: { action: 'manage', subject: 'Operator' } },
@@ -946,6 +974,8 @@ export class WSServer extends WSMessageHandler {
     WSMessageType.CW_KEY_ACTION,
     WSMessageType.CW_TEXT_INPUT,
     WSMessageType.CW_PLAY_MESSAGE,
+    WSMessageType.RTTY_TX_APPEND,
+    WSMessageType.RTTY_PLAY_MESSAGE,
     WSMessageType.REMOVE_OPERATOR_FROM_TRANSMISSION,
     WSMessageType.PLUGIN_USER_ACTION,
   ]);
@@ -1935,6 +1965,55 @@ export class WSServer extends WSMessageHandler {
     }
   }
 
+  private async handleRttyTxAppend(connectionId: string, data: unknown): Promise<void> {
+    try {
+      const request = RttyTxAppendSchema.parse(data);
+      const label = this.getConnection(connectionId)?.getAuthLabel() || connectionId;
+      this.digitalRadioEngine.rttyAppend(connectionId, label, request.text, {
+        start: request.start,
+        finishAfter: request.finishAfter,
+        placeholderValues: request.placeholderValues,
+        operatorId: request.operatorId,
+      });
+    } catch (error) {
+      this.handleCommandError(error, 'rttyTxAppend');
+    }
+  }
+
+  private handleRttyTxRetract(connectionId: string, data: unknown): void {
+    try {
+      const request = RttyTxRetractSchema.parse(data);
+      // Only the client that owns the transmission may edit its buffer.
+      this.digitalRadioEngine.getRttyService()?.retract(request.count, connectionId);
+    } catch (error) {
+      this.handleCommandError(error, 'rttyTxRetract');
+    }
+  }
+
+  private handleRttyTxFinish(connectionId: string): void {
+    this.digitalRadioEngine.getRttyService()?.finish(connectionId);
+  }
+
+  private async handleRttyTxAbort(): Promise<void> {
+    try {
+      await this.digitalRadioEngine.getRttyService()?.abort('stopped by client');
+    } catch (error) {
+      this.handleCommandError(error, 'rttyTxAbort');
+    }
+  }
+
+  private async handleRttyPlayMessage(connectionId: string, data: unknown): Promise<void> {
+    try {
+      const request = RttyPlayMessageSchema.parse(data);
+      const label = this.getConnection(connectionId)?.getAuthLabel() || connectionId;
+      await this.digitalRadioEngine.rttyPlayMessage(
+        connectionId, label, request.callsign, request.slotId, request.placeholderValues, request.operatorId, request.repeat,
+      );
+    } catch (error) {
+      this.handleCommandError(error, 'rttyPlayMessage');
+    }
+  }
+
   private async handleCWStopMessage(): Promise<void> {
     try {
       await this.digitalRadioEngine.getCWKeyerManager().stopActive('stopped by client');
@@ -2008,6 +2087,7 @@ export class WSServer extends WSMessageHandler {
       this.startHandshakeTimer(id);
       this.sendInitialState(connection);
       this.sendCWDecoderStatus(connection);
+      this.sendRttyState(connection);
       logger.info(`connection ${id} basic state sent (auth disabled, Admin mode), waiting for client handshake`);
     } else {
       // 认证已启用 → 发送 AUTH_REQUIRED
@@ -2130,6 +2210,10 @@ export class WSServer extends WSMessageHandler {
       cwKeyerManager.handleClientDisconnect(id).catch((err) => {
         logger.error('failed to handle cw keyer client disconnect', err);
       });
+      // RTTY fails closed: losing the sending client stops the transmission.
+      this.digitalRadioEngine.getRttyService()?.handleClientDisconnect(id).catch((err) => {
+        logger.error('failed to handle rtty client disconnect', err);
+      });
       const sstvOwner = this.sstvTxOwners.get(id);
       if (sstvOwner) {
         this.sstvTxOwners.delete(id);
@@ -2220,6 +2304,23 @@ export class WSServer extends WSMessageHandler {
       connection.send(type, 'plugins' in data
         ? projectPluginSnapshot(data, includeDiagnostics)
         : { ...data, plugin: projectPluginStatus(data.plugin, includeDiagnostics) });
+    }
+  }
+
+  /** Initial RTTY snapshot so a (re)connected client renders without waiting for a change. */
+  private sendRttyState(connection: WSConnection): void {
+    try {
+      connection.send(WSMessageType.RTTY_CONFIG_CHANGED, this.digitalRadioEngine.getRttyConfig());
+      const service = this.digitalRadioEngine.getRttyService();
+      if (service) {
+        connection.send(WSMessageType.RTTY_TX_STATUS, service.getTxStatus());
+        connection.send(WSMessageType.RTTY_DECODER_STATUS, service.getDecoderStatus());
+        connection.send(WSMessageType.RTTY_SCAN_UPDATE, service.getScanUpdate());
+        const transcript = service.getTranscriptSnapshot();
+        if (transcript) connection.send(WSMessageType.RTTY_DECODER_EVENT, transcript);
+      }
+    } catch (error) {
+      logger.error('failed to send rtty state', error);
     }
   }
 
@@ -3487,6 +3588,7 @@ export class WSServer extends WSMessageHandler {
       });
       this.sendInitialState(connection);
       this.sendCWDecoderStatus(connection);
+      this.sendRttyState(connection);
 
       // 如果是在线升级（之前已经握手完成），重新发送操作员列表
       if (wasAuthenticated || connection.isHandshakeCompleted()) {
@@ -3529,6 +3631,7 @@ export class WSServer extends WSMessageHandler {
     });
     this.sendInitialState(connection);
     this.sendCWDecoderStatus(connection);
+    this.sendRttyState(connection);
 
     logger.info(`connection ${connectionId} entered public viewer mode`);
   }

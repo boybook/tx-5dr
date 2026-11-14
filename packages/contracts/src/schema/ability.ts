@@ -36,6 +36,8 @@ export type CapabilitySubject =
   | 'ModeSwitch'
   | 'CWDecoder'
   | 'CWDecoderConfig'
+  | 'RttyDecoder'
+  | 'RttyDecoderConfig'
   | 'SettingsDecodeWindows'
   | 'SettingsFrequencyPresets'
   | 'StationInfo';
@@ -63,6 +65,8 @@ export enum Permission {
   MODE_SWITCH = 'mode:switch',
   CW_DECODER_CONTROL = 'cw:decoder_control',
   CW_DECODER_CONFIG = 'cw:decoder_config',
+  RTTY_DECODER_CONTROL = 'rtty:decoder_control',
+  RTTY_DECODER_CONFIG = 'rtty:decoder_config',
   SETTINGS_DECODE_WINDOWS = 'settings:decode_windows',
   SETTINGS_FREQUENCY_PRESETS = 'settings:frequency_presets',
   STATION_UPDATE = 'station:update',
@@ -85,6 +89,8 @@ export const PERMISSION_RULE_MAP: Record<Permission, { action: AppAction; subjec
   [Permission.MODE_SWITCH]: { action: 'execute', subject: 'ModeSwitch' },
   [Permission.CW_DECODER_CONTROL]: { action: 'execute', subject: 'CWDecoder' },
   [Permission.CW_DECODER_CONFIG]: { action: 'update', subject: 'CWDecoderConfig' },
+  [Permission.RTTY_DECODER_CONTROL]: { action: 'execute', subject: 'RttyDecoder' },
+  [Permission.RTTY_DECODER_CONFIG]: { action: 'update', subject: 'RttyDecoderConfig' },
   [Permission.SETTINGS_DECODE_WINDOWS]: { action: 'update', subject: 'SettingsDecodeWindows' },
   [Permission.SETTINGS_FREQUENCY_PRESETS]: { action: 'update', subject: 'SettingsFrequencyPresets' },
   [Permission.STATION_UPDATE]: { action: 'update', subject: 'StationInfo' },
@@ -322,6 +328,13 @@ export const PERMISSION_GROUPS: PermissionGroupDef[] = [
     permissions: [
       Permission.CW_DECODER_CONTROL,
       Permission.CW_DECODER_CONFIG,
+    ],
+  },
+  {
+    key: 'rtty',
+    permissions: [
+      Permission.RTTY_DECODER_CONTROL,
+      Permission.RTTY_DECODER_CONFIG,
     ],
   },
   {

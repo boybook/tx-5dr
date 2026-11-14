@@ -8,6 +8,7 @@ import {
   resetQsoToastAggregatorForTests,
   type ServerTextToastMessage,
 } from '../qsoToastAggregator';
+import { LOCAL_QSO_TOAST_SUPPRESS_MS, noteLocallyLoggedQso } from '../localQsoLog';
 
 type Listener = () => void;
 
@@ -193,5 +194,28 @@ describe('qsoToastAggregator', () => {
       key: ServerMessageKey.TIMING_ALERT,
     }, showToast)).toBe(false);
     expect(showToast).not.toHaveBeenCalled();
+  });
+
+  it('drops the server echo of a QSO this client just logged, also from the background summary', () => {
+    const visibility = installVisibilityHarness({ visible: true, focused: false });
+    const showToast = vi.fn();
+
+    noteLocallyLoggedQso('ja1xyz');
+    expect(handleQsoToastAggregation(qsoToast({ params: { summary: 'JA1XYZ • 14.083 MHz • RTTY • 599/599' } }), showToast)).toBe(true);
+    visibility.setVisibility({ visible: true, focused: true });
+    visibility.emitWindow('focus');
+    vi.advanceTimersByTime(QSO_TOAST_DRAIN_WINDOW_MS);
+    expect(showToast).not.toHaveBeenCalled();
+
+    // The mark is consumed once: another client's QSO with the same station still shows.
+    expect(handleQsoToastAggregation(qsoToast({ params: { summary: 'JA1XYZ • 14.083 MHz • RTTY' } }), showToast)).toBe(false);
+  });
+
+  it('shows the server toast again once a local mark has expired', () => {
+    installVisibilityHarness({ visible: true, focused: true });
+    const showToast = vi.fn();
+    noteLocallyLoggedQso('JA1XYZ');
+    vi.advanceTimersByTime(LOCAL_QSO_TOAST_SUPPRESS_MS + 1);
+    expect(handleQsoToastAggregation(qsoToast({ params: { summary: 'JA1XYZ • 14.083 MHz • RTTY' } }), showToast)).toBe(false);
   });
 });

@@ -41,6 +41,7 @@ import { deviceUiRoutes } from './device-ui/routes.js';
 import { voiceRoutes } from './routes/voice.js';
 import { imageRadioRoutes } from './routes/image-radio.js';
 import { cwRoutes } from './routes/cw.js';
+import { rttyRoutes } from './routes/rtty.js';
 import { stationRoutes } from './routes/station.js';
 import { callsignRoutes } from './routes/callsigns.js';
 import { openwebrxRoutes } from './routes/openwebrx.js';
@@ -497,6 +498,7 @@ export async function createServer() {
   processMonitor.setExtraSnapshotProvider(() => ({
     decodeWorkers: digitalRadioEngine.getDecodeWorkerTelemetrySnapshot(),
     workerPools: digitalRadioEngine.getWorkerPoolTelemetrySnapshots(),
+    rtty: digitalRadioEngine.getRttyService()?.isRunning() ? digitalRadioEngine.getRttyService()!.getTelemetry() : undefined,
   }));
   processMonitor.start();
 
@@ -716,6 +718,7 @@ export async function createServer() {
     await scope.register(slotpackRoutes, { prefix: '/api/slotpack' });
     await scope.register(voiceRoutes, { prefix: '/api/voice' });
     await scope.register(cwRoutes, { prefix: '/api/cw' });
+    await scope.register(rttyRoutes, { prefix: '/api/rtty' });
     await scope.register(callsignRoutes, { prefix: '/api/callsigns' });
   });
   fastify.log.info('Viewer+ routes registered (operators, radio, mode, slotpack, voice, callsigns)');

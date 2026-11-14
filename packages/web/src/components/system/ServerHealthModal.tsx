@@ -768,6 +768,51 @@ function WorkerPoolsCard({
   );
 }
 
+function RttyTelemetryCard({ snapshot }: { snapshot: ProcessSnapshot }) {
+  const { t } = useTranslation('settings');
+  const rtty = snapshot.rtty;
+  if (!rtty) return null;
+  const { rx, tx } = rtty;
+  const stateColor = rx.state === 'error' || rx.state === 'unavailable'
+    ? 'danger'
+    : rx.overruns > 0 ? 'warning' : rx.state === 'listening' || rx.state === 'muted' ? 'success' : 'default';
+  const lostSeconds = rx.sampleRate ? rx.samplesLost / rx.sampleRate : 0;
+  const items: Array<[string, string]> = [
+    [t('serverHealth.rtty.history'), `${safeFixed(rx.historySeconds, 0)} s`],
+    [t('serverHealth.rtty.backlog'), `${rx.backlogChunks} / ${rx.nativeQueuedSamples}`],
+    [t('serverHealth.rtty.lost'), `${safeFixed(lostSeconds, 1)} s · ${rx.overruns}`],
+    [t('serverHealth.rtty.replays'), rx.lastReplayMs === null ? String(rx.replays) : `${rx.replays} · ${rx.lastReplayMs} ms`],
+    [t('serverHealth.rtty.restarts'), String(rx.restarts)],
+    [t('serverHealth.rtty.txSessions'), `${tx.sessions} · ${tx.errors}`],
+  ];
+  return (
+    <div className="bg-content2 rounded-xl p-4 flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-xs font-semibold text-default-500 uppercase tracking-wider">
+          {t('serverHealth.rtty.title')}
+        </div>
+        <Chip size="sm" color={stateColor} variant="flat" className="text-xs">
+          {t(`serverHealth.rtty.state.${rx.state}`)}
+        </Chip>
+      </div>
+      {tx.lastError && (
+        <div className="rounded-lg border border-warning-200 bg-warning-50 px-3 py-2 text-xs text-warning-700">
+          <div className="font-medium">{t('serverHealth.rtty.lastTxError')}</div>
+          <div className="mt-1 font-mono break-all">{tx.lastError}</div>
+        </div>
+      )}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        {items.map(([label, value]) => (
+          <div key={label}>
+            <div className="text-xs text-default-400">{label}</div>
+            <div className="text-sm font-mono font-semibold text-foreground">{value}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function DecodeWorkersCard({
   snapshot,
   cpuPercentValues,
@@ -1131,6 +1176,8 @@ export const ServerHealthModal: React.FC<ServerHealthModalProps> = ({
                   timestamps={timestamps}
                 />
               )}
+
+              <RttyTelemetryCard snapshot={latest} />
 
               {unsupportedCoreCapabilities.length > 0 && (
                 <div className="bg-content2 rounded-xl p-4 flex flex-col gap-3">

@@ -2582,6 +2582,85 @@ export const api = {
     );
   },
 
+  // ===== RTTY API =====
+
+  async getRttyState(apiBase?: string): Promise<{
+    success: boolean;
+    config: import('@tx5dr/contracts').RttyConfig;
+    txStatus: import('@tx5dr/contracts').RttyTxStatus | null;
+    decoderStatus: import('@tx5dr/contracts').RttyDecoderStatus | null;
+    scan?: import('@tx5dr/contracts').RttyScanUpdate | null;
+    /** Received text of the current transcript, as a `replay` characters event. */
+    transcript?: import('@tx5dr/contracts').RttyDecoderEvent | null;
+  }> {
+    return apiRequest('/rtty/state', undefined, apiBase);
+  },
+
+  async updateRttyConfig(
+    patch: import('@tx5dr/contracts').RttyConfigPatch,
+    apiBase?: string,
+  ): Promise<{ success: boolean; config: import('@tx5dr/contracts').RttyConfig }> {
+    return apiRequest('/rtty/config', { method: 'PUT', body: JSON.stringify(patch) }, apiBase);
+  },
+
+  async previewRttyTuning(centerHz: number, apiBase?: string): Promise<{ success: boolean }> {
+    return apiRequest('/rtty/tuning', { method: 'PATCH', body: JSON.stringify({ centerHz }) }, apiBase);
+  },
+
+  async clearRttyTranscript(apiBase?: string): Promise<{ success: boolean; status: import('@tx5dr/contracts').RttyDecoderStatus | null }> {
+    return apiRequest('/rtty/decoder/clear', { method: 'POST' }, apiBase);
+  },
+
+  async getRttyMessagePanel(callsign: string, apiBase?: string): Promise<{ success: boolean; panel: import('@tx5dr/contracts').KeyboardMessagePanel }> {
+    return apiRequest(`/rtty/panel/${encodeURIComponent(callsign)}`, undefined, apiBase);
+  },
+
+  async updateRttyMessagePanel(
+    callsign: string,
+    body: { slotCount: number },
+    apiBase?: string,
+  ): Promise<{ success: boolean; panel: import('@tx5dr/contracts').KeyboardMessagePanel }> {
+    return apiRequest(`/rtty/panel/${encodeURIComponent(callsign)}`, { method: 'PATCH', body: JSON.stringify(body) }, apiBase);
+  },
+
+  async updateRttyMessageSlot(
+    callsign: string,
+    slotId: string,
+    body: import('@tx5dr/contracts').KeyboardMessageSlotUpdate,
+    apiBase?: string,
+  ): Promise<{ success: boolean; panel: import('@tx5dr/contracts').KeyboardMessagePanel }> {
+    return apiRequest(
+      `/rtty/panel/${encodeURIComponent(callsign)}/slots/${encodeURIComponent(slotId)}`,
+      { method: 'PATCH', body: JSON.stringify(body) },
+      apiBase,
+    );
+  },
+
+  async deleteRttyMessageSlot(
+    callsign: string,
+    slotId: string,
+    apiBase?: string,
+  ): Promise<{ success: boolean; panel: import('@tx5dr/contracts').KeyboardMessagePanel }> {
+    return apiRequest(
+      `/rtty/panel/${encodeURIComponent(callsign)}/slots/${encodeURIComponent(slotId)}`,
+      { method: 'DELETE' },
+      apiBase,
+    );
+  },
+
+  async swapRttyMessageSlots(
+    callsign: string,
+    slotIdA: string,
+    slotIdB: string,
+    apiBase?: string,
+  ): Promise<{ success: boolean; panel: import('@tx5dr/contracts').KeyboardMessagePanel }> {
+    return apiRequest(
+      `/rtty/panel/${encodeURIComponent(callsign)}/slots/swap`,
+      { method: 'POST', body: JSON.stringify({ slotIdA, slotIdB }) },
+      apiBase,
+    );
+  },
+
   // ===== 插件系统 API =====
 
   async getPlugins(apiBase?: string): Promise<import('@tx5dr/contracts').PluginSystemSnapshot> {

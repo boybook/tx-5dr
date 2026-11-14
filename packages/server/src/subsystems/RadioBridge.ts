@@ -1,3 +1,4 @@
+import { rttyRadioMode } from '@tx5dr/contracts';
 import type { EventEmitter } from 'eventemitter3';
 import type {
   CoreRadioCapabilities,
@@ -392,16 +393,18 @@ export class RadioBridge {
     const band = this.resolveBandLabel(frequency);
     const isVoiceMode = engineMode === 'voice';
     const isCWMode = engineMode === 'cw';
+    const isRttyMode = engineMode === 'rtty';
     const lastVoiceFrequency = isVoiceMode ? ConfigManager.getInstance().getLastVoiceFrequency() : null;
     const lastCWFrequency = isCWMode ? ConfigManager.getInstance().getLastCWFrequency() : null;
+    const rttyRadioModeName = isRttyMode ? rttyRadioMode(ConfigManager.getInstance().getRttyConfig()) : undefined;
     const supportsFmOptions = lastVoiceFrequency?.radioMode?.toUpperCase() === 'FM';
     const digitalModeName = this.deps.getCurrentModeName?.() || 'FT8';
 
     return {
       frequency,
-      mode: logicalState?.mode ?? (isVoiceMode ? 'VOICE' : isCWMode ? 'CW' : digitalModeName),
+      mode: logicalState?.mode ?? (isVoiceMode ? 'VOICE' : isCWMode ? 'CW' : isRttyMode ? 'RTTY' : digitalModeName),
       band: logicalState?.band ?? band,
-      radioMode: logicalState?.radioMode ?? (isVoiceMode ? lastVoiceFrequency?.radioMode : isCWMode ? (lastCWFrequency?.radioMode || 'CW') : undefined),
+      radioMode: logicalState?.radioMode ?? (isVoiceMode ? lastVoiceFrequency?.radioMode : isCWMode ? (lastCWFrequency?.radioMode || 'CW') : rttyRadioModeName),
       description: logicalState?.description ?? `${(frequency / 1000000).toFixed(3)} MHz${band !== 'Unknown' ? ` ${band}` : ''}`,
       repeaterShift: supportsFmOptions ? lastVoiceFrequency?.repeaterShift : undefined,
       repeaterOffsetHz: supportsFmOptions ? lastVoiceFrequency?.repeaterOffsetHz : undefined,
@@ -421,12 +424,14 @@ export class RadioBridge {
       ? 'VOICE'
       : engineMode === 'cw'
         ? 'CW'
-        : this.deps.getCurrentModeName?.();
+        : engineMode === 'rtty'
+          ? 'RTTY'
+          : this.deps.getCurrentModeName?.();
     let closestPreset: PresetFrequency | null = null;
     let smallestDiff = Infinity;
 
     for (const preset of presets) {
-      if (targetMode ? preset.mode !== targetMode : preset.mode === 'VOICE' || preset.mode === 'CW') {
+      if (targetMode ? preset.mode !== targetMode : preset.mode === 'VOICE' || preset.mode === 'CW' || preset.mode === 'RTTY') {
         continue;
       }
 
@@ -472,6 +477,16 @@ export class RadioBridge {
         toneMode: frequencyInfo.toneMode,
         ctcssToneTenthsHz: frequencyInfo.ctcssToneTenthsHz,
         dcsCode: frequencyInfo.dcsCode,
+      });
+      return;
+    }
+
+    if (frequencyInfo.mode === 'RTTY') {
+      await configManager.updateLastRTTYFrequency({
+        frequency: frequencyInfo.frequency,
+        radioMode: frequencyInfo.radioMode,
+        band: frequencyInfo.band,
+        description: frequencyInfo.description,
       });
       return;
     }

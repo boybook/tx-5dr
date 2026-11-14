@@ -1,3 +1,4 @@
+import type { EngineMode } from '@tx5dr/contracts';
 import type { PSKReporterStats, RepeaterShift, ToneSquelchMode } from '@tx5dr/contracts';
 import { getConfigFilePath } from '../utils/app-paths.js';
 import { JsonFileStore, PersistenceCoordinator } from '../utils/persistence/index.js';
@@ -43,8 +44,9 @@ export interface ProfileOperatingMemory {
   lastSelectedFrequency?: LastSelectedFrequencyState | null;
   lastVoiceFrequency?: LastVoiceFrequencyState | null;
   lastCWFrequency?: LastCWFrequencyState | null;
+  lastRTTYFrequency?: LastCWFrequencyState | null;
   lastImageFrequency?: LastImageFrequencyState | null;
-  lastEngineMode?: 'digital' | 'voice' | 'cw' | 'image';
+  lastEngineMode?: EngineMode;
   lastDigitalModeName?: string;
   /** Per-profile audio gain slots keyed by `${modeCategory}_${band}`. */
   volumeGainMap?: Record<string, ProfileVolumeGainSlot> | null;
@@ -54,10 +56,11 @@ export interface RuntimeState {
   lastSelectedFrequency?: LastSelectedFrequencyState | null;
   lastVoiceFrequency?: LastVoiceFrequencyState | null;
   lastCWFrequency?: LastCWFrequencyState | null;
+  lastRTTYFrequency?: LastCWFrequencyState | null;
   lastImageFrequency?: LastImageFrequencyState | null;
   lastVolumeGain?: { gain: number; gainDb: number } | null;
   volumeGainMap?: Record<string, { gain: number; gainDb: number }> | null;
-  lastEngineMode?: 'digital' | 'voice' | 'cw' | 'image';
+  lastEngineMode?: EngineMode;
   lastDigitalModeName?: string;
   /** Last digital/voice/CW frequency + mode, keyed by RadioProfile id. */
   profileOperatingMemory?: Record<string, ProfileOperatingMemory> | null;

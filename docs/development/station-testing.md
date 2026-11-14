@@ -26,6 +26,13 @@ Choose one case or retain artifacts at a chosen location:
 yarn test:station --case ft8-caller --artifacts /tmp/station-result
 ```
 
+RTTY cases (`rtty-caller`, `rtty-responder`, `rtty-noise`, `rtty-disconnect`)
+run on 14.080 MHz in RTTY mode. RTTY is operated by hand, so the runner acts as
+the operator over the normal WebSocket API: it sends macros ending in `{RX}`,
+waits for the virtual peer's decoded reply, logs the QSO and checks it survives
+a restart. `rtty-noise` adds channel noise to the peer; `rtty-disconnect` closes
+the sending client mid-transmission and requires PTT release within 3 s.
+
 A compatible external provider/strategy can be selected with `--provider`,
 `--strategy` and `--scenario`. `--plugins /absolute/path/built-plugins` copies
 only those named, self-contained plugin directories into the isolated run.
@@ -102,11 +109,16 @@ yarn test:station --hardware /absolute/path/radio-profile.json --callsign YOURCA
 ```
 
 Install the dummy load and manually set minimum power before entering `ARM`.
-The CLI displays the exact device, frequency, mode and limit. There is no
+The CLI displays the device, frequency, software mode, the radio's own CAT mode
+and RF power readback, and the time limit (counted from server start). Check
+the mode on the radio display as well: some links (ICOM WLAN) do not report the
+DATA flag, so LSB-D and LSB read back the same. There is no
 unattended hardware option or persisted permission. Hardware tests use a separate
 application process and never load the primary instance's configuration. The
 first case defaults to FT8 on 14.074 MHz; choose the case deliberately and inspect
-the displayed target before authorizing. The first release proves CAT/PTT and
+the displayed target before authorizing. RTTY hardware runs (`--case rtty-caller`,
+`--case rtty-disconnect`) select PKTLSB/LSB-D before arming; the mode and the
+manually set power are then read back every second and any change fails the run. The first release proves CAT/PTT and
 actual software audio output with virtual replies; RF verification requires an
 external capture source and separate hardware evidence.
 

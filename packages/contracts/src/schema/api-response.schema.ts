@@ -133,6 +133,12 @@ export const LastFrequencyResponseSchema = z.object({
     description: z.string().optional(),
   }).nullable().optional(),
   lastImageFrequency: PresetFrequencySchema.nullable().optional(),
+  lastRTTYFrequency: z.object({
+    frequency: z.number(),
+    radioMode: z.string().optional(),
+    band: z.string(),
+    description: z.string().optional(),
+  }).nullable().optional(),
 });
 
 /**

@@ -31,6 +31,7 @@ import { createLogger } from '../utils/logger.js';
 import type { WSJTXDecodeWorkQueue } from '../decode/WSJTXDecodeWorkQueue.js';
 import type { PhysicalTxCoordinator } from '../transmission/PhysicalTxCoordinator.js';
 import type { ImageRadioService } from '../image-radio/ImageRadioService.js';
+import type { RttyService } from '../rtty/RttyService.js';
 
 const logger = createLogger('EngineLifecycle');
 
@@ -58,6 +59,7 @@ export interface EngineLifecycleDeps {
   getAudioVolumeController: () => AudioVolumeController;
   getAudioSidecar: () => AudioSidecarController;
   getImageRadioService?: () => ImageRadioService | null;
+  getRttyService?: () => RttyService | null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   getStatus: () => any;
 }
@@ -166,12 +168,14 @@ export class EngineLifecycle {
         ? this.buildVoiceModeResourcePlan()
         : mode.name === 'CW'
           ? this.buildCWModeResourcePlan()
-          : mode.name === 'SSTV' || mode.name === 'FAX'
+          : mode.name === 'RTTY'
+            ? this.buildRttyModeResourcePlan()
+            : mode.name === 'SSTV' || mode.name === 'FAX'
             ? this.buildImageModeResourcePlan(mode.name === 'SSTV' ? 'sstv' : 'fax')
             : this.buildDigitalModeResourcePlan()),
     ];
 
-    logger.info(`Built ${mode.name === 'VOICE' ? 'voice' : mode.name === 'CW' ? 'cw' : mode.name === 'SSTV' || mode.name === 'FAX' ? 'image' : 'digital'} resource plan`);
+    logger.info(`Built ${mode.name === 'VOICE' ? 'voice' : mode.name === 'CW' ? 'cw' : mode.name === 'RTTY' ? 'rtty' : mode.name === 'SSTV' || mode.name === 'FAX' ? 'image' : 'digital'} resource plan`);
     return resources;
   }
 
@@ -417,6 +421,27 @@ export class EngineLifecycle {
         optional: false,
       },
     ];
+  }
+
+  private buildRttyModeResourcePlan(): SimplifiedResourceConfig[] {
+    const service = this.deps.getRttyService?.() ?? null;
+    const resources: SimplifiedResourceConfig[] = [{
+      name: 'spectrumScheduler',
+      start: async () => this.deps.spectrumScheduler.start(),
+      stop: async () => this.deps.spectrumScheduler.stop(),
+      priority: 6,
+      dependencies: [],
+      optional: false,
+    }];
+    if (service) resources.push({
+      name: 'rttyService',
+      start: async () => service.start(),
+      stop: async () => service.stop('mode_runtime_stopped'),
+      priority: 7,
+      dependencies: [],
+      optional: true,
+    });
+    return resources;
   }
 
   private buildImageModeResourcePlan(family: 'sstv' | 'fax'): SimplifiedResourceConfig[] {

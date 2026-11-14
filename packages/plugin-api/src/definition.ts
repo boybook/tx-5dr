@@ -229,7 +229,9 @@ export interface PluginDefinition<
    * pane), `'voice-left-top'` (above the voice frequency card),
    * `'voice-right-top'` (the tabbed top area of the voice right panel),
    * `'cw-left-top'` (above the CW frequency card),
-   * `'cw-right-top'` (the tabbed top area of the CW right panel), or
+   * `'cw-right-top'` (the tabbed top area of the CW right panel),
+   * `'rtty-left-top'` (above the RTTY frequency card),
+   * `'rtty-right-top'` (the tabbed top area of the RTTY right panel), or
    * `'radio-control-toolbar'` (a global utility iframe button in RadioControl).
    * An `operator-action` panel must use `component: 'iframe'` and
    * `openMode: 'page'`; the Host binds it to that operator and opens the

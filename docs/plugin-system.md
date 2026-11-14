@@ -747,7 +747,7 @@ onLoad(ctx) {
 ```
 
 可用 slot：`operator`、`automation`、`operator-action`、`main-right`、`voice-left-top`、
-`voice-right-top`、`cw-left-top`、`cw-right-top`、`radio-control-toolbar`。
+`voice-right-top`、`cw-left-top`、`cw-right-top`、`rtty-left-top`、`rtty-right-top`、`radio-control-toolbar`。
 运行期 panel 使用 `setPanelContributions()` / `clearPanelContributions()` 管理。
 
 ### 7.4 iframe 页面
@@ -1098,8 +1098,10 @@ are measured separately from cooperative CPU work.
 
 ## Declarative audio peers
 
-Plugins may declare `simulationScenarios` for FT8/FT4 peer exchanges. The Host
-validates and freezes these declarations and owns decoding, scheduling, encoding
-and audio. Built-in standard exchanges use the same contract as external
+Plugins may declare `simulationScenarios` for FT8/FT4 and RTTY peer exchanges.
+The Host validates and freezes these declarations and owns decoding, scheduling,
+encoding and audio. An RTTY peer has no transmit slots: a received message is the
+text of one complete station transmission, and cycle counts in rules and timeouts
+count those transmissions. Built-in standard exchanges use the same contract as external
 plugins. Scenarios do not receive station strategy state or device handles.
 See [Station testing](architecture/station-testing.md) for evidence and lifetime.

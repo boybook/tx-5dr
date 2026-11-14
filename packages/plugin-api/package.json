@@ -1,6 +1,6 @@
 {
   "name": "@tx5dr/plugin-api",
-  "version": "2.7.0",
+  "version": "2.8.0",
   "type": "module",
   "bin": {
     "tx5dr-plugin": "./dist/cli/tx5dr-plugin.js"

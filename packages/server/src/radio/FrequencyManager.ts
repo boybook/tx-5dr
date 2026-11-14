@@ -164,6 +164,16 @@ export class FrequencyManager {
     { band: '70cm', mode: 'VOICE', radioMode: 'FM', frequency: 433000000, description: '433.000 MHz 70cm FM' },
     { band: '70cm', mode: 'VOICE', radioMode: 'FM', frequency: 438500000, description: '438.500 MHz 70cm FM' },
 
+    // ===== RTTY activity (dial frequency; the radio data mode follows the RTTY sideband setting) =====
+    { band: '80m', mode: 'RTTY', frequency: 3580000, description: '3.580 MHz 80m RTTY' },
+    { band: '40m', mode: 'RTTY', frequency: 7040000, description: '7.040 MHz 40m RTTY' },
+    { band: '30m', mode: 'RTTY', frequency: 10140000, description: '10.140 MHz 30m RTTY' },
+    { band: '20m', mode: 'RTTY', frequency: 14080000, description: '14.080 MHz 20m RTTY' },
+    { band: '17m', mode: 'RTTY', frequency: 18100000, description: '18.100 MHz 17m RTTY' },
+    { band: '15m', mode: 'RTTY', frequency: 21080000, description: '21.080 MHz 15m RTTY' },
+    { band: '12m', mode: 'RTTY', frequency: 24920000, description: '24.920 MHz 12m RTTY' },
+    { band: '10m', mode: 'RTTY', frequency: 28080000, description: '28.080 MHz 10m RTTY' },
+
     // ===== SSTV image activity centers (regional, not exclusive channels) =====
     { band: '80m', mode: 'SSTV', radioMode: 'LSB', frequency: 3730000, description: '3.730 MHz SSTV · IARU 1', region: 'iaru1', imagePurpose: 'activity', audioCenterHz: 1900 },
     { band: '80m', mode: 'SSTV', radioMode: 'LSB', frequency: 3845000, description: '3.845 MHz SSTV · IARU 2', region: 'iaru2', imagePurpose: 'activity', audioCenterHz: 1900 },
@@ -207,6 +217,7 @@ export class FrequencyManager {
     );
     const missingImageDefaults = FrequencyManager.DEFAULT_PRESETS.filter((preset) => (
       (preset.mode === 'SSTV' && !configuredModes.has('SSTV'))
+      || (preset.mode === 'RTTY' && !configuredModes.has('RTTY'))
       || (preset.mode === 'FAX' && !configuredFaxFrequencies.has(preset.frequency))
     ));
     this.presets = [...enrichedCustomPresets, ...missingImageDefaults];

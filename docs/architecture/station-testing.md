@@ -32,6 +32,18 @@ known-text side channels. Fixed dial frequency, digital mode, peer phase and
 baseband position define channel membership. A changed channel cannot keep
 answering the old transmission.
 
+`RttyPeerSession` is the keyboard-mode counterpart for RTTY runs. A received
+message is one complete observed station transmission (deterministic playback
+now emits the same TX observation as `playAudio`), decoded with the real native
+RTTY decoder. The declarative scenario advances once per station transmission
+or after eight seconds of channel silence, and replies are rendered with the
+real native encoder after a short turnaround. A peer may declare
+`channelSnrDb` to add seeded white noise to its replies. RTTY cases are operated
+by the runner through the normal WebSocket API (`rttyTxAppend` with `{RX}`),
+read the station's own decoder events, and log the QSO through the normal
+logbook API; a disconnect case asserts that losing the sending client releases
+PTT within three seconds.
+
 The audio owner is the single RX ring writer. Virtual-device audio enters normal
 capture, conversion and resampling. With physical capture, a baseband
 contribution is mixed after IF demodulation/resampling on the input timeline.
@@ -76,7 +88,8 @@ immediately, as do software mode-write requests. Changed, unknown or failed
 mode readback stops the session. Reconnect, stop or expiry while a read is
 pending cannot restore permission when its late result arrives.
 
-The current hardware scope is digital transmission. The normal physical lease
+The hardware scope is the case's mode: digital transmission for FT8/FT4 cases
+and RTTY transmission (`rtty` source) for RTTY cases. The normal physical lease
 and radio owners enforce restrictions, including temporary tests and self-keyed
 sources. CW, tuner and other sources are denied by this session's scope. RF power
 and physical power writes are prohibited in hardware runs. Supported RF power

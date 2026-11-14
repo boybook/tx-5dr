@@ -20,7 +20,7 @@ const { values } = parseArgs({ options: {
   help: { type: 'boolean', default: false },
 } });
 if (values.help) {
-  process.stdout.write(`Usage: yarn test:station [--case ft8-caller|ft8-responder|ft4-caller|ft8-silence]
+  process.stdout.write(`Usage: yarn test:station [--case ft8-caller|ft8-responder|ft4-caller|ft8-silence|rtty-caller|rtty-responder|rtty-noise|rtty-disconnect]
   --strategy NAME --provider NAME --scenario ID --plugins /path/to/built-plugins
   --plugin NAME                 Also load a utility/UI plugin (repeatable)
   --logbook-page PAGE_ID         Verify the strategy's public ContestWorkbench QSO view
@@ -45,6 +45,11 @@ const cases = {
   'ft8-responder': { mode: 'FT8', scenario: 'calling', cycle: 1 },
   'ft4-caller': { mode: 'FT4', scenario: 'standard', cycle: 0 },
   'ft8-silence': { mode: 'FT8', scenario: 'silence', cycle: 0, negative: true },
+  // Keyboard RTTY: the runner acts as the operator through the normal WebSocket API.
+  'rtty-caller': { mode: 'RTTY', scenario: 'rtty-answering', cycle: 0, keyboard: 'caller' },
+  'rtty-responder': { mode: 'RTTY', scenario: 'rtty-calling', cycle: 0, keyboard: 'responder' },
+  'rtty-noise': { mode: 'RTTY', scenario: 'rtty-answering', cycle: 0, keyboard: 'caller', snrDb: 0 },
+  'rtty-disconnect': { mode: 'RTTY', scenario: 'rtty-silence', cycle: 0, keyboard: 'disconnect', negative: true },
 };
 const selected = values.case ? [values.case] : values.hardware || uiMode ? ['ft8-caller'] : Object.keys(cases);
 for (const id of selected) if (!cases[id]) throw new Error(`Unknown station case: ${id}`);
@@ -103,13 +108,86 @@ async function freePort() {
   const socket = net.createServer(); socket.listen(0, '127.0.0.1'); await once(socket, 'listening');
   const port = socket.address().port; await new Promise(resolve => socket.close(resolve)); return port;
 }
+/**
+ * Operates a keyboard RTTY QSO over the normal WebSocket API and returns the
+ * logged QSOs. Each exchange waits for the station to return to receive and for
+ * the peer's answer in the station's own decoder output.
+ */
+async function runRttyCase({ entry, dir, callsign, frequency, api, port, jwt, getQsos, send, rx, tx, ptt }) {
+  const operatorId = 'station-operator';
+  const transmit = async text => {
+    send('rttyTxAppend', { text: `${text} {RX}`, operatorId });
+    await until(() => tx()?.active, 15000, `RTTY transmission start: ${text}`);
+    await until(() => !tx()?.active && !ptt(), 90000, `RTTY transmission end: ${text}`);
+    if (tx()?.error) throw new Error(`RTTY transmission failed: ${tx().error}`);
+  };
+  const hear = (pattern, description) => until(() => pattern.test(rx()), 90000, `RTTY reception: ${description}`);
+  const peerDecoded = async text => {
+    const trace = (await fs.readFile(path.join(dir, 'peer.jsonl'), 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line));
+    return trace.some(event => event.kind === 'host-decode' && event.data.messages.some(message => message.text.includes(text)));
+  };
+  await until(() => tx()?.available, 30000, 'RTTY transmit availability');
+  if (entry.keyboard === 'disconnect') {
+    const owner = new WebSocket(`ws://127.0.0.1:${port}/api/ws`, { origin: `http://127.0.0.1:${port}` });
+    let ready = false;
+    owner.on('message', bytes => {
+      const message = JSON.parse(bytes.toString());
+      if (message.type === 'authResult' && message.data?.success) {
+        owner.send(JSON.stringify({ type: 'clientHandshake', timestamp: new Date().toISOString(), data: { clientInstanceId: 'station-rtty-owner', enabledOperatorIds: [operatorId], selectedOperatorId: operatorId } }));
+      }
+      if (message.type === 'serverHandshakeComplete') ready = true;
+    });
+    await once(owner, 'open');
+    owner.send(JSON.stringify({ type: 'authToken', timestamp: new Date().toISOString(), data: { jwt } }));
+    await until(() => ready, 10000, 'second client handshake');
+    owner.send(JSON.stringify({ type: 'rttyTxAppend', timestamp: new Date().toISOString(), data: { text: 'RYRYRYRYRYRYRYRYRYRYRYRYRYRYRYRYRYRYRYRY', operatorId } }));
+    await until(() => ptt() && tx()?.phase === 'on_air', 20000, 'RTTY on air from the second client');
+    const closedAt = Date.now();
+    owner.close();
+    await until(() => !ptt() && !tx()?.active, 5000, 'PTT release after the owner disconnected');
+    const releaseMs = Date.now() - closedAt;
+    await fs.writeFile(path.join(dir, 'disconnect.json'), JSON.stringify({ releaseMs }, null, 2));
+    if (releaseMs > 3000) throw new Error(`PTT released ${releaseMs} ms after disconnect`);
+    return [];
+  }
+  const startedAt = Date.now();
+  let finalStationText;
+  if (entry.keyboard === 'caller') {
+    await transmit(`CQ CQ CQ DE ${callsign} ${callsign} ${callsign} K`);
+    await hear(new RegExp(`${callsign} DE JA1AAA`), 'peer answer');
+    await transmit(`JA1AAA DE ${callsign} UR 599 599 K`);
+    await hear(/R TU UR 599/, 'peer report');
+    finalStationText = `JA1AAA TU 73 DE ${callsign} SK`;
+    await transmit(finalStationText);
+    await hear(/TU 73 DE JA1AAA SK/, 'peer sign-off');
+  } else {
+    await hear(/CQ .*DE JA1AAA/, 'peer CQ');
+    await transmit(`JA1AAA DE ${callsign} ${callsign} K`);
+    await hear(new RegExp(`${callsign} DE JA1AAA UR 599`), 'peer report');
+    finalStationText = `JA1AAA DE ${callsign} R TU UR 599 599 K`;
+    await transmit(finalStationText);
+    await hear(/TU 73 DE JA1AAA SK/, 'peer sign-off');
+  }
+  if (!await peerDecoded(finalStationText)) throw new Error('Peer did not decode the final station message');
+  if (ptt()) throw new Error('PTT still active after the QSO');
+  await api(`/api/logbooks/${encodeURIComponent(callsign)}/qsos`, {
+    callsign: 'JA1AAA', frequency: frequency - 2125, mode: 'RTTY', startTime: startedAt, endTime: Date.now(),
+    reportSent: '599', reportReceived: '599', messageHistory: [],
+  });
+  return until(async () => {
+    const records = await getQsos();
+    return records.some(record => record.callsign === 'JA1AAA') ? records : false;
+  }, 15000, 'RTTY QSO in the logbook');
+}
+
 for (const id of selected) {
   const entry = cases[id];
   const dir = path.join(artifactRoot, id);
   await fs.mkdir(dir);
   await fs.mkdir(path.join(dir, 'config'));
   const now = Date.now();
-  const frequency = entry.mode === 'FT4' ? 14080000 : 14074000;
+  const isRtty = entry.mode === 'RTTY';
+  const frequency = entry.mode === 'FT4' || isRtty ? 14080000 : 14074000;
   const profile = hardwareProfile ?? { id: 'station-dummy', name: 'Station Dummy', radio: { type: 'serial', serial: { path: process.platform === 'win32' ? 'NUL' : '/dev/null', rigModel: 1 }, pttMethod: 'cat', digitalModeRadioMode: 'usb' },
     audio: { inputDeviceName: 'Station PCM device', outputDeviceName: 'Station PCM device', inputSampleRate: 48000, outputSampleRate: 48000, inputBufferSize: 1024, outputBufferSize: 1024 }, audioLockedToRadio: false, createdAt: now, updatedAt: now };
   const callsign = values.callsign ?? 'BG5DRB';
@@ -126,7 +204,8 @@ for (const id of selected) {
   }
   const spec = StationTestRunSchema.parse({ version: 1, hardware: Boolean(hardwareProfile), profileId: profile.id, mode: entry.mode,
     dialFrequencyHz: frequency, scenarioProvider: provider, seed: id, transmitCycle: 1 - entry.cycle,
-    peers: [{ id: 'remote-1', callsign: 'JA1AAA', grid: 'PM95', scenarioId: values.scenario ?? entry.scenario, audioFrequencyHz: 1500 }], artifactDir: dir });
+    peers: [{ id: 'remote-1', callsign: 'JA1AAA', grid: 'PM95', scenarioId: values.scenario ?? entry.scenario,
+      audioFrequencyHz: isRtty ? 2210 : 1500, ...(entry.snrDb !== undefined ? { channelSnrDb: entry.snrDb } : {}) }], artifactDir: dir });
   const configs = Object.fromEntries(['autocall-idle-frequency', 'wavelog-sync', 'qrz-sync', 'lotw-sync', 'clublog-sync', 'qso-udp-broadcast',
     'scheduled-cq-autocall', 'scheduled-band-switcher'].map(name => [name, { enabled: false, settings: {} }]));
   configs['standard-qso'] = { enabled: true, settings: { autoReplyToCQ: true, autoResumeCQAfterSuccess: false, autoResumeCQAfterFail: false, replyToWorkedStations: false } };
@@ -134,8 +213,10 @@ for (const id of selected) {
   configs[strategy] ??= { enabled: true, settings: {} };
   for (const name of values.plugin) configs[name] ??= { enabled: true, settings: {} };
   const config = { profiles: [profile], activeProfileId: profile.id,
-    operators: [{ id: 'station-operator', myCallsign: callsign, myGrid: values.grid ?? 'OL32', frequency: 1500, transmitCycles: [entry.cycle], mode: MODES[entry.mode] }],
-    lastDigitalModeName: entry.mode, lastEngineMode: 'digital', lastSelectedFrequency: { frequency, mode: entry.mode, radioMode: 'USB', band: '20m' },
+    operators: [{ id: 'station-operator', myCallsign: callsign, myGrid: values.grid ?? 'OL32', frequency: 1500, transmitCycles: [entry.cycle], mode: MODES[isRtty ? 'FT8' : entry.mode] }],
+    ...(isRtty
+      ? { lastDigitalModeName: 'FT8', lastEngineMode: 'rtty', lastRTTYFrequency: { frequency, band: '20m', description: '14.080 MHz 20m RTTY' } }
+      : { lastDigitalModeName: entry.mode, lastEngineMode: 'digital', lastSelectedFrequency: { frequency, mode: entry.mode, radioMode: 'USB', band: '20m' } }),
     pskreporter: { enabled: false }, rigctld: { enabled: false }, observability: { enabled: false }, ntp: { autoApplyOffset: false },
     plugins: { configs, operatorStrategies: { 'station-operator': strategy }, operatorSettings: { 'station-operator': { 'standard-qso': configs['standard-qso'].settings } } }, logLevel: 'info' };
   await fs.writeFile(path.join(dir, 'config/config.json'), JSON.stringify(config, null, 2), { mode: 0o600 });
@@ -149,6 +230,8 @@ for (const id of selected) {
   let eventsDone = Promise.resolve();
   let webLogsDone = Promise.resolve();
   let pttActive = false;
+  let rttyText = '';
+  let rttyTx = null;
   const shutdownToken = crypto.randomBytes(32).toString('hex');
   secrets.add(shutdownToken);
   const api = async (route, body, publicAccess = false, asText = false) => {
@@ -244,6 +327,10 @@ for (const id of selected) {
       }
       if (message.type === 'serverHandshakeComplete') handshaken = true;
       if (message.type === 'pttStatusChanged') pttActive = message.data.isTransmitting;
+      if (message.type === 'rttyDecoderEvent' && message.data?.kind === 'characters') {
+        rttyText += message.data.characters.map(character => character.ch).join('');
+      }
+      if (message.type === 'rttyTxStatus') rttyTx = message.data;
       eventTail = eventTail.then(() => events.write(`${JSON.stringify(redact(message))}\n`));
     });
     eventsDone = new Promise(resolve => socket.once('close', resolve)).then(async () => { await eventTail; await events.close(); });
@@ -310,9 +397,16 @@ for (const id of selected) {
     } else {
       if (hardwareProfile) {
         const status = await api('/api/station-test/status');
+        // Show what the radio itself reports, so the operator can compare it with the display.
+        const readback = (await api('/api/radio/capabilities')).capabilities ?? [];
+        const capability = id => readback.find(item => item.id === id);
+        const radioMode = capability('radio_mode')?.supported ? capability('radio_mode').value : 'unreadable';
+        const powerValue = capability('rf_power')?.supported ? capability('rf_power').value : null;
+        // rf_power is normalised 0..1, not watts.
+        const rfPower = typeof powerValue === 'number' ? `${Math.round(powerValue * 100)}%` : 'unreadable';
         const terminal = createInterface({ input: process.stdin, output: process.stdout });
         try {
-          const answer = await terminal.question(`Target ${profile.name}; ${frequency} Hz ${entry.mode}; maximum ${spec.maxDurationMs / 1000}s. Confirm dummy load installed and minimum power set manually. Type ARM: `, { signal: interruptController.signal });
+          const answer = await terminal.question(`Target ${profile.name}; ${frequency} Hz ${entry.mode}; radio reports mode ${radioMode}, RF power ${rfPower}; maximum ${spec.maxDurationMs / 1000}s counted from server start. Confirm dummy load installed and minimum power set manually. Type ARM: `, { signal: interruptController.signal });
           if (answer !== 'ARM') throw new Error('Hardware test was not armed');
         } finally { terminal.close(); }
         const permission = await api('/api/station-test/arm', { sessionId: status.sessionId, dummyLoadInstalled: true, minimumPowerSetManually: true });
@@ -320,9 +414,13 @@ for (const id of selected) {
       }
       await checkPlugins(false);
       await writeSession('verifying');
-      if (!values.prepare) await api('/api/operators/station-operator/start', {});
+      if (!values.prepare && !isRtty) await api('/api/operators/station-operator/start', {});
       let qsos = [];
-      if (entry.negative) {
+      if (isRtty) {
+        qsos = await runRttyCase({ entry, dir, callsign, frequency, api, port, jwt, getQsos,
+          send: (type, data) => socket.send(JSON.stringify({ type, timestamp: new Date().toISOString(), data })),
+          rx: () => rttyText.replace(/\s+/g, ' ').toUpperCase(), tx: () => rttyTx, ptt: () => pttActive });
+      } else if (entry.negative) {
         const end = Date.now() + MODES[entry.mode].slotMs * 3;
         while (Date.now() < end) {
           if (interruption) throw interruption;
@@ -345,7 +443,7 @@ for (const id of selected) {
         }, MODES[entry.mode].slotMs * 12, 'audio QSO completion and durable logbook');
       }
       await checkPlugins(false);
-      await api('/api/operators/station-operator/stop', {});
+      if (!isRtty) await api('/api/operators/station-operator/stop', {});
       await api('/api/station-test/stop', {});
       const status = await api('/api/station-test/status');
       if (status.phase !== 'stopped') throw new Error(`Station test did not stop: ${status.error}`);
@@ -357,7 +455,7 @@ for (const id of selected) {
       }, 30000, 'logbook recovery after restart');
       assertRestoredQsos(qsos, restored);
       const trace = await fs.readFile(path.join(dir, 'peer.jsonl'), 'utf8');
-      if (!trace.includes('host-decode')) throw new Error('No observed transmission was decoded by the peer');
+      if (!entry.negative && !trace.includes('host-decode')) throw new Error('No observed transmission was decoded by the peer');
       result = { id, result: 'passed', qsos: restored.length, hardware: Boolean(hardwareProfile), evidence: hardwareProfile ? 'actual-output' : 'virtual-device-consumed',
         plugins: pluginSelection.map(({ name, version }) => ({ name, version })), logbookPage: values['logbook-page'] };
     }

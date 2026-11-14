@@ -33,10 +33,22 @@ import {
 import { RadioInfoSchema, HamlibConfigSchema, TunerStatusSchema, TunerCapabilitiesSchema, RadioConnectionStatusSchema, ReconnectProgressSchema, CoreRadioCapabilitiesSchema, CoreCapabilityDiagnosticsSchema } from './radio.schema.js';
 import { RadioProfileSchema, ProfileChangedEventSchema } from './radio-profile.schema.js';
 import { UserRole } from './auth.schema.js';
-import type { VoicePTTLock } from './voice.schema.js';
+import { EngineModeSchema, type VoicePTTLock } from './voice.schema.js';
 import type { VoiceKeyerStatus } from './voice-keyer.schema.js';
 import type { CWKeyerStatus, CWKeyerConfig } from './cw-keyer.schema.js';
 import { CWDecoderEventSchema, CWDecoderStatusSchema, type CWDecoderEvent, type CWDecoderStatus } from './cw-decoder.schema.js';
+import {
+  RttyConfigSchema,
+  RttyDecoderEventSchema,
+  RttyScanUpdateSchema,
+  RttyDecoderStatusSchema,
+  RttyTxStatusSchema,
+  type RttyConfig,
+  type RttyDecoderEvent,
+  type RttyScanUpdate,
+  type RttyDecoderStatus,
+  type RttyTxStatus,
+} from './rtty.schema.js';
 import { CapabilityListSchema, CapabilityStateSchema, WriteCapabilityPayloadSchema, WriteCapabilityGroupPayloadSchema } from './radio-capability.schema.js';
 import { RadioPowerStateEventSchema } from './radio-power.schema.js';
 import { AudioSidecarStatusPayloadSchema } from './audio-sidecar.schema.js';
@@ -248,6 +260,27 @@ export enum WSMessageType {
   /** CW 解码器增量事件（server → client） */
   CW_DECODER_EVENT = 'cwDecoderEvent',
 
+  // ===== RTTY 模式 =====
+  /** RTTY 发送状态（server → client） */
+  RTTY_TX_STATUS = 'rttyTxStatus',
+  /** 追加发送文字（client → server） */
+  RTTY_TX_APPEND = 'rttyTxAppend',
+  /** 撤回未发送的文字（client → server） */
+  RTTY_TX_RETRACT = 'rttyTxRetract',
+  /** 发完缓冲区后结束发射（client → server） */
+  RTTY_TX_FINISH = 'rttyTxFinish',
+  /** 立即停止发射（client → server） */
+  RTTY_TX_ABORT = 'rttyTxAbort',
+  /** 发送预设报文（client → server） */
+  RTTY_PLAY_MESSAGE = 'rttyPlayMessage',
+  /** RTTY 配置变更（server → client） */
+  RTTY_CONFIG_CHANGED = 'rttyConfigChanged',
+  /** RTTY 解码器状态（server → client） */
+  RTTY_DECODER_STATUS = 'rttyDecoderStatus',
+  /** RTTY 解码器增量事件（server → client） */
+  RTTY_DECODER_EVENT = 'rttyDecoderEvent',
+  RTTY_SCAN_UPDATE = 'rttyScanUpdate',
+
   // ===== 进程监控 =====
   PROCESS_SNAPSHOT = 'processSnapshot',
   PROCESS_SNAPSHOT_HISTORY = 'processSnapshotHistory',
@@ -288,8 +321,8 @@ export const SystemStatusSchema = z.object({
   radioConnectionHealth: z.object({
     connectionHealthy: z.boolean(),
   }).optional(),
-  /** 引擎模式：digital（FT8/FT4）、voice（语音通联）或 cw（莫尔斯码） */
-  engineMode: z.enum(['digital', 'voice', 'cw', 'image']).default('digital'),
+  /** 引擎模式：digital（FT8/FT4）、voice（语音）、cw（莫尔斯码）、image（图像）或 rtty */
+  engineMode: EngineModeSchema.default('digital'),
   /** 当前电台调制模式（语音模式下使用，如 USB/LSB/FM/AM） */
   currentRadioMode: z.string().optional(),
   /** 引擎状态机当前状态 */
@@ -421,7 +454,7 @@ export const PTTStatusSchema = z.object({
   operatorIds: z.array(z.string()),
   phase: z.enum(['idle', 'starting', 'on_air', 'draining', 'stopping', 'unknown']).optional(),
   frameId: z.string().optional(),
-  source: z.enum(['digital', 'voice', 'voice-keyer', 'cw', 'sstv', 'tune-tone', 'manual', 'test']).optional(),
+  source: z.enum(['digital', 'voice', 'voice-keyer', 'cw', 'rtty', 'sstv', 'tune-tone', 'manual', 'test']).optional(),
 });
 
 export const TuneToneStartPayloadSchema = z.object({
@@ -1694,6 +1727,36 @@ export const WSCWDecoderEventMessageSchema = WSBaseMessageSchema.extend({
 
 export type WSCWDecoderEventMessage = z.infer<typeof WSCWDecoderEventMessageSchema>;
 
+export const WSRttyTxStatusMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.RTTY_TX_STATUS),
+  data: RttyTxStatusSchema,
+});
+export type WSRttyTxStatusMessage = z.infer<typeof WSRttyTxStatusMessageSchema>;
+
+export const WSRttyConfigChangedMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.RTTY_CONFIG_CHANGED),
+  data: RttyConfigSchema,
+});
+export type WSRttyConfigChangedMessage = z.infer<typeof WSRttyConfigChangedMessageSchema>;
+
+export const WSRttyDecoderStatusMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.RTTY_DECODER_STATUS),
+  data: RttyDecoderStatusSchema,
+});
+export type WSRttyDecoderStatusMessage = z.infer<typeof WSRttyDecoderStatusMessageSchema>;
+
+export const WSRttyDecoderEventMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.RTTY_DECODER_EVENT),
+  data: RttyDecoderEventSchema,
+});
+export type WSRttyDecoderEventMessage = z.infer<typeof WSRttyDecoderEventMessageSchema>;
+
+export const WSRttyScanUpdateMessageSchema = WSBaseMessageSchema.extend({
+  type: z.literal(WSMessageType.RTTY_SCAN_UPDATE),
+  data: RttyScanUpdateSchema,
+});
+export type WSRttyScanUpdateMessage = z.infer<typeof WSRttyScanUpdateMessageSchema>;
+
 // ===== 统一电台控制能力消息 =====
 
 /**
@@ -1993,6 +2056,13 @@ export const WSMessageSchema = z.discriminatedUnion('type', [
   WSCWDecoderStatusMessageSchema,
   WSCWDecoderEventMessageSchema,
 
+  // RTTY 消息
+  WSRttyTxStatusMessageSchema,
+  WSRttyConfigChangedMessageSchema,
+  WSRttyDecoderStatusMessageSchema,
+  WSRttyDecoderEventMessageSchema,
+  WSRttyScanUpdateMessageSchema,
+
   // 认证消息
   WSAuthRequiredMessageSchema,
   WSAuthTokenMessageSchema,
@@ -2216,6 +2286,13 @@ export interface DigitalRadioEngineEvents {
   cwConfigChanged: (data: CWKeyerConfig) => void;
   cwDecoderStatusChanged: (data: CWDecoderStatus) => void;
   cwDecoderEvent: (data: CWDecoderEvent) => void;
+
+  // RTTY 模式事件
+  rttyTxStatus: (data: RttyTxStatus) => void;
+  rttyConfigChanged: (data: RttyConfig) => void;
+  rttyDecoderStatus: (data: RttyDecoderStatus) => void;
+  rttyDecoderEvent: (data: RttyDecoderEvent) => void;
+  rttyScanUpdate: (data: RttyScanUpdate) => void;
 
   // 进程监控事件
   processSnapshot: (data: import('./process-monitor.schema.js').ProcessSnapshot) => void;

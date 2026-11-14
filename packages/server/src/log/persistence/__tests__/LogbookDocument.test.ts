@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import type { QSORecord } from '@tx5dr/contracts';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { encodeAdifRecord, getLastAdifFieldValue, scanAdifBuffer } from '../AdifCodec.js';
 import {
@@ -38,9 +38,18 @@ describe('LogbookDocument loading and indexes', () => {
     const source = Buffer.from('<EOH>\n' + Array.from({ length: 2000 }, (_, i) => rawRecord('K1ABC', '010203', '14.074000', `<APP_TX5DR_ID:${String(i).length}>${i}`)).join('\n'));
     const original = LogbookDocument.fromScan(scanAdifBuffer(source));
     const mutation = { type: 'replace' as const, id: '1999', qso: { ...original.getQso('1999')!, notes: 'sent status patch' } };
-    let ticks = 0; const timer = setInterval(() => ticks++, 1);
+    // Deterministic on any machine speed: the slicing yields once ~5 ms of work
+    // have passed, so advance the clock on every reading, and count event-loop
+    // turns (setImmediate) that ran in between instead of real timer ticks.
+    let clock = 0;
+    const now = vi.spyOn(performance, 'now').mockImplementation(() => (clock += 1));
+    let ticks = 0; let spinning = true;
+    const spin = () => { if (spinning) { ticks++; setImmediate(spin); } };
+    setImmediate(spin);
     try {
       const asynchronous = await original.prepareRewriteAsync([mutation]);
+      const ticksAfterRewrite = ticks;
+      expect(ticksAfterRewrite).toBeGreaterThan(0);
       const synchronous = original.prepareRewrite([mutation]);
       expect(materializeParts(asynchronous.rewriteParts, source)).toEqual(materializeParts(synchronous.rewriteParts, source));
       const scan = scanAdifBuffer(materializeParts(asynchronous.rewriteParts, source));
@@ -48,8 +57,9 @@ describe('LogbookDocument loading and indexes', () => {
       expect(document.getQsoRecords().map(record => record.id)).toEqual(LogbookDocument.fromScan(scan).getQsoRecords().map(record => record.id));
       expect(document.getQso('1999')?.notes).toBe('sent status patch');
       expect(original.getQso('1999')?.notes).toBeUndefined();
-      expect(ticks).toBeGreaterThan(0);
-    } finally { clearInterval(timer); }
+      // Both the rewrite preparation and the projection installation yield.
+      expect(ticks).toBeGreaterThan(ticksAfterRewrite);
+    } finally { spinning = false; now.mockRestore(); }
   });
 
   it('builds from worker scan DTOs without retaining or materializing the source file', () => {

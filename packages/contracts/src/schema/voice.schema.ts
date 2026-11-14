@@ -23,6 +23,9 @@ export type VoicePTTLock = z.infer<typeof VoicePTTLockSchema>;
  * 引擎模式枚举
  * digital: FT8/FT4 等数字模式
  * voice: 语音通联模式（SSB/FM/AM）
+ * cw: 莫尔斯码键盘通联
+ * image: SSTV / FAX 图像模式
+ * rtty: RTTY（ITA2 AFSK）键盘通联
  */
-export const EngineModeSchema = z.enum(['digital', 'voice', 'cw', 'image']);
+export const EngineModeSchema = z.enum(['digital', 'voice', 'cw', 'image', 'rtty']);
 export type EngineMode = z.infer<typeof EngineModeSchema>;

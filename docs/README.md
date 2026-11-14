@@ -36,6 +36,7 @@ in the site repository. Host, SDK, plugin and data-format versions are separate.
 - [FT8/FT4 transmit envelope](decisions/ft8-ft4-tx-envelope.md)
 - [DeepCW model integration and distribution obligations](decisions/deepcw-engine-integration.md)
 - [WSJT-X staged decode lifecycle](decisions/wsjtx-decode-lifecycle.md)
+- [RTTY over AFSK](decisions/rtty-afsk.md)
 
 ## Development
 

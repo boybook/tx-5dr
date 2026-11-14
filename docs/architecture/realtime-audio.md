@@ -242,6 +242,88 @@ The local preview ends at the raster boundary, before any station ID or guard.
 The UI reserves 100 percent for `completed`, which requires output drain and
 successful physical lease release.
 
+## RTTY Transmit Streaming
+
+`RttyService` uses the same `openDeterministicPlayback` session with playback
+kind `rtty`; the sink behaviour, FIFO bounds, watchdogs and TX monitor tap are
+those described for SSTV. What differs is the producer: the native
+`RttyEncoder` keeps text the operator has typed but not yet committed to audio,
+and never ends on its own (it sends idle diddles) until the session finishes or
+aborts.
+
+The service writes encoder frames only while less than 250 ms of audio is
+queued in the session, so text behind that horizon stays retractable. Each
+committed character carries its end sample in the encoder's timeline; the
+`onPlaybackChunk` consumption count moves characters from committed to sent,
+so "sent" reflects consumed audio on every sink rather than encoder read-ahead.
+TCI sessions report `preparation: 'complete'`: RTTY then renders each message in
+full before keying (`typeAheadSupported: false`) and queues text typed during a
+transmission as the next one.
+
+The physical lease uses source `rtty` and asserts PTT for radio targets. The
+session fails closed: the owning client disconnecting, the radio disconnecting,
+a frequency change, a coordinator interruption, leaving RTTY mode or the
+configured maximum duration aborts the encoder and playback and force-interrupts
+the lease. Receive decoding is muted while a session exists; the dropped sample
+count is reported to the decoder so character timestamps stay on the input
+timeline.
+
+Deterministic playback also emits `txAudioObservation` (`started`, consumed
+`samples`, `completed`/`interrupted`) when a listener is attached, so station
+test peers hear SSTV and RTTY the same way they hear digital `playAudio` output.
+
+## RTTY Receive History and Re-decode
+
+`RttyService` feeds the decoder in 100 ms chunks and records the same chunks in
+a 60 s history at the internal sample rate (about 2.9 MB at 12 kHz). Samples
+that never reach a chunk (muted during transmission, dropped by an overrun or a
+restart) are kept as a gap count on the next recorded chunk, so a replay sees
+the same timeline as the live decoder.
+
+When a setting that changes what was decoded is saved (tones, shift, REV, baud,
+stop bits, character set, USOS, squelch, noise blanker; not the sideband, which
+retunes the radio), a new decoder consumes the history, keeps consuming chunks
+recorded while it catches up, and then takes over as the live decoder in one
+synchronous step. The old decoder's text during the catch-up is discarded, so
+nothing is lost or repeated at the hand-over.
+
+A replay never rewrites text the operator has already read. It is sent as a
+`characters` event with `replay: true` and `replayFrom` in the same session,
+and clients show it as a separate block. It is only sent when it is worth
+reading: at least six characters, at least half of them decoded while the
+decoder was locked on both tones (a mistuned or reversed replay decodes
+plausible-looking but wrong text), and its words differ from what is already
+shown (a squelch tweak does not repeat the last minute). Clearing the
+transcript also clears the history.
+
+The same received chunks feed a native wideband `RttyScanner` (signal browser,
+optional via `scanner`/`scannerChannels`). It finds alternating tone pairs one
+shift apart across the passband and runs a preview decoder per signal; chunks
+are dropped rather than queued when it falls behind, so it never delays the
+main decoder. Its list (`rttyScanUpdate`, about twice a second) drives the
+waterfall markers and the browser rows; picking a signal saves its centre,
+which re-decodes the history as above.
+
+The lock indicator does not trust the decoder's own lock flag alone: a strong
+signal with only one tone inside the filters decodes confident garbage. Lock
+therefore also requires both tones above the noise and within 15 dB of each
+other, an AFC offset inside its range and a mean confidence of the last
+characters of at least 0.45. The SNR shown is the modem's calibrated SNR in
+3 kHz (measured on bit centres of decoded frames, duty-weighted over both
+tones), clamped and smoothed, hidden until the first measurement; the UI shows
+it with the decode quality and the mark/space level bars.
+
+The service keeps the last 4,000 received characters of the current
+transcript; a client that connects later gets them as a `snapshot` characters
+event (WebSocket on connect and `/api/rtty/state`) that replaces what it shows
+up to the snapshot's last character, so live batches that arrive before or
+after it are neither repeated nor lost. A macro played with
+`repeat` (CQ loop) is sent again `repeatIntervalSec` after each transmission
+ends, until confident text is received in between, the operator sends anything
+else or stops, the owning client disconnects, the dial frequency changes, or
+100 repeats have been sent. The scanner has no discontinuity input: chunks it drops and muted
+transmit periods are simply skipped, which only affects its previews.
+
 ## Voice Keyer TX Monitor
 
 Voice keyer monitoring is part of the voice source layer, not a transport-specific shortcut.

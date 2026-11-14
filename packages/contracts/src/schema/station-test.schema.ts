@@ -8,17 +8,19 @@ export const SimulationPeerSchema = z.object({
   dropProbability: z.number().min(0).max(1).default(0),
   frequencyOffsetHz: z.number().min(-200).max(200).default(0),
   timingOffsetMs: z.number().min(-1000).max(1000).default(0),
+  /** RTTY peers only: white noise added to replies, as SNR in a 3 kHz bandwidth. */
+  channelSnrDb: z.number().min(-20).max(40).optional(),
 });
 export const StationTestRunSchema = z.object({
   version: z.literal(1), hardware: z.boolean().default(false), profileId: z.string().min(1),
-  mode: z.enum(['FT8', 'FT4']), dialFrequencyHz: z.number().finite().min(100000).max(10000000000),
+  mode: z.enum(['FT8', 'FT4', 'RTTY']), dialFrequencyHz: z.number().finite().min(100000).max(10000000000),
   transmitCycle: z.union([z.literal(0), z.literal(1)]).default(1),
   scenarioProvider: z.string().min(1), seed: z.union([z.string().min(1), z.number().finite()]),
   peers: z.array(SimulationPeerSchema).min(1).max(16),
   artifactDir: z.string().min(1), maxDurationMs: z.number().int().min(1000).max(600000).default(600000),
 }).superRefine((v, ctx) => {
   const frequencies = v.peers.map(p => p.audioFrequencyHz + p.frequencyOffsetHz).sort((a, b) => a - b);
-  const spacing = v.mode === 'FT4' ? 100 : 60;
+  const spacing = v.mode === 'RTTY' ? 400 : v.mode === 'FT4' ? 100 : 60;
   if (frequencies.some((f, i) => f < 200 || f > 4000 || (i > 0 && f - frequencies[i - 1]! < spacing))) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Peer frequencies must remain in the passband with mode-appropriate spacing' });
   }

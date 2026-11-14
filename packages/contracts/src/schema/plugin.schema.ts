@@ -311,6 +311,8 @@ export type PluginCapability = z.infer<typeof PluginCapabilitySchema>;
  * - `voice-right-top`: shown in the tabbed top area of the voice right panel.
  * - `cw-left-top`: shown above the CW frequency control card.
  * - `cw-right-top`: shown in the tabbed top area of the CW right panel.
+ * - `rtty-left-top`: shown above the RTTY frequency control card.
+ * - `rtty-right-top`: shown in the tabbed top area of the RTTY right panel.
  */
 export const PluginPanelSlotSchema = z.enum([
   'operator',
@@ -321,6 +323,8 @@ export const PluginPanelSlotSchema = z.enum([
   'voice-right-top',
   'cw-left-top',
   'cw-right-top',
+  'rtty-left-top',
+  'rtty-right-top',
   'radio-control-toolbar',
 ]);
 

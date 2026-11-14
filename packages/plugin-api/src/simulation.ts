@@ -1,4 +1,12 @@
-export type SimulationMode = 'FT8' | 'FT4';
+/**
+ * Protocol a virtual RF peer speaks.
+ *
+ * FT8/FT4 peers work in transmit cycles. An RTTY peer has no slots: one
+ * "cycle" is one complete transmission of the station it listens to, so
+ * `delayCycles` and `afterReceiveCycles` count transmissions, and a decoded
+ * message is the text of one station transmission.
+ */
+export type SimulationMode = 'FT8' | 'FT4' | 'RTTY';
 
 /** One protocol identity that a reusable virtual RF peer may assume. */
 export interface SimulationPeerIdentity {

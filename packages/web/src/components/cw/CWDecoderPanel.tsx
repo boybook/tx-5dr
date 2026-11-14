@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Button,
   Chip,
@@ -9,11 +9,10 @@ import {
   ModalHeader,
   Select,
   SelectItem,
-  Switch,
   Tooltip,
 } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faBroom, faGear, faMicrochip, faSatelliteDish, faUserTag } from '@fortawesome/free-solid-svg-icons';
+import { faGear, faMicrochip, faSatelliteDish } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
 import { useCWDecoder } from '../../hooks/useCWDecoder';
 import { setCWQSOHisCallsign } from '../../store/cwQsoDraftStore';
@@ -30,10 +29,10 @@ import {
   clampCWDecoderFilterWidth,
   clampCWDecoderTargetFreq,
 } from '../../utils/cwDecoderTuning';
+import { DecoderHeader } from '../keyboard-mode/DecoderHeader';
+import { DecoderTranscriptView, type DecoderTranscriptLabels } from '../keyboard-mode/DecoderTranscriptView';
 
-const CALLSIGN_RE = /\b(?:[A-Z]{1,2}\d[A-Z0-9]{1,4}|[A-Z0-9]{1,3}\d[A-Z]{1,4})\b/i;
 const DEFAULT_MODEL_SIZES = ['tiny', 'small'] as const;
-const TRANSCRIPT_BOTTOM_THRESHOLD_PX = 8;
 
 interface DecoderSettingsDraft {
   backend: string;
@@ -54,11 +53,6 @@ const BACKEND_ATTRIBUTIONS: Record<string, BackendAttribution> = {
     license: 'AGPL-3.0-only',
   },
 };
-
-function extractCallsign(text: string): string | null {
-  const match = text.toUpperCase().match(CALLSIGN_RE);
-  return match?.[0] ?? null;
-}
 
 function stringList(value: unknown, fallback: readonly string[]): string[] {
   return Array.isArray(value) && value.every(item => typeof item === 'string') ? value : [...fallback];
@@ -88,18 +82,12 @@ function makeSettingsDraft(backend: string, modelSize: string, runtimeBackend: s
   return { backend, modelSize, runtimeBackend };
 }
 
-function isNearScrollBottom(element: HTMLElement): boolean {
-  return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_THRESHOLD_PX;
-}
-
 export function CWDecoderPanel() {
   const { t } = useTranslation('radio');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState<DecoderSettingsDraft | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
   const [savingFilterWidth, setSavingFilterWidth] = useState<number | null>(null);
-  const transcriptRef = useRef<HTMLDivElement | null>(null);
-  const shouldAutoScrollTranscriptRef = useRef(true);
   const canControlDecoder = useCan('execute', 'CWDecoder');
   const canConfigureDecoder = useCan('update', 'CWDecoderConfig');
   const {
@@ -135,9 +123,13 @@ export function CWDecoderPanel() {
       : status.state === 'starting' || status.state === 'stopping'
         ? 'warning'
         : 'default';
-  const callsign = useMemo(() => extractCallsign(confirmedText), [confirmedText]);
-  const hasTranscript = Boolean(confirmedText || pendingText);
-  const renderedPendingText = pendingText && confirmedText ? ` ${pendingText}` : pendingText;
+  const transcriptLabels = useMemo<DecoderTranscriptLabels>(() => ({
+    title: t('cw.decoder.transcript', 'Transcript'),
+    empty: t('cw.decoder.pendingEmpty', 'Listening for decoded Morse...'),
+    useCallsign: (callsign) => t('cw.decoder.useCallsign', 'Use callsign {{callsign}}', { callsign }),
+    noCallsign: t('cw.decoder.noCallsign', 'No callsign found'),
+    clear: t('cw.decoder.clear', 'Clear'),
+  }), [t]);
   const draft = settingsDraft ?? makeSettingsDraft(backendId, modelSize, runtimeBackend);
   const draftBackend = backends.find(item => item.id === draft.backend) ?? effectiveBackend;
   const draftBackendLabel = getBackendLabel(draftBackend) || draft.backend || t('cw.decoder.backendUnknown', 'backend');
@@ -157,19 +149,6 @@ export function CWDecoderPanel() {
     if (!settingsOpen) return;
     setSettingsDraft(makeSettingsDraft(backendId, modelSize, runtimeBackend));
   }, [backendId, modelSize, runtimeBackend, settingsOpen]);
-
-  useEffect(() => {
-    const transcript = transcriptRef.current;
-    if (!transcript) return;
-    if (!shouldAutoScrollTranscriptRef.current) return;
-    transcript.scrollTop = transcript.scrollHeight;
-  }, [confirmedText, pendingText, showDecoderDetails]);
-
-  const handleTranscriptScroll = useCallback(() => {
-    const transcript = transcriptRef.current;
-    if (!transcript) return;
-    shouldAutoScrollTranscriptRef.current = isNearScrollBottom(transcript);
-  }, []);
 
   const handleEnabledChange = (enabled: boolean) => {
     if (!canControlDecoder) return;
@@ -253,142 +232,86 @@ export function CWDecoderPanel() {
   return (
     <>
       <div className="flex-shrink-0 rounded-xl bg-content1/80 p-3 shadow-sm ring-1 ring-default-200/60">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-              <FontAwesomeIcon icon={faSatelliteDish} />
-            </span>
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <span className="truncate text-sm font-semibold text-foreground">{t('cw.decoder.title', 'CW Decoder')}</span>
-                <Chip size="sm" color={statusColor} variant="flat" className="h-5 text-[10px]">
-                  {t(`cw.decoder.state.${status.state}`, status.state)}
-                </Chip>
-              </div>
-              <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-default-500">
-                <FontAwesomeIcon icon={faMicrochip} className="text-[10px]" />
-                <span className="truncate">{backendId || t('cw.decoder.backendUnknown', 'backend')}</span>
-                <span>·</span>
-                <span className="truncate">{model}</span>
-                <span>·</span>
-                <span className="truncate">{runtime}</span>
-                <Tooltip content={canConfigureDecoder ? t('cw.decoder.settings', 'Decoder settings') : t('cw.decoder.configPermissionRequired', 'No permission to change decoder settings')}>
-                  <Button
-                    isIconOnly
-                    size="sm"
-                    variant="light"
-                    className="ml-0.5 h-5 min-w-5 text-default-500"
-                    aria-label={t('cw.decoder.settings', 'Decoder settings')}
-                    isDisabled={!canConfigureDecoder}
-                    onPress={openSettings}
-                  >
-                    <FontAwesomeIcon icon={faGear} className="text-[10px]" />
-                  </Button>
-                </Tooltip>
-                <Select
+        <DecoderHeader
+          icon={faSatelliteDish}
+          title={t('cw.decoder.title', 'CW Decoder')}
+          statusLabel={t(`cw.decoder.state.${status.state}`, status.state)}
+          statusColor={statusColor}
+          enabled={isEnabled}
+          switchDisabled={!canControlDecoder || loading || status.state === 'starting' || status.state === 'stopping'}
+          onEnabledChange={handleEnabledChange}
+          switchAriaLabel={canControlDecoder ? t('cw.decoder.enable', 'Enable CW decoder') : t('cw.decoder.controlPermissionRequired', 'No permission to control CW decoder')}
+          details={(
+            <>
+              <FontAwesomeIcon icon={faMicrochip} className="text-[10px]" />
+              <span className="truncate">{backendId || t('cw.decoder.backendUnknown', 'backend')}</span>
+              <span>·</span>
+              <span className="truncate">{model}</span>
+              <span>·</span>
+              <span className="truncate">{runtime}</span>
+              <Tooltip content={canConfigureDecoder ? t('cw.decoder.settings', 'Decoder settings') : t('cw.decoder.configPermissionRequired', 'No permission to change decoder settings')}>
+                <Button
+                  isIconOnly
                   size="sm"
-                  aria-label={t('cw.decoder.filter', 'Audio filter')}
-                  title={t('cw.decoder.filterSummary', '{{target}} Hz tone · {{width}} Hz width', {
-                    target: targetFreqHz,
-                    width: filterWidthHz,
-                  })}
-                  selectedKeys={[String(filterWidthHz)]}
-                  isDisabled={!canConfigureDecoder || savingFilterWidth !== null}
-                  disallowEmptySelection
-                  classNames={{
-                    base: 'w-[76px] shrink-0',
-                    trigger: 'h-5 min-h-5 rounded-md bg-content2 px-1.5',
-                    value: 'text-[10px] text-default-500',
-                    selectorIcon: 'h-3 w-3 text-default-400',
-                  }}
-                  onSelectionChange={(keys) => {
-                    if (keys === 'all') return;
-                    const key = Array.from(keys)[0];
-                    const width = Number(key);
-                    if (Number.isFinite(width)) {
-                      void handleFilterWidthChange(width);
-                    }
-                  }}
+                  variant="light"
+                  className="ml-0.5 h-5 min-w-5 text-default-500"
+                  aria-label={t('cw.decoder.settings', 'Decoder settings')}
+                  isDisabled={!canConfigureDecoder}
+                  onPress={openSettings}
                 >
-                  {filterWidthOptions.map(width => (
-                    <SelectItem key={String(width)} textValue={`${width} Hz`}>
-                      {width} Hz
-                    </SelectItem>
-                  ))}
-                </Select>
-              </div>
-            </div>
-          </div>
-          <Switch
-            size="sm"
-            isSelected={isEnabled}
-            isDisabled={!canControlDecoder || loading || status.state === 'starting' || status.state === 'stopping'}
-            onValueChange={handleEnabledChange}
-            aria-label={canControlDecoder ? t('cw.decoder.enable', 'Enable CW decoder') : t('cw.decoder.controlPermissionRequired', 'No permission to control CW decoder')}
-          />
-        </div>
-
-        {showDecoderDetails && (
-          <>
-            {(error || status.lastError) && (
-              <Chip size="sm" variant="flat" color="danger" className="mt-3 max-w-full text-[11px]">
-                <span className="truncate">{error ?? status.lastError}</span>
-              </Chip>
-            )}
-
-            <div className="mt-3">
-              <div className="mb-1 flex items-center justify-between gap-2">
-                <span className="text-[11px] font-medium uppercase tracking-wide text-default-500">
-                  {t('cw.decoder.transcript', 'Transcript')}
-                </span>
-                <div className="flex items-center gap-1">
-                  <Tooltip content={callsign ? t('cw.decoder.useCallsign', 'Use callsign {{callsign}}', { callsign }) : t('cw.decoder.noCallsign', 'No callsign found')}>
-                    <Button
-                      isIconOnly
-                      size="sm"
-                      variant="light"
-                      color={callsign ? 'primary' : 'default'}
-                      className="h-6 min-w-6 text-[11px]"
-                      isDisabled={!callsign}
-                      aria-label={callsign ? t('cw.decoder.useCallsign', 'Use callsign {{callsign}}', { callsign }) : t('cw.decoder.noCallsign', 'No callsign found')}
-                      onPress={() => callsign && setCWQSOHisCallsign(callsign)}
-                    >
-                      <FontAwesomeIcon icon={faUserTag} className="text-[10px]" />
-                    </Button>
-                  </Tooltip>
-                  <Button
-                    size="sm"
-                    variant="light"
-                    className="h-6 px-2 text-[11px]"
-                    startContent={<FontAwesomeIcon icon={faBroom} className="text-[10px]" />}
-                    onPress={clearTranscript}
-                    isDisabled={!canControlDecoder || (confirmedSegments.length === 0 && !pendingText)}
-                  >
-                    {t('cw.decoder.clear', 'Clear')}
-                  </Button>
-                </div>
-              </div>
-              <div
-                ref={transcriptRef}
-                onScroll={handleTranscriptScroll}
-                spellCheck={false}
-                role="textbox"
-                aria-multiline="true"
-                aria-readonly="true"
-                className="h-16 overflow-y-auto rounded-lg bg-content2 px-2.5 py-2 font-mono text-sm leading-6 text-foreground whitespace-pre-wrap break-words outline-none"
+                  <FontAwesomeIcon icon={faGear} className="text-[10px]" />
+                </Button>
+              </Tooltip>
+              <Select
+                size="sm"
+                aria-label={t('cw.decoder.filter', 'Audio filter')}
+                title={t('cw.decoder.filterSummary', '{{target}} Hz tone · {{width}} Hz width', {
+                  target: targetFreqHz,
+                  width: filterWidthHz,
+                })}
+                selectedKeys={[String(filterWidthHz)]}
+                isDisabled={!canConfigureDecoder || savingFilterWidth !== null}
+                disallowEmptySelection
+                classNames={{
+                  base: 'w-[76px] shrink-0',
+                  trigger: 'h-5 min-h-5 rounded-md bg-content2 px-1.5',
+                  value: 'text-[10px] text-default-500',
+                  selectorIcon: 'h-3 w-3 text-default-400',
+                }}
+                onSelectionChange={(keys) => {
+                  if (keys === 'all') return;
+                  const key = Array.from(keys)[0];
+                  const width = Number(key);
+                  if (Number.isFinite(width)) {
+                    void handleFilterWidthChange(width);
+                  }
+                }}
               >
-                {hasTranscript ? (
-                  <>
-                    {confirmedText && <span>{confirmedText}</span>}
-                    {renderedPendingText && <span className="text-default-400 opacity-80">{renderedPendingText}</span>}
-                  </>
-                ) : (
-                  <span className="text-default-400">{t('cw.decoder.pendingEmpty', 'Listening for decoded Morse...')}</span>
-                )}
-              </div>
-            </div>
-          </>
+                {filterWidthOptions.map(width => (
+                  <SelectItem key={String(width)} textValue={`${width} Hz`}>
+                    {width} Hz
+                  </SelectItem>
+                ))}
+              </Select>
+            </>
+          )}
+        />
+
+        {showDecoderDetails && (error || status.lastError) && (
+          <Chip size="sm" variant="flat" color="danger" className="mt-3 max-w-full text-[11px]">
+            <span className="truncate">{error ?? status.lastError}</span>
+          </Chip>
         )}
+
+        <DecoderTranscriptView
+          visible={showDecoderDetails}
+          confirmedText={confirmedText}
+          pendingText={pendingText}
+          labels={transcriptLabels}
+          onUseCallsign={setCWQSOHisCallsign}
+          onClear={clearTranscript}
+          clearDisabled={!canControlDecoder || (confirmedSegments.length === 0 && !pendingText)}
+        />
       </div>
 
       <Modal isOpen={settingsOpen} onClose={closeSettings} size="sm" placement="center"

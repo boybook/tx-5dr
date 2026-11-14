@@ -10,6 +10,7 @@ import { requireRole } from '../auth/authPlugin.js';
 import { installAudioDeviceFactory } from '../audio/rtaudio-api.js';
 import { installRadioExecutionPolicy } from '../radio/RadioExecutionPolicy.js';
 import { PeerSession } from '../simulation/PeerSession.js';
+import { RttyPeerSession } from '../simulation/RttyPeerSession.js';
 import { VirtualAudioDevice } from './VirtualAudioDevice.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -19,7 +20,7 @@ const logger = createLogger('StationTest');
 export class StationTestRuntime {
   readonly sessionId = randomUUID();
   private engine?: DigitalRadioEngine;
-  private peer?: PeerSession;
+  private peer?: PeerSession | RttyPeerSession;
   private error?: string;
   private stopped = false;
   private wasReady = false;
@@ -55,7 +56,8 @@ export class StationTestRuntime {
       if (operation.kind === 'connect') {
         if (this.stopped || !isDeepStrictEqual(operation.config, this.target)) throw new Error('Connection target is outside the station test session');
       } else if (operation.kind === 'transmit') {
-        if (!['digital', 'ptt', 'test'].includes(operation.source)) throw new Error('This station test only permits digital transmission');
+        const permitted = config.mode === 'RTTY' ? ['rtty', 'ptt', 'test'] : ['digital', 'ptt', 'test'];
+        if (!permitted.includes(operation.source)) throw new Error(`This station test only permits ${config.mode} transmission`);
         if (this.stopped || this.error || !this.contextMatches() || (this.config.hardware && (!this.armedUntil || Date.now() >= this.armedUntil))) {
           throw new Error('Station test transmission is not authorized');
         }
@@ -71,7 +73,8 @@ export class StationTestRuntime {
   async attach(engine: DigitalRadioEngine, server: FastifyInstance, onOwnerLost?: () => void): Promise<void> {
     this.engine = engine;
     this.providerDefinition = engine.pluginManager.getLoadedPlugin(this.config.scenarioProvider)?.definition;
-    this.peer = new PeerSession({ config: this.config, artifactDir: this.config.artifactDir, now: () => engine.getClockSource().now(),
+    const Peer = this.config.mode === 'RTTY' ? RttyPeerSession : PeerSession;
+    this.peer = new Peer({ config: this.config, artifactDir: this.config.artifactDir, now: () => engine.getClockSource().now(),
       scenarios: engine.pluginManager.getSimulationScenarios(this.config.scenarioProvider),
       channel: () => ({ connected: this.contextMatches(), frequency: engine.getRadioManager().getKnownFrequency() ?? 0, mode: engine.getCurrentMode().name }),
       fail: error => this.fail(error),

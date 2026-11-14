@@ -1,5 +1,6 @@
 import { ServerMessageKey } from '@tx5dr/contracts';
 import i18n from '../i18n/index';
+import { consumeLocallyLoggedQso, resetLocallyLoggedQsosForTests } from './localQsoLog';
 
 type ToastColor = 'default' | 'foreground' | 'primary' | 'secondary' | 'success' | 'warning' | 'danger';
 
@@ -37,6 +38,12 @@ let drainUntilMs = 0;
 let pendingSummary: PendingQsoToastSummary | null = null;
 let pendingTimer: ReturnType<typeof setTimeout> | null = null;
 let lastPresenter: ToastPresenter | null = null;
+
+/** The server summary starts with the callsign (`CALL • grid • freq • mode • rst`). */
+function summaryCallsign(message: ServerTextToastMessage): string {
+  const summary = message.params?.summary || message.description || '';
+  return summary.split(/\s+[•-]\s+/)[0]?.trim().toUpperCase() ?? '';
+}
 
 function isQsoToastKey(key: string | undefined): key is ServerMessageKey.QSO_LOGGED | ServerMessageKey.QSO_UPDATED {
   return key === ServerMessageKey.QSO_LOGGED || key === ServerMessageKey.QSO_UPDATED;
@@ -182,6 +189,11 @@ export function handleQsoToastAggregation(
     return false;
   }
 
+  // This client already confirmed the QSO it just logged: drop the echo.
+  if (consumeLocallyLoggedQso(summaryCallsign(message))) {
+    return true;
+  }
+
   const now = Date.now();
   const createdAtMs = getMessageCreatedAtMs(message);
   // Server and browser clocks can differ, so only use createdAtMs as a stale
@@ -215,6 +227,7 @@ export function resetQsoToastAggregatorForTests(): void {
   lastVisibleAtMs = 0;
   wasBackgrounded = false;
   lastPresenter = null;
+  resetLocallyLoggedQsosForTests();
 
   if (initialized && typeof window !== 'undefined' && typeof document !== 'undefined') {
     document.removeEventListener('visibilitychange', handleVisibilityChange);

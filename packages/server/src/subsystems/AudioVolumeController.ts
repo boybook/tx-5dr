@@ -1,3 +1,4 @@
+import type { EngineMode } from '@tx5dr/contracts';
 import type { EventEmitter } from 'eventemitter3';
 import type { DigitalRadioEngineEvents } from '@tx5dr/contracts';
 import type { AudioStreamManager } from '../audio/AudioStreamManager.js';
@@ -18,12 +19,12 @@ const TCI_DEFAULT_GAIN_DB = 0;
  */
 export class AudioVolumeController {
   private currentBand: string = 'Unknown';
-  private currentModeCategory: 'digital' | 'voice' | 'cw' | 'image' = 'digital';
+  private currentModeCategory: EngineMode = 'digital';
 
   constructor(
     private engineEmitter: EventEmitter<DigitalRadioEngineEvents>,
     private audioStreamManager: AudioStreamManager,
-    private getEngineMode: () => 'digital' | 'voice' | 'cw' | 'image',
+    private getEngineMode: () => EngineMode,
   ) {}
 
   /**

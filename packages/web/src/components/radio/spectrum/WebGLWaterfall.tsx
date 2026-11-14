@@ -108,6 +108,11 @@ export interface FrequencyBandOverlay {
   centerStepHz?: number;
   widthStepHz?: number;
   description?: string;
+  /**
+   * Optional tone lines drawn inside the band, as offsets from the centre so
+   * they follow the band while it is dragged (for example RTTY mark/space).
+   */
+  markers?: Array<{ offsetHz: number; label: string; tone?: 'primary' | 'secondary' }>;
 }
 
 export interface FrequencyBandOverlayChange {
@@ -4881,6 +4886,23 @@ export const WebGLWaterfall: React.FC<WebGLWaterfallProps> = ({
                   style={{ left: `${clippedLeft}%`, width: `${width}%` }}
                 />
               )}
+              {overlay.markers?.map((marker) => {
+                const markerPosition = getInteractionFrequencyPosition(centerFrequency + marker.offsetHz, 0);
+                if (markerPosition === null || markerPosition < 0 || markerPosition > 100) return null;
+                const primary = marker.tone !== 'secondary';
+                return (
+                  <div
+                    key={`frequency-band-marker-${overlay.id}-${marker.label}`}
+                    className="absolute top-0 h-full pointer-events-none"
+                    style={{ left: `${markerPosition}%` }}
+                  >
+                    <div className={`h-full w-px ${primary ? 'bg-amber-300/90' : 'bg-sky-300/80'}`} />
+                    <div className={`absolute top-1 left-1 whitespace-nowrap rounded bg-black/60 px-1 text-[9px] font-semibold select-none ${primary ? 'text-amber-200' : 'text-sky-200'}`}>
+                      {marker.label}
+                    </div>
+                  </div>
+                );
+              })}
               {canResize && (
                 <>
                   <div
