@@ -41,6 +41,16 @@ describe('ProcessHamlibTransport', () => {
     await expect(replacement.call('getFrequency', [])).resolves.toBe(7100000);
   });
 
+  it('ignores tooling messages on the IPC channel but fails on a malformed worker message', async () => {
+    const transport = host();
+    // The fixture sends a tsx-style `{ type: 'dependency' }` message before `ready`.
+    await transport.call('connect', [config('normal'), undefined]);
+    await expect(transport.call('getFrequency', [])).resolves.toBe(7100000);
+    const malformed = host();
+    await malformed.call('connect', [config('malformed'), undefined]);
+    await expect(malformed.call('getFrequency', [])).rejects.toThrow('Invalid Hamlib worker message');
+  });
+
   it('asks the worker to disconnect the rig before terminating it', async () => {
     const transport = host();
     await transport.call('connect', [config('normal'), undefined]);

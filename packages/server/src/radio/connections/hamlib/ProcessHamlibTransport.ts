@@ -22,6 +22,10 @@ export function resolveHamlibWorkerEntry(): { path: string; execArgv: string[] }
   return { path: fileURLToPath(new URL(source ? './hamlib-worker-entry.ts' : './hamlib-worker-entry.js', import.meta.url)), execArgv: source ? ['--import', 'tsx'] : [] };
 }
 
+function isGenerationMessage(input: unknown, generation: string): boolean {
+  return typeof input === 'object' && input !== null && (input as { generation?: unknown }).generation === generation;
+}
+
 export interface HamlibProcessOptions {
   entry?: { path: string; execArgv: string[] };
   startupTimeoutMs?: number;
@@ -89,6 +93,10 @@ export class ProcessHamlibTransport extends HamlibTransport {
       const timer = setTimeout(() => this.fail(new Error('Hamlib worker startup timed out')), this.options.startupTimeoutMs ?? 10000);
       child.on('message', input => {
         if (this.stopped || this.failure) return;
+        // The IPC channel is shared with tooling in the child (in development the
+        // tsx loader sends `{ type: 'dependency' }` messages): only messages that
+        // carry this host's generation belong to the worker protocol.
+        if (!isGenerationMessage(input, this.generation)) return;
         const parsed = HamlibWorkerMessageSchema.safeParse(input);
         if (!parsed.success) { this.fail(new Error(`Invalid Hamlib worker message: ${parsed.error.message}`)); return; }
         const message = parsed.data;

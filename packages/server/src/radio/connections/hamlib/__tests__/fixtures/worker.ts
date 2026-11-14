@@ -10,6 +10,8 @@ let mode = '';
 let frames: ReturnType<typeof setInterval> | undefined;
 const send = (message: Record<string, unknown>) => { if (process.connected) process.send!({ ...message, generation }); };
 setInterval(() => send({ type: 'snapshot', snapshot }), 20).unref();
+// Tooling shares the IPC channel (the tsx loader announces watched files).
+process.send!({ type: 'dependency', path: '/tooling/only.ts' });
 send({ type: 'snapshot', snapshot });
 send({ type: 'ready', version: 1 });
 
@@ -21,6 +23,10 @@ process.on('message', input => {
     send({ type: 'snapshot', snapshot });
   }
   if (operation === 'getFrequency') {
+    if (mode === 'malformed') {
+      send({ type: 'bogus' });
+      return;
+    }
     if (mode === 'crash') process.exit(42);
     if (mode === 'block') Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
     if (mode === 'hang') {
