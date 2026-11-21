@@ -199,6 +199,7 @@ interface ElectronAPI {
     openPluginPageWindow(queryString: string): Promise<void>;
     openSpectrumWindow(): Promise<void>;
     onSpectrumWindowClosed(callback: () => void): () => void;
+    getZoomFactor?(): number;
   };
   shell?: {
     openExternal(url: string): Promise<void>;

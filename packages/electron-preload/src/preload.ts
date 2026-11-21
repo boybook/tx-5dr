@@ -215,7 +215,7 @@ interface StartupErrorAction {
   style: 'primary';
 }
 
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webFrame } = require('electron');
 
 /**
  * Subscribes to a main-process push channel and returns its disposer.
@@ -386,6 +386,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
      */
     onSpectrumWindowClosed: (callback: () => void): (() => void) =>
       subscribe('spectrum-window-closed', () => callback()),
+
+    /**
+     * Current page zoom factor. Native window controls do not scale with page zoom,
+     * so the renderer needs it to keep content clear of the macOS traffic lights.
+     */
+    getZoomFactor: (): number => webFrame.getZoomFactor(),
   },
 
   // 系统集成
@@ -512,6 +518,7 @@ declare global {
         openPluginPageWindow(queryString: string): Promise<void>;
         openSpectrumWindow(): Promise<void>;
         onSpectrumWindowClosed(callback: () => void): () => void;
+        getZoomFactor(): number;
       };
       shell: {
         openExternal(url: string): Promise<void>;

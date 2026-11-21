@@ -13,7 +13,8 @@ import { AppBrandAboutLink } from '../components/common/AppBrandAboutLink';
 import { useConnection, useStationInfo, useCurrentOperatorId } from '../store/radioStore';
 import { useHasMinRole } from '../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
-import { isElectron, isMacOS } from '../utils/config';
+import { isElectron } from '../utils/config';
+import { useMacTitlebarLeftInset } from '../hooks/useMacTitlebarInset';
 
 /**
  * VoiceLeftLayout
@@ -34,8 +35,9 @@ export const VoiceLeftLayout: React.FC = React.memo(() => {
   const [isMobile, setIsMobile] = useState(false);
   const [clientCount, setClientCount] = useState(0);
 
-  const stationInfoOffsetClassName = isElectron() && isMacOS()
-    ? 'pl-16'
+  const titlebarLeftInset = useMacTitlebarLeftInset();
+  const stationInfoOffsetClassName = titlebarLeftInset !== null
+    ? ''
     : (isMobile && hasStationContent ? 'pl-0' : 'pl-2');
 
   // Mobile detection
@@ -62,7 +64,10 @@ export const VoiceLeftLayout: React.FC = React.memo(() => {
       {/* Top toolbar */}
       <div
         className="flex-shrink-0 flex justify-between items-center gap-2 p-1 px-2 md:p-2 md:px-3 cursor-default select-none"
-        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties & { WebkitAppRegion: string }}
+        style={{
+          WebkitAppRegion: 'drag',
+          ...(titlebarLeftInset !== null ? { paddingLeft: titlebarLeftInset } : {}),
+        } as React.CSSProperties & { WebkitAppRegion: string }}
       >
         {/* Left: App name (non-Electron) */}
         <div className="flex min-w-0 flex-1 items-center gap-1">

@@ -7,6 +7,7 @@ import { useTheme } from '../hooks/useTheme';
 import { useViewportHeightValue } from '../hooks/useViewportHeight';
 import { SpectrumDisplay } from '../components/radio/spectrum/SpectrumDisplay';
 import { isElectron } from '../utils/config';
+import { useMacTitlebarLeftInset } from '../hooks/useMacTitlebarInset';
 import { useLanguage } from '../hooks/useLanguage';
 
 /**
@@ -19,8 +20,9 @@ const SpectrumContent: React.FC = () => {
 
   // 仅 macOS Electron 环境需要手动绘制拖拽条
   const showTitlebar = isElectron() && navigator.userAgent.includes('Macintosh');
+  const titlebarLeftInset = useMacTitlebarLeftInset();
   const topLeftOverlayInset = showTitlebar
-    ? { left: 80 }
+    ? { left: titlebarLeftInset ?? 80 }
     : undefined;
 
   if (!connectionState.isReady) {

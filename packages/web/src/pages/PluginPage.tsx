@@ -11,7 +11,8 @@ import { useLanguage } from '../hooks/useLanguage';
 import { useTheme } from '../hooks/useTheme';
 import { useViewportHeightCssVar } from '../hooks/useViewportHeight';
 import { pluginApi } from '../utils/pluginApi';
-import { isElectron, isMacOS } from '../utils/config';
+import { isElectron } from '../utils/config';
+import { useMacTitlebarLeftInset } from '../hooks/useMacTitlebarInset';
 import { createLogger } from '../utils/logger';
 import { registerPluginLocales, resolvePluginLabel, resolvePluginName } from '../utils/pluginLocales';
 import { resolvePluginPageParameters } from './pluginPageParameters';
@@ -33,9 +34,8 @@ const PluginPageContent: React.FC = () => {
   const [operatorLabel, setOperatorLabel] = React.useState('');
   const [error, setError] = React.useState('');
   const inElectron = isElectron();
-  const electronHeaderClass = inElectron
-    ? isMacOS() ? 'pl-20' : 'pr-36'
-    : '';
+  const titlebarLeftInset = useMacTitlebarLeftInset();
+  const electronHeaderClass = inElectron && titlebarLeftInset === null ? 'pr-36' : '';
 
   React.useEffect(() => {
     configureAuthToken(localStorage.getItem('tx5dr_jwt'));
@@ -111,7 +111,10 @@ const PluginPageContent: React.FC = () => {
     <>
       <header
         className={`flex h-12 shrink-0 items-center justify-between border-b border-divider bg-content1 px-4 ${electronHeaderClass}`}
-        style={inElectron ? { WebkitAppRegion: 'drag' } as React.CSSProperties & { WebkitAppRegion: string } : undefined}
+        style={inElectron ? {
+          WebkitAppRegion: 'drag',
+          ...(titlebarLeftInset !== null ? { paddingLeft: titlebarLeftInset } : {}),
+        } as React.CSSProperties & { WebkitAppRegion: string } : undefined}
       >
         <div className="min-w-0">
           <h1 className="truncate text-sm font-semibold text-foreground">{contextualTitle}</h1>

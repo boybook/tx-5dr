@@ -26,7 +26,8 @@ import { AppBrandAboutLink } from '../components/common/AppBrandAboutLink';
 import { useRadioActions, useConnection, useStationInfo } from '../store/radioStore';
 import { useHasMinRole } from '../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
-import { isElectron, isMacOS } from '../utils/config';
+import { isElectron } from '../utils/config';
+import { useMacTitlebarLeftInset } from '../hooks/useMacTitlebarInset';
 import { useTranslation } from 'react-i18next';
 
 export const LeftLayout: React.FC = React.memo(() => {
@@ -41,8 +42,9 @@ export const LeftLayout: React.FC = React.memo(() => {
   const [clientCount, setClientCount] = useState(0);
   const [isSpectrumPopedOut, setIsSpectrumPopedOut] = useState(false);
 
-  const stationInfoOffsetClassName = isElectron() && isMacOS()
-    ? 'pl-16'
+  const titlebarLeftInset = useMacTitlebarLeftInset();
+  const stationInfoOffsetClassName = titlebarLeftInset !== null
+    ? ''
     : (isMobile && hasStationContent ? 'pl-0' : 'pl-2');
 
   // 监听频谱独立窗口关闭，恢复主窗口内的频谱显示
@@ -117,6 +119,7 @@ export const LeftLayout: React.FC = React.memo(() => {
         className="flex-shrink-0 flex justify-between items-center gap-2 p-1 px-2 md:p-2 md:px-3 cursor-default select-none"
         style={{
           WebkitAppRegion: 'drag',
+          ...(titlebarLeftInset !== null ? { paddingLeft: titlebarLeftInset } : {}),
         } as React.CSSProperties & { WebkitAppRegion: string }}
       >
         {/* 左侧：非Electron环境下显示软件名称 */}

@@ -18,7 +18,8 @@ import { RemoteAccessPopover } from '../components/system/RemoteAccessPopover';
 import { StationInfoPopover } from '../components/station/StationInfoPopover';
 import { useConnection, useRadioModeState, useStationInfo } from '../store/radioStore';
 import { useHasMinRole } from '../store/authStore';
-import { isElectron, isMacOS } from '../utils/config';
+import { isElectron } from '../utils/config';
+import { useMacTitlebarLeftInset } from '../hooks/useMacTitlebarInset';
 import { useVerticalPaneSplit } from '../hooks/useVerticalPaneSplit';
 import { PANE_SPLIT_DIVIDER_HEIGHT_PX } from './paneSplitPreferences';
 
@@ -55,8 +56,9 @@ export function ImageLeftLayout() {
   const presetMode = radioMode.currentMode?.name === 'FAX' ? 'FAX' : 'SSTV';
 
   const hasStationContent = !!(stationInfo?.callsign || stationInfo?.name || stationInfo?.qth?.grid || stationInfo?.description);
-  const stationInfoOffsetClassName = isElectron() && isMacOS()
-    ? 'pl-16'
+  const titlebarLeftInset = useMacTitlebarLeftInset();
+  const stationInfoOffsetClassName = titlebarLeftInset !== null
+    ? ''
     : (isMobile && hasStationContent ? 'pl-0' : 'pl-2');
 
   useEffect(() => {
@@ -83,7 +85,10 @@ export function ImageLeftLayout() {
       )}
       <div
         className="flex flex-shrink-0 items-center justify-between gap-2 p-1 px-2 cursor-default select-none md:p-2 md:px-3"
-        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties & { WebkitAppRegion: string }}
+        style={{
+          WebkitAppRegion: 'drag',
+          ...(titlebarLeftInset !== null ? { paddingLeft: titlebarLeftInset } : {}),
+        } as React.CSSProperties & { WebkitAppRegion: string }}
       >
         <div className="flex min-w-0 flex-1 items-center gap-1">
           {!isElectron() && (
