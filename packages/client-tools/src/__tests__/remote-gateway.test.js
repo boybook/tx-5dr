@@ -269,3 +269,43 @@ describe('remote gateway configuration', () => {
     expect(rewriteLocation('https://192.0.2.1:8443/', target)).toBeNull();
   });
 });
+
+describe('remote gateway command line', () => {
+  it('starts through a symbolic link and stops once the desktop client is gone', async () => {
+    const { spawn } = await import('node:child_process');
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tx5dr-gateway-cli-'));
+    cleanups.push(async () => fs.rmSync(dir, { recursive: true, force: true }));
+    const source = fileURLToPath(new URL('../remote-gateway.js', import.meta.url));
+    const linkDir = path.join(dir, 'linked');
+    fs.symlinkSync(path.dirname(source), linkDir, 'dir');
+
+    const parent = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)']);
+    const probe = net.createServer();
+    const port = await listen(probe);
+    await new Promise(resolve => probe.close(resolve));
+    const readyFile = path.join(dir, 'ready.json');
+    const gateway = spawn(process.execPath, [path.join(linkDir, 'remote-gateway.js')], {
+      env: {
+        ...process.env,
+        PORT: String(port),
+        TARGET: 'http://127.0.0.1:9',
+        TX5DR_REMOTE_GATEWAY_READY_FILE: readyFile,
+        TX5DR_REMOTE_GATEWAY_PARENT_PID: String(parent.pid),
+      },
+      stdio: 'ignore',
+    });
+    const exited = new Promise(resolve => gateway.once('exit', code => resolve(code)));
+    cleanups.push(async () => { gateway.kill(); parent.kill(); });
+
+    await expect.poll(() => fs.existsSync(readyFile), { timeout: 5000 }).toBe(true);
+    expect(JSON.parse(fs.readFileSync(readyFile, 'utf8')).httpOk).toBe(true);
+
+    parent.kill();
+    await expect(Promise.race([exited, new Promise(resolve => setTimeout(() => resolve('still running'), 6000))])).resolves.toBe(0);
+  }, 15000);
+});

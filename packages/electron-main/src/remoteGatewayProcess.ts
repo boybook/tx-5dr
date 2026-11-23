@@ -23,6 +23,8 @@ export function buildRemoteGatewayEnv(
     TARGET: profile.url,
     TX5DR_REMOTE_GATEWAY_READY_FILE: paths.readyFile,
     TX5DR_REMOTE_GATEWAY_LOG_FILE: paths.logFile,
+    // The gateway exits when this process is gone, so a crash leaves no gateway holding the station's fixed port.
+    TX5DR_REMOTE_GATEWAY_PARENT_PID: String(process.pid),
   };
   if (profile.tls?.fingerprint256 && profile.url.startsWith('https:')) {
     env.TX5DR_UPSTREAM_TLS_FINGERPRINT = profile.tls.fingerprint256;

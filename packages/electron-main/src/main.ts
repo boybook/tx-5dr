@@ -2579,7 +2579,7 @@ function getPreloadPath(): string {
  * the granted bridge capabilities from the command-line switches; the main
  * process still enforces them per IPC call.
  */
-function embeddedStationWebPreferences(): Electron.WebPreferences {
+function embeddedStationWebPreferences(options: { pluginPage?: boolean } = {}): Electron.WebPreferences {
   return {
     contextIsolation: true,
     nodeIntegration: false,
@@ -2587,7 +2587,7 @@ function embeddedStationWebPreferences(): Electron.WebPreferences {
     allowRunningInsecureContent: true,
     backgroundThrottling: false,
     preload: getPreloadPath(),
-    additionalArguments: buildBridgeArguments('embedded', getShellPageUrls()),
+    additionalArguments: buildBridgeArguments('embedded', getShellPageUrls(), options),
   };
 }
 
@@ -3689,6 +3689,8 @@ const configuredRemoteSessions = new WeakSet<Electron.Session>();
 let lastFocusedStationWindow: BrowserWindow | null = null;
 let stationManagerWindow: BrowserWindow | null = null;
 const stationStateSubscribers = new Map<number, WebContents>();
+/** Detaches the lifecycle listeners a subscription installed on its page. */
+const stationStateSubscriberCleanups = new Map<number, () => void>();
 
 /**
  * The station manager is a page of the shell's own Web build: the packaged
@@ -3781,12 +3783,12 @@ function requireSenderStation(event: Electron.IpcMainInvokeEvent): StationWindow
   return remoteTarget(profile);
 }
 
-function stationWebPreferences(target: StationWindowTarget): Electron.WebPreferences {
-  if (target.kind === 'embedded') return embeddedStationWebPreferences();
+function stationWebPreferences(target: StationWindowTarget, options: { pluginPage?: boolean } = {}): Electron.WebPreferences {
+  if (target.kind === 'embedded') return embeddedStationWebPreferences(options);
   return remoteStationWebPreferences({
     preload: getPreloadPath(),
     partition: target.partition,
-    bridgeArguments: buildBridgeArguments('remote', getShellPageUrls()),
+    bridgeArguments: buildBridgeArguments('remote', getShellPageUrls(), options),
   });
 }
 
@@ -3913,6 +3915,7 @@ function broadcastStationState(): void {
   for (const [id, contents] of stationStateSubscribers) {
     if (contents.isDestroyed()) {
       stationStateSubscribers.delete(id);
+      stationStateSubscriberCleanups.delete(id);
       continue;
     }
     contents.send('stations:state', state);
@@ -4832,7 +4835,7 @@ function setupIpcHandlers() {
           symbolColor: '#000000',
         } : false,
         frame: process.platform !== 'darwin',
-        webPreferences: stationWebPreferences(target),
+        webPreferences: stationWebPreferences(target, { pluginPage: true }),
       });
       attachStationWindowGuards(pluginPageWindow);
 
@@ -5247,15 +5250,26 @@ function setupIpcHandlers() {
 
   handleBridge('stations:subscribe', (event) => {
     const contents = event.sender;
-    stationStateSubscribers.set(contents.id, contents);
-    const remove = () => stationStateSubscribers.delete(contents.id);
-    contents.once('destroyed', remove);
-    contents.once('did-navigate', remove);
+    // Re-subscribing the same page only refreshes its snapshot; listeners are attached once.
+    if (!stationStateSubscribers.has(contents.id)) {
+      stationStateSubscribers.set(contents.id, contents);
+      const remove = () => {
+        stationStateSubscribers.delete(contents.id);
+        stationStateSubscriberCleanups.delete(contents.id);
+        contents.off('did-navigate', remove);
+        contents.off('destroyed', remove);
+      };
+      stationStateSubscriberCleanups.set(contents.id, remove);
+      contents.once('destroyed', remove);
+      contents.once('did-navigate', remove);
+    }
     return buildStationState();
   });
 
   handleBridge('stations:unsubscribe', (event) => {
-    stationStateSubscribers.delete(event.sender.id);
+    const remove = stationStateSubscriberCleanups.get(event.sender.id);
+    if (remove) remove();
+    else stationStateSubscribers.delete(event.sender.id);
   });
 
   handleBridge('stations:probe', async (_event, url: unknown) => {

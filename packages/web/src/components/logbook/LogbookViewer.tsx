@@ -49,7 +49,7 @@ import type {
 import { UserRole } from '@tx5dr/contracts';
 import { api, WSClient, ApiError, getDisplayMode } from '@tx5dr/core';
 import { getLogbookWebSocketUrl } from '../../utils/config';
-import { isElectron } from '../../utils/config';
+import { hasDesktopCapability } from '../../utils/desktopBridge';
 import { showErrorToast } from '../../utils/errorToast';
 import { SyncConfigModal } from './SyncConfigModal';
 import { createSyncPresentation } from './syncPresentation';
@@ -960,7 +960,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   const handleOpenDataDir = async () => {
     try {
       const result = await api.getLogbookDataPath();
-      if (isElectron() && window.electronAPI?.shell?.openPath) {
+      if (window.electronAPI?.shell?.openPath) {
         await window.electronAPI.shell.openPath(result.path);
       }
     } catch (error) {
@@ -2112,7 +2112,7 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
           </Button>
         )}
 
-        {isAdmin && isElectron() && (
+        {isAdmin && hasDesktopCapability('openAppDirectory') && (
           <Tooltip content={t('action.openDataDir')}>
             <Button
               variant="flat"

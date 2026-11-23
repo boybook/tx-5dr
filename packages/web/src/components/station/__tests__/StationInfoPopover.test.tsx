@@ -48,6 +48,38 @@ describe('StationInfoPopover', () => {
     expect(screen.queryByRole('button')).toBeNull();
   });
 
+  it('shows only the station profile in a browser, without desktop entries', async () => {
+    mocks.stationInfo = { callsign: 'BG7XXX', qth: { grid: 'PM01' } };
+    await act(async () => { render(<HeroUIProvider disableAnimation><StationInfoPopover /></HeroUIProvider>); });
+
+    const trigger = screen.getByRole('button', { name: 'BG7XXX' });
+    expect(trigger.textContent).toBe('BG7XXXPM01');
+    await act(async () => { fireEvent.click(trigger); });
+
+    expect(await screen.findByText('1.2.3')).toBeTruthy();
+    expect(screen.queryByText('tag.connection')).toBeNull();
+    expect(screen.queryByText('tag.address')).toBeNull();
+    expect(screen.queryByText('tag.embedded')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'tag.manage' })).toBeNull();
+  });
+
+  it('does not fall back to the page address in a browser when only a grid is set', async () => {
+    mocks.stationInfo = { qth: { grid: 'PM01' } };
+    await act(async () => { render(<HeroUIProvider disableAnimation><StationInfoPopover /></HeroUIProvider>); });
+
+    expect(screen.getByRole('button', { name: 'PM01' }).textContent).toBe('PM01');
+  });
+
+  it('marks a remote window as remote before its details arrive', async () => {
+    window.electronAPI = {
+      bridge: { version: 1, kind: 'remote', capabilities: ['stations'] },
+      stations: { openManager: vi.fn(), getCurrent: () => new Promise(() => undefined) },
+    } as unknown as typeof window.electronAPI;
+    await act(async () => { render(<HeroUIProvider disableAnimation><StationInfoPopover /></HeroUIProvider>); });
+
+    expect(screen.getByRole('button', { name: 'tag.remote: tag.remote' })).toBeTruthy();
+  });
+
   it('names the remote station of a desktop window without a station profile', async () => {
     installShell('remote');
     await act(async () => { render(<HeroUIProvider disableAnimation><StationInfoPopover /></HeroUIProvider>); });

@@ -5862,7 +5862,7 @@ __metadata:
     "@tx5dr/shared-config": "workspace:*"
     "@types/node": "npm:^20.0.0"
     "@types/node-forge": "npm:^1"
-    bonjour-service: "npm:^1"
+    bonjour-service: "npm:^1.4.4"
     electron: "npm:^45.3.2"
     electron-log: "npm:^5.4.3"
     electron-updater: "npm:6.8.12"
@@ -5944,7 +5944,7 @@ __metadata:
     audify: "patch:audify@npm%3A1.10.1#~/.yarn/patches/audify-npm-1.10.1-076cc4cf40.patch"
     autocannon: "npm:^8.0.0"
     bcrypt: "npm:^6.0.0"
-    bonjour-service: "npm:^1"
+    bonjour-service: "npm:^1.4.4"
     eslint: "npm:^8.57.1"
     eventemitter3: "npm:^5.0.1"
     fast-jwt: "npm:^6.3.6"
@@ -7129,7 +7129,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"bonjour-service@npm:^1":
+"bonjour-service@npm:^1.4.4":
   version: 1.4.4
   resolution: "bonjour-service@npm:1.4.4"
   dependencies:

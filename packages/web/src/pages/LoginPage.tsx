@@ -81,62 +81,66 @@ export function LoginPage() {
   }, []);
 
   return (
-    <div className="app-viewport-min-height relative flex w-full flex-col overflow-y-auto bg-background text-foreground">
+    // The document itself never scrolls (index.css), so the area below the drag
+    // bar scrolls on short viewports such as a phone with the keyboard open.
+    <div className="app-viewport-height relative flex w-full flex-col bg-background text-foreground">
       {isElectron() && (
         <div aria-hidden className="h-10 w-full flex-shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} />
       )}
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
 
-      <main className="flex flex-1 items-center justify-center px-6 py-10">
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4, ease }}
-          className="flex w-full max-w-[360px] flex-col gap-8"
-        >
-          <header className="flex flex-col items-center gap-4 text-center">
-            <img src="./favicon.svg" alt="" className="h-14 w-14 select-none" draggable={false} />
-            <div className="flex flex-col gap-1">
-              <h1 className="text-3xl font-semibold tracking-tight">TX-5DR</h1>
-              <p className="text-small text-default-500">{t('auth:loginPage.subtitle')}</p>
+        <main className="flex flex-1 items-center justify-center px-6 py-10">
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4, ease }}
+            className="flex w-full max-w-[360px] flex-col gap-8"
+          >
+            <header className="flex flex-col items-center gap-4 text-center">
+              <img src="./favicon.svg" alt="" className="h-14 w-14 select-none" draggable={false} />
+              <div className="flex flex-col gap-1">
+                <h1 className="text-3xl font-semibold tracking-tight">TX-5DR</h1>
+                <p className="text-small text-default-500">{t('auth:loginPage.subtitle')}</p>
+              </div>
+              {stationInfo && <StationProfileLine stationInfo={stationInfo} />}
+            </header>
+
+            <AuthLoginForm autoFocus inputVariant="flat" />
+
+            <div className="flex flex-col">
+              <button
+                type="button"
+                className="flex w-fit items-center gap-1.5 rounded-small text-tiny text-default-400 outline-none transition-colors hover:text-default-600 focus-visible:ring-2 focus-visible:ring-focus"
+                aria-expanded={helpExpanded}
+                onClick={() => setHelpExpanded(!helpExpanded)}
+              >
+                <motion.span animate={{ rotate: helpExpanded ? 90 : 0 }} transition={{ duration: 0.2, ease }} className="flex">
+                  <FontAwesomeIcon icon={faChevronRight} className="text-[10px]" />
+                </motion.span>
+                {t('auth:loginPage.helpTitle')}
+              </button>
+              <AnimatePresence initial={false}>
+                {helpExpanded && (
+                  <motion.p
+                    key="help"
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    transition={{ duration: 0.22, ease }}
+                    className="overflow-hidden pl-4 text-tiny leading-relaxed text-default-400"
+                  >
+                    <span className="block pt-1.5">{t('auth:loginPage.helpContent')}</span>
+                  </motion.p>
+                )}
+              </AnimatePresence>
             </div>
-            {stationInfo && <StationProfileLine stationInfo={stationInfo} />}
-          </header>
+          </motion.div>
+        </main>
 
-          <AuthLoginForm autoFocus inputVariant="flat" />
-
-          <div className="flex flex-col">
-            <button
-              type="button"
-              className="flex w-fit items-center gap-1.5 rounded-small text-tiny text-default-400 outline-none transition-colors hover:text-default-600 focus-visible:ring-2 focus-visible:ring-focus"
-              aria-expanded={helpExpanded}
-              onClick={() => setHelpExpanded(!helpExpanded)}
-            >
-              <motion.span animate={{ rotate: helpExpanded ? 90 : 0 }} transition={{ duration: 0.2, ease }} className="flex">
-                <FontAwesomeIcon icon={faChevronRight} className="text-[10px]" />
-              </motion.span>
-              {t('auth:loginPage.helpTitle')}
-            </button>
-            <AnimatePresence initial={false}>
-              {helpExpanded && (
-                <motion.p
-                  key="help"
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  transition={{ duration: 0.22, ease }}
-                  className="overflow-hidden pl-4 text-tiny leading-relaxed text-default-400"
-                >
-                  <span className="block pt-1.5">{t('auth:loginPage.helpContent')}</span>
-                </motion.p>
-              )}
-            </AnimatePresence>
-          </div>
-        </motion.div>
-      </main>
-
-      <footer className="mx-auto w-full max-w-[680px] px-6 pb-5">
-        <DesktopStationFooter />
-      </footer>
+        <footer className="mx-auto w-full max-w-[680px] px-6 pb-5">
+          <DesktopStationFooter />
+        </footer>
+      </div>
     </div>
   );
 }

@@ -39,11 +39,33 @@ describe('desktop bridge policy', () => {
     expect(evaluateBridgeCall('shell:openPath', embeddedInput('http://127.0.0.1:8076/#settings')).allowed).toBe(true);
   });
 
+  it('grants a plugin page window only what the policy lets a plugin page use', () => {
+    const args = buildBridgeArguments('embedded', [], { pluginPage: true });
+    const granted = args.find(arg => arg.startsWith('--tx5dr-bridge-capabilities='))!.split('=')[1].split(',');
+    expect(granted).toContain('saveFile');
+    for (const denied of ['stations', 'appLifecycle', 'openAppDirectory', 'shortcutSettings', 'desktopUpdates']) {
+      expect(granted, denied).not.toContain(denied);
+    }
+  });
+
   it('keeps privileged capabilities away from standalone plugin pages', () => {
     const pluginPage = embeddedInput('http://127.0.0.1:8076/plugin-page.html?plugin=x&page=y');
     expect(evaluateBridgeCall('updater:installAndRestart', pluginPage)).toEqual({ allowed: false, reason: 'capability_denied' });
     expect(evaluateBridgeCall('shell:openPath', pluginPage)).toEqual({ allowed: false, reason: 'capability_denied' });
     expect(evaluateBridgeCall('fs:saveFile', pluginPage).allowed).toBe(true);
+  });
+
+  it('recognizes a shell page however its install path is escaped', () => {
+    // pathToFileURL escapes `[`, `]`, `~` and `%`; Chromium reports the frame URL with them as typed.
+    const installed = 'file:///D:/Apps/TX-5DR%20%5Bnightly%5D/~tools/100%25/assets/loading.html';
+    const reported = 'file:///D:/Apps/TX-5DR%20[nightly]/~tools/100%25/assets/loading.html?lang=zh#x';
+    expect(evaluateBridgeCall('startupLogs:subscribe', embeddedInput(reported, { shellPageUrls: [installed] })).allowed).toBe(true);
+    const rawPercent = 'file:///D:/Apps/TX-5DR%20[nightly]/~tools/100%/assets/loading.html';
+    expect(evaluateBridgeCall('startupLogs:subscribe', embeddedInput(rawPercent, { shellPageUrls: [installed] })).allowed).toBe(true);
+    const nonAscii = 'file:///C:/Funkr%C3%A4ume/loading.html';
+    expect(evaluateBridgeCall('startupLogs:subscribe', embeddedInput('file:///C:/Funkräume/loading.html', { shellPageUrls: [nonAscii] })).allowed).toBe(true);
+    expect(evaluateBridgeCall('startupLogs:subscribe', embeddedInput('file:///D:/Apps/other/loading.html', { shellPageUrls: [installed] })))
+      .toEqual({ allowed: false, reason: 'untrusted_sender' });
   });
 
   it('rejects subframes, other origins and other sessions', () => {
@@ -59,12 +81,16 @@ describe('desktop bridge policy', () => {
 
   it('limits a remote station to capabilities that are safe to grant it', () => {
     const page = remoteInput('http://127.0.0.1:18101/');
-    for (const channel of ['window:openLogbook', 'shell:openExternal', 'fs:saveFile', 'app:getVersion', 'config:get', 'shortcuts:setConfig']) {
+    for (const channel of [
+      'window:openLogbook', 'shell:openExternal', 'fs:saveFile', 'app:getVersion', 'config:get',
+      'shortcuts:getConfig', 'shortcuts:getToggles', 'voicePttShortcut:setConfig',
+    ]) {
       expect(evaluateBridgeCall(channel, page).allowed, channel).toBe(true);
     }
     for (const channel of [
       'shell:openPath', 'fs:selectFile', 'fs:selectDirectory', 'app:quit', 'app:restart',
       'updater:download', 'https:applySettings', 'remoteAccess:applyPreset', 'startupLogs:subscribe',
+      'shortcuts:setConfig', 'shortcuts:setToggles', 'shortcuts:register', 'shortcuts:startRecording', 'shortcuts:stopRecording',
     ]) {
       expect(evaluateBridgeCall(channel, page), channel).toEqual({ allowed: false, reason: 'capability_denied' });
     }
@@ -137,6 +163,13 @@ describe('desktop bridge wiring', () => {
     const list = preloadSource.match(/const SHELL_PAGE_CAPABILITIES: BridgeCapability\[\] = \[([^\]]+)\]/)?.[1] ?? '';
     const names = [...list.matchAll(/'([^']+)'/g)].map(match => match[1]).sort();
     expect(names).toEqual(getCapabilitiesForKind('shell').sort());
+  });
+
+  it('keeps the preload copy of the page address comparison identical', () => {
+    const extract = (source: string) => source.match(/function canonicalPageUrl\(href: string\): string \| null \{[\s\S]*?\n\}/)?.[0];
+    const policySource = readFileSync(join(__dirname, '..', 'bridgePolicy.ts'), 'utf8');
+    expect(extract(policySource)).toBeTruthy();
+    expect(extract(preloadSource)).toBe(extract(policySource));
   });
 
   it('keeps the preload capability names aligned with the contract', () => {

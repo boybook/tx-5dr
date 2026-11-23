@@ -282,19 +282,23 @@ export const StationManagerPage: React.FC = () => {
   }, [t]);
 
   return (
-    <div className="flex min-h-screen flex-col bg-default-50 text-foreground dark:bg-background">
+    // The document itself never scrolls (index.css); the content area below the
+    // title bar does, so the drag region stays put.
+    <div className="app-viewport-height flex flex-col bg-default-50 text-foreground dark:bg-background">
       <TitlebarDragRegion />
-      <main
-        className={`mx-auto flex w-full max-w-[680px] flex-1 flex-col px-6 pb-10 ${connectStationId ? 'items-center justify-center pb-[12vh]' : 'pt-2'}`}
-      >
-        {!state ? (
-          <div className="flex flex-1 items-center justify-center"><Spinner /></div>
-        ) : connectStationId ? (
-          <ConnectView state={state} stationId={connectStationId} />
-        ) : (
-          <ManageView state={state} />
-        )}
-      </main>
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <main
+          className={`mx-auto flex w-full max-w-[680px] flex-1 flex-col px-6 pb-10 ${connectStationId ? 'items-center justify-center pb-[12vh]' : 'pt-2'}`}
+        >
+          {!state ? (
+            <div className="flex flex-1 items-center justify-center"><Spinner /></div>
+          ) : connectStationId ? (
+            <ConnectView state={state} stationId={connectStationId} />
+          ) : (
+            <ManageView state={state} />
+          )}
+        </main>
+      </div>
     </div>
   );
 };

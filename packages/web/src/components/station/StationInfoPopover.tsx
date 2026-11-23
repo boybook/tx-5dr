@@ -9,7 +9,7 @@ import { api } from '@tx5dr/core';
 import { useStationInfo } from '../../store/radioStore';
 import { useHasMinRole } from '../../store/authStore';
 import { getGridBounds, UserRole, type StationInfo } from '@tx5dr/contracts';
-import { hasDesktopCapability } from '../../utils/desktopBridge';
+import { getDesktopStationKind, hasDesktopCapability } from '../../utils/desktopBridge';
 import { openStationManager, useCurrentDesktopStation } from '../../utils/desktopStations';
 import { displayHost } from '../stations/stationText';
 
@@ -104,7 +104,9 @@ export const StationInfoPopover: React.FC = () => {
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   const [isOpen, setIsOpen] = useState(false);
   const desktopStation = useCurrentDesktopStation();
-  const canOpenManager = hasDesktopCapability('stations');
+  // Connection details and the station manager belong to the desktop shell; a
+  // browser shows the station profile as it always has.
+  const inDesktopShell = hasDesktopCapability('stations');
   const tagVisible = useStationTagVisible();
   const { version, loading: versionLoading } = useStationVersion(isOpen);
 
@@ -121,15 +123,17 @@ export const StationInfoPopover: React.FC = () => {
   if (!tagVisible) return null;
 
   const { callsign, name, description, qth } = stationInfo ?? {};
-  const isRemote = desktopStation?.kind === 'remote';
-  const kindIcon: IconDefinition = !desktopStation ? faRadio : isRemote ? faTowerBroadcast : faComputer;
-  const kindLabel = !desktopStation ? t('tag.browser') : isRemote ? t('tag.remote') : t('tag.embedded');
-  const fallbackTitle = desktopStation
-    ? (isRemote ? desktopStation.label ?? t('tag.remote') : t('tag.embedded'))
-    : window.location.host;
+  // The shell reports this window's kind synchronously; the label and address arrive with getCurrent.
+  const isRemote = (desktopStation?.kind ?? getDesktopStationKind()) === 'remote';
+  const kindIcon: IconDefinition = !inDesktopShell ? faRadio : isRemote ? faTowerBroadcast : faComputer;
+  const kindLabel = isRemote ? t('tag.remote') : t('tag.embedded');
+  const fallbackTitle = !inDesktopShell
+    ? null
+    : isRemote ? desktopStation?.label ?? t('tag.remote') : t('tag.embedded');
   const tagTitle = callsign || name || fallbackTitle;
   const tagDetail = qth?.grid ?? null;
-  const address = isRemote && desktopStation?.url ? displayHost(desktopStation.url) : !desktopStation ? window.location.host : null;
+  const address = isRemote && desktopStation?.url ? displayHost(desktopStation.url) : null;
+  const showVersion = Boolean(version || versionLoading);
 
   const hasPreciseCoords = qth?.latitude != null && qth?.longitude != null;
   const hasGrid = !hasPreciseCoords && qth?.grid && qth.grid.length >= 4;
@@ -174,7 +178,7 @@ export const StationInfoPopover: React.FC = () => {
         <div
           role="button"
           tabIndex={0}
-          aria-label={`${kindLabel}: ${tagTitle}`}
+          aria-label={inDesktopShell ? `${kindLabel}: ${tagTitle}` : tagTitle ?? tagDetail ?? undefined}
           className="flex max-w-[16rem] items-center gap-1.5 rounded-md bg-default-100 px-2 py-1 text-xs
                      cursor-pointer select-none transition-[background-color,transform] duration-150
                      hover:bg-default-200 active:scale-[0.97] outline-none
@@ -182,7 +186,9 @@ export const StationInfoPopover: React.FC = () => {
           onKeyDown={e => e.key === 'Enter' && setIsOpen(o => !o)}
         >
           <FontAwesomeIcon icon={kindIcon} className={`text-xs ${isRemote ? 'text-secondary' : 'text-primary'}`} />
-          <span className={`truncate text-foreground ${callsign ? 'font-bold' : 'font-medium'}`}>{tagTitle}</span>
+          {tagTitle && (
+            <span className={`truncate text-foreground ${callsign ? 'font-bold' : 'font-medium'}`}>{tagTitle}</span>
+          )}
           {tagDetail && (
             <span className="flex-shrink-0 text-default-400 font-mono">{tagDetail}</span>
           )}
@@ -196,12 +202,14 @@ export const StationInfoPopover: React.FC = () => {
             </span>
             <div className="min-w-0 flex-1">
               <div className="truncate">
-                <span className={`text-foreground text-sm mr-1 ${callsign ? 'font-bold' : 'font-semibold'}`}>{callsign || name || fallbackTitle}</span>
+                {tagTitle && (
+                  <span className={`text-foreground text-sm mr-1 ${callsign ? 'font-bold' : 'font-semibold'}`}>{tagTitle}</span>
+                )}
                 {callsign && name && (
                   <span className="text-default-600 text-xs">{name}</span>
                 )}
               </div>
-              <p className="truncate text-tiny text-default-500">{kindLabel}</p>
+              {inDesktopShell && <p className="truncate text-tiny text-default-500">{kindLabel}</p>}
             </div>
             {isAdmin && (
               <Button
@@ -315,23 +323,29 @@ export const StationInfoPopover: React.FC = () => {
             </div>
           )}
 
-          <Divider className="my-2.5" />
-          <div className="flex flex-col gap-1.5">
-            <InfoRow label={t('tag.connection')}>
-              {/* The header already names the station when it has no callsign or name. */}
-              {isRemote && desktopStation?.label && (callsign || name) ? `${kindLabel} · ${desktopStation.label}` : kindLabel}
-            </InfoRow>
-            {address && (
-              <InfoRow label={t('tag.address')}><span className="font-mono">{address}</span></InfoRow>
-            )}
-            {(version || versionLoading) && (
-              <InfoRow label={t('tag.version')}>
-                {version ?? <Skeleton className="ml-auto h-3 w-14 rounded-small" />}
-              </InfoRow>
-            )}
-          </div>
+          {(inDesktopShell || showVersion) && (
+            <>
+              <Divider className="my-2.5" />
+              <div className="flex flex-col gap-1.5">
+                {inDesktopShell && (
+                  <InfoRow label={t('tag.connection')}>
+                    {/* The header already names the station when it has no callsign or name. */}
+                    {isRemote && desktopStation?.label && (callsign || name) ? `${kindLabel} · ${desktopStation.label}` : kindLabel}
+                  </InfoRow>
+                )}
+                {address && (
+                  <InfoRow label={t('tag.address')}><span className="font-mono">{address}</span></InfoRow>
+                )}
+                {showVersion && (
+                  <InfoRow label={t('tag.version')}>
+                    {version ?? <Skeleton className="ml-auto h-3 w-14 rounded-small" />}
+                  </InfoRow>
+                )}
+              </div>
+            </>
+          )}
 
-          {canOpenManager && (
+          {inDesktopShell && (
             <Button
               size="sm"
               variant="flat"

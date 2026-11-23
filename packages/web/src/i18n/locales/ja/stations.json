@@ -99,7 +99,6 @@
     "connection": "接続",
     "address": "アドレス",
     "version": "バージョン",
-    "browser": "ブラウザからのアクセス",
     "manage": "局を管理"
   }
 }

@@ -30,8 +30,13 @@ export function canManageStations(): boolean {
   return typeof stationsBridge()?.subscribe === 'function';
 }
 
+/** Opens the shell's station manager. Callers fire and forget, so a failure is only logged. */
 export async function openStationManager(): Promise<void> {
-  await stationsBridge()?.openManager?.();
+  try {
+    await stationsBridge()?.openManager?.();
+  } catch (error) {
+    logger.warn('station manager could not be opened', error);
+  }
 }
 
 export async function probeStationAddress(url: string): Promise<DesktopStationProbeResult> {

@@ -245,7 +245,7 @@ function subscribe<T>(channel: string, callback: (payload: T) => void): () => vo
 
 type BridgeCapability =
   | 'windows' | 'externalLinks' | 'saveFile' | 'selectPath' | 'openAppDirectory'
-  | 'appInfo' | 'appLifecycle' | 'closeBehavior' | 'shortcuts' | 'desktopUpdates'
+  | 'appInfo' | 'appLifecycle' | 'closeBehavior' | 'shortcuts' | 'shortcutSettings' | 'desktopUpdates'
   | 'desktopHttps' | 'desktopRemoteAccess' | 'startupLogs' | 'stations' | 'stationManagement';
 
 type StationKind = 'embedded' | 'remote';
@@ -256,13 +256,32 @@ function readSwitch(name: string): string | null {
   return value ? value.slice(prefix.length) : null;
 }
 
+/** Must stay identical to `canonicalPageUrl` in `electron-main/src/bridgePolicy.ts` (checked by a test). */
+function canonicalPageUrl(href: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(href);
+  } catch {
+    return null;
+  }
+  // Decode each run of escapes on its own, so a literal `%` elsewhere in the path stays as it is.
+  const pathname = url.pathname.replace(/(?:%[0-9a-fA-F]{2})+/g, (escaped) => {
+    try {
+      return decodeURIComponent(escaped);
+    } catch {
+      return escaped;
+    }
+  });
+  return `${url.protocol}//${url.host}${pathname}`;
+}
+
 /** URLs of the shell's own pages, provided by the main process. */
 const shellPageUrls = (readSwitch('tx5dr-shell-pages') ?? '').split(',').filter(Boolean).map(decodeURIComponent);
 const isShellPage = (() => {
   const current = globalThis.location;
   if (!current) return false;
-  return shellPageUrls.includes(`${current.origin === 'null' ? 'file://' : current.origin}${current.pathname}`)
-    || shellPageUrls.includes(current.href.split(/[?#]/)[0]);
+  const page = canonicalPageUrl(current.href);
+  return page !== null && shellPageUrls.some(candidate => canonicalPageUrl(candidate) === page);
 })();
 const stationKind: StationKind | null = (() => {
   const value = readSwitch('tx5dr-station-kind');
@@ -402,12 +421,14 @@ if (has('closeBehavior')) {
 if (has('shortcuts')) {
   electronAPI.shortcuts = {
     getConfig: (): Promise<ShortcutConfig> => ipcRenderer.invoke('shortcuts:getConfig'),
-    setConfig: (config: ShortcutConfig): Promise<ShortcutRegistrationStatus> => ipcRenderer.invoke('shortcuts:setConfig', config),
     getToggles: (): Promise<ShortcutToggles> => ipcRenderer.invoke('shortcuts:getToggles'),
-    setToggles: (toggles: ShortcutToggles): Promise<ShortcutRegistrationStatus> => ipcRenderer.invoke('shortcuts:setToggles', toggles),
-    register: (config?: ShortcutConfig): Promise<ShortcutRegistrationStatus> => ipcRenderer.invoke('shortcuts:register', config),
-    startRecording: (actionId: ShortcutActionId): Promise<void> => ipcRenderer.invoke('shortcuts:startRecording', actionId),
-    stopRecording: (): Promise<void> => ipcRenderer.invoke('shortcuts:stopRecording'),
+    ...(has('shortcutSettings') ? {
+      setConfig: (config: ShortcutConfig): Promise<ShortcutRegistrationStatus> => ipcRenderer.invoke('shortcuts:setConfig', config),
+      setToggles: (toggles: ShortcutToggles): Promise<ShortcutRegistrationStatus> => ipcRenderer.invoke('shortcuts:setToggles', toggles),
+      register: (config?: ShortcutConfig): Promise<ShortcutRegistrationStatus> => ipcRenderer.invoke('shortcuts:register', config),
+      startRecording: (actionId: ShortcutActionId): Promise<void> => ipcRenderer.invoke('shortcuts:startRecording', actionId),
+      stopRecording: (): Promise<void> => ipcRenderer.invoke('shortcuts:stopRecording'),
+    } : {}),
     onCommand: (callback: (payload: ShortcutCommandPayload) => void): (() => void) =>
       subscribe('shortcut:command', callback),
     onRecorded: (callback: (payload: ShortcutRecordedPayload) => void): (() => void) =>

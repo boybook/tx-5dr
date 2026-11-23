@@ -21,7 +21,7 @@ import net from 'node:net';
 import tls from 'node:tls';
 import fs from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { isLoopbackHostname, parseHostHeader } from './gateway-utils.js';
 
 const HOP_BY_HOP = new Set([
@@ -433,8 +433,40 @@ export async function runRemoteGatewayCli(env = process.env) {
   };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
+  watchParent(Number(env.TX5DR_REMOTE_GATEWAY_PARENT_PID), stop, logger);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+/** Whether a process exists; signal 0 only checks, and EPERM still means it is there. */
+export function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === 'EPERM';
+  }
+}
+
+function watchParent(parentPid, stop, logger) {
+  if (!Number.isInteger(parentPid) || parentPid <= 0) return;
+  const timer = setInterval(() => {
+    if (isProcessAlive(parentPid)) return;
+    clearInterval(timer);
+    logger.warn('[remote-gateway] desktop client exited, stopping', { parentPid });
+    stop();
+  }, 2000);
+  timer.unref();
+}
+
+/** Compares real paths, so a start through a symbolic link or junction still runs the CLI. */
+function isMainModule() {
+  if (!process.argv[1]) return false;
+  try {
+    return fs.realpathSync(fileURLToPath(import.meta.url)) === fs.realpathSync(path.resolve(process.argv[1]));
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   void runRemoteGatewayCli();
 }

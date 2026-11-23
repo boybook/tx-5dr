@@ -32,6 +32,7 @@ const CAPABILITIES_BY_KIND: Record<BridgeSenderKind, readonly DesktopBridgeCapab
     'appLifecycle',
     'closeBehavior',
     'shortcuts',
+    'shortcutSettings',
     'desktopUpdates',
     'desktopHttps',
     'desktopRemoteAccess',
@@ -52,6 +53,7 @@ const CAPABILITIES_BY_KIND: Record<BridgeSenderKind, readonly DesktopBridgeCapab
 const PLUGIN_PAGE_DENIED: ReadonlySet<DesktopBridgeCapability> = new Set([
   'appLifecycle',
   'openAppDirectory',
+  'shortcutSettings',
   'desktopUpdates',
   'desktopHttps',
   'desktopRemoteAccess',
@@ -78,11 +80,13 @@ const CHANNEL_CAPABILITY: Readonly<Record<string, DesktopBridgeCapability>> = {
   'config:getAll': 'closeBehavior',
   'shortcuts:getConfig': 'shortcuts',
   'shortcuts:getToggles': 'shortcuts',
-  'shortcuts:setToggles': 'shortcuts',
-  'shortcuts:setConfig': 'shortcuts',
-  'shortcuts:register': 'shortcuts',
-  'shortcuts:startRecording': 'shortcuts',
-  'shortcuts:stopRecording': 'shortcuts',
+  // Global shortcuts act on every application and persist in the shell, so a
+  // remote station can use them but not change them.
+  'shortcuts:setToggles': 'shortcutSettings',
+  'shortcuts:setConfig': 'shortcutSettings',
+  'shortcuts:register': 'shortcutSettings',
+  'shortcuts:startRecording': 'shortcutSettings',
+  'shortcuts:stopRecording': 'shortcutSettings',
   'voicePttShortcut:setConfig': 'shortcuts',
   'updater:getStatus': 'desktopUpdates',
   'updater:setChannel': 'desktopUpdates',
@@ -147,15 +151,40 @@ export interface BridgeSender {
   isPluginPage: boolean;
 }
 
-function stripSearchAndHash(url: URL): string {
-  const copy = new URL(url.href);
-  copy.search = '';
-  copy.hash = '';
-  return copy.href;
+/**
+ * A page address without query or hash and with its path decoded. Chromium and
+ * `pathToFileURL` escape characters such as `[`, `]`, `~` and `%` differently
+ * in file URLs, so both sides are compared in this form. The preload carries an
+ * identical copy (checked by a test).
+ */
+export function canonicalPageUrl(href: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(href);
+  } catch {
+    return null;
+  }
+  // Decode each run of escapes on its own, so a literal `%` elsewhere in the path stays as it is.
+  const pathname = url.pathname.replace(/(?:%[0-9a-fA-F]{2})+/g, (escaped) => {
+    try {
+      return decodeURIComponent(escaped);
+    } catch {
+      return escaped;
+    }
+  });
+  return `${url.protocol}//${url.host}${pathname}`;
+}
+
+function isShellPageUrl(href: string, shellPageUrls: readonly string[]): boolean {
+  const page = canonicalPageUrl(href);
+  return page !== null && shellPageUrls.some(candidate => canonicalPageUrl(candidate) === page);
 }
 
 /** Classifies an IPC sender, or returns null when it must not reach the bridge at all. */
 export function classifyBridgeSender(input: BridgeSenderInput): BridgeSender | null {
+  // Same-origin plugin iframes call through `parent.electronAPI` and arrive as the
+  // main frame, so this rejects only frames that are not same-origin (see the
+  // known gap in docs/decisions/desktop-remote-station.md).
   if (!input.isMainFrame) return null;
   let url: URL;
   try {
@@ -164,7 +193,7 @@ export function classifyBridgeSender(input: BridgeSenderInput): BridgeSender | n
     return null;
   }
 
-  if (input.shellPageUrls.includes(stripSearchAndHash(url))) return { kind: 'shell', isPluginPage: false };
+  if (isShellPageUrl(url.href, input.shellPageUrls)) return { kind: 'shell', isPluginPage: false };
   if (url.protocol === 'file:') return null;
 
   if (!input.station || (url.protocol !== 'http:' && url.protocol !== 'https:')) return null;
@@ -227,11 +256,21 @@ export function buildShellPagesArgument(shellPageUrls: readonly string[]): strin
   return `${BRIDGE_SHELL_PAGES_SWITCH}${shellPageUrls.map(encodeURIComponent).join(',')}`;
 }
 
-export function buildBridgeArguments(kind: 'embedded' | 'remote', shellPageUrls: readonly string[] = []): string[] {
+/**
+ * Preload arguments of a station window. A standalone plugin page window is
+ * granted what `isCapabilityAllowed` lets a plugin page use, so it does not
+ * offer entries the main process would refuse.
+ */
+export function buildBridgeArguments(
+  kind: 'embedded' | 'remote',
+  shellPageUrls: readonly string[] = [],
+  options: { pluginPage?: boolean } = {},
+): string[] {
+  const capabilities = CAPABILITIES_BY_KIND[kind].filter(capability => !(options.pluginPage && PLUGIN_PAGE_DENIED.has(capability)));
   return [
     `${BRIDGE_KIND_SWITCH}${kind}`,
     `${BRIDGE_VERSION_SWITCH}${DESKTOP_BRIDGE_VERSION}`,
-    `${BRIDGE_CAPABILITIES_SWITCH}${CAPABILITIES_BY_KIND[kind].join(',')}`,
+    `${BRIDGE_CAPABILITIES_SWITCH}${capabilities.join(',')}`,
     buildShellPagesArgument(shellPageUrls),
   ];
 }

@@ -27,7 +27,10 @@ export const DesktopBridgeCapabilitySchema = z.enum([
   'appInfo',
   'appLifecycle',
   'closeBehavior',
+  /** Read the shell's shortcut settings and receive global shortcut and voice PTT commands. */
   'shortcuts',
+  /** Change, register and record the shell's global shortcuts; the embedded station only. */
+  'shortcutSettings',
   'desktopUpdates',
   'desktopHttps',
   'desktopRemoteAccess',

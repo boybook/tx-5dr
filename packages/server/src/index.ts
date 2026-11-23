@@ -270,10 +270,14 @@ async function start() {
     bootstrapCoordinator.finalizeIfSettled();
     clockManager.pluginManager.notifyStartupReady();
     logger.info('server startup complete');
-    await startStationDiscovery();
 
     // 启动日志管理定时任务
     startLogMaintenanceTasks(consoleLogger);
+
+    // Local network discovery is optional and must never hold up or fail startup.
+    void startStationDiscovery().catch((error) => {
+      logger.warn('local network discovery could not start', { error: error instanceof Error ? error.message : String(error) });
+    });
   } catch (err) {
     logger.error('server startup failed', err);
     process.exit(1);

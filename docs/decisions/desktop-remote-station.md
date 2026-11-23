@@ -31,8 +31,12 @@ not the enforcement point.
 | Sender | Capabilities |
 | --- | --- |
 | Shell page (`file:` pages shipped with the app) | app info, startup logs, open and manage stations |
-| Embedded station | windows, external links, save/select files, open app directories, app info and lifecycle, close behavior, shortcuts, desktop updates, desktop HTTPS, desktop remote access, open station manager |
-| Remote station | windows, external links, save file, app info, close behavior, shortcuts, open station manager |
+| Embedded station | windows, external links, save/select files, open app directories, app info and lifecycle, close behavior, shortcuts, shortcut settings, desktop updates, desktop HTTPS, desktop remote access, open station manager |
+| Remote station | windows, external links, save file, app info, close behavior, shortcuts (read and receive commands), open station manager |
+
+Global shortcuts act on every application and persist in the shell, so changing,
+registering or recording them (`shortcutSettings`) belongs to the embedded
+station; a remote station window shows them read-only.
 
 Every station page may open the station manager and read which desktop station
 it belongs to (`stations.getCurrent`: kind, and for a remote station the name
@@ -40,14 +44,24 @@ and address the user saved). Managing, probing, trusting and opening stations
 (`stationManagement`) is available only to the shell's own pages: `loading.html`
 and the station manager, `station-manager.html` from the shell's own packaged Web
 build (the Vite dev server page in development), never a page served by a
-station. Shell pages are recognized by their exact URL, passed to the preload by
-the main process and re-checked for every call. The station list and connection
+station. Shell pages are recognized by their URL without query or hash, compared
+with percent escapes decoded (Chromium and `pathToFileURL` escape characters such
+as `[`, `]`, `~` and `%` differently), passed to the preload by the main process
+and re-checked for every call. The station list and connection
 state crossing to that page are decoded with `DesktopStationsStateSchema` and the
 related schemas in `@tx5dr/contracts`.
 
 Standalone plugin page windows never receive app lifecycle, app directories,
-desktop updates, desktop HTTPS or desktop remote access, even for their own
-station. Subframes and unknown origins or sessions are rejected.
+shortcut settings, desktop updates, desktop HTTPS, desktop remote access or the
+station manager, even for their own station; their preload is granted the same
+reduced set. Subframes and unknown origins or sessions are rejected.
+
+Known gap: plugin iframes inside a station page are sandboxed with
+`allow-same-origin`, so a plugin's UI can reach `parent.electronAPI` and its calls
+arrive from the station page's main frame. It therefore holds that page's
+capabilities. This predates the remote station work and needs plugin UIs on
+their own origin (or without `allow-same-origin`) to close; until then the frame
+check stops only frames that are not same-origin.
 
 `shell:openPath` opens only paths that resolve, after following symbolic links,
 inside the app's config, data, logs or cache roots
@@ -99,7 +113,8 @@ only while the station manager is open (`stationDiscovery.ts`). An announcement
 is listed only after the station at the announced address answered
 `/api/station/identity` with the announced instance ID; the embedded station's own
 announcement is ignored. Its display name comes from the station's public profile,
-because announcements carry no callsign or host name.
+because announcements carry no callsign or host name: address records use a
+name derived from the instance ID.
 
 macOS requires Local Network permission for multicast DNS. The packaged app
 declares `NSLocalNetworkUsageDescription` and `NSBonjourServices`

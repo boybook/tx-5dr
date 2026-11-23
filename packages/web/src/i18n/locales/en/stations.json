@@ -99,7 +99,6 @@
     "connection": "Connection",
     "address": "Address",
     "version": "Version",
-    "browser": "Browser access",
     "manage": "Manage Stations"
   }
 }

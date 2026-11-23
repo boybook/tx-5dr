@@ -39,6 +39,7 @@ import { RemoteAccessSettingsCard } from './RemoteAccessSettingsCard';
 import { applyRemoteAccessPreset, normalizeRemoteAccessOrigins, validateRemoteAccessDraft } from './remoteAccessDraft';
 import { SettingsBlock, SettingsPage, SettingsRow, SettingsSection } from './SettingsLayout';
 import { hasDesktopCapability } from '../../utils/desktopBridge';
+import { openStationManager } from '../../utils/desktopStations';
 
 interface DecodeWindowState {
   decodeDepth: number;
@@ -2763,7 +2764,7 @@ export const SystemSettings = forwardRef<
               >
                 <Button
                   variant="bordered"
-                  onPress={() => { void window.electronAPI?.stations?.openManager?.(); }}
+                  onPress={() => { void openStationManager(); }}
                 >
                   {t('system.desktopStationsOpen')}
                 </Button>

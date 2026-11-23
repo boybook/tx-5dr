@@ -213,14 +213,19 @@ interface ElectronAPI {
     set(key: string, value: unknown): Promise<void>;
     getAll(): Promise<Record<string, unknown>>;
   };
+  /**
+   * Global shortcuts of the desktop shell. Every station window can read them and
+   * receive their commands; only the embedded station may change them, so the
+   * setters are absent in remote station windows.
+   */
   shortcuts?: {
     getConfig(): Promise<ShortcutConfig>;
-    setConfig(config: ShortcutConfig): Promise<ShortcutRegistrationStatus>;
+    setConfig?(config: ShortcutConfig): Promise<ShortcutRegistrationStatus>;
     getToggles(): Promise<ShortcutToggles>;
-    setToggles(toggles: ShortcutToggles): Promise<ShortcutRegistrationStatus>;
-    register(config?: ShortcutConfig): Promise<ShortcutRegistrationStatus>;
-    startRecording(actionId: ShortcutActionId): Promise<void>;
-    stopRecording(): Promise<void>;
+    setToggles?(toggles: ShortcutToggles): Promise<ShortcutRegistrationStatus>;
+    register?(config?: ShortcutConfig): Promise<ShortcutRegistrationStatus>;
+    startRecording?(actionId: ShortcutActionId): Promise<void>;
+    stopRecording?(): Promise<void>;
     onCommand(callback: (payload: ShortcutCommandPayload) => void): () => void;
     onRecorded(callback: (payload: ShortcutRecordedPayload) => void): () => void;
     onRecordingCancelled(callback: (payload: ShortcutRecordingCancelledPayload) => void): () => void;
