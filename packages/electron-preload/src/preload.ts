@@ -234,100 +234,115 @@ function subscribe<T>(channel: string, callback: (payload: T) => void): () => vo
 }
 
 /**
- * Electron Preload 脚本
- * 通过 contextBridge 安全地暴露 API 给渲染进程
+ * Electron preload: exposes the desktop bridge to the page through contextBridge.
+ *
+ * The main process grants each window a capability list (command-line switches
+ * built by `electron-main/src/bridgePolicy.ts`) and enforces it again for every
+ * IPC call. Namespaces outside the grant are not exposed, so station pages fall
+ * back to their browser/server behavior through ordinary feature detection.
+ * Local shell pages (`file:`) receive only startup diagnostics and app info.
  */
 
-// 设置 API 基础 URL 环境变量
-const API_BASE = process.env.EMBEDDED === 'true'
-  ? `http://127.0.0.1:${process.env.SERVER_PORT || 4000}`
-  : 'http://localhost:4000';
+type BridgeCapability =
+  | 'windows' | 'externalLinks' | 'saveFile' | 'selectPath' | 'openAppDirectory'
+  | 'appInfo' | 'appLifecycle' | 'closeBehavior' | 'shortcuts' | 'shortcutSettings' | 'desktopUpdates'
+  | 'desktopHttps' | 'desktopRemoteAccess' | 'startupLogs' | 'stations' | 'stationManagement';
 
-// 暴露给渲染进程的 API
-contextBridge.exposeInMainWorld('electronAPI', {
-  // 环境信息
-  getApiBase: () => API_BASE,
-  isEmbedded: () => process.env.EMBEDDED === 'true',
-  
-  // 文件系统操作
-  fs: {
-    /**
-     * 选择文件
-     */
-    selectFile: async (_options?: {
-      title?: string;
-      filters?: Array<{ name: string; extensions: string[] }>;
-    }) => {
-      return ipcRenderer.invoke('fs:selectFile', _options);
-    },
+type StationKind = 'embedded' | 'remote';
 
-    /**
-     * 选择目录
-     */
-    selectDirectory: async (_options?: {
-      title?: string;
-    }) => {
-      return ipcRenderer.invoke('fs:selectDirectory', _options);
-    },
+function readSwitch(name: string): string | null {
+  const prefix = `--${name}=`;
+  const value = process.argv.find(arg => arg.startsWith(prefix));
+  return value ? value.slice(prefix.length) : null;
+}
 
-    /**
-     * 读取文件
-     */
-    readFile: async (_filePath: string) => {
-      return ipcRenderer.invoke('fs:readFile', _filePath);
-    },
-
-    /**
-     * 写入文件
-     */
-    writeFile: async (_filePath: string, _data: string) => {
-      return ipcRenderer.invoke('fs:writeFile', _filePath, _data);
-    },
-
-    saveFile: async (_options: {
-      title?: string;
-      defaultName: string;
-      filters?: Array<{ name: string; extensions: string[] }>;
-      data: Uint8Array;
-    }): Promise<{ canceled: boolean; filePath?: string }> => {
-      return ipcRenderer.invoke('fs:saveFile', _options);
+/** Must stay identical to `canonicalPageUrl` in `electron-main/src/bridgePolicy.ts` (checked by a test). */
+function canonicalPageUrl(href: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(href);
+  } catch {
+    return null;
+  }
+  // Decode each run of escapes on its own, so a literal `%` elsewhere in the path stays as it is.
+  const pathname = url.pathname.replace(/(?:%[0-9a-fA-F]{2})+/g, (escaped) => {
+    try {
+      return decodeURIComponent(escaped);
+    } catch {
+      return escaped;
     }
-  },
-  
-  // 应用控制
-  app: {
-    /**
-     * 获取应用版本
-     */
-    getVersion: () => ipcRenderer.invoke('app:getVersion'),
+  });
+  return `${url.protocol}//${url.host}${pathname}`;
+}
 
-    /**
-     * 获取构建信息（channel/commit/tag/buildTimestamp）
-     */
-    getBuildInfo: (): Promise<BuildInfo> => ipcRenderer.invoke('app:getBuildInfo'),
+/** URLs of the shell's own pages, provided by the main process. */
+const shellPageUrls = (readSwitch('tx5dr-shell-pages') ?? '').split(',').filter(Boolean).map(decodeURIComponent);
+const isShellPage = (() => {
+  const current = globalThis.location;
+  if (!current) return false;
+  const page = canonicalPageUrl(current.href);
+  return page !== null && shellPageUrls.some(candidate => canonicalPageUrl(candidate) === page);
+})();
+const stationKind: StationKind | null = (() => {
+  const value = readSwitch('tx5dr-station-kind');
+  return value === 'embedded' || value === 'remote' ? value : null;
+})();
+const bridgeVersion = Number(readSwitch('tx5dr-bridge-version') ?? '0');
+/** Must match the `shell` grant in `electron-main/src/bridgePolicy.ts`. */
+const SHELL_PAGE_CAPABILITIES: BridgeCapability[] = ['appInfo', 'startupLogs', 'stations', 'stationManagement'];
+const grantedCapabilities: BridgeCapability[] = isShellPage
+  ? SHELL_PAGE_CAPABILITIES
+  : (readSwitch('tx5dr-bridge-capabilities') ?? '').split(',').filter(Boolean) as BridgeCapability[];
+const granted = new Set<BridgeCapability>(grantedCapabilities);
+const has = (capability: BridgeCapability): boolean => granted.has(capability);
 
-    /**
-     * 退出应用
-     */
-    quit: () => ipcRenderer.invoke('app:quit'),
+type FileFilter = { name: string; extensions: string[] };
 
-    /**
-     * 重启应用
-     */
-    restart: () => ipcRenderer.invoke('app:restart'),
-    
-    /**
-     * 最小化窗口
-     */
-    minimize: () => ipcRenderer.invoke('app:minimize'),
-    
-    /**
-     * 最大化/还原窗口
-     */
-    toggleMaximize: () => ipcRenderer.invoke('app:toggleMaximize')
-  },
+const electronAPI: Record<string, unknown> = {};
 
-  updater: {
+if (!isShellPage && stationKind && bridgeVersion > 0) {
+  electronAPI.bridge = Object.freeze({
+    version: bridgeVersion,
+    kind: stationKind,
+    capabilities: Object.freeze([...grantedCapabilities]),
+  });
+}
+
+if (has('selectPath') || has('saveFile')) {
+  electronAPI.fs = {
+    ...(has('selectPath') ? {
+      selectFile: (options?: { title?: string; filters?: FileFilter[] }): Promise<string | null> =>
+        ipcRenderer.invoke('fs:selectFile', options),
+      selectDirectory: (options?: { title?: string }): Promise<string | null> =>
+        ipcRenderer.invoke('fs:selectDirectory', options),
+    } : {}),
+    ...(has('saveFile') ? {
+      saveFile: (options: {
+        title?: string;
+        defaultName: string;
+        filters?: FileFilter[];
+        data: Uint8Array;
+      }): Promise<{ canceled: boolean; filePath?: string }> => ipcRenderer.invoke('fs:saveFile', options),
+    } : {}),
+  };
+}
+
+if (has('appInfo') || has('appLifecycle')) {
+  electronAPI.app = {
+    ...(has('appInfo') ? {
+      getVersion: (): Promise<string> => ipcRenderer.invoke('app:getVersion'),
+      /** Build information (channel/commit/tag/buildTimestamp). */
+      getBuildInfo: (): Promise<BuildInfo> => ipcRenderer.invoke('app:getBuildInfo'),
+    } : {}),
+    ...(has('appLifecycle') ? {
+      quit: (): Promise<void> => ipcRenderer.invoke('app:quit'),
+      restart: (): Promise<void> => ipcRenderer.invoke('app:restart'),
+    } : {}),
+  };
+}
+
+if (has('desktopUpdates')) {
+  electronAPI.updater = {
     getStatus: (): Promise<DesktopUpdateStatus> => ipcRenderer.invoke('updater:getStatus'),
     check: (): Promise<DesktopUpdateStatus> => ipcRenderer.invoke('updater:check'),
     setChannel: (channel: 'release' | 'nightly'): Promise<DesktopUpdateStatus> => ipcRenderer.invoke('updater:setChannel', { channel }),
@@ -336,9 +351,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openDownload: (url?: string): Promise<void> => ipcRenderer.invoke('updater:openDownload', url),
     onStatus: (callback: (status: DesktopUpdateStatus) => void): (() => void) =>
       subscribe('updater:status', callback),
-  },
+  };
+}
 
-  startupLogs: {
+if (has('startupLogs')) {
+  electronAPI.startupLogs = {
     openFolder: (): Promise<void> => ipcRenderer.invoke('startupLogs:openFolder'),
     runAction: (actionId: StartupErrorActionId): Promise<void> => ipcRenderer.invoke('startupLogs:runAction', actionId),
     subscribe: async (callback: (payload: StartupLogsPayload) => void): Promise<() => Promise<void>> => {
@@ -357,99 +374,78 @@ contextBridge.exposeInMainWorld('electronAPI', {
         await ipcRenderer.invoke('startupLogs:unsubscribe');
       };
     },
-  },
+  };
+}
 
-  // 窗口管理
-  window: {
-    /**
-     * 打开"关于"窗口
-     */
-    openAbout: () => ipcRenderer.invoke('window:openAbout'),
-
-    /**
-     * 打开通联日志窗口
-     */
-    openLogbookWindow: (_queryString: string) => ipcRenderer.invoke('window:openLogbook', _queryString),
-
-    /**
-     * Open a plugin custom UI in the standalone application page host.
-     */
-    openPluginPageWindow: (_queryString: string) => ipcRenderer.invoke('window:openPluginPage', _queryString),
-
-    /**
-     * 打开独立频谱图窗口
-     */
-    openSpectrumWindow: () => ipcRenderer.invoke('window:openSpectrumWindow'),
-
-    /**
-     * 监听频谱窗口关闭事件，返回取消监听函数
-     */
-    onSpectrumWindowClosed: (callback: () => void): (() => void) =>
-      subscribe('spectrum-window-closed', () => callback()),
-
+if (!isShellPage) {
+  electronAPI.window = {
+    ...(has('windows') ? {
+      openAbout: (): Promise<void> => ipcRenderer.invoke('window:openAbout'),
+      openLogbookWindow: (queryString: string): Promise<void> => ipcRenderer.invoke('window:openLogbook', queryString),
+      /** Open a plugin custom UI in the standalone application page host. */
+      openPluginPageWindow: (queryString: string): Promise<void> => ipcRenderer.invoke('window:openPluginPage', queryString),
+      openSpectrumWindow: (): Promise<void> => ipcRenderer.invoke('window:openSpectrumWindow'),
+      /** Subscribe to the spectrum window closing; returns the disposer. */
+      onSpectrumWindowClosed: (callback: () => void): (() => void) =>
+        subscribe('spectrum-window-closed', () => callback()),
+    } : {}),
     /**
      * Current page zoom factor. Native window controls do not scale with page zoom,
      * so the renderer needs it to keep content clear of the macOS traffic lights.
      */
     getZoomFactor: (): number => webFrame.getZoomFactor(),
-  },
+  };
+}
 
-  // 系统集成
-  shell: {
-    /**
-     * 使用系统默认浏览器打开外部链接
-     */
-    openExternal: (_url: string) => ipcRenderer.invoke('shell:openExternal', _url),
+if (has('externalLinks') || has('openAppDirectory')) {
+  electronAPI.shell = {
+    ...(has('externalLinks') ? {
+      /** Open an http(s) link in the system browser. */
+      openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:openExternal', url),
+    } : {}),
+    ...(has('openAppDirectory') ? {
+      /** Open one of the app's own directories in the system file manager. */
+      openPath: (path: string): Promise<string> => ipcRenderer.invoke('shell:openPath', path),
+    } : {}),
+  };
+}
 
-    /**
-     * 在系统文件管理器中打开目录
-     */
-    openPath: (_path: string) => ipcRenderer.invoke('shell:openPath', _path)
-  },
+if (has('closeBehavior')) {
+  electronAPI.config = {
+    get: (key: string): Promise<unknown> => ipcRenderer.invoke('config:get', key),
+    set: (key: string, value: unknown): Promise<void> => ipcRenderer.invoke('config:set', key, value),
+    getAll: (): Promise<Record<string, unknown>> => ipcRenderer.invoke('config:getAll'),
+  };
+}
 
-  // 配置管理
-  config: {
-    /**
-     * 获取配置
-     */
-    get: (_key: string) => ipcRenderer.invoke('config:get', _key),
-
-    /**
-     * 设置配置
-     */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    set: (_key: string, _value: any) => ipcRenderer.invoke('config:set', _key, _value),
-
-    /**
-     * 获取所有配置
-     */
-    getAll: () => ipcRenderer.invoke('config:getAll')
-  },
-
-  shortcuts: {
+if (has('shortcuts')) {
+  electronAPI.shortcuts = {
     getConfig: (): Promise<ShortcutConfig> => ipcRenderer.invoke('shortcuts:getConfig'),
-    setConfig: (config: ShortcutConfig): Promise<ShortcutRegistrationStatus> => ipcRenderer.invoke('shortcuts:setConfig', config),
     getToggles: (): Promise<ShortcutToggles> => ipcRenderer.invoke('shortcuts:getToggles'),
-    setToggles: (toggles: ShortcutToggles): Promise<ShortcutRegistrationStatus> => ipcRenderer.invoke('shortcuts:setToggles', toggles),
-    register: (config?: ShortcutConfig): Promise<ShortcutRegistrationStatus> => ipcRenderer.invoke('shortcuts:register', config),
-    startRecording: (actionId: ShortcutActionId): Promise<void> => ipcRenderer.invoke('shortcuts:startRecording', actionId),
-    stopRecording: (): Promise<void> => ipcRenderer.invoke('shortcuts:stopRecording'),
+    ...(has('shortcutSettings') ? {
+      setConfig: (config: ShortcutConfig): Promise<ShortcutRegistrationStatus> => ipcRenderer.invoke('shortcuts:setConfig', config),
+      setToggles: (toggles: ShortcutToggles): Promise<ShortcutRegistrationStatus> => ipcRenderer.invoke('shortcuts:setToggles', toggles),
+      register: (config?: ShortcutConfig): Promise<ShortcutRegistrationStatus> => ipcRenderer.invoke('shortcuts:register', config),
+      startRecording: (actionId: ShortcutActionId): Promise<void> => ipcRenderer.invoke('shortcuts:startRecording', actionId),
+      stopRecording: (): Promise<void> => ipcRenderer.invoke('shortcuts:stopRecording'),
+    } : {}),
     onCommand: (callback: (payload: ShortcutCommandPayload) => void): (() => void) =>
       subscribe('shortcut:command', callback),
     onRecorded: (callback: (payload: ShortcutRecordedPayload) => void): (() => void) =>
       subscribe('shortcut:recorded', callback),
     onRecordingCancelled: (callback: (payload: ShortcutRecordingCancelledPayload) => void): (() => void) =>
       subscribe('shortcut:recording-cancelled', callback),
-  },
-
-  voicePttShortcut: {
+  };
+  electronAPI.voicePttShortcut = {
     setConfig: (config: VoicePttShortcutConfigPayload): Promise<void> =>
       ipcRenderer.invoke('voicePttShortcut:setConfig', config),
     onCommand: (callback: (payload: VoicePttShortcutCommandPayload) => void): (() => void) =>
       subscribe('voice-ptt-shortcut:command', callback),
-  },
+  };
+}
 
-  https: {
+if (has('desktopHttps')) {
+  electronAPI.https = {
     getStatus: (): Promise<DesktopHttpsStatus> => ipcRenderer.invoke('https:getStatus'),
     getShareUrls: (): Promise<string[]> => ipcRenderer.invoke('https:getShareUrls'),
     generateSelfSigned: (): Promise<DesktopHttpsStatus> => ipcRenderer.invoke('https:generateSelfSigned'),
@@ -462,112 +458,49 @@ contextBridge.exposeInMainWorld('electronAPI', {
       redirectExternalHttp?: boolean;
     }): Promise<DesktopHttpsStatus> => ipcRenderer.invoke('https:applySettings', update),
     disable: (): Promise<DesktopHttpsStatus> => ipcRenderer.invoke('https:disable'),
-  },
-  remoteAccess: {
-    getPreset: (): Promise<'local' | 'lan' | 'public'> => ipcRenderer.invoke('remoteAccess:getPreset'),
-    applyPreset: (preset: 'local' | 'lan' | 'public') => ipcRenderer.invoke('remoteAccess:applyPreset', preset),
-  }
-});
-
-// 类型声明，供 TypeScript 使用
-declare global {
-  interface Window {
-    electronAPI: {
-      getApiBase(): string;
-      isEmbedded(): boolean;
-      fs: {
-        selectFile(options?: {
-          title?: string;
-          filters?: Array<{ name: string; extensions: string[] }>;
-        }): Promise<string | null>;
-        selectDirectory(options?: { title?: string }): Promise<string | null>;
-        readFile(filePath: string): Promise<string>;
-        writeFile(filePath: string, data: string): Promise<void>;
-        saveFile(options: {
-          title?: string;
-          defaultName: string;
-          filters?: Array<{ name: string; extensions: string[] }>;
-          data: Uint8Array;
-        }): Promise<{ canceled: boolean; filePath?: string }>;
-      };
-      app: {
-        getVersion(): Promise<string>;
-        getBuildInfo(): Promise<BuildInfo>;
-        quit(): Promise<void>;
-        restart(): Promise<void>;
-        minimize(): Promise<void>;
-        toggleMaximize(): Promise<void>;
-      };
-      updater: {
-        getStatus(): Promise<DesktopUpdateStatus>;
-        check(): Promise<DesktopUpdateStatus>;
-        setChannel(channel: 'release' | 'nightly'): Promise<DesktopUpdateStatus>;
-    download(request: { identity: string; allowDowngrade: boolean }): Promise<DesktopUpdateStatus>;
-        installAndRestart(request: { identity: string; allowDowngrade: boolean }): Promise<DesktopUpdateStatus>;
-        openDownload(url?: string): Promise<void>;
-        onStatus(callback: (status: DesktopUpdateStatus) => void): () => void;
-      };
-      startupLogs: {
-        openFolder(): Promise<void>;
-        runAction(actionId: StartupErrorActionId): Promise<void>;
-        subscribe(callback: (payload: StartupLogsPayload) => void): Promise<() => Promise<void>>;
-      };
-      window: {
-        openAbout(): Promise<void>;
-        openLogbookWindow(queryString: string): Promise<void>;
-        openPluginPageWindow(queryString: string): Promise<void>;
-        openSpectrumWindow(): Promise<void>;
-        onSpectrumWindowClosed(callback: () => void): () => void;
-        getZoomFactor(): number;
-      };
-      shell: {
-        openExternal(url: string): Promise<void>;
-        openPath(path: string): Promise<string>;
-      };
-      config: {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        get(key: string): Promise<any>;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        set(key: string, value: any): Promise<void>;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        getAll(): Promise<Record<string, any>>;
-      };
-      shortcuts: {
-        getConfig(): Promise<ShortcutConfig>;
-        setConfig(config: ShortcutConfig): Promise<ShortcutRegistrationStatus>;
-        getToggles(): Promise<ShortcutToggles>;
-        setToggles(toggles: ShortcutToggles): Promise<ShortcutRegistrationStatus>;
-        register(config?: ShortcutConfig): Promise<ShortcutRegistrationStatus>;
-        startRecording(actionId: ShortcutActionId): Promise<void>;
-        stopRecording(): Promise<void>;
-        onCommand(callback: (payload: ShortcutCommandPayload) => void): () => void;
-        onRecorded(callback: (payload: ShortcutRecordedPayload) => void): () => void;
-        onRecordingCancelled(callback: (payload: ShortcutRecordingCancelledPayload) => void): () => void;
-      };
-      voicePttShortcut: {
-        setConfig(config: VoicePttShortcutConfigPayload): Promise<void>;
-        onCommand(callback: (payload: VoicePttShortcutCommandPayload) => void): () => void;
-      };
-      https: {
-        getStatus(): Promise<DesktopHttpsStatus>;
-        getShareUrls(): Promise<string[]>;
-        generateSelfSigned(): Promise<DesktopHttpsStatus>;
-        importPemCertificate(certPath: string, keyPath: string): Promise<DesktopHttpsStatus>;
-        applySettings(update: {
-          enabled?: boolean;
-          mode?: DesktopHttpsMode;
-          httpsPort?: number;
-          redirectExternalHttp?: boolean;
-        }): Promise<DesktopHttpsStatus>;
-        disable(): Promise<DesktopHttpsStatus>;
-      };
-      remoteAccess: {
-        getPreset(): Promise<'local' | 'lan' | 'public'>;
-        applyPreset(preset: 'local' | 'lan' | 'public'): Promise<{ preset: 'local' | 'lan' | 'public'; https: DesktopHttpsStatus }>;
-      };
-    };
-  }
+  };
 }
 
-// 导出空对象使其成为模块
+if (has('desktopRemoteAccess')) {
+  electronAPI.remoteAccess = {
+    getPreset: (): Promise<'local' | 'lan' | 'public'> => ipcRenderer.invoke('remoteAccess:getPreset'),
+    applyPreset: (preset: 'local' | 'lan' | 'public') => ipcRenderer.invoke('remoteAccess:applyPreset', preset),
+  };
+}
+
+if (has('stations') || has('stationManagement')) {
+  electronAPI.stations = {
+    openManager: (): Promise<void> => ipcRenderer.invoke('stations:openManager'),
+    ...(!isShellPage ? {
+      getCurrent: (): Promise<unknown> => ipcRenderer.invoke('stations:getCurrent'),
+    } : {}),
+    ...(has('stationManagement') ? {
+      getState: (): Promise<unknown> => ipcRenderer.invoke('stations:getState'),
+      subscribe: async (callback: (state: unknown) => void): Promise<() => Promise<void>> => {
+        const listener = (_event: unknown, state: unknown) => callback(state);
+        ipcRenderer.on('stations:state', listener);
+        try {
+          callback(await ipcRenderer.invoke('stations:subscribe'));
+        } catch (error) {
+          ipcRenderer.removeListener('stations:state', listener);
+          throw error;
+        }
+        return async () => {
+          ipcRenderer.removeListener('stations:state', listener);
+          await ipcRenderer.invoke('stations:unsubscribe');
+        };
+      },
+      probe: (url: string): Promise<unknown> => ipcRenderer.invoke('stations:probe', url),
+      save: (input: unknown): Promise<unknown> => ipcRenderer.invoke('stations:save', input),
+      remove: (id: string): Promise<void> => ipcRenderer.invoke('stations:remove', id),
+      connect: (id: string): Promise<void> => ipcRenderer.invoke('stations:connect', id),
+      trustCertificate: (id: string, fingerprint256: string): Promise<void> =>
+        ipcRenderer.invoke('stations:trustCertificate', id, fingerprint256),
+    } : {}),
+  };
+}
+
+contextBridge.exposeInMainWorld('electronAPI', electronAPI);
+
+// The station page's own typing lives in `packages/web/src/types/electron.d.ts`.
 export {};

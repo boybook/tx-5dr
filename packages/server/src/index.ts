@@ -16,6 +16,11 @@ import { createServerReadyState, resolveServerPortOptions, writeServerReadyFile 
 import { PersistenceCoordinator } from './utils/persistence/index.js';
 import { bootstrapCoordinator } from './services/BootstrapCoordinator.js';
 import { TelemetryService } from './observability/TelemetryService.js';
+import { AuthManager } from './auth/AuthManager.js';
+import { tx5drPaths } from './utils/app-paths.js';
+import { resolvePluginDistribution } from './plugin/runtime-info.js';
+import { StationDiscoveryAdvertiser } from './services/StationDiscoveryAdvertiser.js';
+import { getStationIdentityService } from './services/StationIdentityService.js';
 
 const logger = createLogger('Server');
 
@@ -150,6 +155,21 @@ async function listenWithPortNegotiation(
   throw new Error(`Server port range ${options.requestedPort}-${options.requestedPort + options.scanSteps} is unavailable`);
 }
 
+let stationDiscovery: StationDiscoveryAdvertiser | null = null;
+
+/** Announces the station on the local network while its remote access settings allow it. */
+async function startStationDiscovery(): Promise<void> {
+  const authManager = AuthManager.getInstance();
+  const advertiser = new StationDiscoveryAdvertiser({
+    getDistribution: async () => resolvePluginDistribution(await tx5drPaths.getDataDir()),
+    getPreset: () => authManager.getRemoteAccessConfig().preset,
+    getInstanceId: () => getStationIdentityService().getInstanceId(),
+  });
+  stationDiscovery = advertiser;
+  authManager.onRemoteAccessChanged(() => { void advertiser.refresh(); });
+  await advertiser.refresh();
+}
+
 async function start() {
   try {
     // 初始化 XState Inspector（必须在引擎启动前，否则状态机 actor 无法连接）。
@@ -253,6 +273,11 @@ async function start() {
 
     // 启动日志管理定时任务
     startLogMaintenanceTasks(consoleLogger);
+
+    // Local network discovery is optional and must never hold up or fail startup.
+    void startStationDiscovery().catch((error) => {
+      logger.warn('local network discovery could not start', { error: error instanceof Error ? error.message : String(error) });
+    });
   } catch (err) {
     logger.error('server startup failed', err);
     process.exit(1);
@@ -313,6 +338,12 @@ function startLogMaintenanceTasks(consoleLogger: ConsoleLogger): void {
       blockNewMutations();
       DigitalRadioEngine.getInstance().operatorManager.qsoCompletions.stopAccepting();
       PersistenceCoordinator.getInstance().blockNewMutations();
+
+      await stationDiscovery?.stop().catch((error) => {
+        logger.debug('local network announcement was not withdrawn', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
 
       await TelemetryService.getInstance().shutdown().catch((error) => {
         logger.debug('anonymous usage statistics shutdown was not delivered', {

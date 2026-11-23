@@ -472,6 +472,8 @@ jobs:
             "$APP_ROOT/packages/server/dist"
             "$APP_ROOT/packages/web/dist"
             "$APP_ROOT/packages/client-tools/src/proxy.js"
+            "$APP_ROOT/packages/client-tools/src/gateway-utils.js"
+            "$APP_ROOT/packages/client-tools/src/remote-gateway.js"
           )
 
           for required in "${required_paths[@]}"; do

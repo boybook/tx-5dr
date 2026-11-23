@@ -241,6 +241,34 @@ rigctld 优先报告连接的物理 VFO；后端明确不支持 VFO 命令时保
 - `RadioBridge.test.ts`：连接事件投影不执行连接期写频
 - `HamlibConnection.test.ts` / `IcomWlanConnection.test.ts`：关键 I/O 串行化、复合切换与低优先级让路
 
+## Local network announcement
+
+After startup completes and the signal handlers are installed,
+`StationDiscoveryAdvertiser` announces the station as DNS-SD `_tx5dr._tcp` when
+`resolveStationAdvertisement` allows it:
+
+- never with the `local` remote access preset;
+- with the `lan` preset, by default for Electron, Linux service and generic
+  servers;
+- with the `public` preset, or for Docker, Android and development servers, only
+  with `TX5DR_DISCOVERY=1`. `TX5DR_DISCOVERY=0` always turns it off.
+
+The announced port is the browser-facing Web entrypoint
+(`TX5DR_DISCOVERY_HTTPS_PORT`, else `TX5DR_DISCOVERY_PORT`, `WEB_PORT` or
+`TX5DR_HTTP_PORT`). TXT records carry only the version, the station instance ID
+and the protocol. Address records are published under `tx5dr-<instance id
+prefix>.local`, never the machine's host name, which would expose it and compete
+with the operating system's own mDNS responder.
+
+`AuthManager.onRemoteAccessChanged` re-evaluates the announcement after a saved
+preset change, and a 30-second check of the machine's addresses republishes it
+after a network change. When nothing is announced, the mDNS socket is closed.
+
+Discovery starts in the background and never blocks or fails startup. A failed
+bind of UDP 5353 is logged once and closes the socket without retrying; the next
+preset or address change tries again. Shutdown withdraws the announcement before
+the engine stops.
+
 ## Station test composition
 
 Station tests select external audio device ports before discovery and keep the

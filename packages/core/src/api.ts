@@ -5,6 +5,7 @@ import {
   IncompleteQsoHealthResponseSchema,
   IncompleteQsoCommitResponseSchema, IncompleteQsoDismissResponseSchema,
   IncompleteQsoRetrySyncResponseSchema,
+  StationIdentitySchema,
 } from '@tx5dr/contracts';
 
 const logger = createLogger('API');
@@ -126,6 +127,7 @@ import type {
   SystemUpdateStatus,
   BootstrapStatus,
   BootstrapPhaseId,
+  StationIdentity,
 } from '@tx5dr/contracts';
 import { sanitizeCallsignInput, sanitizeGridInput } from '@tx5dr/contracts';
 
@@ -2214,6 +2216,11 @@ export const api = {
   },
 
   // ========== 电台站基础信息 ==========
+
+  /** Public build identity of the connected station (no authentication). */
+  async getStationIdentity(apiBase?: string): Promise<StationIdentity> {
+    return StationIdentitySchema.parse(await apiRequest<unknown>('/station/identity', undefined, apiBase));
+  },
 
   async getStationInfo(apiBase?: string): Promise<StationInfoResponse> {
     return apiRequest<StationInfoResponse>('/station/info', undefined, apiBase);

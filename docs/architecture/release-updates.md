@@ -53,6 +53,12 @@ compatibility of Host data or third-party plugin data.
 | Android Runtime | Native shell; Server consumes its read-only state projection | Trusted local WebView can open native updates; LAN browsers cannot install |
 | Docker | Server preference projects the chosen target | Operator recreates container using image/digest and preserved volume; no Docker socket service |
 
+A desktop window showing a remote station is that station's own UI. It is not
+given the desktop updater bridge, so its update panel shows the remote station's
+own update owner (Linux Server, Docker or Android), and installing it requires
+the station's administrator rights there. The desktop shell updates itself through
+its own updater, independently of any remote station's version.
+
 Packaged identity selects the distribution path. A Linux Server package running
 inside a container remains a Linux Server installation; `/.dockerenv` does not
 override that identity. Unpackaged execution retains environment/path detection.

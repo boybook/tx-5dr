@@ -89,6 +89,23 @@ describe('AuthManager remote access migration', () => {
     await expect(manager.initialize()).rejects.toThrow('Unable to recover JSON file');
   });
 
+  it('notifies remote access listeners only after a saved change', async () => {
+    const manager = AuthManager.getInstance();
+    await manager.initialize();
+    const seen: string[] = [];
+    const unsubscribe = manager.onRemoteAccessChanged(() => seen.push(manager.getRemoteAccessConfig().preset));
+
+    await expect(manager.updateRemoteAccessConfig({ preset: 'public', allowedOrigins: [] })).rejects.toBeTruthy();
+    expect(seen).toEqual([]);
+
+    await manager.updateRemoteAccessConfig({ preset: 'lan' });
+    expect(seen).toEqual(['lan']);
+
+    unsubscribe();
+    await manager.updateRemoteAccessConfig({ preset: 'public', allowedOrigins: ['http://radio.example.com'] });
+    expect(seen).toEqual(['lan']);
+  });
+
   it('requires an explicit origin for managed public deployment and accepts HTTP', async () => {
     const manager = AuthManager.getInstance();
     await manager.initialize();

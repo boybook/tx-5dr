@@ -77,6 +77,7 @@ export default defineConfig({
         pluginPage: resolve(__dirname, 'plugin-page.html'),
         spectrum: resolve(__dirname, 'spectrum.html'),
         about: resolve(__dirname, 'about.html'),
+        stationManager: resolve(__dirname, 'station-manager.html'),
       },
     },
   },

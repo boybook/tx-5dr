@@ -11,6 +11,8 @@ interface AuthLoginFormProps {
   initialMethod?: AuthLoginMethod;
   compact?: boolean;
   autoFocus?: boolean;
+  /** Field style; the full-screen login page uses the filled `flat` style. */
+  inputVariant?: 'bordered' | 'flat';
   onSuccess?: () => void;
 }
 
@@ -18,6 +20,7 @@ export function AuthLoginForm({
   initialMethod = 'token',
   compact = false,
   autoFocus = false,
+  inputVariant = 'bordered',
   onSuccess,
 }: AuthLoginFormProps) {
   const { t } = useTranslation();
@@ -104,7 +107,7 @@ export function AuthLoginForm({
           isDisabled={state.loginLoading}
           autoFocus={autoFocus}
           startContent={<FontAwesomeIcon icon={faKey} className="text-default-400" />}
-          variant="bordered"
+          variant={inputVariant}
         />
       ) : (
         <>
@@ -120,7 +123,7 @@ export function AuthLoginForm({
             isDisabled={state.loginLoading}
             autoFocus={autoFocus}
             startContent={<FontAwesomeIcon icon={faUser} className="text-default-400" />}
-            variant="bordered"
+            variant={inputVariant}
           />
           <Input
             size={inputSize}
@@ -135,7 +138,7 @@ export function AuthLoginForm({
             onKeyDown={handlePasswordKeyDown}
             isDisabled={state.loginLoading}
             startContent={<FontAwesomeIcon icon={faLock} className="text-default-400" />}
-            variant="bordered"
+            variant={inputVariant}
           />
         </>
       )}

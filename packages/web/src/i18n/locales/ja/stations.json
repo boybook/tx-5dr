@@ -1,0 +1,104 @@
+{
+  "title": "局",
+  "subtitle": "開く局を選んでください。",
+  "embeddedLabel": "このコンピュータ",
+  "embeddedDescription": "デスクトップクライアントと一緒に動作する局",
+  "remoteSection": "リモート局",
+  "status": {
+    "idle": "未起動",
+    "starting": "起動中",
+    "ready": "実行中",
+    "failed": "起動失敗"
+  },
+  "badge": {
+    "open": "表示中",
+    "lastUsed": "最近使用",
+    "pinned": "証明書を固定済み"
+  },
+  "actions": {
+    "open": "開く",
+    "focus": "ウィンドウへ移動",
+    "edit": "編集",
+    "remove": "削除",
+    "add": "リモート局を追加",
+    "save": "保存",
+    "cancel": "キャンセル",
+    "test": "接続テスト",
+    "retry": "再試行",
+    "openEmbedded": "このコンピュータを開く",
+    "manage": "局を管理",
+    "trustAndConnect": "証明書を信頼して接続",
+    "trustNewAndConnect": "新しい証明書を信頼して接続",
+    "more": "その他の操作"
+  },
+  "empty": {
+    "title": "リモート局はまだありません",
+    "description": "ネットワークやインターネット上の TX-5DR 局を追加すると、ここやトレイメニューからいつでも開けます。"
+  },
+  "editor": {
+    "addTitle": "リモート局を追加",
+    "editTitle": "局を編集",
+    "label": "名前",
+    "labelPlaceholder": "例: 自宅の局",
+    "url": "アドレス",
+    "urlPlaceholder": "192.168.1.10 または https://station.example:8443",
+    "urlDescription": "ホスト名または IP のみの場合は http と 8076 番ポートを使います。",
+    "trust": "この証明書を信頼する"
+  },
+  "probe": {
+    "testing": "接続をテストしています…",
+    "okTitle": "TX-5DR 局が見つかりました",
+    "okDescription": "バージョン {{version}}。初回接続時は局の画面でサインインしてください。"
+  },
+  "remove": {
+    "title": "局を削除",
+    "body": "「{{label}}」を削除しますか？このコンピュータに保存されたサインイン情報も削除されます。",
+    "confirm": "削除"
+  },
+  "connect": {
+    "title": "接続しています",
+    "stepProbe": "局を確認",
+    "stepGateway": "ローカル接続を準備",
+    "stepLoad": "局の画面を読み込み",
+    "portReassigned": "ローカルポートが使用中だったため新しいポートを割り当てました。再度サインインしてください。",
+    "failedTitle": "局に接続できません"
+  },
+  "cert": {
+    "fingerprint": "SHA-256 フィンガープリント",
+    "subject": "サブジェクト",
+    "validTo": "有効期限",
+    "previous": "以前信頼したフィンガープリント",
+    "untrustedTitle": "局の証明書を確認",
+    "untrustedBody": "この局はシステムが信頼していない証明書（自己署名証明書など）を使っています。局に表示されているフィンガープリントと照合してから信頼してください。今後証明書が変わった場合は接続がブロックされます。",
+    "changedTitle": "局の証明書が変更されました",
+    "changedBody": "局が提示した証明書が以前信頼したものと異なるため、接続をブロックしました。局が証明書を更新したことが確かな場合は、新しいフィンガープリントを確認して再度信頼してください。そうでない場合は、接続が傍受されている可能性があります。",
+    "changedConfirm": "新しいフィンガープリントを確認し、局が証明書を更新したことを確認しました"
+  },
+  "errors": {
+    "unreachable": "このアドレスに接続できません（{{code}}）。局が起動していること、アドレスとポートが正しいこと、ネットワークに到達できることを確認してください。",
+    "notStation": "このアドレスは TX-5DR 局の識別情報を返しませんでした。TX-5DR ではないか、局のバージョンが古い可能性があります。先に局を更新してください。",
+    "bridgeTooOld": "この局には新しいバージョンのデスクトップクライアントが必要です（ブリッジバージョン {{required}}）。先に TX-5DR デスクトップクライアントを更新してください。",
+    "redirect": "局がリクエストを {{location}} にリダイレクトしました。このアドレスを直接使用してください。",
+    "gateway": "ローカル接続を開始できませんでした（{{code}}）。",
+    "load": "局の画面を読み込めませんでした（{{code}}）。",
+    "invalidUrl": "アドレスが無効です。ホスト名または IP を入力してください（ポートと http/https は省略可能）。",
+    "unknown": "操作に失敗しました: {{message}}"
+  },
+  "meta": {
+    "version": "バージョン {{version}}",
+    "neverConnected": "未接続"
+  },
+  "discovered": {
+    "title": "ネットワーク上の局",
+    "description": "ローカルネットワークで通知している局です。追加すると開けます。",
+    "add": "追加"
+  },
+  "tag": {
+    "embedded": "このコンピュータ",
+    "remote": "リモート局",
+    "connection": "接続",
+    "address": "アドレス",
+    "version": "バージョン",
+    "manage": "局を管理"
+  }
+}

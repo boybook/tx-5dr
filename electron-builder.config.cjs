@@ -51,7 +51,7 @@ module.exports = {
     'package.json',
     'packages/**/package.json',
     'packages/**/dist/**',
-    'packages/client-tools/src/proxy.js',
+    'packages/client-tools/src/*.js',
     'packages/electron-main/assets/**',
     'node_modules/**',
     '!node_modules/.cache/**',
@@ -81,6 +81,13 @@ module.exports = {
     hardenedRuntime: true,
     entitlements: 'build/entitlements.mac.plist',
     entitlementsInherit: 'build/entitlements.mac.plist',
+    // macOS asks for Local Network permission before an app may use multicast DNS.
+    // The desktop client browses for stations and the embedded server announces
+    // itself as `_tx5dr._tcp`; without these keys both are silently blocked.
+    extendInfo: {
+      NSLocalNetworkUsageDescription: 'TX-5DR finds TX-5DR stations on your local network and lets other computers find this station.',
+      NSBonjourServices: ['_tx5dr._tcp'],
+    },
     identity: sanitizeMacIdentity(process.env.APPLE_IDENTITY),
     notarize: Boolean(
       process.env.APPLE_ID

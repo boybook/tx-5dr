@@ -92,6 +92,8 @@ export const ShortcutSettings = forwardRef<ShortcutSettingsRef, ShortcutSettings
   ({ onUnsavedChanges }, ref) => {
     const { t } = useTranslation('settings');
     const isElectron = Boolean(window.electronAPI?.shortcuts);
+    // A remote station window reads the shell's global shortcuts but cannot change them.
+    const isReadOnly = isElectron && typeof window.electronAPI?.shortcuts?.setConfig !== 'function';
     const [draftConfig, setDraftConfig] = useState<ShortcutConfig>(() => getShortcutConfig());
     const [originalConfig, setOriginalConfig] = useState<ShortcutConfig>(() => getShortcutConfig());
     const [draftToggles, setDraftToggles] = useState<ShortcutToggles>(() => getShortcutToggles());
@@ -155,9 +157,11 @@ export const ShortcutSettings = forwardRef<ShortcutSettingsRef, ShortcutSettings
       try {
         const normalized = normalizeShortcutConfig(draftConfig);
         const normalizedToggles = normalizeShortcutToggles(draftToggles);
-        if (isElectron && window.electronAPI?.shortcuts) {
-          await window.electronAPI.shortcuts.setToggles(normalizedToggles);
-          const status = await window.electronAPI.shortcuts.setConfig(normalized);
+        const electronShortcuts = window.electronAPI?.shortcuts;
+        if (isReadOnly) return;
+        if (isElectron && electronShortcuts?.setToggles && electronShortcuts.setConfig) {
+          await electronShortcuts.setToggles(normalizedToggles);
+          const status = await electronShortcuts.setConfig(normalized);
           const nextConfig = normalizeShortcutConfig(status.config);
           setDraftConfig(nextConfig);
           setOriginalConfig(nextConfig);
@@ -193,7 +197,7 @@ export const ShortcutSettings = forwardRef<ShortcutSettingsRef, ShortcutSettings
       } finally {
         setIsSaving(false);
       }
-    }, [draftConfig, draftToggles, isElectron, t]);
+    }, [draftConfig, draftToggles, isElectron, isReadOnly, t]);
 
     useImperativeHandle(ref, () => ({
       hasUnsavedChanges,
@@ -214,7 +218,8 @@ export const ShortcutSettings = forwardRef<ShortcutSettingsRef, ShortcutSettings
         setRecordingActionId(null);
       };
 
-      if (electronShortcuts) {
+      if (electronShortcuts?.startRecording && electronShortcuts.stopRecording) {
+        const { startRecording, stopRecording } = electronShortcuts;
         const handleRecorded = (payload: { actionId: ShortcutActionId; binding: ShortcutConfig[ShortcutActionId] }) => {
           if (payload.actionId !== recordingActionId) return;
           commitBinding(payload.binding);
@@ -226,7 +231,7 @@ export const ShortcutSettings = forwardRef<ShortcutSettingsRef, ShortcutSettings
 
         const disposeRecorded = electronShortcuts.onRecorded(handleRecorded);
         const disposeCancelled = electronShortcuts.onRecordingCancelled(handleCancelled);
-        void electronShortcuts.startRecording(recordingActionId).catch((error) => {
+        void startRecording(recordingActionId).catch((error) => {
           logger.warn('Failed to start Electron shortcut recording', error);
           setErrorMessage(t('shortcuts.saveFailed'));
           setRecordingActionId(null);
@@ -235,7 +240,7 @@ export const ShortcutSettings = forwardRef<ShortcutSettingsRef, ShortcutSettings
         return () => {
           disposeRecorded();
           disposeCancelled();
-          void electronShortcuts.stopRecording().catch((error) => {
+          void stopRecording().catch((error) => {
             logger.warn('Failed to stop Electron shortcut recording', error);
           });
         };
@@ -306,7 +311,7 @@ export const ShortcutSettings = forwardRef<ShortcutSettingsRef, ShortcutSettings
       <SettingsPage title={t('shortcuts.title')} description={t('shortcuts.description')}>
         <div className="flex flex-col gap-2">
           <Alert color={isElectron ? 'primary' : 'warning'} variant="flat" className="text-xs">
-            {isElectron ? t('shortcuts.electronScope') : t('shortcuts.browserScope')}
+            {isReadOnly ? t('shortcuts.remoteReadOnly') : isElectron ? t('shortcuts.electronScope') : t('shortcuts.browserScope')}
           </Alert>
 
           {errorMessage && (
@@ -344,7 +349,7 @@ export const ShortcutSettings = forwardRef<ShortcutSettingsRef, ShortcutSettings
                 size="sm"
                 color="primary"
                 aria-label={t('shortcuts.masterEnabled')}
-                isDisabled={isSaving}
+                isDisabled={isSaving || isReadOnly}
                 isSelected={draftToggles.enabled}
                 onValueChange={(isSelected) => updateToggles({ enabled: isSelected })}
               />
@@ -358,7 +363,7 @@ export const ShortcutSettings = forwardRef<ShortcutSettingsRef, ShortcutSettings
                 size="sm"
                 color="primary"
                 aria-label={t('shortcuts.globalEnabled')}
-                isDisabled={isSaving || !isElectron || !draftToggles.enabled}
+                isDisabled={isSaving || isReadOnly || !isElectron || !draftToggles.enabled}
                 isSelected={draftToggles.globalEnabled}
                 onValueChange={(isSelected) => updateToggles({ globalEnabled: isSelected })}
               />
@@ -399,7 +404,7 @@ export const ShortcutSettings = forwardRef<ShortcutSettingsRef, ShortcutSettings
                           size="sm"
                           variant={isRecording ? 'solid' : 'flat'}
                           color={isRecording ? 'primary' : 'default'}
-                          isDisabled={isSaving}
+                          isDisabled={isSaving || isReadOnly}
                           onPress={() => handleRecordButtonPress(actionId)}
                           className="h-7 min-w-0 px-2 text-xs"
                           startContent={<FontAwesomeIcon icon={faKeyboard} className="text-xs" />}
@@ -410,7 +415,7 @@ export const ShortcutSettings = forwardRef<ShortcutSettingsRef, ShortcutSettings
                           size="sm"
                           variant="light"
                           isIconOnly
-                          isDisabled={isSaving}
+                          isDisabled={isSaving || isReadOnly}
                           onPress={() => handleClearAction(actionId)}
                           className="h-7 w-7 min-w-0"
                           aria-label={t('shortcuts.clear')}
@@ -431,7 +436,7 @@ export const ShortcutSettings = forwardRef<ShortcutSettingsRef, ShortcutSettings
             size="sm"
             variant="flat"
             onPress={handleResetDefaults}
-            isDisabled={isSaving}
+            isDisabled={isSaving || isReadOnly}
             startContent={<FontAwesomeIcon icon={faRotateLeft} />}
           >
             {t('shortcuts.restoreDefaults')}

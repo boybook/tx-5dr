@@ -1064,6 +1064,7 @@
     "description": "配置常用操作的本机快捷键。为避免误触，快捷键必须包含 Ctrl、Alt、Shift 或 Meta 中至少一个修饰键。",
     "browserScope": "浏览器端仅在当前页面获得焦点时生效；网页失焦后浏览器不会提供系统级全局快捷键。",
     "electronScope": "Electron 端可将快捷键注册为系统级全局快捷键；应用在后台时也会触发当前主窗口中的操作。",
+    "remoteReadOnly": "全局快捷键由桌面客户端统一管理，在这里只能查看。请在本机电台的窗口中修改。",
     "conflictError": "存在重复快捷键，请修改或清除冲突项后再保存。",
     "registrationFailed": "部分 Electron 全局快捷键注册失败，可能已被系统或其他应用占用：",
     "saveSuccess": "快捷键已保存",

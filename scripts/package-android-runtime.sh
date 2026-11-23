@@ -73,7 +73,7 @@ for pkg in builtin-plugins client-tools contracts core plugin-api rigctld-server
   [[ -d "$PROJECT_ROOT/packages/$pkg/dist" ]] && cp -R "$PROJECT_ROOT/packages/$pkg/dist" "$APP_ROOT/packages/$pkg/dist"
   if [[ "$pkg" == "client-tools" ]]; then
     mkdir -p "$APP_ROOT/packages/client-tools/src"
-    cp "$PROJECT_ROOT/packages/client-tools/src/proxy.js" "$APP_ROOT/packages/client-tools/src/proxy.js"
+    cp "$PROJECT_ROOT/packages/client-tools/src/"*.js "$APP_ROOT/packages/client-tools/src/"
   fi
 done
 cp -R "$PROJECT_ROOT/resources/models" "$APP_ROOT/resources/models"

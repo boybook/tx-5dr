@@ -16,9 +16,11 @@
     "@tx5dr/contracts": "workspace:*",
     "@tx5dr/core": "workspace:*",
     "@tx5dr/server": "workspace:*",
+    "bonjour-service": "^1.4.4",
     "electron-log": "^5.4.3",
     "electron-updater": "6.8.12",
-    "node-forge": "^1.4.2"
+    "node-forge": "^1.4.2",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@tx5dr/electron-preload": "workspace:*",

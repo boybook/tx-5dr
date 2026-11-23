@@ -7,6 +7,11 @@
   "scripts": {
     "build": "node -e \"require('node:fs').mkdirSync('dist',{recursive:true});require('node:fs').writeFileSync('dist/.keep','');console.log('client-tools: no build step')\"",
     "dev": "echo 'client-tools: skipped in dev mode (only needed for production/Electron)'",
-    "start": "node src/proxy.js"
+    "start": "node src/proxy.js",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "node-forge": "^1.4.2",
+    "vitest": "^4.1.12"
   }
 }

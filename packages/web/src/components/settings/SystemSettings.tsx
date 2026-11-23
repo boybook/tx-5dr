@@ -38,6 +38,8 @@ import { useWSEvent } from '../../hooks/useWSEvent';
 import { RemoteAccessSettingsCard } from './RemoteAccessSettingsCard';
 import { applyRemoteAccessPreset, normalizeRemoteAccessOrigins, validateRemoteAccessDraft } from './remoteAccessDraft';
 import { SettingsBlock, SettingsPage, SettingsRow, SettingsSection } from './SettingsLayout';
+import { hasDesktopCapability } from '../../utils/desktopBridge';
+import { openStationManager } from '../../utils/desktopStations';
 
 interface DecodeWindowState {
   decodeDepth: number;
@@ -2755,6 +2757,19 @@ export const SystemSettings = forwardRef<
                 <SelectItem key="quit">{t('system.closeBehaviorQuit')}</SelectItem>
               </Select>
             </SettingsRow>
+            {hasDesktopCapability('stations') && (
+              <SettingsRow
+                label={t('system.desktopStations')}
+                description={t('system.desktopStationsDesc')}
+              >
+                <Button
+                  variant="bordered"
+                  onPress={() => { void openStationManager(); }}
+                >
+                  {t('system.desktopStationsOpen')}
+                </Button>
+              </SettingsRow>
+            )}
           </SettingsSection>
         </div>
       )}

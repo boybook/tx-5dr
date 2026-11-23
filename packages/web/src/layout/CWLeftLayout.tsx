@@ -11,9 +11,9 @@ import { CWSpectrumFilterOverlay } from '../components/cw/CWSpectrumFilterOverla
 import { CWDecoderProvider } from '../hooks/useCWDecoder';
 import { RemoteAccessPopover } from '../components/system/RemoteAccessPopover';
 import { ClockDisplay } from '../components/system/ClockDisplay';
-import { StationInfoPopover } from '../components/station/StationInfoPopover';
+import { StationInfoPopover, useStationTagVisible } from '../components/station/StationInfoPopover';
 import { AppBrandAboutLink } from '../components/common/AppBrandAboutLink';
-import { useConnection, useStationInfo, useCurrentOperatorId } from '../store/radioStore';
+import { useConnection, useCurrentOperatorId } from '../store/radioStore';
 import { useHasMinRole } from '../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
 import { isElectron } from '../utils/config';
@@ -30,10 +30,9 @@ import { useMacTitlebarLeftInset } from '../hooks/useMacTitlebarInset';
 export const CWLeftLayout: React.FC = React.memo(() => {
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   const connection = useConnection();
-  const stationInfo = useStationInfo();
   const { currentOperatorId } = useCurrentOperatorId();
   const activeOperatorId = currentOperatorId || null;
-  const hasStationContent = !!(stationInfo?.callsign || stationInfo?.name || stationInfo?.qth?.grid || stationInfo?.description);
+  const hasStationContent = useStationTagVisible();
   const [isMobile, setIsMobile] = useState(false);
   const [clientCount, setClientCount] = useState(0);
 

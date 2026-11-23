@@ -164,6 +164,7 @@ function checkEntryImports() {
   const entries = [
     { file: join(ROOT, 'packages/web/src/main.tsx'), desc: 'main.tsx' },
     { file: join(ROOT, 'packages/web/src/spectrum-main.tsx'), desc: 'spectrum-main.tsx' },
+    { file: join(ROOT, 'packages/web/src/station-manager-main.tsx'), desc: 'station-manager-main.tsx' },
   ];
 
   const violations = [];
