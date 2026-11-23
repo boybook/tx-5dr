@@ -5811,6 +5811,9 @@ __metadata:
 "@tx5dr/client-tools@workspace:packages/client-tools":
   version: 0.0.0-use.local
   resolution: "@tx5dr/client-tools@workspace:packages/client-tools"
+  dependencies:
+    node-forge: "npm:^1.4.2"
+    vitest: "npm:^4.1.12"
   languageName: unknown
   linkType: soft
 
@@ -5859,6 +5862,7 @@ __metadata:
     node-forge: "npm:^1.4.2"
     typescript: "npm:^5.8.3"
     vitest: "npm:^4.1.12"
+    zod: "npm:^4.6.7"
   languageName: unknown
   linkType: soft
 

@@ -21,9 +21,9 @@ import { SlotPacksMessageDisplay } from '../components/radio/digital/SlotPacksMe
 import { RadioMetersPanel } from '../components/radio/control/RadioMetersPanel';
 import { RemoteAccessPopover } from '../components/system/RemoteAccessPopover';
 import { ClockDisplay } from '../components/system/ClockDisplay';
-import { StationInfoPopover } from '../components/station/StationInfoPopover';
+import { StationInfoPopover, useStationTagVisible } from '../components/station/StationInfoPopover';
 import { AppBrandAboutLink } from '../components/common/AppBrandAboutLink';
-import { useRadioActions, useConnection, useStationInfo } from '../store/radioStore';
+import { useRadioActions, useConnection } from '../store/radioStore';
 import { useHasMinRole } from '../store/authStore';
 import { UserRole } from '@tx5dr/contracts';
 import { isElectron } from '../utils/config';
@@ -35,8 +35,7 @@ export const LeftLayout: React.FC = React.memo(() => {
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   const { slotPacksDispatch, clearMyRelatedTimeline } = useRadioActions();
   const connection = useConnection();
-  const stationInfo = useStationInfo();
-  const hasStationContent = !!(stationInfo?.callsign || stationInfo?.name || stationInfo?.qth?.grid || stationInfo?.description);
+  const hasStationContent = useStationTagVisible();
   const [isMobile, setIsMobile] = useState(false);
   const [hoveredMessageFreq, setHoveredMessageFreq] = useState<number | null>(null);
   const [clientCount, setClientCount] = useState(0);
@@ -51,7 +50,7 @@ export const LeftLayout: React.FC = React.memo(() => {
   // 注意：SpectrumDisplay 弹出后会被卸载，只有 LeftLayout 始终存活，因此监听必须在此处
   useEffect(() => {
     if (!isElectron() || !isSpectrumPopedOut) return;
-    return window.electronAPI?.window?.onSpectrumWindowClosed(() => setIsSpectrumPopedOut(false));
+    return window.electronAPI?.window?.onSpectrumWindowClosed?.(() => setIsSpectrumPopedOut(false));
   }, [isSpectrumPopedOut]);
 
   // 监听屏幕宽度变化

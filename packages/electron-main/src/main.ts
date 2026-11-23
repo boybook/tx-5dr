@@ -1,4 +1,5 @@
 import { UpdatePreferencesSchema } from '@tx5dr/contracts';
+import { z } from 'zod';
 import { createUpdateBackup } from './updateBackup.js';
 import { app, BrowserWindow, ipcMain, shell, Tray, Menu, dialog, nativeTheme, powerSaveBlocker, session, globalShortcut, type WebContents } from 'electron';
 import log from 'electron-log/main';
@@ -9,8 +10,9 @@ import http from 'http';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import fs from 'node:fs';
-import type { DesktopHttpsStatus } from '@tx5dr/contracts';
+import type { DesktopCurrentStation, DesktopHttpsStatus, DesktopStationsState } from '@tx5dr/contracts';
 import { DesktopUpdateService, type DesktopUpdateStatus } from './desktopUpdate.js';
 import { BUILD_INFO } from './generated/buildInfo.js';
 import { createLogger } from './utils/logger.js';
@@ -58,6 +60,37 @@ import {
   detectWindowsVCRuntime,
 } from './vcRuntime.js';
 import { copyRendererFileBytes, sanitizeRendererSaveFileName } from './rendererFileSave.js';
+import {
+  buildBridgeArguments,
+  buildShellPagesArgument,
+  evaluateBridgeCall,
+  isBridgeConfigKey,
+  isValidBridgeConfigValue,
+  listBridgeConfigKeys,
+  type BridgeStationBinding,
+} from './bridgePolicy.js';
+import { resolveOpenableAppPath } from './appDirectoryPolicy.js';
+import {
+  EMBEDDED_STATION_ID,
+  allocateGatewayPort,
+  createRemoteStationProfile,
+  decodeStationSettings,
+  findRemoteStation,
+  gatewayOrigin,
+  normalizeStationUrl,
+  removeRemoteStation,
+  stationPartition,
+  upsertRemoteStation,
+  type RemoteStationProfile,
+  type StationSettings,
+} from './stationProfiles.js';
+import { probeStation, type CertificateSummary, type StationProbeResult } from './stationProbe.js';
+import { RemoteGatewayStartError, RemoteGatewaySupervisor } from './remoteGatewayProcess.js';
+import {
+  classifyStationNavigation,
+  isRemoteStationPermissionAllowed,
+  remoteStationWebPreferences,
+} from './stationSession.js';
 
 // 获取当前模块的目录(ESM中的__dirname替代方案)
 // const __filename = fileURLToPath(import.meta.url);
@@ -165,13 +198,12 @@ interface VoicePttShortcutCaptureState {
   lastKeyDownAt: number | null;
 }
 
-const voicePttShortcutCapture: VoicePttShortcutCaptureState = {
-  enabled: false,
-  preset: 'Backquote',
-  webContentsId: null,
-  keyDownActive: false,
-  lastKeyDownAt: null,
-};
+/**
+ * Voice PTT key capture per window. Keyboard input reaches only the focused
+ * window, so each station window keeps its own capture and PTT acts on the
+ * station the operator is looking at.
+ */
+const voicePttShortcutCaptures = new Map<number, VoicePttShortcutCaptureState>();
 
 type QuitSource = 'tray-menu' | 'window-close' | 'renderer' | 'before-quit' | 'will-quit' | 'unknown';
 
@@ -197,7 +229,7 @@ type StartupErrorKind =
   | 'child_crash'
   | 'child_start_failed'
   | 'unknown';
-type StartupErrorActionId = 'open-vc-runtime-download';
+type StartupErrorActionId = 'open-vc-runtime-download' | 'open-station-manager';
 
 interface StartupLogSourceSpec {
   id: StartupLogSourceId;
@@ -269,6 +301,8 @@ interface FsSaveFileOptions {
 
 interface CreateMainWindowOptions {
   startHealthCheck?: boolean;
+  /** Station the window shows; defaults to the active station. */
+  target?: StationWindowTarget;
 }
 
 interface StartupLogFileState {
@@ -309,6 +343,8 @@ interface ElectronSettings {
   remoteAccessPreset?: 'local' | 'lan' | 'public';
   shortcuts?: ShortcutConfig;
   shortcutToggles?: ShortcutToggles;
+  /** Remote station profiles and the active station; decoded by `stationProfiles.ts`. */
+  stations?: unknown;
 }
 
 const SHORTCUT_ACTION_IDS = [
@@ -676,23 +712,21 @@ function updateVoicePttShortcutCapture(
   webContentsId: number,
   payload: VoicePttShortcutConfigPayload,
 ): VoicePttShortcutCaptureState {
-  const enabled = payload.enabled === true;
-  if (!enabled) {
-    if (voicePttShortcutCapture.webContentsId === null || voicePttShortcutCapture.webContentsId === webContentsId) {
-      voicePttShortcutCapture.enabled = false;
-      voicePttShortcutCapture.webContentsId = null;
-      voicePttShortcutCapture.keyDownActive = false;
-      voicePttShortcutCapture.lastKeyDownAt = null;
-    }
-    return { ...voicePttShortcutCapture };
+  const preset = normalizeVoicePttShortcutPreset(payload.preset);
+  if (payload.enabled !== true) {
+    voicePttShortcutCaptures.delete(webContentsId);
+    return { enabled: false, preset, webContentsId: null, keyDownActive: false, lastKeyDownAt: null };
   }
 
-  voicePttShortcutCapture.enabled = true;
-  voicePttShortcutCapture.preset = normalizeVoicePttShortcutPreset(payload.preset);
-  voicePttShortcutCapture.webContentsId = webContentsId;
-  voicePttShortcutCapture.keyDownActive = false;
-  voicePttShortcutCapture.lastKeyDownAt = null;
-  return { ...voicePttShortcutCapture };
+  const capture: VoicePttShortcutCaptureState = {
+    enabled: true,
+    preset,
+    webContentsId,
+    keyDownActive: false,
+    lastKeyDownAt: null,
+  };
+  voicePttShortcutCaptures.set(webContentsId, capture);
+  return { ...capture };
 }
 
 function inputHasModifier(input: VoicePttKeyboardInput): boolean {
@@ -723,11 +757,8 @@ function handleVoicePttShortcutInput(
   input: VoicePttKeyboardInput,
   webContents: WebContents,
 ): boolean {
-  if (
-    !voicePttShortcutCapture.enabled
-    || voicePttShortcutCapture.webContentsId !== webContents.id
-    || input.code !== voicePttShortcutCapture.preset
-  ) {
+  const capture = voicePttShortcutCaptures.get(webContents.id);
+  if (!capture || !capture.enabled || input.code !== capture.preset) {
     return false;
   }
 
@@ -737,15 +768,15 @@ function handleVoicePttShortcutInput(
 
   // Do not start PTT with modifiers, but always allow the matching keyUp to
   // release the debounce guard if the key was pressed before modifiers changed.
-  if (inputHasModifier(input) && !(input.type === 'keyUp' && voicePttShortcutCapture.keyDownActive)) {
+  if (inputHasModifier(input) && !(input.type === 'keyUp' && capture.keyDownActive)) {
     return false;
   }
 
   event.preventDefault();
 
   if (input.type === 'keyUp') {
-    voicePttShortcutCapture.keyDownActive = false;
-    voicePttShortcutCapture.lastKeyDownAt = null;
+    capture.keyDownActive = false;
+    capture.lastKeyDownAt = null;
     sendVoicePttShortcutCommand(webContents, input, 'keyup');
     return true;
   }
@@ -755,23 +786,23 @@ function handleVoicePttShortcutInput(
   }
 
   const now = Date.now();
-  if (voicePttShortcutCapture.keyDownActive) {
-    const elapsedMs = voicePttShortcutCapture.lastKeyDownAt === null
+  if (capture.keyDownActive) {
+    const elapsedMs = capture.lastKeyDownAt === null
       ? Number.POSITIVE_INFINITY
-      : now - voicePttShortcutCapture.lastKeyDownAt;
+      : now - capture.lastKeyDownAt;
 
     if (elapsedMs < VOICE_PTT_STALE_KEYDOWN_RECOVERY_MS) {
       return true;
     }
 
     logger.debug('Voice PTT shortcut keyUp was not observed; recovering debounce on fresh keyDown', {
-      preset: voicePttShortcutCapture.preset,
+      preset: capture.preset,
       elapsedMs,
     });
   }
 
-  voicePttShortcutCapture.keyDownActive = true;
-  voicePttShortcutCapture.lastKeyDownAt = now;
+  capture.keyDownActive = true;
+  capture.lastKeyDownAt = now;
   sendVoicePttShortcutCommand(webContents, input, 'keydown');
   return true;
 }
@@ -868,11 +899,13 @@ function applyShortcutSettings(
 
     try {
       const ok = globalShortcut.register(accelerator, () => {
-        if (!mainWindowInstance || mainWindowInstance.isDestroyed()) {
-          logger.warn('shortcut command ignored because main window is unavailable', { actionId, accelerator });
+        // System-wide shortcuts act on the station window the operator used last.
+        const targetWindow = getShortcutTargetWindow();
+        if (!targetWindow) {
+          logger.warn('shortcut command ignored because no station window is available', { actionId, accelerator });
           return;
         }
-        mainWindowInstance.webContents.send('shortcut:command', { actionId, accelerator, source: 'electron' });
+        targetWindow.webContents.send('shortcut:command', { actionId, accelerator, source: 'electron' });
       });
 
       if (ok) {
@@ -1731,7 +1764,7 @@ function nodePath() {
   return path.join(res, 'bin', triplet(), exe);
 }
 
-async function ensureWindowsVCRuntimeInstalled(): Promise<boolean> {
+async function ensureWindowsVCRuntimeInstalled(options: { present?: boolean } = {}): Promise<boolean> {
   if (process.platform !== 'win32') {
     return true;
   }
@@ -1758,7 +1791,9 @@ async function ensureWindowsVCRuntimeInstalled(): Promise<boolean> {
   }
 
   const dialogMsgs = isOutdated ? msgs.vcRuntimeOutdated : msgs.vcRuntimeMissing;
-  await createMainWindowOnly({ startHealthCheck: false });
+  if (options.present !== false) {
+    await createMainWindowOnly({ startHealthCheck: false, target: EMBEDDED_TARGET });
+  }
   showStartupError('vc_runtime', {
     detail: `${dialogMsgs.message}\n${dialogMsgs.detail}`,
     actions: ['open-vc-runtime-download'],
@@ -1967,9 +2002,12 @@ function showStartupError(kind: StartupErrorKind, options: StartupErrorOptions =
     crashedProcessName = options.processName;
   }
 
+  embeddedRuntimeStatus = 'failed';
   const msgs = getMessages(app.getLocale()).startupErrors;
   const template = msgs[kind];
-  const actions = (options.actions ?? []).map((id): StartupErrorAction => ({
+  // An embedded startup failure must never trap the user: a remote station stays reachable.
+  const actionIds = [...new Set<StartupErrorActionId>([...(options.actions ?? []), 'open-station-manager'])];
+  const actions = actionIds.map((id): StartupErrorAction => ({
     id,
     label: msgs.actions[id],
     style: 'primary',
@@ -1998,8 +2036,9 @@ function showStartupError(kind: StartupErrorKind, options: StartupErrorOptions =
   });
 
   broadcastStartupLogPayload(createStartupLogsPayload(false, []));
+  broadcastStationState();
 
-  if (!hasLoadingErrorSurface()) {
+  if (!hasLoadingErrorSurface() && remoteStationWindows.size === 0) {
     dialog.showErrorBox(
       startupErrorState.title,
       `${startupErrorState.message}\n\n${startupErrorState.detail ?? ''}`,
@@ -2052,6 +2091,12 @@ function wireChildProcess(name: string, child: import('node:child_process').Chil
         ? `\n\nRecent stderr:\n${recentStderr.join('\n')}`
         : '';
       const detail = `${name} process ${reason}\n\n${buildLogPathsHint(name)}${stderrHint}`;
+      if (mainAppReadyForWindow && !aliveWindow(mainWindowInstance) && remoteStationWindows.size > 0) {
+        embeddedRuntimeStatus = 'failed';
+        broadcastStationState();
+        logger.error(`embedded ${detail}`);
+        return;
+      }
       if (!mainAppReadyForWindow) {
         showStartupError('child_crash', {
           processName: name,
@@ -2354,6 +2399,8 @@ function buildContextMenu(includQuit: boolean): Menu {
     { label: msgs.menu.logViewer, click: () => openLogInTerminal() },
     { type: 'separator' },
     { label: msgs.menu.openInBrowser, click: () => openInBrowser() },
+    { type: 'separator' },
+    ...buildStationMenuItems(),
   ];
 
   if (includQuit) {
@@ -2413,12 +2460,13 @@ function createDockMenu() {
 /**
  * 打开/聚焦"关于"窗口（单例）
  */
-async function openAboutWindow(): Promise<void> {
+async function openAboutWindow(target: StationWindowTarget = getActiveStationTarget()): Promise<void> {
   if (aboutWindow && !aboutWindow.isDestroyed()) {
     if (aboutWindow.isMinimized()) aboutWindow.restore();
     aboutWindow.focus();
     return;
   }
+  if (target.kind === 'remote') configureRemoteStationSession(target);
 
   try {
     aboutWindow = new BrowserWindow({
@@ -2436,23 +2484,15 @@ async function openAboutWindow(): Promise<void> {
         symbolColor: '#000000',
       } : false,
       frame: process.platform !== 'darwin',
-      webPreferences: {
-        contextIsolation: true,
-        nodeIntegration: false,
-        webSecurity: false,
-        allowRunningInsecureContent: true,
-        backgroundThrottling: false,
-        preload: app.isPackaged
-          ? join(process.resourcesPath, 'app', 'packages', 'electron-preload', 'dist', 'preload.js')
-          : join(__dirname, '../../electron-preload/dist/preload.js'),
-      },
+      webPreferences: stationWebPreferences(target),
     });
+    attachStationWindowGuards(aboutWindow);
 
     if (process.platform === 'win32' || process.platform === 'linux') {
       aboutWindow.setMenuBarVisibility(false);
     }
 
-    const aboutUrl = `${getWebUrl()}/about.html`;
+    const aboutUrl = `${stationOriginOf(target)}/about.html`;
     logger.info(`opening about window at ${aboutUrl}`);
     await aboutWindow.loadURL(aboutUrl);
 
@@ -2482,6 +2522,8 @@ function createApplicationMenu() {
       label: app.name,
       submenu: [
         { label: msgs.menu.about, click: () => { void openAboutWindow(); } },
+        { type: 'separator' },
+        ...buildStationMenuItems(),
         { type: 'separator' },
         { role: 'services' },
         { type: 'separator' },
@@ -2519,6 +2561,29 @@ function getWebUrl(): string {
   return `http://127.0.0.1:${selectedWebPort || DEFAULT_WEB_HTTP_PORT}`;
 }
 
+function getPreloadPath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'app', 'packages', 'electron-preload', 'dist', 'preload.js')
+    : join(__dirname, '../../electron-preload/dist/preload.js');
+}
+
+/**
+ * Web preferences for windows showing the embedded station. The preload learns
+ * the granted bridge capabilities from the command-line switches; the main
+ * process still enforces them per IPC call.
+ */
+function embeddedStationWebPreferences(): Electron.WebPreferences {
+  return {
+    contextIsolation: true,
+    nodeIntegration: false,
+    webSecurity: false,
+    allowRunningInsecureContent: true,
+    backgroundThrottling: false,
+    preload: getPreloadPath(),
+    additionalArguments: buildBridgeArguments('embedded', getShellPageUrls()),
+  };
+}
+
 function getLoadingPagePath(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'app', 'packages', 'electron-main', 'assets', 'loading.html')
@@ -2548,16 +2613,17 @@ function closeMainWindowToBackground(windowInstance: BrowserWindow, reason: stri
  */
 async function createMainWindowOnly(options: CreateMainWindowOptions = {}): Promise<BrowserWindow> {
   configureNotificationPermissionHandlers();
+  const target = options.target ?? getActiveStationTarget();
+  if (target.kind === 'remote') configureRemoteStationSession(target);
 
-  // 检查主窗口是否已存在且有效
-  if (mainWindowInstance && !mainWindowInstance.isDestroyed()) {
-    mainWindowInstance.show();
-    mainWindowInstance.focus();
-    return mainWindowInstance;
+  // Each station has at most one station window; reuse it when it is still open.
+  const existingWindow = getStationWindow(stationIdOf(target));
+  if (existingWindow) {
+    existingWindow.show();
+    existingWindow.focus();
+    return existingWindow;
   }
-
-  // 清理已销毁的主窗口引用
-  if (mainWindowInstance) {
+  if (target.kind === 'embedded') {
     mainWindowInstance = null;
   }
 
@@ -2574,25 +2640,31 @@ async function createMainWindowOnly(options: CreateMainWindowOptions = {}): Prom
       symbolColor: nativeTheme.shouldUseDarkColors ? '#ffffff' : '#000000'
     } : false,
     frame: process.platform !== 'darwin',
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      webSecurity: false,
-      allowRunningInsecureContent: true,
-      backgroundThrottling: false,
-      preload: app.isPackaged
-        ? join(process.resourcesPath, 'app', 'packages', 'electron-preload', 'dist', 'preload.js')
-        : join(__dirname, '../../electron-preload/dist/preload.js'),
-    },
+    webPreferences: stationWebPreferences(target),
   });
 
-  logger.info('main window created');
-  mainWindowInstance = mainWindow;
+  logger.info('station window created', { station: stationIdOf(target) });
+  const mainWindowWebContentsId = mainWindow.webContents.id;
+  if (target.kind === 'embedded') mainWindowInstance = mainWindow;
+  else remoteStationWindows.set(target.profile.id, mainWindow);
+  lastFocusedStationWindow = mainWindow;
+  mainWindow.on('focus', () => noteStationWindowFocused(mainWindow, stationIdOf(target)));
+  attachStationWindowGuards(mainWindow);
 
   // Windows/Linux: 关闭窗口时询问用户行为；后台模式销毁 renderer，避免隐藏窗口继续占用内存。
   if (process.platform !== 'darwin') {
     mainWindow.on('close', (event) => {
       if (isQuitting) return;
+
+      // While another station window stays open, closing one station only closes
+      // that window; the embedded server keeps running as in background mode.
+      if (hasOtherStationWindow(mainWindow)) {
+        if (target.kind === 'embedded') {
+          event.preventDefault();
+          closeMainWindowToBackground(mainWindow, 'other-station-open');
+        }
+        return;
+      }
 
       const settings = loadElectronSettings();
 
@@ -2639,12 +2711,18 @@ async function createMainWindowOnly(options: CreateMainWindowOptions = {}): Prom
   }
 
   mainWindow.on('closed', () => {
-    logger.info('main window closed');
+    logger.info('station window closed', { station: stationIdOf(target) });
+    voicePttShortcutCaptures.delete(mainWindowWebContentsId);
+    if (lastFocusedStationWindow === mainWindow) lastFocusedStationWindow = null;
+    if (target.kind === 'remote') {
+      if (remoteStationWindows.get(target.profile.id) === mainWindow) remoteStationWindows.delete(target.profile.id);
+      refreshStationMenus();
+      broadcastStationState();
+      return;
+    }
+    if (mainWindowInstance !== mainWindow) return;
     mainWindowInstance = null;
-    voicePttShortcutCapture.enabled = false;
-    voicePttShortcutCapture.webContentsId = null;
-    voicePttShortcutCapture.keyDownActive = false;
-    voicePttShortcutCapture.lastKeyDownAt = null;
+    refreshStationMenus();
     if (serverCheckInterval) {
       clearInterval(serverCheckInterval);
       serverCheckInterval = null;
@@ -2667,6 +2745,11 @@ async function createMainWindowOnly(options: CreateMainWindowOptions = {}): Prom
         return;
       }
 
+      if (target.kind === 'remote') {
+        handleRemoteStationLoadFailure(mainWindow, target, errorCode, errorDescription, validatedURL);
+        return;
+      }
+
       logger.error(`page load failed: ${errorCode} - ${errorDescription} (${validatedURL})`);
       errorType = 'UNKNOWN';
       hasStartupError = true;
@@ -2678,6 +2761,22 @@ async function createMainWindowOnly(options: CreateMainWindowOptions = {}): Prom
       );
     },
   );
+
+  if (target.kind === 'remote') {
+    // The gateway answers 495/502/503 when the station is gone or its certificate
+    // changed; re-probe so the connect page shows the actual reason.
+    mainWindow.webContents.on('did-navigate', (_event, url, httpResponseCode) => {
+      if (![495, 502, 503].includes(httpResponseCode)) return;
+      const binding = remoteStationSessions.get(mainWindow.webContents.session);
+      if (!binding || !url.startsWith(binding.origin)) return;
+      logger.warn('remote station gateway reported an upstream failure', { station: target.profile.id, httpResponseCode });
+      const current = stationTargetById(target.profile.id);
+      if (current?.kind !== 'remote') return;
+      void loadStationManagerPage(mainWindow, { mode: 'connect', station: target.profile.id })
+        .then(() => connectRemoteStation(current, mainWindow))
+        .catch(error => logger.warn('failed to reconnect remote station', error));
+    });
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mainWindow.webContents.on('render-process-gone', (_event: any, details: any) => {
@@ -2729,8 +2828,8 @@ async function createMainWindowOnly(options: CreateMainWindowOptions = {}): Prom
     mainWindow.setMenuBarVisibility(false);
   }
 
-  // 定期检查服务器健康状态
-  if (options.startHealthCheck !== false) {
+  // 定期检查服务器健康状态（仅内嵌电台）
+  if (options.startHealthCheck !== false && target.kind === 'embedded') {
     serverCheckInterval = setInterval(async () => {
       const isHealthy = await checkServerHealth();
       if (!isHealthy) {
@@ -2743,8 +2842,12 @@ async function createMainWindowOnly(options: CreateMainWindowOptions = {}): Prom
     }, 10000);
   }
 
-  // 先加载本地 loading 页面，避免白屏；主前端在服务就绪后单独切换。
-  await mainWindow.loadFile(getLoadingPagePath());
+  // 先加载本地页面，避免白屏：内嵌电台显示启动进度，远程电台显示连接状态。
+  if (target.kind === 'remote') {
+    await loadStationManagerPage(mainWindow, { mode: 'connect', station: target.profile.id });
+  } else {
+    await mainWindow.loadFile(getLoadingPagePath());
+  }
 
   // 显示窗口（此时展示 loading 动画）
   mainWindow.show();
@@ -2765,13 +2868,14 @@ async function createMainWindowOnly(options: CreateMainWindowOptions = {}): Prom
  * 确保主窗口存在并可见，若已销毁则重新创建（不重启子进程）
  */
 async function ensureMainWindowVisible(): Promise<BrowserWindow> {
-  let windowInstance = mainWindowInstance && !mainWindowInstance.isDestroyed()
-    ? mainWindowInstance
-    : null;
+  let windowInstance = aliveWindow(lastFocusedStationWindow) ?? listStationWindows()[0] ?? null;
 
   if (!windowInstance) {
-    windowInstance = await createMainWindowOnly();
-    if (mainAppReadyForWindow) {
+    const target = getActiveStationTarget();
+    windowInstance = await createMainWindowOnly({ target });
+    if (target.kind === 'remote') {
+      void connectRemoteStation(target, windowInstance);
+    } else if (mainAppReadyForWindow) {
       await loadMainAppInWindow(windowInstance);
     }
   }
@@ -2876,6 +2980,12 @@ function openLogInTerminal() {
  * 在系统浏览器中打开 web 界面（附带认证 token）
  */
 async function openInBrowser() {
+  const active = getActiveStationTarget();
+  if (active.kind === 'remote') {
+    await shell.openExternal(active.profile.url);
+    return;
+  }
+  // The embedded station page; its browser entrypoint may use desktop HTTPS.
   const status = await getDesktopHttpsStatus().catch(() => null);
   const base = status?.browserAccessUrl || getWebUrl();
 
@@ -3092,6 +3202,8 @@ async function cleanupChildProcesses(isDevelopment: boolean): Promise<ChildShutd
   if (currentWebProcess) {
     tasks.push(killProcess(currentWebProcess, 'web', CHILD_SHUTDOWN_OPTIONS.web));
   }
+  await Promise.all([...remoteGateways.values()].map(gateway => gateway.stop()
+    .catch((error: unknown) => logger.warn('failed to stop remote gateway', error))));
 
   if (!isDevelopment) {
     const currentServerProcess = serverProcess;
@@ -3132,11 +3244,17 @@ async function cleanup(): Promise<ChildShutdownResult[]> {
   return childResults;
 }
 
-async function createWindow() {
-  logger.info('createWindow called');
+/**
+ * Starts the embedded station. With `present: false` it runs in the background
+ * while another station owns the main window: startup errors are recorded for
+ * the station manager instead of taking over the window.
+ */
+async function createWindow(options: { present?: boolean } = {}) {
+  const present = options.present !== false;
+  logger.info('createWindow called', { present });
 
   // 检查主窗口是否已存在且有效
-  if (mainWindowInstance && !mainWindowInstance.isDestroyed()) {
+  if (present && mainWindowInstance && !mainWindowInstance.isDestroyed()) {
     logger.info('main window already exists, reusing');
     mainWindowInstance.show();
     mainWindowInstance.focus();
@@ -3149,6 +3267,8 @@ async function createWindow() {
   }
 
   // 重置启动状态（支持重新启动场景）
+  embeddedRuntimeStatus = 'starting';
+  broadcastStationState();
   hasStartupError = false;
   errorType = '';
   startupErrorDialogShown = false;
@@ -3158,7 +3278,7 @@ async function createWindow() {
   const startupErrorMsgs = getMessages(app.getLocale()).startupErrors;
   logger.info(`isDevelopment: ${isDevelopment}`);
 
-  const startupWindow = await createMainWindowOnly();
+  const startupWindow = present ? await createMainWindowOnly({ target: EMBEDDED_TARGET }) : null;
   if (FORCE_STARTUP_ERROR_CARD_TEST) {
     logger.warn('forcing VC runtime startup error card for loading page test');
     showStartupError('vc_runtime', {
@@ -3500,13 +3620,11 @@ Failed to load: ${failedModules.map(m => m.name).join(', ')}`
 
   logger.info('services ready, loading main app');
   mainAppReadyForWindow = true;
+  embeddedRuntimeStatus = 'ready';
+  broadcastStationState();
 
-  const currentMainWindow = mainWindowInstance as BrowserWindow | null;
-  const targetWindow = currentMainWindow && !currentMainWindow.isDestroyed()
-    ? currentMainWindow
-    : startupWindow && !startupWindow.isDestroyed()
-      ? startupWindow
-      : null;
+  // Load the app into the embedded station window if one is open.
+  const targetWindow = aliveWindow(mainWindowInstance as BrowserWindow | null);
 
   if (targetWindow) {
     await loadMainAppInWindow(targetWindow);
@@ -3515,6 +3633,640 @@ Failed to load: ${failedModules.map(m => m.name).join(', ')}`
 
   logger.info('services ready but main window is closed; staying in background');
   return undefined;
+}
+
+// ===== Stations: embedded and remote =====
+//
+// Every station has at most one station window and they can be open side by
+// side. The embedded station lives in the default session (`mainWindowInstance`);
+// each remote station renders through its own loopback gateway in its own
+// partition. A remote gateway runs while any window of that station is open.
+
+type RemoteStationTarget = { kind: 'remote'; profile: RemoteStationProfile; origin: string; partition: string };
+type StationWindowTarget = { kind: 'embedded' } | RemoteStationTarget;
+
+const EMBEDDED_TARGET: StationWindowTarget = { kind: 'embedded' };
+
+type EmbeddedRuntimeStatus = 'idle' | 'starting' | 'ready' | 'failed';
+let embeddedRuntimeStatus: EmbeddedRuntimeStatus = 'idle';
+
+type StationConnectErrorKind =
+  | 'unreachable'
+  | 'not-a-station'
+  | 'bridge-too-old'
+  | 'redirect'
+  | 'gateway'
+  | 'load'
+  | 'certificate-changed';
+
+interface StationConnectState {
+  stationId: string;
+  phase: 'probing' | 'gateway' | 'loading' | 'connected' | 'needs-trust' | 'failed';
+  error?: { kind: StationConnectErrorKind; code?: string; location?: string; required?: number };
+  certificate?: CertificateSummary;
+  changed?: { expected: string; actual: string | null };
+  notice?: 'portReassigned';
+}
+
+const remoteStationWindows = new Map<string, BrowserWindow>();
+const stationConnectStates = new Map<string, StationConnectState>();
+const stationConnectSequences = new Map<string, number>();
+const remoteGateways = new Map<string, RemoteGatewaySupervisor>();
+const remoteStationSessions = new Map<Electron.Session, { profileId: string; origin: string }>();
+const configuredRemoteSessions = new WeakSet<Electron.Session>();
+/** Station window the operator used last; target of system-wide shortcuts. */
+let lastFocusedStationWindow: BrowserWindow | null = null;
+let stationManagerWindow: BrowserWindow | null = null;
+const stationStateSubscribers = new Map<number, WebContents>();
+
+/**
+ * The station manager is a page of the shell's own Web build: the packaged
+ * `station-manager.html`, or the Vite dev server page in development. It never
+ * comes from a station.
+ */
+function getStationManagerPageUrl(): string {
+  if (isDevelopmentRuntime()) return `http://localhost:${getDevWebPort()}/station-manager.html`;
+  return pathToFileURL(join(resourcesRoot(), 'app', 'packages', 'web', 'dist', 'station-manager.html')).href;
+}
+
+function loadStationManagerPage(windowInstance: BrowserWindow, query: Record<string, string>): Promise<void> {
+  const url = getStationManagerPageUrl();
+  if (url.startsWith('file:')) return windowInstance.loadFile(fileURLToPath(url), { query });
+  return windowInstance.loadURL(`${url}?${new URLSearchParams(query).toString()}`);
+}
+
+function loadStationSettings(): StationSettings {
+  return decodeStationSettings(loadElectronSettings().stations);
+}
+
+function saveStationSettings(next: StationSettings): void {
+  if (!saveElectronSettings({ ...loadElectronSettings(), stations: next })) {
+    throw new Error('station_settings_write_failed');
+  }
+  refreshStationMenus();
+  broadcastStationState();
+}
+
+function remoteTarget(profile: RemoteStationProfile): RemoteStationTarget {
+  return { kind: 'remote', profile, origin: gatewayOrigin(profile), partition: stationPartition(profile) };
+}
+
+function stationTargetById(stationId: string): StationWindowTarget | null {
+  if (stationId === EMBEDDED_STATION_ID) return EMBEDDED_TARGET;
+  const profile = findRemoteStation(loadStationSettings(), stationId);
+  return profile ? remoteTarget(profile) : null;
+}
+
+/** Last station the operator opened or focused; opened first on the next launch. */
+function getActiveStationTarget(): StationWindowTarget {
+  return stationTargetById(loadStationSettings().activeStationId) ?? EMBEDDED_TARGET;
+}
+
+function stationIdOf(target: StationWindowTarget): string {
+  return target.kind === 'embedded' ? EMBEDDED_STATION_ID : target.profile.id;
+}
+
+function stationOriginOf(target: StationWindowTarget): string {
+  return target.kind === 'embedded' ? getWebUrl() : target.origin;
+}
+
+function aliveWindow(windowInstance: BrowserWindow | null | undefined): BrowserWindow | null {
+  return windowInstance && !windowInstance.isDestroyed() ? windowInstance : null;
+}
+
+function getStationWindow(stationId: string): BrowserWindow | null {
+  return stationId === EMBEDDED_STATION_ID
+    ? aliveWindow(mainWindowInstance)
+    : aliveWindow(remoteStationWindows.get(stationId));
+}
+
+function listStationWindows(): BrowserWindow[] {
+  return [aliveWindow(mainWindowInstance), ...[...remoteStationWindows.values()].map(aliveWindow)]
+    .filter((item): item is BrowserWindow => item !== null);
+}
+
+function hasOtherStationWindow(windowInstance: BrowserWindow): boolean {
+  return listStationWindows().some(item => item !== windowInstance);
+}
+
+function getShortcutTargetWindow(): BrowserWindow | null {
+  return aliveWindow(lastFocusedStationWindow) ?? listStationWindows()[0] ?? null;
+}
+
+function noteStationWindowFocused(windowInstance: BrowserWindow, stationId: string): void {
+  lastFocusedStationWindow = windowInstance;
+  const settings = loadStationSettings();
+  if (settings.activeStationId !== stationId && stationTargetById(stationId)) {
+    saveStationSettings({ ...settings, activeStationId: stationId });
+  }
+}
+
+/** Station owning an IPC sender, for windows it opens; refuses unknown sessions. */
+function requireSenderStation(event: Electron.IpcMainInvokeEvent): StationWindowTarget {
+  if (event.sender.session === session.defaultSession) return EMBEDDED_TARGET;
+  const binding = remoteStationSessions.get(event.sender.session);
+  const profile = binding ? findRemoteStation(loadStationSettings(), binding.profileId) : null;
+  if (!profile) throw new Error('station_not_found');
+  return remoteTarget(profile);
+}
+
+function stationWebPreferences(target: StationWindowTarget): Electron.WebPreferences {
+  if (target.kind === 'embedded') return embeddedStationWebPreferences();
+  return remoteStationWebPreferences({
+    preload: getPreloadPath(),
+    partition: target.partition,
+    bridgeArguments: buildBridgeArguments('remote', getShellPageUrls()),
+  });
+}
+
+async function stationPageUrl(target: StationWindowTarget, pathAndQuery: string): Promise<string> {
+  if (target.kind === 'embedded') return buildAuthenticatedRendererUrl(`${getWebUrl()}${pathAndQuery}`);
+  return `${target.origin}${pathAndQuery}`;
+}
+
+/** Binds a remote partition to its gateway origin and installs its permission policy once. */
+function configureRemoteStationSession(target: RemoteStationTarget): Electron.Session {
+  const stationSession = session.fromPartition(target.partition);
+  remoteStationSessions.set(stationSession, { profileId: target.profile.id, origin: target.origin });
+  if (!configuredRemoteSessions.has(stationSession)) {
+    configuredRemoteSessions.add(stationSession);
+    stationSession.setPermissionRequestHandler((contents, permission, callback, details) => {
+      const binding = remoteStationSessions.get(stationSession);
+      const mediaTypes = (details as { mediaTypes?: string[] }).mediaTypes ?? [];
+      const allowed = Boolean(binding) && isRemoteStationPermissionAllowed(
+        permission,
+        details.requestingUrl ?? contents.getURL(),
+        binding!.origin,
+        mediaTypes,
+      );
+      if (!allowed) logger.warn('remote station permission denied', { permission, mediaTypes });
+      callback(allowed);
+    });
+    stationSession.setPermissionCheckHandler((_contents, permission, requestingOrigin, details) => {
+      const binding = remoteStationSessions.get(stationSession);
+      const mediaType = (details as { mediaType?: string }).mediaType;
+      return Boolean(binding) && isRemoteStationPermissionAllowed(
+        permission,
+        requestingOrigin,
+        binding!.origin,
+        mediaType ? [mediaType] : [],
+      );
+    });
+  }
+  return stationSession;
+}
+
+function windowsInSession(stationSession: Electron.Session, except?: BrowserWindow): BrowserWindow[] {
+  return BrowserWindow.getAllWindows().filter(item =>
+    item !== except && !item.isDestroyed() && item.webContents.session === stationSession);
+}
+
+/** Stops a remote station's gateway once none of its windows remain. */
+function releaseRemoteStationIfUnused(stationSession: Electron.Session, closing: BrowserWindow): void {
+  const binding = remoteStationSessions.get(stationSession);
+  if (!binding || windowsInSession(stationSession, closing).length > 0) return;
+  stationConnectSequences.set(binding.profileId, (stationConnectSequences.get(binding.profileId) ?? 0) + 1);
+  stationConnectStates.delete(binding.profileId);
+  const gateway = remoteGateways.get(binding.profileId);
+  if (gateway) {
+    logger.info('stopping remote gateway; no windows remain', { station: binding.profileId });
+    void gateway.stop().catch(error => logger.warn('failed to stop remote gateway', error));
+  }
+  broadcastStationState();
+}
+
+/**
+ * Keeps a remote station window on its gateway origin: other http(s) links open
+ * in the system browser, popups and other schemes are refused. Closing the last
+ * window of the station releases its gateway.
+ */
+function attachStationWindowGuards(windowInstance: BrowserWindow): void {
+  const contents = windowInstance.webContents;
+  const stationSession = contents.session;
+  if (stationSession === session.defaultSession) return;
+  const stationOrigin = (): string | null => remoteStationSessions.get(stationSession)?.origin ?? null;
+
+  contents.on('will-navigate', (event, url) => {
+    const origin = stationOrigin();
+    const decision = origin ? classifyStationNavigation(url, origin) : 'deny';
+    if (decision === 'allow') return;
+    event.preventDefault();
+    if (decision === 'external') void shell.openExternal(url);
+    else logger.warn('remote station navigation blocked', { url: redactSensitiveUrl(url) });
+  });
+  contents.setWindowOpenHandler(({ url }) => {
+    const origin = stationOrigin();
+    if (origin && classifyStationNavigation(url, origin) === 'external') void shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  // 'closed' (not 'close'): a close can still be cancelled by the close-behavior prompt.
+  windowInstance.on('closed', () => releaseRemoteStationIfUnused(stationSession, windowInstance));
+}
+
+function buildStationState(): DesktopStationsState {
+  const settings = loadStationSettings();
+  const embeddedError = embeddedRuntimeStatus === 'failed' && startupErrorState
+    ? { title: startupErrorState.title, message: startupErrorState.message }
+    : null;
+  return {
+    activeStationId: settings.activeStationId,
+    openStationIds: [
+      ...(getStationWindow(EMBEDDED_STATION_ID) ? [EMBEDDED_STATION_ID] : []),
+      ...settings.profiles.filter(profile => getStationWindow(profile.id)).map(profile => profile.id),
+    ],
+    embedded: { id: EMBEDDED_STATION_ID, status: embeddedRuntimeStatus, error: embeddedError },
+    profiles: settings.profiles.map(profile => ({
+      id: profile.id,
+      label: profile.label,
+      url: profile.url,
+      pinnedFingerprint256: profile.tls?.fingerprint256 ?? null,
+      lastIdentity: profile.lastIdentity ?? null,
+    })),
+    connections: Object.fromEntries(stationConnectStates),
+    discovered: [],
+  };
+}
+
+function broadcastStationState(): void {
+  if (stationStateSubscribers.size === 0) return;
+  const state = buildStationState();
+  for (const [id, contents] of stationStateSubscribers) {
+    if (contents.isDestroyed()) {
+      stationStateSubscribers.delete(id);
+      continue;
+    }
+    contents.send('stations:state', state);
+  }
+}
+
+function setStationConnectState(next: StationConnectState): void {
+  stationConnectStates.set(next.stationId, next);
+  broadcastStationState();
+}
+
+function describeProbeFailure(result: StationProbeResult): StationConnectState['error'] {
+  switch (result.kind) {
+    case 'unreachable': return { kind: 'unreachable', code: result.code };
+    case 'not-a-station': return { kind: 'not-a-station', code: result.status === null ? undefined : String(result.status) };
+    case 'bridge-too-old': return { kind: 'bridge-too-old', required: result.required };
+    case 'redirect': return { kind: 'redirect', location: result.location };
+    default: return { kind: 'unreachable', code: result.kind };
+  }
+}
+
+function getRemoteGatewayEntryPath(): string {
+  if (app.isPackaged) {
+    return join(resourcesRoot(), 'app', 'packages', 'client-tools', 'src', 'remote-gateway.js');
+  }
+  return path.resolve(__dirname, '../../client-tools/src/remote-gateway.js');
+}
+
+function getRemoteGateway(stationId: string): RemoteGatewaySupervisor {
+  let gateway = remoteGateways.get(stationId);
+  if (!gateway) {
+    gateway = new RemoteGatewaySupervisor({
+      paths: {
+        readyFile: path.join(getAppLogsDir(), 'remote-gateways', `${stationId}.ready.json`),
+        logFile: path.join(getAppLogsDir(), 'remote-gateway.log'),
+      },
+      spawn: env => spawnRemoteGatewayChild(stationId, env),
+      stop: async (child) => {
+        await killProcess(child, 'remote-gateway', CHILD_SHUTDOWN_OPTIONS.web);
+      },
+    });
+    remoteGateways.set(stationId, gateway);
+  }
+  return gateway;
+}
+
+/** Remote gateways are not part of embedded startup, so their exits never raise embedded errors. */
+function spawnRemoteGatewayChild(stationId: string, env: Record<string, string>): import('node:child_process').ChildProcess {
+  const entry = getRemoteGatewayEntryPath();
+  logger.info(`[child:remote-gateway] starting station=${stationId} entry=${entry} port=${env.PORT}`);
+  const child = spawn(nodePath(), [entry], {
+    cwd: path.dirname(entry),
+    env: createChildEnv(env),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  child.stdout?.on('data', (data: Buffer) => {
+    const lines = data.toString().trimEnd();
+    if (lines) logger.debug(`[child:remote-gateway] ${lines}`);
+  });
+  child.stderr?.on('data', (data: Buffer) => {
+    const lines = data.toString().trimEnd();
+    if (lines) logger.warn(`[child:remote-gateway] ${lines}`);
+  });
+  child.on('error', error => logger.error('[child:remote-gateway] failed to start', error));
+  child.on('exit', (code, signal) => {
+    logger.info(`[child:remote-gateway] exited station=${stationId} pid=${child.pid ?? 'unknown'} code=${code ?? 'null'} signal=${signal ?? 'null'}`);
+    if (isQuitting || intentionalChildShutdowns.delete(child)) return;
+    handleRemoteGatewayLost(stationId, code === null ? `signal ${signal}` : `code ${code}`);
+  });
+  return child;
+}
+
+function handleRemoteGatewayLost(stationId: string, reason: string): void {
+  const state = stationConnectStates.get(stationId);
+  if (!state || state.phase !== 'connected') return;
+  logger.error('remote gateway exited unexpectedly', { station: stationId, reason });
+  setStationConnectState({ stationId, phase: 'failed', error: { kind: 'gateway', code: 'GATEWAY_EXITED' } });
+  showStationConnectPage(stationId);
+}
+
+function showStationConnectPage(stationId: string): void {
+  const windowInstance = getStationWindow(stationId);
+  if (!windowInstance || stationId === EMBEDDED_STATION_ID) return;
+  void loadStationManagerPage(windowInstance, { mode: 'connect', station: stationId })
+    .catch(error => logger.warn('failed to show station connect page', error));
+}
+
+function handleRemoteStationLoadFailure(
+  windowInstance: BrowserWindow,
+  target: RemoteStationTarget,
+  errorCode: number,
+  errorDescription: string,
+  validatedURL: string,
+): void {
+  // -3 is ERR_ABORTED: a newer navigation replaced this one.
+  if (errorCode === -3 || validatedURL.startsWith('file:')) return;
+  logger.error('remote station page load failed', { station: target.profile.id, errorCode, errorDescription });
+  if (getStationWindow(target.profile.id) !== windowInstance) return;
+  setStationConnectState({ stationId: target.profile.id, phase: 'failed', error: { kind: 'load', code: errorDescription || String(errorCode) } });
+  showStationConnectPage(target.profile.id);
+}
+
+function recordStationIdentity(profile: RemoteStationProfile, instanceId: string, hostVersion: string): RemoteStationProfile {
+  const next: RemoteStationProfile = { ...profile, lastIdentity: { instanceId, hostVersion, seenAt: new Date().toISOString() } };
+  const settings = loadStationSettings();
+  if (findRemoteStation(settings, profile.id)) saveStationSettings(upsertRemoteStation(settings, next));
+  return next;
+}
+
+/**
+ * Probes the station, starts its gateway and loads its UI into its window.
+ * A newer attempt for the same station or a closed window cancels the older one.
+ */
+async function connectRemoteStation(initialTarget: RemoteStationTarget, windowInstance: BrowserWindow): Promise<void> {
+  const stationId = initialTarget.profile.id;
+  const sequence = (stationConnectSequences.get(stationId) ?? 0) + 1;
+  stationConnectSequences.set(stationId, sequence);
+  const stale = () => stationConnectSequences.get(stationId) !== sequence || windowInstance.isDestroyed();
+  const update = (state: Omit<StationConnectState, 'stationId'>) => {
+    if (!stale()) setStationConnectState({ stationId, ...state });
+  };
+
+  let profile = initialTarget.profile;
+  update({ phase: 'probing' });
+  const probe = await probeStation(profile.url, { pinnedFingerprint256: profile.tls?.fingerprint256 ?? null });
+  if (stale()) return;
+  if (probe.kind === 'certificate-untrusted') {
+    update({ phase: 'needs-trust', certificate: probe.certificate });
+    return;
+  }
+  if (probe.kind === 'certificate-changed') {
+    update({ phase: 'failed', error: { kind: 'certificate-changed' }, changed: { expected: probe.expected, actual: probe.actual } });
+    return;
+  }
+  if (probe.kind !== 'ok') {
+    logger.warn('remote station probe failed', { station: stationId, result: probe.kind });
+    update({ phase: 'failed', error: describeProbeFailure(probe) });
+    return;
+  }
+  profile = recordStationIdentity(profile, probe.identity.instanceId, probe.identity.hostVersion);
+
+  update({ phase: 'gateway' });
+  const gateway = getRemoteGateway(stationId);
+  let notice: StationConnectState['notice'];
+  try {
+    await gateway.ensure(profile);
+  } catch (error) {
+    if (!(error instanceof RemoteGatewayStartError) || error.code !== 'EADDRINUSE') {
+      logger.error('remote gateway failed to start', error);
+      update({ phase: 'failed', error: { kind: 'gateway', code: (error as { code?: string }).code ?? 'GATEWAY_START_FAILED' } });
+      return;
+    }
+    // The fixed port is taken by another program: move to a free one. The page origin
+    // changes, so the station's sign-in on this computer has to be repeated.
+    const settings = loadStationSettings();
+    profile = { ...profile, gatewayPort: allocateGatewayPort(settings.profiles, () => true, new Set([profile.gatewayPort])) };
+    saveStationSettings(upsertRemoteStation(settings, profile));
+    notice = 'portReassigned';
+    logger.warn('remote gateway port in use; reassigned', { station: stationId, port: profile.gatewayPort });
+    try {
+      await gateway.ensure(profile);
+    } catch (retryError) {
+      logger.error('remote gateway failed to start on reassigned port', retryError);
+      update({ phase: 'failed', error: { kind: 'gateway', code: (retryError as { code?: string }).code ?? 'GATEWAY_START_FAILED' } });
+      return;
+    }
+  }
+  if (stale()) return;
+
+  const target = remoteTarget(profile);
+  configureRemoteStationSession(target);
+  update({ phase: 'loading', notice });
+  try {
+    await windowInstance.loadURL(`${target.origin}/`);
+  } catch (error) {
+    // did-fail-load reports the failure and shows the connect page.
+    logger.warn('remote station load rejected', { station: stationId, error: (error as Error).message });
+    return;
+  }
+  update({ phase: 'connected', notice });
+}
+
+/**
+ * Opens a station in its own window, or focuses the window it already has.
+ * A remote station that is not connected is (re)connected in that window.
+ */
+async function openStation(stationId: string): Promise<void> {
+  const target = stationTargetById(stationId);
+  if (!target) throw new Error('station_not_found');
+  const settings = loadStationSettings();
+  if (settings.activeStationId !== stationId) saveStationSettings({ ...settings, activeStationId: stationId });
+
+  const existing = getStationWindow(stationId);
+  if (target.kind === 'embedded') {
+    if (existing) {
+      focusWindow(existing);
+      return;
+    }
+    if (embeddedRuntimeStatus === 'idle') {
+      await createWindow();
+      return;
+    }
+    const windowInstance = await createMainWindowOnly({ target });
+    if (embeddedRuntimeStatus === 'ready' && mainAppReadyForWindow) await loadMainAppInWindow(windowInstance);
+    // While starting, createWindow loads the app when ready; after a failure the
+    // loading page shows the recorded startup error.
+    return;
+  }
+
+  if (existing && stationConnectStates.get(stationId)?.phase === 'connected') {
+    focusWindow(existing);
+    return;
+  }
+  logger.info('opening remote station', { station: stationId });
+  const windowInstance = existing ?? await createMainWindowOnly({ target });
+  if (existing) {
+    focusWindow(existing);
+    await loadStationManagerPage(existing, { mode: 'connect', station: stationId });
+  }
+  await connectRemoteStation(target, windowInstance);
+}
+
+function focusWindow(windowInstance: BrowserWindow): void {
+  if (windowInstance.isMinimized()) windowInstance.restore();
+  windowInstance.show();
+  windowInstance.focus();
+}
+
+async function openStationManagerWindow(): Promise<void> {
+  if (stationManagerWindow && !stationManagerWindow.isDestroyed()) {
+    focusWindow(stationManagerWindow);
+    return;
+  }
+  const windowInstance = new BrowserWindow({
+    width: 760,
+    height: 700,
+    minWidth: 560,
+    minHeight: 480,
+    show: true,
+    title: 'TX-5DR',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#111111' : '#f5f5f5',
+    titleBarStyle: 'hiddenInset',
+    frame: process.platform !== 'darwin',
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      preload: getPreloadPath(),
+      additionalArguments: [buildShellPagesArgument(getShellPageUrls())],
+    },
+  });
+  stationManagerWindow = windowInstance;
+  if (process.platform === 'win32' || process.platform === 'linux') windowInstance.setMenuBarVisibility(false);
+  windowInstance.webContents.on('will-navigate', event => event.preventDefault());
+  windowInstance.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  windowInstance.on('closed', () => {
+    if (stationManagerWindow === windowInstance) stationManagerWindow = null;
+  });
+  await loadStationManagerPage(windowInstance, { mode: 'manage' });
+  windowInstance.focus();
+}
+
+function buildStationMenuItems(): Electron.MenuItemConstructorOptions[] {
+  const msgs = getMessages(app.getLocale());
+  const settings = loadStationSettings();
+  const open = (stationId: string) => () => {
+    void openStation(stationId).catch(error => logger.error('failed to open station', error));
+  };
+  return [{
+    label: msgs.menu.switchStation,
+    submenu: [
+      {
+        label: msgs.menu.embeddedStation,
+        type: 'checkbox',
+        checked: Boolean(getStationWindow(EMBEDDED_STATION_ID)),
+        click: open(EMBEDDED_STATION_ID),
+      },
+      ...settings.profiles.map((profile): Electron.MenuItemConstructorOptions => ({
+        label: profile.label,
+        type: 'checkbox',
+        checked: Boolean(getStationWindow(profile.id)),
+        click: open(profile.id),
+      })),
+      { type: 'separator' },
+      { label: msgs.menu.manageStations, click: () => { void openStationManagerWindow(); } },
+    ],
+  }];
+}
+
+function refreshStationMenus(): void {
+  if (!app.isReady()) return;
+  if (trayInstance) trayInstance.setContextMenu(buildContextMenu(true));
+  if (process.platform === 'darwin') {
+    app.dock?.setMenu(buildContextMenu(false));
+    createApplicationMenu();
+  }
+}
+
+const StationSaveInputSchema = z.object({
+  id: z.string().optional(),
+  label: z.string().max(80),
+  url: z.string().max(512),
+  trustFingerprint256: z.string().nullable().optional(),
+});
+
+function normalizeFingerprintInput(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const hex = value.replace(/[^0-9a-fA-F]/g, '').toUpperCase();
+  if (hex.length !== 64) throw new Error('invalid_fingerprint');
+  return hex.match(/.{2}/g)!.join(':');
+}
+
+function saveStationFromInput(input: unknown): RemoteStationProfile {
+  const parsed = StationSaveInputSchema.parse(input);
+  const settings = loadStationSettings();
+  const trusted = normalizeFingerprintInput(parsed.trustFingerprint256);
+  const normalized = normalizeStationUrl(parsed.url);
+  if (!normalized.ok) throw new Error(`invalid_station_url:${normalized.reason}`);
+  const existing = parsed.id ? findRemoteStation(settings, parsed.id) : null;
+  if (parsed.id && !existing) throw new Error('station_not_found');
+
+  let profile: RemoteStationProfile;
+  if (existing) {
+    const urlChanged = existing.url !== normalized.url;
+    profile = {
+      ...existing,
+      label: parsed.label.trim() || new URL(normalized.url).host,
+      url: normalized.url,
+      // A new address is a different station until proven otherwise.
+      tls: urlChanged ? undefined : existing.tls,
+      lastIdentity: urlChanged ? undefined : existing.lastIdentity,
+    };
+  } else {
+    profile = createRemoteStationProfile({ label: parsed.label, url: normalized.url }, settings.profiles);
+  }
+  if (trusted && profile.url.startsWith('https:')) {
+    profile = { ...profile, tls: { fingerprint256: trusted, pinnedAt: new Date().toISOString() } };
+  }
+  saveStationSettings(upsertRemoteStation(settings, profile));
+  return profile;
+}
+
+async function removeStation(stationId: string): Promise<void> {
+  const settings = loadStationSettings();
+  const profile = findRemoteStation(settings, stationId);
+  if (!profile) return;
+  const stationSession = session.fromPartition(stationPartition(profile));
+  for (const windowInstance of windowsInSession(stationSession)) windowInstance.destroy();
+  await remoteGateways.get(stationId)?.stop();
+  remoteGateways.delete(stationId);
+  stationConnectStates.delete(stationId);
+  remoteStationSessions.delete(stationSession);
+  saveStationSettings(removeRemoteStation(settings, stationId));
+  await stationSession.clearStorageData()
+    .catch(error => logger.warn('failed to clear removed station storage', error));
+}
+
+async function trustStationCertificate(stationId: unknown, fingerprint: unknown): Promise<void> {
+  if (typeof stationId !== 'string' || typeof fingerprint !== 'string') throw new Error('invalid_request');
+  const state = stationConnectStates.get(stationId);
+  const offered = state
+    ? (state.phase === 'needs-trust' ? state.certificate?.fingerprint256 : state.changed?.actual) ?? null
+    : null;
+  const normalized = normalizeFingerprintInput(fingerprint);
+  // Only the certificate the station just presented can be trusted.
+  if (!offered || normalized !== offered) throw new Error('fingerprint_not_offered');
+  const settings = loadStationSettings();
+  const profile = findRemoteStation(settings, stationId);
+  if (!profile) throw new Error('station_not_found');
+  saveStationSettings(upsertRemoteStation(settings, {
+    ...profile,
+    tls: { fingerprint256: normalized, pinnedAt: new Date().toISOString() },
+  }));
+  await openStation(stationId);
 }
 
 // 启动应用
@@ -3553,12 +4305,24 @@ const startApp = async () => {
   const startupSettings = loadElectronSettings();
   applyShortcutSettings(startupSettings.shortcuts, startupSettings.shortcutToggles);
 
-  const vcRuntimeOk = await ensureWindowsVCRuntimeInstalled();
-  if (!vcRuntimeOk) return;
+  const activeStation = getActiveStationTarget();
+  if (activeStation.kind === 'remote') {
+    // The remote station is shown first; the embedded station starts in the background
+    // and its failures never block the remote one.
+    logger.info('active station is remote; starting embedded station in background', { station: activeStation.profile.id });
+    const remoteWindow = await createMainWindowOnly({ target: activeStation });
+    void connectRemoteStation(activeStation, remoteWindow);
+    void (async () => {
+      if (await ensureWindowsVCRuntimeInstalled({ present: false })) await createWindow({ present: false });
+    })().catch(error => logger.error('background embedded station startup failed', error));
+  } else {
+    const vcRuntimeOk = await ensureWindowsVCRuntimeInstalled();
+    if (!vcRuntimeOk) return;
 
-  logger.info('calling createWindow');
-  await createWindow();
-  logger.info('createWindow complete');
+    logger.info('calling createWindow');
+    await createWindow();
+    logger.info('createWindow complete');
+  }
   startDevProcessMemoryLogger();
 
   if (app.isPackaged) {
@@ -3577,13 +4341,46 @@ let relaunchAfterCleanup = false;
 let isInstallingDesktopUpdate = false;
 
 
-function assertUpdateSender(event: Electron.IpcMainInvokeEvent): void {
-  const owner = BrowserWindow.fromWebContents(event.sender);
-  if (!owner || event.senderFrame !== event.sender.mainFrame) throw new Error('update_sender_denied');
-  const url = new URL(event.senderFrame.url);
-  if (url.origin !== new URL(getWebUrl()).origin || url.pathname.includes('plugin-page')) {
-    throw new Error('update_sender_denied');
-  }
+/**
+ * Station whose session owns the sender: the default session holds the embedded
+ * station, each remote station has its own partition bound to its gateway origin.
+ */
+function resolveBridgeStation(event: Electron.IpcMainInvokeEvent): BridgeStationBinding | null {
+  if (event.sender.session === session.defaultSession) return { kind: 'embedded', origin: getWebUrl() };
+  const binding = remoteStationSessions.get(event.sender.session);
+  return binding ? { kind: 'remote', origin: binding.origin } : null;
+}
+
+function getShellPageUrls(): string[] {
+  return [pathToFileURL(getLoadingPagePath()).href, getStationManagerPageUrl()];
+}
+
+/**
+ * Registers an IPC handler behind the desktop bridge policy. The sender is
+ * classified from its frame and session before the handler runs.
+ */
+function handleBridge<Args extends unknown[], Result>(
+  channel: string,
+  handler: (event: Electron.IpcMainInvokeEvent, ...args: Args) => Result,
+): void {
+  ipcMain.handle(channel, (event, ...args) => {
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const decision = evaluateBridgeCall(channel, {
+      isMainFrame: Boolean(owner) && event.senderFrame === event.sender.mainFrame,
+      frameUrl: event.senderFrame?.url ?? '',
+      station: resolveBridgeStation(event),
+      shellPageUrls: getShellPageUrls(),
+    });
+    if (!decision.allowed) {
+      logger.warn('desktop bridge call denied', {
+        channel,
+        reason: decision.reason,
+        url: redactSensitiveUrl(event.senderFrame?.url ?? ''),
+      });
+      throw new Error(`bridge_call_denied:${decision.reason}`);
+    }
+    return handler(event, ...(args as Args));
+  });
 }
 
 function getDesktopUpdateService(): DesktopUpdateService {
@@ -3852,14 +4649,15 @@ function setupIpcHandlers() {
   ipcHandlersConfigured = true;
 
   // 处理打开"关于"窗口的请求
-  ipcMain.handle('window:openAbout', async () => {
+  handleBridge('window:openAbout', async (event) => {
     logger.info('IPC window:openAbout');
-    await openAboutWindow();
+    await openAboutWindow(requireSenderStation(event));
   });
 
   // 处理打开通联日志窗口的请求
-  ipcMain.handle('window:openLogbook', async (_event, queryString: string) => {
+  handleBridge('window:openLogbook', async (event, queryString: string) => {
     logger.info(`IPC window:openLogbook, queryString: ${queryString}`);
+    const target = requireSenderStation(event);
 
     try {
       // 创建新的通联日志窗口
@@ -3873,17 +4671,9 @@ function setupIpcHandlers() {
           symbolColor: '#000000'
         } : false,
         frame: process.platform !== 'darwin',
-        webPreferences: {
-          contextIsolation: true,
-          nodeIntegration: false,
-          webSecurity: false,
-          allowRunningInsecureContent: true,
-          backgroundThrottling: false,
-          preload: app.isPackaged
-            ? join(process.resourcesPath, 'app', 'packages', 'electron-preload', 'dist', 'preload.js')
-            : join(__dirname, '../../electron-preload/dist/preload.js'),
-        },
+        webPreferences: stationWebPreferences(target),
       });
+      attachStationWindowGuards(logbookWindow);
 
       // 在 Windows 和 Linux 下隐藏菜单栏
       if (process.platform === 'win32' || process.platform === 'linux') {
@@ -3891,8 +4681,7 @@ function setupIpcHandlers() {
       }
 
       // 加载通联日志页面
-      const logbookBaseUrl = `${getWebUrl()}/logbook.html?${queryString}`;
-      const logbookUrl = await buildAuthenticatedRendererUrl(logbookBaseUrl);
+      const logbookUrl = await stationPageUrl(target, `/logbook.html?${queryString}`);
       if (process.env.NODE_ENV === 'development' && !app.isPackaged) {
         // 开发模式：使用 Vite
         logger.info(`IPC window:openLogbook loading dev URL: ${redactSensitiveText(logbookUrl)}`);
@@ -3916,7 +4705,8 @@ function setupIpcHandlers() {
     }
   });
 
-  ipcMain.handle('window:openPluginPage', async (_event, queryString: string) => {
+  handleBridge('window:openPluginPage', async (event, queryString: string) => {
+    const target = requireSenderStation(event);
     const params = new URLSearchParams(queryString);
     const pluginName = params.get('pluginName')?.trim();
     const pageId = params.get('pageId')?.trim();
@@ -3938,24 +4728,15 @@ function setupIpcHandlers() {
           symbolColor: '#000000',
         } : false,
         frame: process.platform !== 'darwin',
-        webPreferences: {
-          contextIsolation: true,
-          nodeIntegration: false,
-          webSecurity: false,
-          allowRunningInsecureContent: true,
-          backgroundThrottling: false,
-          preload: app.isPackaged
-            ? join(process.resourcesPath, 'app', 'packages', 'electron-preload', 'dist', 'preload.js')
-            : join(__dirname, '../../electron-preload/dist/preload.js'),
-        },
+        webPreferences: stationWebPreferences(target),
       });
+      attachStationWindowGuards(pluginPageWindow);
 
       if (process.platform === 'win32' || process.platform === 'linux') {
         pluginPageWindow.setMenuBarVisibility(false);
       }
 
-      const baseUrl = `${getWebUrl()}/plugin-page.html?${params.toString()}`;
-      const pluginPageUrl = await buildAuthenticatedRendererUrl(baseUrl);
+      const pluginPageUrl = await stationPageUrl(target, `/plugin-page.html?${params.toString()}`);
       logger.info(`IPC window:openPluginPage loading URL: ${redactSensitiveText(pluginPageUrl)}`);
       await pluginPageWindow.loadURL(pluginPageUrl);
       if (process.env.NODE_ENV === 'development' && !app.isPackaged && shouldOpenDevTools()) {
@@ -3969,8 +4750,9 @@ function setupIpcHandlers() {
   });
 
   // 处理打开独立频谱图窗口的请求
-  ipcMain.handle('window:openSpectrumWindow', async (_event) => {
+  handleBridge('window:openSpectrumWindow', async (event) => {
     logger.info('IPC window:openSpectrumWindow');
+    const target = requireSenderStation(event);
 
     try {
       const spectrumWindow = new BrowserWindow({
@@ -3985,17 +4767,9 @@ function setupIpcHandlers() {
           symbolColor: '#000000'
         } : false,
         frame: process.platform !== 'darwin',
-        webPreferences: {
-          contextIsolation: true,
-          nodeIntegration: false,
-          webSecurity: false,
-          allowRunningInsecureContent: true,
-          backgroundThrottling: false,
-          preload: app.isPackaged
-            ? join(process.resourcesPath, 'app', 'packages', 'electron-preload', 'dist', 'preload.js')
-            : join(__dirname, '../../electron-preload/dist/preload.js'),
-        },
+        webPreferences: stationWebPreferences(target),
       });
+      attachStationWindowGuards(spectrumWindow);
 
       // 在 Windows 和 Linux 下隐藏菜单栏
       if (process.platform === 'win32' || process.platform === 'linux') {
@@ -4003,7 +4777,7 @@ function setupIpcHandlers() {
       }
 
       // 加载频谱图页面
-      const spectrumUrl = await buildAuthenticatedRendererUrl(`${getWebUrl()}/spectrum.html`);
+      const spectrumUrl = await stationPageUrl(target, '/spectrum.html');
       if (process.env.NODE_ENV === 'development' && !app.isPackaged) {
         logger.info(`IPC window:openSpectrumWindow loading dev URL: ${redactSensitiveText(spectrumUrl)}`);
         await spectrumWindow.loadURL(spectrumUrl);
@@ -4019,10 +4793,10 @@ function setupIpcHandlers() {
       spectrumWindow.focus();
 
       // 窗口关闭时通知主窗口，以便主窗口恢复显示频谱图
+      // Tell the window that popped the spectrum out, which may belong to any station.
+      const opener = event.sender;
       spectrumWindow.on('closed', () => {
-        if (mainWindowInstance && !mainWindowInstance.isDestroyed()) {
-          mainWindowInstance.webContents.send('spectrum-window-closed');
-        }
+        if (!opener.isDestroyed()) opener.send('spectrum-window-closed');
       });
 
       logger.info('IPC window:openSpectrumWindow window created');
@@ -4032,19 +4806,20 @@ function setupIpcHandlers() {
     }
   });
 
-  // 处理打开目录的请求（在系统文件管理器中打开）
-  ipcMain.handle('shell:openPath', async (_event, dirPath: string) => {
-    logger.info(`IPC shell:openPath: ${dirPath}`);
+  // Open an app-owned directory (logs, data, plugins, diagnostics) in the file manager.
+  handleBridge('shell:openPath', async (_event, requestedPath: unknown) => {
+    const decision = await resolveOpenableAppPath(requestedPath, {
+      roots: [getAppConfigDir(), getAppDataDir(), getAppLogsDir(), getAppCacheDir()],
+    });
+    if (!decision.allowed) {
+      logger.warn('IPC shell:openPath denied', { reason: decision.reason });
+      throw new Error(`open_path_denied:${decision.reason}`);
+    }
+    logger.info(`IPC shell:openPath: ${decision.path}`);
 
     try {
-      // 验证路径存在
-      if (!fs.existsSync(dirPath)) {
-        // 尝试创建目录
-        fs.mkdirSync(dirPath, { recursive: true });
-      }
-
-      // 使用系统文件管理器打开目录
-      const result = await shell.openPath(dirPath);
+      if (!decision.exists) await fs.promises.mkdir(decision.path, { recursive: true });
+      const result = await shell.openPath(decision.path);
       if (result) {
         logger.error(`IPC shell:openPath failed: ${result}`);
         throw new Error(result);
@@ -4058,7 +4833,7 @@ function setupIpcHandlers() {
   });
 
   // 处理打开外部链接的请求
-  ipcMain.handle('shell:openExternal', async (_event, url: string) => {
+  handleBridge('shell:openExternal', async (_event, url: string) => {
     logger.info(`IPC shell:openExternal: ${url}`);
 
     try {
@@ -4079,7 +4854,7 @@ function setupIpcHandlers() {
     }
   });
 
-  ipcMain.handle('fs:selectFile', async (event, options?: FsSelectFileOptions) => {
+  handleBridge('fs:selectFile', async (event, options?: FsSelectFileOptions) => {
     logger.info('IPC fs:selectFile');
     const result = await showOpenDialogForEvent(event, {
       title: sanitizeDialogTitle(options?.title),
@@ -4090,7 +4865,7 @@ function setupIpcHandlers() {
     return result.canceled ? null : (result.filePaths[0] ?? null);
   });
 
-  ipcMain.handle('fs:selectDirectory', async (event, options?: FsSelectDirectoryOptions) => {
+  handleBridge('fs:selectDirectory', async (event, options?: FsSelectDirectoryOptions) => {
     logger.info('IPC fs:selectDirectory');
     const result = await showOpenDialogForEvent(event, {
       title: sanitizeDialogTitle(options?.title),
@@ -4100,7 +4875,7 @@ function setupIpcHandlers() {
     return result.canceled ? null : (result.filePaths[0] ?? null);
   });
 
-  ipcMain.handle('fs:saveFile', async (event, options?: FsSaveFileOptions) => {
+  handleBridge('fs:saveFile', async (event, options?: FsSaveFileOptions) => {
     const data = copyRendererFileBytes(options?.data);
     const defaultName = sanitizeRendererSaveFileName(options?.defaultName);
     logger.info(`IPC fs:saveFile requested, bytes=${data.byteLength}`);
@@ -4117,16 +4892,16 @@ function setupIpcHandlers() {
     return { canceled: false, filePath: result.filePath };
   });
 
-  ipcMain.handle('app:getVersion', () => BUILD_INFO.version);
-  ipcMain.handle('app:getBuildInfo', () => BUILD_INFO);
-  ipcMain.handle('app:quit', async () => {
+  handleBridge('app:getVersion', () => BUILD_INFO.version);
+  handleBridge('app:getBuildInfo', () => BUILD_INFO);
+  handleBridge('app:quit', async () => {
     await cleanupAndQuit('renderer');
   });
-  ipcMain.handle('app:restart', async () => {
+  handleBridge('app:restart', async () => {
     await cleanupAndQuit('renderer', { relaunch: true });
   });
 
-  ipcMain.handle('startupLogs:subscribe', (event) => {
+  handleBridge('startupLogs:subscribe', (event) => {
     ensureStartupLogsPolling();
     const webContentsId = event.sender.id;
     startupLogSubscribers.set(webContentsId, event.sender);
@@ -4136,11 +4911,11 @@ function setupIpcHandlers() {
     return createStartupLogsPayload(true);
   });
 
-  ipcMain.handle('startupLogs:unsubscribe', (event) => {
+  handleBridge('startupLogs:unsubscribe', (event) => {
     removeStartupLogSubscriber(event.sender.id);
   });
 
-  ipcMain.handle('startupLogs:openFolder', async () => {
+  handleBridge('startupLogs:openFolder', async () => {
     const logsDir = getAppLogsDir();
     logger.info(`IPC startupLogs:openFolder: ${logsDir}`);
 
@@ -4158,9 +4933,13 @@ function setupIpcHandlers() {
     }
   });
 
-  ipcMain.handle('startupLogs:runAction', async (_event, actionId: StartupErrorActionId) => {
+  handleBridge('startupLogs:runAction', async (_event, actionId: StartupErrorActionId) => {
     logger.info(`IPC startupLogs:runAction: ${actionId}`);
 
+    if (actionId === 'open-station-manager') {
+      await openStationManagerWindow();
+      return;
+    }
     if (actionId !== 'open-vc-runtime-download') {
       throw new Error(`unsupported startup action: ${String(actionId)}`);
     }
@@ -4174,43 +4953,40 @@ function setupIpcHandlers() {
     }
   });
 
-  ipcMain.handle('updater:getStatus', () => {
+  handleBridge('updater:getStatus', () => {
     return getDesktopUpdateService().getStatus();
   });
 
-  ipcMain.handle('updater:setChannel', async (event, request: unknown) => {
-    assertUpdateSender(event);
+  handleBridge('updater:setChannel', async (event, request: unknown) => {
     return getDesktopUpdateService().setChannel(request);
   });
 
-  ipcMain.handle('updater:check', async () => {
+  handleBridge('updater:check', async () => {
     return getDesktopUpdateService().checkForUpdates();
   });
 
-  ipcMain.handle('updater:openDownload', async (_event, url?: string) => {
+  handleBridge('updater:openDownload', async (_event, url?: string) => {
     await getDesktopUpdateService().openDownload(url);
   });
 
-  ipcMain.handle('updater:download', async (event, request: unknown) => {
-    assertUpdateSender(event);
+  handleBridge('updater:download', async (event, request: unknown) => {
     return getDesktopUpdateService().download(request);
   });
 
-  ipcMain.handle('updater:installAndRestart', async (event, request: unknown) => {
-    assertUpdateSender(event);
+  handleBridge('updater:installAndRestart', async (event, request: unknown) => {
     return getDesktopUpdateService().installAndRestart(request);
   });
 
-  ipcMain.handle('https:getStatus', async () => {
+  handleBridge('https:getStatus', async () => {
     return getDesktopHttpsStatus();
   });
 
-  ipcMain.handle('https:getShareUrls', async () => {
+  handleBridge('https:getShareUrls', async () => {
     const status = await getDesktopHttpsStatus();
     return status.shareUrls;
   });
 
-  ipcMain.handle('https:generateSelfSigned', async () => {
+  handleBridge('https:generateSelfSigned', async () => {
     const settings = loadElectronSettings();
     const nextConfig = await generateSelfSignedCertificate({
       configDir: getAppConfigDir(),
@@ -4221,7 +4997,7 @@ function setupIpcHandlers() {
     return persistDesktopHttpsConfig(nextConfig);
   });
 
-  ipcMain.handle('https:importPemCertificate', async (_event, certPath: string, keyPath: string) => {
+  handleBridge('https:importPemCertificate', async (_event, certPath: string, keyPath: string) => {
     if (!certPath || !keyPath) {
       throw new Error('certificate_paths_required');
     }
@@ -4236,7 +5012,7 @@ function setupIpcHandlers() {
     return persistDesktopHttpsConfig(nextConfig);
   });
 
-  ipcMain.handle('https:applySettings', async (
+  handleBridge('https:applySettings', async (
     _event,
     update: Partial<Pick<PersistentDesktopHttpsConfig, 'enabled' | 'mode' | 'httpsPort' | 'redirectExternalHttp'>>,
   ) => {
@@ -4248,17 +5024,17 @@ function setupIpcHandlers() {
     });
   });
 
-  ipcMain.handle('https:disable', async () => {
+  handleBridge('https:disable', async () => {
     const settings = loadElectronSettings();
     const nextConfig = await disableDesktopHttps(settings.desktopHttps);
     return persistDesktopHttpsConfig(nextConfig);
   });
 
-  ipcMain.handle('remoteAccess:getPreset', () => {
+  handleBridge('remoteAccess:getPreset', () => {
     return loadElectronSettings().remoteAccessPreset ?? 'local';
   });
 
-  ipcMain.handle('remoteAccess:applyPreset', async (_event, preset: 'local' | 'lan' | 'public') => {
+  handleBridge('remoteAccess:applyPreset', async (_event, preset: 'local' | 'lan' | 'public') => {
     if (!['local', 'lan', 'public'].includes(preset)) throw new Error('invalid_remote_access_preset');
     const previous = loadElectronSettings();
     const next: ElectronSettings = {
@@ -4293,15 +5069,15 @@ function setupIpcHandlers() {
     }
   });
 
-  ipcMain.handle('shortcuts:getConfig', () => {
+  handleBridge('shortcuts:getConfig', () => {
     return loadElectronSettings().shortcuts ?? createDefaultShortcutConfig();
   });
 
-  ipcMain.handle('shortcuts:getToggles', () => {
+  handleBridge('shortcuts:getToggles', () => {
     return getShortcutToggles();
   });
 
-  ipcMain.handle('shortcuts:setToggles', (_event, toggles: unknown) => {
+  handleBridge('shortcuts:setToggles', (_event, toggles: unknown) => {
     const settings = loadElectronSettings();
     const shortcutToggles = normalizeShortcutToggles(toggles);
     if (!saveElectronSettings({ ...settings, shortcutToggles })) {
@@ -4310,7 +5086,7 @@ function setupIpcHandlers() {
     return applyShortcutSettings(settings.shortcuts, shortcutToggles);
   });
 
-  ipcMain.handle('shortcuts:setConfig', (_event, config: unknown) => {
+  handleBridge('shortcuts:setConfig', (_event, config: unknown) => {
     const settings = loadElectronSettings();
     const shortcuts = normalizeShortcutConfig(config);
     if (!saveElectronSettings({ ...settings, shortcuts })) {
@@ -4319,7 +5095,7 @@ function setupIpcHandlers() {
     return applyShortcutSettings(shortcuts, settings.shortcutToggles);
   });
 
-  ipcMain.handle('shortcuts:register', (_event, config?: unknown) => {
+  handleBridge('shortcuts:register', (_event, config?: unknown) => {
     const settings = loadElectronSettings();
     if (config === undefined) {
       return applyShortcutSettings(settings.shortcuts, settings.shortcutToggles);
@@ -4332,7 +5108,7 @@ function setupIpcHandlers() {
     return applyShortcutSettings(shortcuts, settings.shortcutToggles);
   });
 
-  ipcMain.handle('shortcuts:startRecording', (event, actionId: unknown) => {
+  handleBridge('shortcuts:startRecording', (event, actionId: unknown) => {
     if (!isShortcutActionId(actionId)) {
       throw new Error('invalid_shortcut_action');
     }
@@ -4342,30 +5118,85 @@ function setupIpcHandlers() {
     shortcutRecordingActionId = actionId;
   });
 
-  ipcMain.handle('shortcuts:stopRecording', (event) => {
+  handleBridge('shortcuts:stopRecording', (event) => {
     if (shortcutRecordingWebContentsId === event.sender.id) {
       stopShortcutRecording({ restoreGlobalShortcuts: true });
     }
   });
 
-  ipcMain.handle('voicePttShortcut:setConfig', (event, payload: VoicePttShortcutConfigPayload) => {
+  handleBridge('voicePttShortcut:setConfig', (event, payload: VoicePttShortcutConfigPayload) => {
     return updateVoicePttShortcutCapture(event.sender.id, payload ?? {});
   });
 
-  // 配置管理 IPC
-  ipcMain.handle('config:get', (_event, key: keyof ElectronSettings) => {
-    const settings = loadElectronSettings();
+  handleBridge('stations:openManager', async () => {
+    await openStationManagerWindow();
+  });
+
+  handleBridge('stations:getCurrent', (event): DesktopCurrentStation => {
+    const target = requireSenderStation(event);
+    return target.kind === 'embedded'
+      ? { stationId: EMBEDDED_STATION_ID, kind: 'embedded', label: null, url: null }
+      : { stationId: target.profile.id, kind: 'remote', label: target.profile.label, url: target.profile.url };
+  });
+
+  handleBridge('stations:getState', () => buildStationState());
+
+  handleBridge('stations:subscribe', (event) => {
+    const contents = event.sender;
+    stationStateSubscribers.set(contents.id, contents);
+    const remove = () => stationStateSubscribers.delete(contents.id);
+    contents.once('destroyed', remove);
+    contents.once('did-navigate', remove);
+    return buildStationState();
+  });
+
+  handleBridge('stations:unsubscribe', (event) => {
+    stationStateSubscribers.delete(event.sender.id);
+  });
+
+  handleBridge('stations:probe', async (_event, url: unknown) => {
+    const normalized = normalizeStationUrl(typeof url === 'string' ? url : '');
+    if (!normalized.ok) return { kind: 'invalid-url', reason: normalized.reason };
+    return { url: normalized.url, ...(await probeStation(normalized.url)) };
+  });
+
+  handleBridge('stations:save', (_event, input: unknown) => {
+    const profile = saveStationFromInput(input);
+    return { id: profile.id };
+  });
+
+  handleBridge('stations:remove', async (_event, stationId: unknown) => {
+    if (typeof stationId !== 'string') throw new Error('invalid_request');
+    await removeStation(stationId);
+  });
+
+  handleBridge('stations:connect', async (_event, stationId: unknown) => {
+    if (typeof stationId !== 'string') throw new Error('invalid_request');
+    await openStation(stationId);
+  });
+
+  handleBridge('stations:trustCertificate', async (_event, stationId: unknown, fingerprint: unknown) => {
+    await trustStationCertificate(stationId, fingerprint);
+  });
+
+  // Station pages may only read and write the whitelisted shell settings.
+  handleBridge('config:get', (_event, key: unknown) => {
+    if (!isBridgeConfigKey(key)) throw new Error('config_key_not_allowed');
+    const settings = loadElectronSettings() as unknown as Record<string, unknown>;
     return settings[key] ?? null;
   });
 
-  ipcMain.handle('config:set', (_event, key: string, value: unknown) => {
+  handleBridge('config:set', (_event, key: unknown, value: unknown) => {
+    if (!isBridgeConfigKey(key)) throw new Error('config_key_not_allowed');
+    if (!isValidBridgeConfigValue(key, value)) throw new Error('config_value_invalid');
     const settings = loadElectronSettings();
     (settings as unknown as Record<string, unknown>)[key] = value;
-    saveElectronSettings(settings);
+    if (!saveElectronSettings(settings)) throw new Error('config_write_failed');
   });
 
-  ipcMain.handle('config:getAll', () => {
-    return loadElectronSettings();
+  handleBridge('config:getAll', () => {
+    const settings = loadElectronSettings() as unknown as Record<string, unknown>;
+    return Object.fromEntries(listBridgeConfigKeys().map(key => [key, settings[key] ?? null]));
   });
 }
 

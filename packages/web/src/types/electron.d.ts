@@ -1,5 +1,5 @@
 import type { UpdateSelection } from '@tx5dr/contracts';
-import type { DesktopHttpsMode, DesktopHttpsStatus } from '@tx5dr/contracts';
+import type { DesktopBridgeInfo, DesktopHttpsMode, DesktopHttpsStatus } from '@tx5dr/contracts';
 import type { ShortcutConfig, ShortcutActionId, ShortcutToggles } from '../utils/shortcutPreferences';
 import type { VoicePttShortcutPreset } from '../utils/voicePttShortcutPreferences';
 
@@ -155,17 +155,20 @@ interface StartupErrorAction {
   style: 'primary';
 }
 
+/**
+ * Desktop shell bridge. Every namespace and member is present only when the
+ * shell granted the matching capability to this page (see `bridge`), so callers
+ * feature-detect each member they use.
+ */
 interface ElectronAPI {
-  getApiBase(): string;
-  isEmbedded(): boolean;
+  /** Absent when the page runs in a shell that predates the bridge contract. */
+  bridge?: DesktopBridgeInfo;
   fs?: {
-    selectFile(options?: {
+    selectFile?(options?: {
       title?: string;
       filters?: Array<{ name: string; extensions: string[] }>;
     }): Promise<string | null>;
-    selectDirectory(options?: { title?: string }): Promise<string | null>;
-    readFile(filePath: string): Promise<string>;
-    writeFile(filePath: string, data: string): Promise<void>;
+    selectDirectory?(options?: { title?: string }): Promise<string | null>;
     saveFile?(options: {
       title?: string;
       defaultName: string;
@@ -174,11 +177,10 @@ interface ElectronAPI {
     }): Promise<{ canceled: boolean; filePath?: string }>;
   };
   app?: {
-    getVersion(): Promise<string>;
-    quit(): Promise<void>;
-    restart(): Promise<void>;
-    minimize(): Promise<void>;
-    toggleMaximize(): Promise<void>;
+    getVersion?(): Promise<string>;
+    getBuildInfo?(): Promise<unknown>;
+    quit?(): Promise<void>;
+    restart?(): Promise<void>;
   };
   updater?: {
     getStatus(): Promise<DesktopUpdateStatus>;
@@ -195,15 +197,16 @@ interface ElectronAPI {
     subscribe(callback: (payload: StartupLogsPayload) => void): Promise<() => Promise<void>>;
   };
   window?: {
-    openLogbookWindow(queryString: string): Promise<void>;
-    openPluginPageWindow(queryString: string): Promise<void>;
-    openSpectrumWindow(): Promise<void>;
-    onSpectrumWindowClosed(callback: () => void): () => void;
+    openAbout?(): Promise<void>;
+    openLogbookWindow?(queryString: string): Promise<void>;
+    openPluginPageWindow?(queryString: string): Promise<void>;
+    openSpectrumWindow?(): Promise<void>;
+    onSpectrumWindowClosed?(callback: () => void): () => void;
     getZoomFactor?(): number;
   };
   shell?: {
-    openExternal(url: string): Promise<void>;
-    openPath(path: string): Promise<string>;
+    openExternal?(url: string): Promise<void>;
+    openPath?(path: string): Promise<string>;
   };
   config?: {
     get(key: string): Promise<unknown>;
@@ -238,6 +241,22 @@ interface ElectronAPI {
       redirectExternalHttp?: boolean;
     }): Promise<DesktopHttpsStatus>;
     disable(): Promise<DesktopHttpsStatus>;
+  };
+  /**
+   * Stations of the desktop shell. Station pages get `openManager` and
+   * `getCurrent`; the management calls exist only on the shell's own pages.
+   * Results are untyped here and decoded with the contracts schemas.
+   */
+  stations?: {
+    openManager?(): Promise<void>;
+    getCurrent?(): Promise<unknown>;
+    getState?(): Promise<unknown>;
+    subscribe?(callback: (state: unknown) => void): Promise<() => Promise<void>>;
+    probe?(url: string): Promise<unknown>;
+    save?(input: { id?: string; label: string; url: string; trustFingerprint256?: string | null }): Promise<{ id: string }>;
+    remove?(id: string): Promise<void>;
+    connect?(id: string): Promise<void>;
+    trustCertificate?(id: string, fingerprint256: string): Promise<void>;
   };
   remoteAccess?: {
     getPreset(): Promise<'local' | 'lan' | 'public'>;

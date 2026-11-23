@@ -15,8 +15,8 @@ import { SpectrumDisplay } from '../components/radio/spectrum/SpectrumDisplay';
 import { AppBrandAboutLink } from '../components/common/AppBrandAboutLink';
 import { ClockDisplay } from '../components/system/ClockDisplay';
 import { RemoteAccessPopover } from '../components/system/RemoteAccessPopover';
-import { StationInfoPopover } from '../components/station/StationInfoPopover';
-import { useConnection, useRadioModeState, useStationInfo } from '../store/radioStore';
+import { StationInfoPopover, useStationTagVisible } from '../components/station/StationInfoPopover';
+import { useConnection, useRadioModeState } from '../store/radioStore';
 import { useHasMinRole } from '../store/authStore';
 import { isElectron } from '../utils/config';
 import { useMacTitlebarLeftInset } from '../hooks/useMacTitlebarInset';
@@ -33,7 +33,6 @@ export function ImageLeftLayout() {
   const imageAvailable = status !== null && status.persistence?.available !== false;
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   const connection = useConnection();
-  const stationInfo = useStationInfo();
   const radioMode = useRadioModeState();
   const [isMobile, setIsMobile] = useState(false);
   const [clientCount, setClientCount] = useState(0);
@@ -55,7 +54,7 @@ export function ImageLeftLayout() {
   });
   const presetMode = radioMode.currentMode?.name === 'FAX' ? 'FAX' : 'SSTV';
 
-  const hasStationContent = !!(stationInfo?.callsign || stationInfo?.name || stationInfo?.qth?.grid || stationInfo?.description);
+  const hasStationContent = useStationTagVisible();
   const titlebarLeftInset = useMacTitlebarLeftInset();
   const stationInfoOffsetClassName = titlebarLeftInset !== null
     ? ''

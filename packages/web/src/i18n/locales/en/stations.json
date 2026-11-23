@@ -1,0 +1,105 @@
+{
+  "title": "Stations",
+  "subtitle": "Each station opens in its own window, and several can be open at once. A remote station uses its own interface and accounts.",
+  "embeddedLabel": "This Computer",
+  "embeddedDescription": "The station that runs with the desktop client",
+  "remoteSection": "Remote stations",
+  "status": {
+    "idle": "Not started",
+    "starting": "Starting",
+    "ready": "Running",
+    "failed": "Failed to start"
+  },
+  "badge": {
+    "open": "Open",
+    "lastUsed": "Last used",
+    "pinned": "Certificate pinned"
+  },
+  "actions": {
+    "open": "Open",
+    "focus": "Go to Window",
+    "edit": "Edit",
+    "remove": "Remove",
+    "add": "Add Remote Station",
+    "save": "Save",
+    "cancel": "Cancel",
+    "test": "Test Connection",
+    "retry": "Retry",
+    "openEmbedded": "Open This Computer",
+    "manage": "Manage Stations",
+    "trustAndConnect": "Trust Certificate and Connect",
+    "trustNewAndConnect": "Trust New Certificate and Connect",
+    "more": "More actions"
+  },
+  "empty": {
+    "title": "No remote stations yet",
+    "description": "Add a TX-5DR station on your network or the internet, then open it from here or the tray menu at any time."
+  },
+  "editor": {
+    "addTitle": "Add Remote Station",
+    "editTitle": "Edit Station",
+    "label": "Name",
+    "labelPlaceholder": "e.g. Home station",
+    "url": "Address",
+    "urlPlaceholder": "192.168.1.10 or https://station.example:8443",
+    "urlDescription": "A host name or IP alone uses http and port 8076.",
+    "trust": "Trust this certificate"
+  },
+  "probe": {
+    "testing": "Testing connection…",
+    "okTitle": "TX-5DR station found",
+    "okDescription": "Version {{version}}. Sign in through the station interface the first time you connect."
+  },
+  "remove": {
+    "title": "Remove Station",
+    "body": "Remove “{{label}}”? Its sign-in stored on this computer is removed as well.",
+    "confirm": "Remove"
+  },
+  "connect": {
+    "title": "Connecting",
+    "stepProbe": "Check the station",
+    "stepGateway": "Open the local connection",
+    "stepLoad": "Load the station interface",
+    "portReassigned": "The local port was in use, so a new one was assigned; sign in again.",
+    "failedTitle": "Cannot connect to the station"
+  },
+  "cert": {
+    "fingerprint": "SHA-256 fingerprint",
+    "subject": "Subject",
+    "validTo": "Valid until",
+    "previous": "Previously trusted",
+    "untrustedTitle": "Confirm the station certificate",
+    "untrustedBody": "This station uses a certificate the system does not trust (for example a self-signed one). Compare the fingerprint with the one shown on the station before trusting it. Connections are blocked if the certificate changes later.",
+    "changedTitle": "The station certificate changed",
+    "changedBody": "The station presented a different certificate from the one you trusted, so the connection was blocked. If you know the station replaced its certificate, verify the new fingerprint and trust it again; otherwise someone may be intercepting the connection.",
+    "changedConfirm": "I verified the new fingerprint and the station replaced its certificate"
+  },
+  "errors": {
+    "unreachable": "Cannot reach this address ({{code}}). Check that the station is running, the address and port are correct, and the network is reachable.",
+    "notStation": "This address did not return a TX-5DR station identity. It may not be TX-5DR, or the station is too old; update the station first.",
+    "bridgeTooOld": "This station requires a newer desktop client (bridge version {{required}}). Update the TX-5DR desktop client first.",
+    "redirect": "The station redirected the request to {{location}}. Use that address directly.",
+    "gateway": "The local connection failed to start ({{code}}).",
+    "load": "The station interface failed to load ({{code}}).",
+    "invalidUrl": "Invalid address. Enter a host name or IP, optionally with a port and http/https.",
+    "unknown": "The action failed: {{message}}"
+  },
+  "meta": {
+    "version": "Version {{version}}",
+    "neverConnected": "Not connected yet"
+  },
+  "discovered": {
+    "title": "Stations on your network",
+    "description": "These stations are announcing themselves on the local network. Add one to open it.",
+    "add": "Add"
+  },
+  "tag": {
+    "embedded": "This computer",
+    "remote": "Remote station",
+    "connection": "Connection",
+    "address": "Address",
+    "version": "Version",
+    "browser": "Browser access",
+    "manage": "Manage Stations"
+  }
+}

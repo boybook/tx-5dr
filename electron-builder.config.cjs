@@ -51,7 +51,7 @@ module.exports = {
     'package.json',
     'packages/**/package.json',
     'packages/**/dist/**',
-    'packages/client-tools/src/proxy.js',
+    'packages/client-tools/src/*.js',
     'packages/electron-main/assets/**',
     'node_modules/**',
     '!node_modules/.cache/**',

@@ -1,0 +1,105 @@
+{
+  "title": "电台",
+  "subtitle": "每个电台在自己的窗口中打开，可以同时打开多个。远程电台使用它自己的界面和账号。",
+  "embeddedLabel": "本机电台",
+  "embeddedDescription": "随桌面客户端运行的电台",
+  "remoteSection": "远程电台",
+  "status": {
+    "idle": "未启动",
+    "starting": "正在启动",
+    "ready": "运行中",
+    "failed": "启动失败"
+  },
+  "badge": {
+    "open": "已打开",
+    "lastUsed": "最近使用",
+    "pinned": "已固定证书"
+  },
+  "actions": {
+    "open": "打开",
+    "focus": "前往窗口",
+    "edit": "编辑",
+    "remove": "删除",
+    "add": "添加远程电台",
+    "save": "保存",
+    "cancel": "取消",
+    "test": "测试连接",
+    "retry": "重试",
+    "openEmbedded": "打开本机电台",
+    "manage": "管理电台",
+    "trustAndConnect": "信任此证书并连接",
+    "trustNewAndConnect": "信任新证书并连接",
+    "more": "更多操作"
+  },
+  "empty": {
+    "title": "还没有远程电台",
+    "description": "添加局域网或互联网上的 TX-5DR 电台，之后可以随时从这里或托盘菜单打开。"
+  },
+  "editor": {
+    "addTitle": "添加远程电台",
+    "editTitle": "编辑电台",
+    "label": "名称",
+    "labelPlaceholder": "例如 家里的电台",
+    "url": "地址",
+    "urlPlaceholder": "192.168.1.10 或 https://station.example:8443",
+    "urlDescription": "只填主机名或 IP 时默认使用 http 和 8076 端口。",
+    "trust": "信任此证书"
+  },
+  "probe": {
+    "testing": "正在测试连接…",
+    "okTitle": "已找到 TX-5DR 电台",
+    "okDescription": "版本 {{version}}。首次连接需要在电台界面中登录。"
+  },
+  "remove": {
+    "title": "删除电台",
+    "body": "删除“{{label}}”？它在本机保存的登录状态也会一并清除。",
+    "confirm": "删除"
+  },
+  "connect": {
+    "title": "正在连接",
+    "stepProbe": "检查电台",
+    "stepGateway": "建立本地连接",
+    "stepLoad": "加载电台界面",
+    "portReassigned": "本地端口被占用，已改用新端口，需要重新登录。",
+    "failedTitle": "无法连接到电台"
+  },
+  "cert": {
+    "fingerprint": "SHA-256 指纹",
+    "subject": "证书主体",
+    "validTo": "有效期至",
+    "previous": "之前信任的指纹",
+    "untrustedTitle": "确认电台证书",
+    "untrustedBody": "这个电台使用系统不信任的证书（例如自签名证书）。请与电台上显示的指纹核对，一致后再信任。之后证书发生变化时会阻止连接。",
+    "changedTitle": "电台证书已变化",
+    "changedBody": "电台出示的证书与之前信任的不一致，连接已阻止。如果你确认电台更换了证书，可以核对新指纹后重新信任；否则可能有人在拦截连接。",
+    "changedConfirm": "我已核对新指纹，确认是电台更换了证书"
+  },
+  "errors": {
+    "unreachable": "无法访问这个地址（{{code}}）。请确认电台已启动、地址和端口正确，并且网络可达。",
+    "notStation": "这个地址没有返回 TX-5DR 电台身份信息。它可能不是 TX-5DR，或电台版本过旧，请先升级电台。",
+    "bridgeTooOld": "这个电台需要更新版本的桌面客户端（桥接版本 {{required}}）。请先更新 TX-5DR 桌面客户端。",
+    "redirect": "电台把请求重定向到了 {{location}}。请直接使用这个地址。",
+    "gateway": "本地连接启动失败（{{code}}）。",
+    "load": "电台界面加载失败（{{code}}）。",
+    "invalidUrl": "地址无效，请输入主机名或 IP，可带端口和 http/https。",
+    "unknown": "操作失败：{{message}}"
+  },
+  "meta": {
+    "version": "版本 {{version}}",
+    "neverConnected": "尚未连接过"
+  },
+  "discovered": {
+    "title": "局域网中发现的电台",
+    "description": "这些电台正在局域网中广播，添加后即可打开。",
+    "add": "添加"
+  },
+  "tag": {
+    "embedded": "本机电台",
+    "remote": "远程电台",
+    "connection": "连接",
+    "address": "地址",
+    "version": "版本",
+    "browser": "浏览器访问",
+    "manage": "管理电台"
+  }
+}

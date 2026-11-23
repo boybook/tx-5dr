@@ -35,6 +35,7 @@ import { AuthManager } from '../auth/AuthManager.js';
 import { buildAbility, emptyAbility, canWithData, type AppAbility } from '../auth/ability.js';
 import { ConfigManager } from '../config/config-manager.js';
 import { createLogger } from '../utils/logger.js';
+import { SERVER_BUILD_INFO } from '../generated/buildInfo.js';
 import { bootstrapCoordinator } from '../services/BootstrapCoordinator.js';
 import { SpectrumCoordinator } from '../spectrum/SpectrumCoordinator.js';
 import { SpectrumSessionCoordinator } from '../spectrum/SpectrumSessionCoordinator.js';
@@ -3457,7 +3458,8 @@ export class WSServer extends WSMessageHandler {
 
       // 3. 发送握手完成消息
       connection.send('serverHandshakeComplete', {
-        serverVersion: '1.0.0',
+        serverVersion: SERVER_BUILD_INFO.version,
+        sourceSha: SERVER_BUILD_INFO.commit,
         supportedFeatures: [
           'operatorFiltering',
           'handshakeProtocol',

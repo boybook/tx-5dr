@@ -9,6 +9,7 @@ import net from 'node:net';
 import tls from 'node:tls';
 import fs from 'node:fs';
 import path from 'node:path';
+import { isLoopbackHostname, parseHostHeader, requestPathname } from './gateway-utils.js';
 
 const DEFAULT_HTTP_PORT = 8076;
 const DEFAULT_HTTPS_PORT = 8443;
@@ -178,28 +179,6 @@ function serveFile(res, absPath) {
   });
 }
 
-function parseHostHeader(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return { hostname: '', port: '' };
-  if (raw.startsWith('[')) {
-    const end = raw.indexOf(']');
-    if (end !== -1) {
-      const hostname = raw.slice(1, end);
-      const port = raw.slice(end + 1).replace(/^:/, '');
-      return { hostname, port };
-    }
-  }
-  const [hostname, port = ''] = raw.split(':');
-  return { hostname, port };
-}
-
-function isLoopbackHostname(hostname) {
-  return hostname === 'localhost'
-    || hostname === '127.0.0.1'
-    || hostname === '::1'
-    || hostname === '[::1]';
-}
-
 function buildForwardedHeaders(req, entryScheme, targetBase = TARGET) {
   const hostHeader = req.headers.host || '';
   const parsedHost = parseHostHeader(hostHeader);
@@ -284,13 +263,6 @@ function buildHttpsRedirectUrl(req) {
   const hostname = parsed.hostname || 'localhost';
   const targetHost = hostname.includes(':') && !hostname.startsWith('[') ? `[${hostname}]` : hostname;
   return `https://${targetHost}:${activeHttpsPort}${req.url || '/'}`;
-}
-
-// WHATWG URL replaces the deprecated url.parse() (DEP0169). The fixed origin keeps a
-// request target such as `//host/x` a path instead of turning it into an authority.
-function requestPathname(rawUrl) {
-  const target = rawUrl || '/';
-  return new URL(`http://gateway.invalid${target.startsWith('/') ? '' : '/'}${target}`).pathname;
 }
 
 function handleRequest(req, res, entryScheme) {

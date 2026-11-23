@@ -1,11 +1,17 @@
-import React, { useState } from 'react';
-import { Popover, PopoverTrigger, PopoverContent, Button } from '@heroui/react';
+import React, { useEffect, useState } from 'react';
+import { Popover, PopoverTrigger, PopoverContent, Button, Divider, Skeleton } from '@heroui/react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faRadio, faLocationDot, faPencil } from '@fortawesome/free-solid-svg-icons';
+import type { IconDefinition } from '@fortawesome/fontawesome-svg-core';
+import { faRadio, faLocationDot, faPencil, faComputer, faTowerBroadcast, faSliders } from '@fortawesome/free-solid-svg-icons';
 import ReactMarkdown from 'react-markdown';
+import { useTranslation } from 'react-i18next';
+import { api } from '@tx5dr/core';
 import { useStationInfo } from '../../store/radioStore';
 import { useHasMinRole } from '../../store/authStore';
-import { getGridBounds, UserRole } from '@tx5dr/contracts';
+import { getGridBounds, UserRole, type StationInfo } from '@tx5dr/contracts';
+import { hasDesktopCapability } from '../../utils/desktopBridge';
+import { openStationManager, useCurrentDesktopStation } from '../../utils/desktopStations';
+import { displayHost } from '../stations/stationText';
 
 // 使用 Carto @2x 瓦片（512×512px 输出），以 256px CSS 尺寸渲染：
 // - 在 2× Retina 屏上：256 CSS px = 512 物理像素 = 1 张 @2x 瓦片，完全清晰
@@ -54,21 +60,76 @@ function latLonToGridPixel(lat: number, lon: number, cx: number, cy: number) {
   };
 }
 
+function hasStationProfile(stationInfo: StationInfo | null | undefined): boolean {
+  return Boolean(stationInfo?.callsign || stationInfo?.name || stationInfo?.qth?.grid || stationInfo?.description);
+}
+
+/**
+ * Whether the top-left station tag is shown. Inside the desktop shell it always
+ * identifies the station of this window; in a browser it appears once the
+ * station has a profile.
+ */
+export function useStationTagVisible(): boolean {
+  const stationInfo = useStationInfo();
+  return hasDesktopCapability('stations') || hasStationProfile(stationInfo);
+}
+
+/** Host version of this station, loaded when the popover first opens. */
+function useStationVersion(enabled: boolean): { version: string | null; loading: boolean } {
+  const [version, setVersion] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    if (!enabled || version !== null) return;
+    let cancelled = false;
+    setLoading(true);
+    api.getStationIdentity()
+      .then(identity => { if (!cancelled) setVersion(identity.hostVersion); })
+      .catch(() => { /* Older stations have no identity endpoint; the row is omitted. */ })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [enabled, version]);
+  return { version, loading };
+}
+
+const InfoRow: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
+  <div className="flex items-baseline justify-between gap-3 text-tiny">
+    <span className="flex-shrink-0 text-default-500">{label}</span>
+    <span className="min-w-0 truncate text-right text-foreground">{children}</span>
+  </div>
+);
+
 export const StationInfoPopover: React.FC = () => {
+  const { t } = useTranslation('stations');
   const stationInfo = useStationInfo();
   const isAdmin = useHasMinRole(UserRole.ADMIN);
   const [isOpen, setIsOpen] = useState(false);
+  const desktopStation = useCurrentDesktopStation();
+  const canOpenManager = hasDesktopCapability('stations');
+  const tagVisible = useStationTagVisible();
+  const { version, loading: versionLoading } = useStationVersion(isOpen);
 
   const handleEdit = () => {
     setIsOpen(false);
     window.dispatchEvent(new CustomEvent('openSettingsModal', { detail: { tab: 'station_info' } }));
   };
 
-  const hasContent =
-    stationInfo?.callsign || stationInfo?.name || stationInfo?.qth?.grid || stationInfo?.description;
-  if (!hasContent) return null;
+  const handleManage = () => {
+    setIsOpen(false);
+    void openStationManager();
+  };
 
-  const { callsign, name, description, qth } = stationInfo!;
+  if (!tagVisible) return null;
+
+  const { callsign, name, description, qth } = stationInfo ?? {};
+  const isRemote = desktopStation?.kind === 'remote';
+  const kindIcon: IconDefinition = !desktopStation ? faRadio : isRemote ? faTowerBroadcast : faComputer;
+  const kindLabel = !desktopStation ? t('tag.browser') : isRemote ? t('tag.remote') : t('tag.embedded');
+  const fallbackTitle = desktopStation
+    ? (isRemote ? desktopStation.label ?? t('tag.remote') : t('tag.embedded'))
+    : window.location.host;
+  const tagTitle = callsign || name || fallbackTitle;
+  const tagDetail = qth?.grid ?? null;
+  const address = isRemote && desktopStation?.url ? displayHost(desktopStation.url) : !desktopStation ? window.location.host : null;
 
   const hasPreciseCoords = qth?.latitude != null && qth?.longitude != null;
   const hasGrid = !hasPreciseCoords && qth?.grid && qth.grid.length >= 4;
@@ -113,28 +174,34 @@ export const StationInfoPopover: React.FC = () => {
         <div
           role="button"
           tabIndex={0}
-          className="flex items-center gap-1.5 bg-default-100 hover:bg-default-200 rounded-md px-2 py-1
-                     cursor-pointer transition-colors text-xs select-none"
+          aria-label={`${kindLabel}: ${tagTitle}`}
+          className="flex max-w-[16rem] items-center gap-1.5 rounded-md bg-default-100 px-2 py-1 text-xs
+                     cursor-pointer select-none transition-[background-color,transform] duration-150
+                     hover:bg-default-200 active:scale-[0.97] outline-none
+                     data-[focus-visible=true]:ring-2 data-[focus-visible=true]:ring-focus focus-visible:ring-2 focus-visible:ring-focus"
           onKeyDown={e => e.key === 'Enter' && setIsOpen(o => !o)}
         >
-          <FontAwesomeIcon icon={faRadio} className="text-primary text-xs" />
-          {callsign && <span className="font-bold text-foreground">{callsign}</span>}
-          {qth?.grid && (
-            <span className="text-default-400 font-mono">{qth.grid}</span>
+          <FontAwesomeIcon icon={kindIcon} className={`text-xs ${isRemote ? 'text-secondary' : 'text-primary'}`} />
+          <span className={`truncate text-foreground ${callsign ? 'font-bold' : 'font-medium'}`}>{tagTitle}</span>
+          {tagDetail && (
+            <span className="flex-shrink-0 text-default-400 font-mono">{tagDetail}</span>
           )}
         </div>
       </PopoverTrigger>
       <PopoverContent>
-        <div className="p-3 w-72 max-h-96 overflow-y-auto">
+        <div className="p-3 w-72 max-h-[28rem] overflow-y-auto">
           <div className="flex items-center gap-2 mb-2">
-            <FontAwesomeIcon icon={faRadio} className="text-primary text-sm flex-shrink-0" />
+            <span className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-medium ${isRemote ? 'bg-secondary/10 text-secondary' : 'bg-primary/10 text-primary'}`}>
+              <FontAwesomeIcon icon={kindIcon} className="text-sm" />
+            </span>
             <div className="min-w-0 flex-1">
-              {callsign && (
-                <span className="font-bold text-foreground text-sm mr-1">{callsign}</span>
-              )}
-              {name && (
-                <span className="text-default-600 text-xs">{name}</span>
-              )}
+              <div className="truncate">
+                <span className={`text-foreground text-sm mr-1 ${callsign ? 'font-bold' : 'font-semibold'}`}>{callsign || name || fallbackTitle}</span>
+                {callsign && name && (
+                  <span className="text-default-600 text-xs">{name}</span>
+                )}
+              </div>
+              <p className="truncate text-tiny text-default-500">{kindLabel}</p>
             </div>
             {isAdmin && (
               <Button
@@ -246,6 +313,35 @@ export const StationInfoPopover: React.FC = () => {
                             [&>p]:my-1 [&>ul]:my-1 [&>ol]:my-1 [&>h1]:text-sm [&>h2]:text-sm [&>h3]:text-xs">
               <ReactMarkdown>{description}</ReactMarkdown>
             </div>
+          )}
+
+          <Divider className="my-2.5" />
+          <div className="flex flex-col gap-1.5">
+            <InfoRow label={t('tag.connection')}>
+              {/* The header already names the station when it has no callsign or name. */}
+              {isRemote && desktopStation?.label && (callsign || name) ? `${kindLabel} · ${desktopStation.label}` : kindLabel}
+            </InfoRow>
+            {address && (
+              <InfoRow label={t('tag.address')}><span className="font-mono">{address}</span></InfoRow>
+            )}
+            {(version || versionLoading) && (
+              <InfoRow label={t('tag.version')}>
+                {version ?? <Skeleton className="ml-auto h-3 w-14 rounded-small" />}
+              </InfoRow>
+            )}
+          </div>
+
+          {canOpenManager && (
+            <Button
+              size="sm"
+              variant="flat"
+              fullWidth
+              className="mt-3"
+              startContent={<FontAwesomeIcon icon={faSliders} className="text-xs" />}
+              onPress={handleManage}
+            >
+              {t('tag.manage')}
+            </Button>
           )}
         </div>
       </PopoverContent>

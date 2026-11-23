@@ -132,6 +132,10 @@ export * from './schema/rtty.schema.js';
 // Station Info Schema
 export * from './schema/station-info.schema.js';
 
+// Station Identity / Desktop Bridge Schema
+export * from './schema/station-identity.schema.js';
+export * from './schema/desktop-stations.schema.js';
+
 // Grid Utils
 export * from './utils/grid.js';
 export * from './utils/callsign.js';

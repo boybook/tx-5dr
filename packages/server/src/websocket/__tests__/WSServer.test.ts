@@ -958,3 +958,38 @@ describe('WSServer spectrum subscriptions', () => {
     expect(send).toHaveBeenCalledWith(WSMessageType.SPECTRUM_FRAME, frame);
   });
 });
+
+describe('WSServer handshake identity', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('reports the real server build in serverHandshakeComplete', async () => {
+    const { SERVER_BUILD_INFO } = await import('../../generated/buildInfo.js');
+    const { connection, sent } = createTestConnection('conn-handshake');
+    const server = Object.create(WSServer.prototype) as any;
+    server.connections = new Map([['conn-handshake', connection]]);
+    server.clientInstanceConnections = new Map();
+    server.handshakeTimers = new Map();
+    server.getActiveConnections = () => [];
+    server.filterRequestedOperatorIds = (_conn: unknown, ids: string[]) => ids;
+    server.resolveSelectedOperatorId = () => null;
+    server.broadcastClientCount = vi.fn();
+    server.sendFilteredOperatorsList = vi.fn();
+    server.sendProjectedRecentSlotPacks = vi.fn(async () => undefined);
+    server.digitalRadioEngine = { getStatus: () => createStatus() };
+    vi.spyOn(AuthManager, 'getInstance').mockReturnValue({
+      getRemoteAccessConfig: () => ({ maxConnections: 32 }),
+    } as unknown as AuthManager);
+
+    await server.handleClientHandshake('conn-handshake', {
+      enabledOperatorIds: [],
+      selectedOperatorId: null,
+      clientInstanceId: 'client-1',
+    });
+
+    const complete = sent.find(message => message.type === WSMessageType.SERVER_HANDSHAKE_COMPLETE);
+    expect(complete?.data.serverVersion).toBe(SERVER_BUILD_INFO.version);
+    expect(complete?.data.sourceSha).toBe(SERVER_BUILD_INFO.commit);
+  });
+});

@@ -328,7 +328,7 @@ export function DesktopUpdateCard() {
 
         {desktopUpdateError && (
           <Alert color="danger" variant="flat" title={t(`system.desktopUpdateAutoReason.${desktopUpdateError}`, { defaultValue: desktopUpdateError })} endContent={desktopUpdateError !== 'update_install_not_completed' && isElectron && window.electronAPI?.app?.restart ?
-            <Button onPress={() => { if (window.confirm(t('system.updateRestartCurrent'))) void window.electronAPI?.app?.restart(); }}>{t('system.updateRestartCurrent')}</Button> : undefined} />
+            <Button onPress={() => { if (window.confirm(t('system.updateRestartCurrent'))) void window.electronAPI?.app?.restart?.(); }}>{t('system.updateRestartCurrent')}</Button> : undefined} />
         )}
 
         <div className="grid gap-3 md:grid-cols-2">

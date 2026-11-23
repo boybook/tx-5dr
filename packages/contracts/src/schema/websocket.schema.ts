@@ -1314,6 +1314,8 @@ export const WSServerHandshakeCompleteMessageSchema = WSBaseMessageSchema.extend
   type: z.literal(WSMessageType.SERVER_HANDSHAKE_COMPLETE),
   data: z.object({
     serverVersion: z.string().optional(),
+    /** Full source commit of the server build. */
+    sourceSha: z.string().optional(),
     supportedFeatures: z.array(z.string()).optional(),
     finalEnabledOperatorIds: z.array(z.string()).optional(),
     finalSelectedOperatorId: z.string().nullable().optional(),

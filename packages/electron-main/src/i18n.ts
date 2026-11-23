@@ -32,6 +32,7 @@ export interface ElectronMessages {
     logHint: string;
     actions: {
       'open-vc-runtime-download': string;
+      'open-station-manager': string;
     };
     vc_runtime: {
       title: string;
@@ -89,6 +90,9 @@ export interface ElectronMessages {
     openInBrowser: string;
     about: string;
     quit: string;
+    switchStation: string;
+    manageStations: string;
+    embeddedStation: string;
   };
 }
 
@@ -121,6 +125,7 @@ const ZH: ElectronMessages = {
     logHint: '你可以查看下方实时日志，或点击日志区域右上角的文件夹图标打开日志目录。',
     actions: {
       'open-vc-runtime-download': '下载 VC++ 运行库',
+      'open-station-manager': '连接其他电台',
     },
     vc_runtime: {
       title: '需要安装 VC++ 运行库',
@@ -178,6 +183,9 @@ const ZH: ElectronMessages = {
     openInBrowser: '在浏览器中打开',
     about: '关于 TX-5DR',
     quit: '退出',
+    switchStation: '打开电台',
+    manageStations: '管理电台…',
+    embeddedStation: '本机电台',
   },
 };
 
@@ -210,6 +218,7 @@ const EN: ElectronMessages = {
     logHint: 'You can check the live logs below, or click the folder icon in the top-right of the log area to open the log folder.',
     actions: {
       'open-vc-runtime-download': 'Download VC++ Runtime',
+      'open-station-manager': 'Connect to Another Station',
     },
     vc_runtime: {
       title: 'VC++ Runtime Required',
@@ -267,6 +276,9 @@ const EN: ElectronMessages = {
     openInBrowser: 'Open in Browser',
     about: 'About TX-5DR',
     quit: 'Quit',
+    switchStation: 'Open Station',
+    manageStations: 'Manage Stations…',
+    embeddedStation: 'This Computer',
   },
 };
 

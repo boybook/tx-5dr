@@ -37,6 +37,7 @@ in the site repository. Host, SDK, plugin and data-format versions are separate.
 - [DeepCW model integration and distribution obligations](decisions/deepcw-engine-integration.md)
 - [WSJT-X staged decode lifecycle](decisions/wsjtx-decode-lifecycle.md)
 - [RTTY over AFSK](decisions/rtty-afsk.md)
+- [Desktop shell, stations and the bridge contract](decisions/desktop-remote-station.md)
 
 ## Development
 
