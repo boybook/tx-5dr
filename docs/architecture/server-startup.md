@@ -241,6 +241,19 @@ rigctld 优先报告连接的物理 VFO；后端明确不支持 VFO 命令时保
 - `RadioBridge.test.ts`：连接事件投影不执行连接期写频
 - `HamlibConnection.test.ts` / `IcomWlanConnection.test.ts`：关键 I/O 串行化、复合切换与低优先级让路
 
+## Local network announcement
+
+After startup completes, `StationDiscoveryAdvertiser` announces the station as
+DNS-SD `_tx5dr._tcp` when `resolveStationAdvertisement` allows it: never with the
+`local` remote access preset, by default for Electron, Linux service and generic
+servers, and only with `TX5DR_DISCOVERY=1` for Docker, Android and development
+servers. The announced port is the browser-facing Web entrypoint
+(`TX5DR_DISCOVERY_HTTPS_PORT`, else `TX5DR_DISCOVERY_PORT`, `WEB_PORT` or
+`TX5DR_HTTP_PORT`). TXT records carry only the version, the station instance ID
+and the protocol. `AuthManager.onRemoteAccessChanged` re-evaluates the
+announcement after a saved preset change, and shutdown withdraws it before the
+engine stops. Announcement failures are logged and never block startup.
+
 ## Station test composition
 
 Station tests select external audio device ports before discovery and keep the

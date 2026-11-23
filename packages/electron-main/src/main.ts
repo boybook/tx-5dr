@@ -84,7 +84,14 @@ import {
   type RemoteStationProfile,
   type StationSettings,
 } from './stationProfiles.js';
-import { probeStation, type CertificateSummary, type StationProbeResult } from './stationProbe.js';
+import { nodeProbeTransport, probeStation, type CertificateSummary, type StationProbeResult } from './stationProbe.js';
+import Bonjour from 'bonjour-service';
+import {
+  STATION_SERVICE_TYPE,
+  StationDiscovery,
+  type CandidateDescription,
+  type StationCandidate,
+} from './stationDiscovery.js';
 import { RemoteGatewayStartError, RemoteGatewaySupervisor } from './remoteGatewayProcess.js';
 import {
   classifyStationNavigation,
@@ -3202,6 +3209,7 @@ async function cleanupChildProcesses(isDevelopment: boolean): Promise<ChildShutd
   if (currentWebProcess) {
     tasks.push(killProcess(currentWebProcess, 'web', CHILD_SHUTDOWN_OPTIONS.web));
   }
+  stationDiscovery?.stop();
   await Promise.all([...remoteGateways.values()].map(gateway => gateway.stop()
     .catch((error: unknown) => logger.warn('failed to stop remote gateway', error))));
 
@@ -3486,6 +3494,9 @@ Failed to load: ${failedModules.map(m => m.name).join(', ')}`
       serverProcess = runChild('server', serverLauncherEntry, {
         PORT: String(requestedServerPort),
         WEB_PORT: String(webPort),
+        ...(getDesktopHttpsConfig().enabled
+          ? { TX5DR_DISCOVERY_HTTPS_PORT: String(getDesktopHttpsConfig().httpsPort || DEFAULT_WEB_HTTPS_PORT) }
+          : {}),
         TX5DR_SERVER_ENTRY: serverEntry,
         TX5DR_INTERNAL_SHUTDOWN_TOKEN: internalShutdownToken,
         TX5DR_CONFIG_DIR: getAppConfigDir(),
@@ -3883,7 +3894,16 @@ function buildStationState(): DesktopStationsState {
       lastIdentity: profile.lastIdentity ?? null,
     })),
     connections: Object.fromEntries(stationConnectStates),
-    discovered: [],
+    discovered: (stationDiscovery?.list() ?? [])
+      .filter(station => station.instanceId !== embeddedInstanceId)
+      .map(station => ({
+        instanceId: station.instanceId,
+        label: station.label,
+        url: station.url,
+        hostVersion: station.hostVersion,
+        profileId: settings.profiles.find(profile =>
+          profile.lastIdentity?.instanceId === station.instanceId || profile.url === station.url)?.id ?? null,
+      })),
   };
 }
 
@@ -4121,6 +4141,88 @@ function focusWindow(windowInstance: BrowserWindow): void {
   windowInstance.focus();
 }
 
+// ===== Local network discovery =====
+// Browsing runs only while the station manager is open.
+
+let stationDiscovery: StationDiscovery | null = null;
+let embeddedInstanceId: string | null = null;
+
+async function getEmbeddedInstanceId(): Promise<string | null> {
+  if (embeddedInstanceId || !selectedServerPort) return embeddedInstanceId;
+  const probe = await probeStation(`http://127.0.0.1:${selectedServerPort}`).catch(() => null);
+  if (probe?.kind === 'ok') embeddedInstanceId = probe.identity.instanceId.toLowerCase();
+  return embeddedInstanceId;
+}
+
+async function fetchStationProfileLabel(url: string): Promise<string | null> {
+  try {
+    const response = await nodeProbeTransport.get(url, '/api/station/info', { kind: 'system' });
+    if (response.status !== 200) return null;
+    const body = JSON.parse(response.body) as { data?: { callsign?: unknown; name?: unknown } };
+    const callsign = typeof body.data?.callsign === 'string' ? body.data.callsign.trim() : '';
+    const name = typeof body.data?.name === 'string' ? body.data.name.trim() : '';
+    return [callsign, name].filter(Boolean).join(' · ') || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Lists a candidate only when the station at its address has the announced identity. */
+async function describeDiscoveredStation(candidate: StationCandidate): Promise<CandidateDescription> {
+  if (candidate.instanceId === await getEmbeddedInstanceId()) {
+    logger.debug('ignoring the embedded station announcement', { url: candidate.url });
+    return null;
+  }
+  const host = new URL(candidate.url).host;
+  const probe = await probeStation(candidate.url);
+  if (probe.kind === 'certificate-untrusted') return { label: host, hostVersion: null };
+  if (probe.kind !== 'ok' || probe.identity.instanceId.toLowerCase() !== candidate.instanceId) {
+    logger.debug('dropping unverified station announcement', {
+      url: candidate.url,
+      result: probe.kind,
+      identityMatches: probe.kind === 'ok' ? false : null,
+    });
+    return null;
+  }
+  logger.debug('discovered station verified', { url: candidate.url, hostVersion: probe.identity.hostVersion });
+  return { label: await fetchStationProfileLabel(candidate.url) ?? host, hostVersion: probe.identity.hostVersion };
+}
+
+function startStationDiscovery(): void {
+  stationDiscovery ??= new StationDiscovery({
+    browse: (onUp, onDown) => {
+      const bonjour = new Bonjour(undefined, (error: unknown) => {
+        logger.warn('local network discovery error', { error: error instanceof Error ? error.message : String(error) });
+      });
+      const browser = bonjour.find({ type: STATION_SERVICE_TYPE, protocol: 'tcp' });
+      const snapshot = (service: { name: string; port: number; addresses?: string[]; txt?: unknown }) => ({
+        name: service.name,
+        port: service.port,
+        addresses: service.addresses,
+        txt: (service.txt ?? {}) as Record<string, unknown>,
+      });
+      browser.on('up', (service) => {
+        logger.debug('station announcement received', { name: service.name, port: service.port });
+        onUp(snapshot(service));
+      });
+      browser.on('srv-update', service => onUp(snapshot(service)));
+      browser.on('down', service => onDown(snapshot(service)));
+      return {
+        stop: () => {
+          browser.stop();
+          bonjour.destroy();
+        },
+      };
+    },
+    describe: describeDiscoveredStation,
+    onChange: broadcastStationState,
+  });
+  if (!stationDiscovery.running) {
+    logger.info('browsing the local network for stations');
+    stationDiscovery.start();
+  }
+}
+
 async function openStationManagerWindow(): Promise<void> {
   if (stationManagerWindow && !stationManagerWindow.isDestroyed()) {
     focusWindow(stationManagerWindow);
@@ -4150,7 +4252,9 @@ async function openStationManagerWindow(): Promise<void> {
   windowInstance.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   windowInstance.on('closed', () => {
     if (stationManagerWindow === windowInstance) stationManagerWindow = null;
+    stationDiscovery?.stop();
   });
+  startStationDiscovery();
   await loadStationManagerPage(windowInstance, { mode: 'manage' });
   windowInstance.focus();
 }

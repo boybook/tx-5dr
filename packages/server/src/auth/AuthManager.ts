@@ -74,8 +74,15 @@ export class AuthManager {
   private runtimeState = RuntimeStateManager.getInstance();
   private browserLoginCodes = new BrowserLoginCodeStore();
   private unregisterPersistence: (() => void) | null = null;
+  private readonly remoteAccessListeners = new Set<() => void>();
 
   private constructor() {}
+
+  /** Notifies after remote access settings were saved; returns the unsubscribe function. */
+  onRemoteAccessChanged(listener: () => void): () => void {
+    this.remoteAccessListeners.add(listener);
+    return () => this.remoteAccessListeners.delete(listener);
+  }
 
   static getInstance(): AuthManager {
     if (!AuthManager.instance) {
@@ -662,6 +669,13 @@ export class AuthManager {
       this.config.allowPublicViewing = allowPublicViewing;
     }
     await this.saveConfig();
+    for (const listener of this.remoteAccessListeners) {
+      try {
+        listener();
+      } catch (error) {
+        logger.warn('remote access listener failed', { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
     return {
       ...this.config.remoteAccess,
       allowPublicViewing: this.config.allowPublicViewing,

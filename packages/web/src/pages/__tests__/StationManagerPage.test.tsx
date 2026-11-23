@@ -93,6 +93,24 @@ describe('StationManagerPage', () => {
     expect(screen.getByText('empty.title')).toBeTruthy();
   });
 
+  it('offers discovered stations, opening the saved one and prefilling a new one', async () => {
+    const bridge = installBridge(baseState({
+      discovered: [
+        { instanceId: 'aaaaaaaa-1111-4222-8333-444444444444', label: 'BG7YYY · Field', url: 'http://192.168.1.30:8076', hostVersion: '1.2.3', profileId: null },
+        { instanceId: 'bbbbbbbb-1111-4222-8333-444444444444', label: 'Shack B', url: 'http://192.168.1.20:8076', hostVersion: '1.2.3', profileId: 'station-b' },
+      ],
+    }));
+    await renderPage('?mode=manage');
+
+    expect(screen.getByText('discovered.title')).toBeTruthy();
+    expect(screen.getByText('BG7YYY · Field')).toBeTruthy();
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'discovered.add' })); });
+    expect((screen.getByLabelText(/editor\.url/) as HTMLInputElement).value).toBe('http://192.168.1.30:8076');
+    expect((screen.getByLabelText('editor.label') as HTMLInputElement).value).toBe('BG7YYY · Field');
+    expect(bridge.connect).not.toHaveBeenCalled();
+  });
+
   it('asks to trust the presented certificate in a remote station window', async () => {
     const bridge = installBridge(baseState({
       connections: {

@@ -90,3 +90,19 @@ instead of loading anything. HTTPS stations use system trust; otherwise the user
 confirms the presented SHA-256 fingerprint, which is then pinned. A changed pinned
 certificate blocks the connection until the user explicitly trusts the newly
 presented fingerprint; only a fingerprint the station just presented can be trusted.
+
+## Local network discovery
+
+Stations announce themselves as DNS-SD `_tx5dr._tcp` (see
+[server startup](../architecture/server-startup.md)). The desktop client browses
+only while the station manager is open (`stationDiscovery.ts`). An announcement
+is listed only after the station at the announced address answered
+`/api/station/identity` with the announced instance ID; the embedded station's own
+announcement is ignored. Its display name comes from the station's public profile,
+because announcements carry no callsign or host name.
+
+macOS requires Local Network permission for multicast DNS. The packaged app
+declares `NSLocalNetworkUsageDescription` and `NSBonjourServices`
+(`_tx5dr._tcp`); without them, both browsing and the embedded server's
+announcement are silently blocked. A development Electron binary has its own
+permission entry under System Settings > Privacy & Security > Local Network.

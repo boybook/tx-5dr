@@ -1,6 +1,6 @@
 {
   "title": "Stations",
-  "subtitle": "Each station opens in its own window, and several can be open at once. A remote station uses its own interface and accounts.",
+  "subtitle": "Choose a station to open.",
   "embeddedLabel": "This Computer",
   "embeddedDescription": "The station that runs with the desktop client",
   "remoteSection": "Remote stations",

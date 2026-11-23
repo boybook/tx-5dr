@@ -1,6 +1,6 @@
 {
   "title": "电台",
-  "subtitle": "每个电台在自己的窗口中打开，可以同时打开多个。远程电台使用它自己的界面和账号。",
+  "subtitle": "选择要打开的电台。",
   "embeddedLabel": "本机电台",
   "embeddedDescription": "随桌面客户端运行的电台",
   "remoteSection": "远程电台",

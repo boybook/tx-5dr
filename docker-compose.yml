@@ -54,6 +54,11 @@ services:
       # 实时音频与音频环境变量
       - RTC_DATA_AUDIO_UDP_PORT=50110
       - RTC_DATA_AUDIO_ICE_UDP_MUX=1
+      # 局域网发现（桌面客户端自动找到本电台）。Docker 默认的 bridge 网络
+      # 不转发组播，需要改用 network_mode: host（并去掉上面的 ports 映射），
+      # 再开启下面两行；端口填写主机上浏览器访问的 Web 端口。
+      # - TX5DR_DISCOVERY=1
+      # - TX5DR_DISCOVERY_PORT=80
       - PULSE_RUNTIME_PATH=/run/user/1000/pulse
       - PULSE_STATE_PATH=/var/lib/pulse
     # 音频(audio)和串口(dialout)设备访问

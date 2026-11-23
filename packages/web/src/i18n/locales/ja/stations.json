@@ -1,6 +1,6 @@
 {
   "title": "局",
-  "subtitle": "各局はそれぞれのウィンドウで開き、複数を同時に開けます。リモート局はその局自身の画面とアカウントを使います。",
+  "subtitle": "開く局を選んでください。",
   "embeddedLabel": "このコンピュータ",
   "embeddedDescription": "デスクトップクライアントと一緒に動作する局",
   "remoteSection": "リモート局",
