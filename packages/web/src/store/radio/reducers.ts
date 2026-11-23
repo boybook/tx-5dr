@@ -152,6 +152,7 @@ export const initialRadioState: RadioState = {
   },
   tuneToneStatus: {
     active: false,
+    method: 'audio-tone',
     toneHz: null,
     startedAt: null,
     maxDurationMs: 15000,

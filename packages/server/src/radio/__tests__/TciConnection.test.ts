@@ -583,6 +583,112 @@ describe('TciConnection', () => {
   });
 });
 
+describe('TciConnection radio tune', () => {
+  const tuneStartup = [
+    'PROTOCOL:ExpertSDR3,2.0;',
+    'DEVICE:Mock ExpertSDR3;',
+    'VFO:0,0,14074000;',
+    'TRX:0,false;',
+    'TUNE:0,false;',
+    'TUNE_DRIVE:0,20;',
+    'READY;',
+  ];
+
+  async function connectTune(options: { startupCommands?: string[]; writeTimeoutMs?: number } = {}) {
+    server = new MockTciServer({ startupCommands: options.startupCommands ?? tuneStartup });
+    await server.start();
+    const endpoint = new URL(server.url());
+    const connection = new TciConnection({ writeTimeoutMs: options.writeTimeoutMs });
+    await connection.connect({ type: 'tci', tci: {
+      host: endpoint.hostname, port: Number(endpoint.port), dialect: 'auto', autoDiscoverPorts: true, receiver: 0, trx: 0, vfo: 0,
+      audioEnabled: true, audioSampleRate: 12000,
+    } });
+    return connection;
+  }
+
+  const tuneWrites = () => server!.receivedCommands
+    .filter((command) => command.name === 'tune')
+    .map((command) => command.args.join(','));
+
+  it('does not offer radio tune when the session never reported TUNE state', async () => {
+    const connection = await connectTune({ startupCommands: tuneStartup.filter((command) => !command.startsWith('TUNE:')) });
+
+    expect(connection.supportsRadioTune()).toBe(false);
+    await expect(connection.setRadioTune(true)).rejects.toThrow(/TUNE state/);
+    expect(tuneWrites()).toEqual([]);
+
+    await connection.disconnect('test complete');
+  });
+
+  it('switches the radio tune by state confirmation and reports each change', async () => {
+    const connection = await connectTune();
+    const changes: boolean[] = [];
+    connection.on('radioTuneChanged', (active) => changes.push(active));
+
+    expect(connection.supportsRadioTune()).toBe(true);
+    await connection.setRadioTune(true);
+    await connection.setRadioTune(false);
+
+    expect(tuneWrites()).toEqual(['0,true', '0,false']);
+    expect(changes).toEqual([true, false]);
+    expect(server!.receivedCommands.some((command) => command.name === 'trx')).toBe(false);
+
+    await connection.disconnect('test complete');
+  });
+
+  it('treats an active radio tune as transmitting for idle-only parameters', async () => {
+    const connection = await connectTune();
+    await connection.setRadioTune(true);
+
+    // SPLIT_ENABLE is idle-only; TRX stays false while the radio tune keys the transmitter.
+    const split = connection.getCapabilityBindings().definitions.find((definition) => definition.id === 'split_enabled');
+    expect(split?.write).toBeDefined();
+    await expect(split!.write!(connection, true)).rejects.toThrow(/idle/i);
+    expect(server!.receivedCommands.some((command) => command.name === 'split_enable' && command.args.length > 1)).toBe(false);
+
+    await connection.setRadioTune(false);
+    await connection.disconnect('test complete');
+  });
+
+  it('reports a TUNE switched off by the radio software', async () => {
+    const connection = await connectTune();
+    await connection.setRadioTune(true);
+    const changes: boolean[] = [];
+    connection.on('radioTuneChanged', (active) => changes.push(active));
+
+    server!.broadcast('TUNE:0,false;');
+
+    await waitFor(() => changes.length === 1);
+    expect(changes).toEqual([false]);
+    await connection.disconnect('test complete');
+    expect(tuneWrites()).toEqual(['0,true']);
+  });
+
+  it('switches an owned radio tune off before disconnecting', async () => {
+    const connection = await connectTune();
+    await connection.setRadioTune(true);
+
+    await connection.disconnect('test complete');
+
+    expect(tuneWrites()).toEqual(['0,true', '0,false']);
+  });
+
+  it('poisons the session after an unconfirmed TUNE ON but still sends the safe OFF', async () => {
+    const connection = await connectTune({ writeTimeoutMs: 25 });
+    // Swallow the state echo and the readback: the ON was sent, its result is unknown.
+    server!.onCommand(({ command }) => command.name === 'tune' && (command.args[1] === 'true' || command.args.length === 1));
+
+    await expect(connection.setRadioTune(true)).rejects.toThrow(/timed out|timeout/i);
+    expect(connection.getState()).toBe(RadioConnectionState.ERROR);
+    expect(connection.isHealthy()).toBe(false);
+    await expect(connection.setPTT(true)).rejects.toThrow(/uncertain/i);
+    await expect(connection.setRadioTune(true)).rejects.toThrow(/uncertain/i);
+
+    await connection.disconnect('test complete');
+    expect(tuneWrites()).toEqual(['0,true', '0', '0,false']);
+  });
+});
+
 describe('resolveTciEndpointCandidates', () => {
   it('tries ExpertSDR and Thetis/Aether defaults for legacy auto configuration', () => {
     expect(resolveTciEndpointCandidates({

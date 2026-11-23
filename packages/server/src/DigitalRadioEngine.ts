@@ -122,6 +122,7 @@ import { PhysicalPttMonitor } from './radio/PhysicalPttMonitor.js';
 import type { RigctldBridgeConfig, RigctldStatus } from '@tx5dr/contracts';
 import { RadioPowerController } from './radio/RadioPowerController.js';
 import { TuneToneController } from './radio/TuneToneController.js';
+import { getRadioTunePort } from './radio/TuneCarriers.js';
 import { buildRadioStatusPayload } from './radio/buildRadioStatusPayload.js';
 import type { RealtimeRxAudioRouter } from './realtime/RealtimeRxAudioRouter.js';
 import type { PluginRadioCommand, PluginRadioTunerCommand } from '@tx5dr/plugin-api';
@@ -687,6 +688,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       physicalTxCoordinator: this.physicalTxCoordinator,
       isTransmitBusy: () => this.isTransmitBusyForTuneTone(),
       getOperatorToneHz: (operatorId) => this.resolveTuneToneFrequency(operatorId),
+      getRadioTune: () => getRadioTunePort(this.radioManager.getActiveConnection()),
       emitStatus: (status) => this.emit('tuneToneStatusChanged', status),
     });
     this.on('radioStatusChanged', () => {
@@ -700,6 +702,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
           logger.warn('Failed to stop tune tone after radio disconnect', error);
         });
       }
+      this.tuneToneController.refreshStatus();
     });
 
     this.rigctldBridge = new RigctldBridge(this.radioManager, this.physicalTxCoordinator);

@@ -335,8 +335,12 @@
     "externalDescription": "外部の空中チューニングをトリガーするために短期間の単一トーンを発します。周波数が空いているか、アンテナが接続されているかを確認してください。",
     "startToneTune": "マニュアルモノトーンチューニング",
     "stopToneTune": "単調チューニングを停止 {{seconds}}s",
-    "toneBusy": "現在送信中のため、モノトーンチューニングを開始できません。",
-    "toneStartFailed": "モノトーンチューニングの開始に失敗しました"
+    "radioTuneTitle": "無線機チューン（TUNE）",
+    "radioTuneDescription": "無線機ソフトウェアがチューン電力でキャリアを生成します。周波数が空いていること、アンテナが接続されていることを確認してください。",
+    "startRadioTune": "無線機チューンを開始",
+    "stopRadioTune": "無線機チューンを停止 {{seconds}}s",
+    "tuneBusy": "現在送信中のため、チューニングを開始できません。",
+    "tuneStartFailed": "チューニングの開始に失敗しました"
   },
   "power": {
     "on": {

@@ -324,8 +324,12 @@
     "externalDescription": "Transmit a short steady tone to trigger an external antenna tuner. Make sure the frequency is clear and an antenna is connected.",
     "startToneTune": "Manual tone tune",
     "stopToneTune": "Stop tone tune {{seconds}}s",
-    "toneBusy": "The transmitter is already active, so tone tune cannot start.",
-    "toneStartFailed": "Failed to start tone tune"
+    "radioTuneTitle": "Radio tune (TUNE)",
+    "radioTuneDescription": "The radio software generates the tune carrier at its tune power. Make sure the frequency is clear and an antenna is connected.",
+    "startRadioTune": "Start radio tune",
+    "stopRadioTune": "Stop radio tune {{seconds}}s",
+    "tuneBusy": "The transmitter is already active, so tuning cannot start.",
+    "tuneStartFailed": "Failed to start tuning"
   },
   "fakeFrequency": {
     "toggle": "Virtual Frequency Offset",

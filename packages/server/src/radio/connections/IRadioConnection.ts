@@ -192,6 +192,12 @@ export interface IRadioConnectionEvents {
 
   /** Observed meter fields changed for the active radio session. */
   meterCapabilitiesChanged: (capabilities: MeterCapabilities) => void;
+
+  /**
+   * The radio reported its own tune carrier switching on or off, whoever caused
+   * it (this client, another client, or the radio software's TUNE button).
+   */
+  radioTuneChanged: (active: boolean) => void;
 }
 
 export type RadioModeIntent = 'voice' | 'digital' | 'cw';
@@ -372,6 +378,23 @@ export interface IRadioConnection extends EventEmitter<IRadioConnectionEvents> {
    * @optional Best-effort stop used by the CW keyer manager.
    */
   stopCWMessage?(): Promise<void>;
+
+  /**
+   * Reports whether the radio software provides its own tune function, which
+   * generates the carrier and applies its own tune power without TX audio or PTT.
+   *
+   * @optional TCI maps this to the `TUNE` command when the session reported tune state.
+   */
+  supportsRadioTune?(): boolean;
+
+  /**
+   * Switches the radio-owned tune carrier on or off and resolves after the radio
+   * confirms the state. A transmission keyed this way is self-keyed: callers must
+   * own a physical TX lease that does not assert PTT.
+   *
+   * @optional Implemented together with supportsRadioTune().
+   */
+  setRadioTune?(enabled: boolean): Promise<void>;
 
   /**
    * 获取电台当前 PTT/TX 状态。

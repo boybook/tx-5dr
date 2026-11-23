@@ -4,7 +4,7 @@ import { addToast } from '@heroui/toast';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faWaveSquare } from '@fortawesome/free-solid-svg-icons';
 import { useTranslation } from 'react-i18next';
-import { WSMessageType } from '@tx5dr/contracts';
+import { WSMessageType, type TuneMethod } from '@tx5dr/contracts';
 import { CapabilityControl } from '../CapabilityRegistry';
 import type { CapabilityComponentProps } from '../control-types';
 import { BooleanCapability } from './BooleanCapability';
@@ -43,7 +43,23 @@ export function TunerCapabilityControl(props: CapabilityComponentProps) {
   </span>;
 }
 
-/** The existing tone-tune workflow remains a dedicated operation beside the shared capability controls. */
+/** The radio's own TUNE uses its tune power; the audio tone uses the normal drive. */
+const TUNE_TEXT: Record<TuneMethod, { title: string; description: string; start: string; stop: string }> = {
+  'audio-tone': {
+    title: 'radio:tuner.externalTitle',
+    description: 'radio:tuner.externalDescription',
+    start: 'radio:tuner.startToneTune',
+    stop: 'radio:tuner.stopToneTune',
+  },
+  'radio-tune': {
+    title: 'radio:tuner.radioTuneTitle',
+    description: 'radio:tuner.radioTuneDescription',
+    start: 'radio:tuner.startRadioTune',
+    stop: 'radio:tuner.stopRadioTune',
+  },
+};
+
+/** The manual tune workflow remains a dedicated operation beside the shared capability controls. */
 export function TunerCapabilitySurface() {
   const { t } = useTranslation();
   const canControl = useCan('execute', 'RadioControl');
@@ -54,6 +70,10 @@ export function TunerCapabilitySurface() {
   const tuneState = useCapabilityState('tuner_tune');
   const switchDescriptor = useCapabilityDescriptor('tuner_switch');
   const tuneDescriptor = useCapabilityDescriptor('tuner_tune');
+  const tunePowerState = useCapabilityState('tune_power');
+  const tunePowerDescriptor = useCapabilityDescriptor('tune_power');
+  const method = tuneToneStatus.method;
+  const text = TUNE_TEXT[method];
   const [now, setNow] = useState(Date.now());
   const active = tuneToneStatus.active;
   const busy = pttStatus.isTransmitting && !active;
@@ -64,7 +84,7 @@ export function TunerCapabilitySurface() {
     return () => clearInterval(id);
   }, [active]);
   useEffect(() => {
-    if (tuneToneStatus.error) addToast({ title: t('radio:tuner.toneStartFailed'), description: tuneToneStatus.error, color: 'danger', timeout: 5000 });
+    if (tuneToneStatus.error) addToast({ title: t('radio:tuner.tuneStartFailed'), description: tuneToneStatus.error, color: 'danger', timeout: 5000 });
   }, [t, tuneToneStatus.error]);
   if (!canControl) return null;
   const handleTone = () => {
@@ -84,14 +104,17 @@ export function TunerCapabilitySurface() {
       {!switchState?.supported && !tuneState?.supported && <p className="text-xs text-default-500">{t('radio:tuner.builtInUnsupported')}</p>}
     </section>
     <section className="space-y-2 border-t border-divider pt-3">
-      <div className="text-sm font-medium">{t('radio:tuner.externalTitle')}</div>
-      <p className="text-xs text-default-500">{t('radio:tuner.externalDescription')}</p>
+      <div className="text-sm font-medium">{t(text.title)}</div>
+      <p className="text-xs text-default-500">{t(text.description)}</p>
+      {method === 'radio-tune' && tunePowerDescriptor && tunePowerState?.supported && (
+        <div className="cap-item"><CapabilityControl descriptor={tunePowerDescriptor} state={tunePowerState} /></div>
+      )}
       <Button size="sm" variant={active ? 'solid' : 'flat'} color="danger" onPress={handleTone}
         isDisabled={!connection.state.isConnected || busy} className="w-full font-medium"
         startContent={<FontAwesomeIcon icon={faWaveSquare} className="text-xs" />}>
-        {active ? t('radio:tuner.stopToneTune', { seconds: elapsed }) : t('radio:tuner.startToneTune')}
+        {active ? t(text.stop, { seconds: elapsed }) : t(text.start)}
       </Button>
-      {busy && <p className="text-xs text-warning-600">{t('radio:tuner.toneBusy')}</p>}
+      {busy && <p className="text-xs text-warning-600">{t('radio:tuner.tuneBusy')}</p>}
     </section>
   </div>;
 }

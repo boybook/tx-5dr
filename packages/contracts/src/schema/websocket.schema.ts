@@ -463,8 +463,19 @@ export const TuneToneStartPayloadSchema = z.object({
 });
 export type TuneToneStartPayload = z.infer<typeof TuneToneStartPayloadSchema>;
 
+/**
+ * How a tune carrier is produced:
+ * - `audio-tone`: TX-5DR keys PTT and transmits a sine tone at the normal drive level.
+ * - `radio-tune`: the radio software's own TUNE function generates the carrier and
+ *   applies its tune power; TX-5DR only switches it on and off.
+ */
+export const TuneMethodSchema = z.enum(['audio-tone', 'radio-tune']);
+export type TuneMethod = z.infer<typeof TuneMethodSchema>;
+
 export const TuneToneStatusSchema = z.object({
   active: z.boolean(),
+  /** Method in use while active, otherwise the method the next start will use. */
+  method: TuneMethodSchema,
   toneHz: z.number().nullable(),
   startedAt: z.number().nullable(),
   maxDurationMs: z.number(),

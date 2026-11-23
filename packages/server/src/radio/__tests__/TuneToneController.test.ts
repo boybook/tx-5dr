@@ -1,6 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'eventemitter3';
 import { TuneToneController } from '../TuneToneController.js';
+import type { RadioTunePort } from '../TuneCarriers.js';
 import { PhysicalTxCoordinator } from '../../transmission/PhysicalTxCoordinator.js';
+import type { IRadioConnectionEvents } from '../connections/IRadioConnection.js';
 import type { TuneToneStatus } from '@tx5dr/contracts';
 
 function deferred<T = void>() {
@@ -13,7 +16,21 @@ function deferred<T = void>() {
   return { promise, resolve, reject };
 }
 
-function createController(options: { busy?: boolean; connected?: boolean } = {}) {
+/** Fake radio-owned tune function that confirms writes the way TCI state notifications do. */
+class FakeRadioTune extends EventEmitter<IRadioConnectionEvents> implements RadioTunePort {
+  active = false;
+  readonly setRadioTune = vi.fn(async (enabled: boolean) => {
+    this.report(enabled);
+  });
+
+  report(active: boolean): void {
+    if (this.active === active) return;
+    this.active = active;
+    this.emit('radioTuneChanged', active);
+  }
+}
+
+function createController(options: { busy?: boolean; connected?: boolean; radioTune?: FakeRadioTune } = {}) {
   const playback = deferred<void>();
   const statuses: TuneToneStatus[] = [];
   const radioManager = {
@@ -38,10 +55,11 @@ function createController(options: { busy?: boolean; connected?: boolean } = {})
     physicalTxCoordinator,
     isTransmitBusy: () => options.busy ?? false,
     getOperatorToneHz: () => 1234,
+    getRadioTune: () => options.radioTune ?? null,
     emitStatus: (status) => statuses.push(status),
   });
 
-  return { controller, radioManager, audioStreamManager, statuses, playback };
+  return { controller, radioManager, audioStreamManager, physicalTxCoordinator, statuses, playback };
 }
 
 describe('TuneToneController', () => {
@@ -58,7 +76,7 @@ describe('TuneToneController', () => {
         expect.objectContaining({ injectIntoMonitor: true, playbackKind: 'tune-tone' }),
       );
     });
-    expect(statuses[0]).toMatchObject({ active: true, toneHz: 1234 });
+    expect(statuses[0]).toMatchObject({ active: true, method: 'audio-tone', toneHz: 1234 });
   });
 
   it('generates the tone at full scale so shared volume gain matches FT8 drive', async () => {
@@ -138,5 +156,95 @@ describe('TuneToneController', () => {
 
     expect(radioManager.setPTT).not.toHaveBeenCalled();
     expect(audioStreamManager.playAudio).not.toHaveBeenCalled();
+  });
+});
+
+describe('TuneToneController with a radio-owned tune function', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('reports the radio tune as the next method while idle', () => {
+    const { controller } = createController({ radioTune: new FakeRadioTune() });
+
+    expect(controller.getStatus()).toMatchObject({ active: false, method: 'radio-tune', toneHz: null });
+  });
+
+  it('keys the radio tune under a self-keyed lease without PTT or audio', async () => {
+    const radioTune = new FakeRadioTune();
+    const { controller, radioManager, audioStreamManager, physicalTxCoordinator, statuses } = createController({ radioTune });
+
+    await controller.start({ toneHz: 1600 });
+
+    expect(radioTune.setRadioTune).toHaveBeenCalledWith(true);
+    expect(radioManager.setPTT).not.toHaveBeenCalled();
+    expect(audioStreamManager.playAudio).not.toHaveBeenCalled();
+    expect(physicalTxCoordinator.getSnapshot()).toMatchObject({ source: 'tune-tone', phase: 'active', pttConfirmed: true });
+    expect(statuses[0]).toMatchObject({ active: true, method: 'radio-tune', toneHz: null });
+  });
+
+  it('switches the radio tune off through the lease interrupt on stop', async () => {
+    const radioTune = new FakeRadioTune();
+    const { controller, physicalTxCoordinator, statuses } = createController({ radioTune });
+
+    await controller.start();
+    await controller.stop('manual');
+
+    expect(radioTune.setRadioTune).toHaveBeenLastCalledWith(false);
+    expect(radioTune.active).toBe(false);
+    expect(physicalTxCoordinator.getSnapshot().phase).toBe('idle');
+    expect(statuses.at(-1)).toMatchObject({ active: false, method: 'radio-tune' });
+    expect(statuses.at(-1)?.error).toBeUndefined();
+  });
+
+  it('ends the session when the radio switches its tune off', async () => {
+    const radioTune = new FakeRadioTune();
+    const { controller, physicalTxCoordinator, statuses } = createController({ radioTune });
+
+    await controller.start();
+    radioTune.report(false);
+
+    await vi.waitFor(() => {
+      expect(physicalTxCoordinator.getSnapshot().phase).toBe('idle');
+    });
+    expect(statuses.at(-1)).toMatchObject({ active: false });
+    expect(radioTune.active).toBe(false);
+  });
+
+  it('switches the radio tune off when the maximum duration elapses', async () => {
+    vi.useFakeTimers();
+    const radioTune = new FakeRadioTune();
+    const { controller, physicalTxCoordinator, statuses } = createController({ radioTune });
+
+    await controller.start();
+    await vi.advanceTimersByTimeAsync(controller.getStatus().maxDurationMs);
+
+    expect(radioTune.setRadioTune).toHaveBeenLastCalledWith(false);
+    expect(radioTune.active).toBe(false);
+    expect(physicalTxCoordinator.getSnapshot().phase).toBe('idle');
+    expect(statuses.at(-1)).toMatchObject({ active: false });
+  });
+
+  it('compensates an unconfirmed radio tune start with an OFF', async () => {
+    const radioTune = new FakeRadioTune();
+    radioTune.setRadioTune.mockRejectedValueOnce(new Error('TUNE not confirmed'));
+    const { controller, physicalTxCoordinator, statuses } = createController({ radioTune });
+
+    await expect(controller.start()).rejects.toThrow('TUNE not confirmed');
+
+    expect(radioTune.setRadioTune).toHaveBeenLastCalledWith(false);
+    expect(physicalTxCoordinator.getSnapshot().phase).toBe('idle');
+    expect(statuses.at(-1)).toMatchObject({ active: false, error: 'TUNE not confirmed' });
+  });
+
+  it('surfaces an unconfirmed radio tune release', async () => {
+    const radioTune = new FakeRadioTune();
+    const { controller, statuses } = createController({ radioTune });
+
+    await controller.start();
+    radioTune.setRadioTune.mockRejectedValueOnce(new Error('TUNE OFF not confirmed'));
+    await controller.stop('manual');
+
+    expect(statuses.at(-1)).toMatchObject({ active: false, error: 'TUNE OFF not confirmed' });
   });
 });

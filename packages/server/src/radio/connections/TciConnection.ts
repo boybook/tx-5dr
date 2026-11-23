@@ -51,6 +51,7 @@ const TCI_FREQUENCY_WRITE_SETTLE_MS = 250;
 const TCI_TX_STREAM_BUFFERING_MS = 150;
 const TCI_METER_INTERVAL_MS = 300;
 const TCI_METER_MIN_FRESHNESS_MS = 1_000;
+const TCI_TUNE_RELEASE_TIMEOUT_MS = 1_500;
 
 /** A handle is scoped to one audio session, never to a later replacement. */
 export interface PreparedTciAudioTransmission {
@@ -78,9 +79,15 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
   private lastKnownFrequency: number | null = null;
   private lastKnownMode: string | null = null;
   private lastKnownPtt: boolean | null = null;
-  // A state-ack timeout means the TRX command may already be in flight. Do
+  /** Radio-owned tune carrier state; null when the session never reported it. */
+  private lastKnownTune: boolean | null = null;
+  /** The startup state carried TUNE for our TRX, which is the support evidence. */
+  private radioTuneSupported = false;
+  /** This client switched the tune carrier on and must switch it off again. */
+  private radioTuneOwned = false;
+  // A state-ack timeout means a TRX/TUNE command may already be in flight. Do
   // not allow a later lease to reuse this session and apply an old ON/OFF.
-  private pttWriteUncertain = false;
+  private txStateUncertain = false;
   private backgroundTasksStarted = false;
   private meterSession: TciMeterStreamSession | null = null;
   private meterFreshnessMs = Math.max(TCI_METER_MIN_FRESHNESS_MS, TCI_METER_INTERVAL_MS * 4);
@@ -139,7 +146,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
 
   isHealthy(): boolean {
     return this.state === RadioConnectionState.CONNECTED
-      && !this.pttWriteUncertain
+      && !this.txStateUncertain
       && Boolean(this.client?.isConnected());
   }
 
@@ -187,12 +194,13 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     this.lastKnownFrequency = null;
     this.lastKnownMode = null;
     this.lastKnownPtt = null;
+    this.resetRadioTuneState();
     this.lastDrivePercent = null;
     this.resetMeterState();
     this.backgroundTasksStarted = false;
     this.handshakeResult = null;
     this.connectedUrl = null;
-    this.pttWriteUncertain = false;
+    this.txStateUncertain = false;
     this.audioRunning = false;
     this.audioStreamOwners.clear();
     this.resetTxAudioSync('connect');
@@ -259,6 +267,9 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
         ? state.ptt[String(tci.trx ?? 0)]
         : null;
       this.lastDrivePercent = state.drive[String(tci.trx ?? 0)] ?? null;
+      const startupTune = state.tune[String(tci.trx ?? 0)];
+      this.radioTuneSupported = typeof startupTune === 'boolean' && state.receiveOnly !== true;
+      this.lastKnownTune = typeof startupTune === 'boolean' ? startupTune : null;
 
       this.setState(RadioConnectionState.CONNECTED);
       this.emit('connected');
@@ -267,6 +278,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
         protocolName: handshake.identity.programName,
         protocolVersion: handshake.identity.protocolVersion,
         dialect: handshake.dialect.dialect.id,
+        radioTune: this.radioTuneSupported,
         frequencyConfirmation: handshake.dialect.dialect.frequencyWriteAcknowledgement ?? 'state',
         ddsConfirmation: handshake.dialect.dialect.ddsWriteAcknowledgement ?? 'state',
         confidence: handshake.dialect.confidence,
@@ -282,9 +294,10 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
 
   async disconnect(reason?: string): Promise<void> {
     logger.info(`Disconnecting TCI radio: ${reason || 'no reason'}`);
+    await this.releaseOwnedRadioTune();
     this.ioSessionId += 1;
     await this.cleanup();
-    this.pttWriteUncertain = false;
+    this.txStateUncertain = false;
     this.setState(RadioConnectionState.DISCONNECTED);
     this.emit('disconnected', reason);
   }
@@ -374,15 +387,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
 
   async setPTT(enabled: boolean): Promise<void> {
     await this.runTask('setPTT', async () => {
-      if (this.pttWriteUncertain) {
-        throw new RadioError({
-          code: RadioErrorCode.OPERATION_TIMEOUT,
-          message: 'TCI PTT state is uncertain; reconnect before issuing another PTT command',
-          userMessage: 'TCI PTT state is uncertain. Reconnect the radio before transmitting again.',
-          severity: RadioErrorSeverity.CRITICAL,
-          context: { operation: 'setPTT', protocol: 'tci', stateUncertain: true },
-        });
-      }
+      this.assertTransmitStateCertain('setPTT');
       this.checkConnected();
       if (!enabled) {
         this.resetTxAudioSync('ptt-off');
@@ -397,13 +402,8 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
         await this.client!.setPtt(enabled, { source: enabled ? 'tci' : undefined });
       } catch (error) {
         if (isTciCommandTimeout(error)) {
-          this.pttWriteUncertain = true;
           this.lastKnownPtt = null;
-          this.setState(RadioConnectionState.ERROR);
-          logger.error('TCI PTT state acknowledgement timed out; poisoning session', {
-            enabled,
-            operation: 'setPTT',
-          });
+          this.markTransmitStateUncertain('setPTT', enabled);
         }
         throw error;
       }
@@ -425,6 +425,56 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
       }
       return this.lastKnownPtt ?? false;
     }, { id: 'getPTT' });
+  }
+
+  supportsRadioTune(): boolean {
+    return this.radioTuneSupported && this.isConnected();
+  }
+
+  /**
+   * TCI `TUNE`: the radio software generates the carrier and applies TUNE_DRIVE.
+   * OFF is the safe direction of an uncertain transmit state, so it only needs
+   * an open socket and remains available after the session was poisoned.
+   */
+  async setRadioTune(enabled: boolean): Promise<void> {
+    await this.runTask('setRadioTune', async () => {
+      if (enabled) {
+        this.assertTransmitStateCertain('setRadioTune');
+        this.checkConnected();
+      } else if (!this.client?.isConnected()) {
+        this.checkConnected();
+      }
+      if (!this.radioTuneSupported) {
+        throw new RadioError({
+          code: RadioErrorCode.INVALID_OPERATION,
+          message: 'TCI session did not report TUNE state; radio tune is unavailable',
+          userMessage: 'This radio does not provide a TCI tune function',
+          severity: RadioErrorSeverity.WARNING,
+          context: { operation: 'setRadioTune', protocol: 'tci', recoverable: true },
+        });
+      }
+      // Ownership is claimed before the write so a disconnect racing an
+      // unconfirmed ON still sends the compensating OFF.
+      if (enabled) this.radioTuneOwned = true;
+      const trx = this.currentConfig?.tci?.trx ?? 0;
+      if (this.txStateUncertain) {
+        // Only OFF reaches here. The cached state is stale and would let the
+        // client skip the write, so send it unconditionally and take the reply.
+        await this.client!.setTune(false, trx, { ackMode: 'reply' });
+      } else if (this.lastKnownTune !== enabled) {
+        try {
+          await this.client!.setTune(enabled, trx);
+        } catch (error) {
+          if (isTciCommandTimeout(error)) {
+            this.lastKnownTune = null;
+            this.markTransmitStateUncertain('setRadioTune', enabled);
+          }
+          throw error;
+        }
+        this.syncStateFromClient();
+      }
+      if (!enabled) this.radioTuneOwned = false;
+    }, { critical: true });
   }
 
   async setMode(mode: string, _bandwidth?: RadioModeBandwidth, options?: SetRadioModeOptions): Promise<void> {
@@ -599,7 +649,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
       }, { id: observation || replacePending ? name : undefined, lowPriority: observation, replacePending }),
       assertIdle: () => {
         assertSession();
-        if (this.lastKnownPtt !== false || this.pttWriteUncertain) {
+        if (this.lastKnownPtt !== false || this.lastKnownTune === true || this.txStateUncertain) {
           throw new RadioError({ code: RadioErrorCode.INVALID_OPERATION, message: 'Radio must be confirmed idle for this setting',
             userMessage: 'Radio is busy or its transmit state is unknown', severity: RadioErrorSeverity.WARNING,
             context: { recoverable: true } });
@@ -888,6 +938,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
       this.backgroundTasksStarted = false;
       this.resetTxAudioSync('disconnected');
       this.resetMeterState();
+      this.resetRadioTuneState();
       this.setState(RadioConnectionState.DISCONNECTED);
       this.emit('disconnected', reason instanceof Error ? reason.message : String(reason ?? 'TCI disconnected'));
     });
@@ -1015,7 +1066,62 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     if (typeof state.drive[trxKey] === 'number') {
       this.lastDrivePercent = state.drive[trxKey];
     }
+    // After an unconfirmed TUNE write the client state is stale, not evidence
+    // that the carrier is off; keep ownership so the safe OFF is still sent.
+    const tune = this.txStateUncertain ? undefined : state.tune[trxKey];
+    if (typeof tune === 'boolean' && tune !== this.lastKnownTune) {
+      const wasTune = this.lastKnownTune;
+      this.lastKnownTune = tune;
+      if (!tune) {
+        this.radioTuneOwned = false;
+        if (wasTune) this.clearTxMeterData(true);
+      }
+      this.emit('radioTuneChanged', tune);
+    }
+  }
 
+  /**
+   * Best-effort OFF for a carrier this client started. Thetis keeps TUNE on
+   * after a client disconnects, so the client must not leave it running.
+   */
+  private async releaseOwnedRadioTune(): Promise<void> {
+    if (!this.radioTuneOwned || !this.client?.isConnected()) return;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        this.setRadioTune(false),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('TCI tune release timed out')), TCI_TUNE_RELEASE_TIMEOUT_MS);
+        }),
+      ]);
+    } catch (error) {
+      logger.warn('TCI tune release before disconnect was not confirmed', error);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private resetRadioTuneState(): void {
+    this.lastKnownTune = null;
+    this.radioTuneSupported = false;
+    this.radioTuneOwned = false;
+  }
+
+  private assertTransmitStateCertain(operation: string): void {
+    if (!this.txStateUncertain) return;
+    throw new RadioError({
+      code: RadioErrorCode.OPERATION_TIMEOUT,
+      message: 'TCI transmit state is uncertain; reconnect before issuing another transmit command',
+      userMessage: 'TCI transmit state is uncertain. Reconnect the radio before transmitting again.',
+      severity: RadioErrorSeverity.CRITICAL,
+      context: { operation, protocol: 'tci', stateUncertain: true },
+    });
+  }
+
+  private markTransmitStateUncertain(operation: string, enabled: boolean): void {
+    this.txStateUncertain = true;
+    this.setState(RadioConnectionState.ERROR);
+    logger.error('TCI transmit state acknowledgement timed out; poisoning session', { operation, enabled });
   }
 
   private async startMeterStream(sessionId: number): Promise<void> {
@@ -1302,6 +1408,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
     this.audioRunning = false;
     this.lineOutRunning = false;
     this.audioStreamOwners.clear();
+    this.resetRadioTuneState();
     this.resetTxAudioSync('connection-cleanup');
     await meterSession?.close().catch((error) => logger.debug('TCI meter stream cleanup failed', error));
     if (client) {
@@ -1438,7 +1545,7 @@ export class TciConnection extends EventEmitter<IRadioConnectionEvents> implemen
         protocol: 'tci',
         writeTimeout: isWriteTimeout,
         recoverable: isWriteTimeout,
-        stateUncertain: operation === 'setPTT' && this.pttWriteUncertain,
+        stateUncertain: (operation === 'setPTT' || operation === 'setRadioTune') && this.txStateUncertain,
       },
     });
   }
@@ -1451,6 +1558,7 @@ function isTciCommandTimeout(error: unknown): boolean {
 function isTciWriteOperation(operation: string): boolean {
   return operation === 'setFrequency'
     || operation === 'setPTT'
+    || operation === 'setRadioTune'
     || operation === 'setMode'
     || operation === 'applyOperatingState'
     || operation.startsWith('applyOperatingState.');

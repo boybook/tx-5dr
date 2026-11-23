@@ -1,26 +1,31 @@
 import type { PhysicalRadioManager } from './PhysicalRadioManager.js';
 import type { PhysicalTxCoordinator } from '../transmission/PhysicalTxCoordinator.js';
 import { createLogger } from '../utils/logger.js';
-import type { TuneToneStatus } from '@tx5dr/contracts';
+import type { TuneMethod, TuneToneStatus } from '@tx5dr/contracts';
+import {
+  AudioToneCarrier,
+  RadioTuneCarrier,
+  type RadioTunePort,
+  type TuneCarrier,
+  type TuneCarrierRun,
+} from './TuneCarriers.js';
 
 const logger = createLogger('TuneToneController');
 
-const TONE_SAMPLE_RATE = 12000;
 const DEFAULT_MAX_DURATION_MS = 15000;
+// Backstop after the carrier's own duration; every carrier ends by itself.
+const WATCHDOG_GRACE_MS = 1000;
 const DEFAULT_TONE_HZ = 1500;
 const MIN_TONE_HZ = 100;
 const MAX_TONE_HZ = 3000;
-// WSJT-X encodes FT8/FT4 at full scale (peak 1.0, RMS ~0.707). The tune tone
-// must use the same source amplitude so the shared user volume gain produces
-// the same RF drive as a digital transmission instead of being ~9 dB weaker.
-const TONE_GAIN = 1.0;
-const RAMP_MS = 20;
 
 export interface TuneToneControllerDeps {
   radioManager: PhysicalRadioManager;
   physicalTxCoordinator: PhysicalTxCoordinator;
   isTransmitBusy: () => boolean;
   getOperatorToneHz: (operatorId?: string | null) => number | null;
+  /** The active radio's own tune function, when it provides one. */
+  getRadioTune: () => RadioTunePort | null;
   emitStatus: (status: TuneToneStatus) => void;
 }
 
@@ -29,26 +34,39 @@ export interface StartTuneToneOptions {
   toneHz?: number | null;
 }
 
+/**
+ * Owns the manual tune transmission: one physical TX lease, a bounded duration,
+ * and the status shown to operators. The carrier is the radio's own TUNE when
+ * available, otherwise a PTT-keyed audio tone.
+ */
 export class TuneToneController {
   private active = false;
-  private pttAsserted = false;
-  private toneHz: number | null = null;
+  private carrier: TuneCarrier | null = null;
+  private run: TuneCarrierRun | null = null;
+  // Survives a stop whose PTT release is unconfirmed, so a later stop can retry.
+  private leaseId: string | null = null;
   private startedAt: number | null = null;
   private maxDurationMs = DEFAULT_MAX_DURATION_MS;
-  private timeout: NodeJS.Timeout | null = null;
+  private watchdog: NodeJS.Timeout | null = null;
   private generation = 0;
-  private physicalLeaseId: string | null = null;
 
   constructor(private readonly deps: TuneToneControllerDeps) {}
 
   getStatus(error?: string): TuneToneStatus {
+    const carrier = this.active ? this.carrier : null;
     return {
       active: this.active,
-      toneHz: this.toneHz,
+      method: carrier?.method ?? this.resolveMethod(),
+      toneHz: carrier?.toneHz ?? null,
       startedAt: this.startedAt,
       maxDurationMs: this.maxDurationMs,
       ...(error ? { error } : {}),
     };
+  }
+
+  /** Re-publishes the idle status after the radio, and so the next method, changed. */
+  refreshStatus(): void {
+    if (!this.active) this.deps.emitStatus(this.getStatus());
   }
 
   async start(options: StartTuneToneOptions = {}): Promise<void> {
@@ -62,11 +80,10 @@ export class TuneToneController {
       throw new Error('transmitter is busy');
     }
 
-    const toneHz = this.resolveToneHz(options);
-    const currentGeneration = ++this.generation;
+    const carrier = this.createCarrier(options);
+    const generation = ++this.generation;
     this.active = true;
-    this.pttAsserted = false;
-    this.toneHz = toneHz;
+    this.carrier = carrier;
     this.startedAt = Date.now();
     this.maxDurationMs = DEFAULT_MAX_DURATION_MS;
     this.deps.emitStatus(this.getStatus());
@@ -74,54 +91,44 @@ export class TuneToneController {
     try {
       const leaseId = await this.deps.physicalTxCoordinator.acquireLease({
         source: 'tune-tone',
-        reason: 'tune tone',
-        playbackKind: 'tune-tone',
+        reason: `tune (${carrier.method})`,
         deferActiveUntilAudio: true,
+        ...carrier.leaseOptions,
       });
-      this.physicalLeaseId = leaseId;
-      if (this.generation !== currentGeneration || !this.active) {
-        await this.deps.physicalTxCoordinator.forceInterruptLease(
-          leaseId,
-          'tune tone cancelled while starting',
-        );
-        this.physicalLeaseId = null;
+      this.leaseId = leaseId;
+      if (!this.isCurrent(generation)) {
+        await this.deps.physicalTxCoordinator.forceInterruptLease(leaseId, 'tune cancelled while starting');
+        this.leaseId = null;
         return;
       }
-      this.pttAsserted = true;
-      this.timeout = setTimeout(() => {
+      this.watchdog = setTimeout(() => {
         void this.stop('timeout').catch((error) => {
-          logger.error('Failed to auto-stop tune tone', error);
+          logger.error('Failed to auto-stop tune', error);
         });
-      }, this.maxDurationMs + 1000);
+      }, this.maxDurationMs + WATCHDOG_GRACE_MS);
 
-      const audio = generateTone(toneHz, this.maxDurationMs, TONE_SAMPLE_RATE);
-      const completion = this.deps.physicalTxCoordinator.playAudioOnLease(this.physicalLeaseId, {
-        audioData: audio,
-        sampleRate: TONE_SAMPLE_RATE,
-        playbackKind: 'tune-tone',
-        playbackOptions: { injectIntoMonitor: true },
-      });
-      await Promise.resolve();
-      void completion
-        .then((result) => {
-          if (this.generation === currentGeneration && this.active) {
-            this.finishAfterPhysicalCompletion(result.error);
-          }
-        })
-        .catch((error) => {
-          if (this.generation === currentGeneration && this.active) {
-            logger.error('Tune tone playback failed', error);
-            this.finishAfterPhysicalCompletion(error instanceof Error ? error.message : String(error));
-          }
+      const run = await carrier.start(leaseId, this.maxDurationMs);
+      if (!this.isCurrent(generation)) {
+        run.dispose();
+        return;
+      }
+      this.run = run;
+      void run.ended.then((error) => {
+        if (!this.isCurrent(generation)) return;
+        if (error) logger.error('Tune carrier ended with an error', { method: carrier.method, error });
+        void this.stop('carrier ended', error).catch((stopError) => {
+          logger.error('Failed to finish tune after the carrier ended', stopError);
         });
+      });
     } catch (error) {
+      if (!this.isCurrent(generation)) return;
       await this.stop('start-error', error instanceof Error ? error.message : String(error));
       throw error;
     }
   }
 
-  async stop(_reason = 'manual', error?: string): Promise<void> {
-    if (!this.active && !this.pttAsserted && !this.physicalLeaseId) {
+  async stop(reason = 'manual', error?: string): Promise<void> {
+    if (!this.active && !this.leaseId) {
       if (error) {
         this.deps.emitStatus(this.getStatus(error));
       }
@@ -129,41 +136,49 @@ export class TuneToneController {
     }
 
     ++this.generation;
-    this.clearTimeout();
-
-    const shouldReleasePtt = this.pttAsserted;
+    this.clearWatchdog();
+    this.run?.dispose();
+    this.run = null;
     this.active = false;
-    this.toneHz = null;
     this.startedAt = null;
 
-    if (shouldReleasePtt) {
-      try {
-        if (this.physicalLeaseId) {
-          const snapshot = this.deps.physicalTxCoordinator.getSnapshot();
-          if (snapshot.leaseId === this.physicalLeaseId && snapshot.phase === 'unknown') {
-            await this.deps.physicalTxCoordinator.retryUnknownStop(`tune tone stop retry: ${_reason}`);
-          } else {
-            await this.deps.physicalTxCoordinator.forceInterruptLease(
-              this.physicalLeaseId,
-              `tune tone stop: ${_reason}`,
-            );
-          }
-        }
-      } catch (pttError) {
-        logger.warn('Releasing tune tone PTT failed', pttError);
-      }
-      const snapshot = this.deps.physicalTxCoordinator.getSnapshot();
-      const releaseUncertain = snapshot.leaseId === this.physicalLeaseId
-        && snapshot.phase === 'unknown';
-      if (!releaseUncertain) {
-        this.pttAsserted = false;
-        this.physicalLeaseId = null;
-      } else {
-        error = error ?? 'PTT release unconfirmed';
-      }
+    if (this.leaseId) {
+      error = (await this.releaseLease(this.leaseId, reason)) ?? error;
     }
-
     this.deps.emitStatus(this.getStatus(error));
+  }
+
+  /** Ends the lease; the coordinator runs the carrier's interrupt. Returns a release error. */
+  private async releaseLease(leaseId: string, reason: string): Promise<string | undefined> {
+    const coordinator = this.deps.physicalTxCoordinator;
+    let releaseError: string | undefined;
+    try {
+      const snapshot = coordinator.getSnapshot();
+      const result = snapshot.leaseId === leaseId && snapshot.phase === 'unknown'
+        ? await coordinator.retryUnknownStop(`tune stop retry: ${reason}`)
+        : await coordinator.forceInterruptLease(leaseId, `tune stop: ${reason}`);
+      releaseError = result?.error;
+    } catch (stopError) {
+      logger.warn('Releasing tune transmission failed', stopError);
+      releaseError = stopError instanceof Error ? stopError.message : String(stopError);
+    }
+    const snapshot = coordinator.getSnapshot();
+    if (snapshot.leaseId === leaseId && snapshot.phase === 'unknown') {
+      return 'PTT release unconfirmed';
+    }
+    this.leaseId = null;
+    return releaseError;
+  }
+
+  private createCarrier(options: StartTuneToneOptions): TuneCarrier {
+    const radioTune = this.deps.getRadioTune();
+    return radioTune
+      ? new RadioTuneCarrier(this.deps.physicalTxCoordinator, radioTune)
+      : new AudioToneCarrier(this.deps.physicalTxCoordinator, this.resolveToneHz(options));
+  }
+
+  private resolveMethod(): TuneMethod {
+    return this.deps.getRadioTune() ? 'radio-tune' : 'audio-tone';
   }
 
   private resolveToneHz(options: StartTuneToneOptions): number {
@@ -174,36 +189,14 @@ export class TuneToneController {
     return Math.round(Math.min(MAX_TONE_HZ, Math.max(MIN_TONE_HZ, value)));
   }
 
-  private clearTimeout(): void {
-    if (this.timeout) {
-      clearTimeout(this.timeout);
-      this.timeout = null;
+  private isCurrent(generation: number): boolean {
+    return this.generation === generation && this.active;
+  }
+
+  private clearWatchdog(): void {
+    if (this.watchdog) {
+      clearTimeout(this.watchdog);
+      this.watchdog = null;
     }
   }
-
-  private finishAfterPhysicalCompletion(error?: string): void {
-    this.clearTimeout();
-    this.active = false;
-    this.pttAsserted = false;
-    this.physicalLeaseId = null;
-    this.toneHz = null;
-    this.startedAt = null;
-    this.deps.emitStatus(this.getStatus(error));
-  }
-}
-
-function generateTone(toneHz: number, durationMs: number, sampleRate: number): Float32Array {
-  const samples = Math.max(1, Math.round((durationMs / 1000) * sampleRate));
-  const rampSamples = Math.max(1, Math.round((RAMP_MS / 1000) * sampleRate));
-  const output = new Float32Array(samples);
-  const step = (Math.PI * 2 * toneHz) / sampleRate;
-
-  for (let i = 0; i < samples; i++) {
-    const fadeIn = Math.min(1, i / rampSamples);
-    const fadeOut = Math.min(1, (samples - i - 1) / rampSamples);
-    const gain = TONE_GAIN * Math.max(0, Math.min(fadeIn, fadeOut));
-    output[i] = Math.sin(i * step) * gain;
-  }
-
-  return output;
 }
