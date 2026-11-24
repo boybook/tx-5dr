@@ -2171,7 +2171,8 @@ export class PluginManager {
 
   shouldProcessStoppedOperatorReDecision(operatorId: string, slotPack: SlotPack): boolean {
     return this.hasTargetQueue(operatorId)
-      || this.orchestrator.hasActiveSilentDirectedCallGate(operatorId, slotPack);
+      || this.orchestrator.hasActiveSilentDirectedCallGate(operatorId, slotPack)
+      || this.orchestrator.hasStoppedDirectCallAutoReplyCandidate(operatorId, slotPack);
   }
 
   // ===== 策略管理 =====

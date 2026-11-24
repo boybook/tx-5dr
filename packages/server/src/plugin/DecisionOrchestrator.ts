@@ -584,10 +584,43 @@ export class DecisionOrchestrator {
     return this.getActiveSilentDirectedCallGate(operatorId, slotPack?.startMs) !== undefined;
   }
 
+  /**
+   * Synchronous admission check for the late-decode path: true when a stopped
+   * operator could be woken by the stopped direct-call auto-reply for this pack.
+   * The full wake decision (candidate filters, worked-station rules, strategy
+   * reply stage) still runs in tryWakeFromStoppedDirectCallAutoReply.
+   */
+  hasStoppedDirectCallAutoReplyCandidate(operatorId: string, slotPack: SlotPack): boolean {
+    if (this.deps.hasTargetQueue?.(operatorId) === true
+        || !this.canWakeFromStoppedDirectCallAutoReply(operatorId)) {
+      return false;
+    }
+    const myCallsign = this.deps.getOperatorById(operatorId)?.config.myCallsign.trim().toUpperCase() ?? '';
+    return slotPack.frames.some((frame) =>
+      this.isInboundDirectedProtocolMessage(this.parseFrame(frame, slotPack), myCallsign)
+    );
+  }
+
   // ===== Private: Message parsing =====
 
-  private async parseSlotPackMessages(slotPack: SlotPack, operatorId: string): Promise<ParsedFT8Message[]> {
+  private parseFrame(frame: FrameMessage, slotPack: SlotPack): ParsedFT8Message {
     const LOCAL_OPERATOR_SIMULATED_SNR = 10;
+    // 部分解码消息（含 `<...>` 未解码呼号占位符）不得作为自动决策输入，
+    // 但需保留在 parsedMessages 中供广播/监控 hook 观察原始解码。
+    return {
+      message: FT8MessageParser.parseMessage(frame.message),
+      snr: frame.snr === -999 ? LOCAL_OPERATOR_SIMULATED_SNR : frame.snr,
+      dt: frame.dt,
+      df: frame.freq,
+      rawMessage: frame.message,
+      slotId: slotPack.slotId,
+      timestamp: slotPack.startMs,
+      isPartialDecode: FT8MessageParser.rawContainsUndecodedCallsign(frame.message),
+      logbookAnalysis: frame.logbookAnalysis,
+    };
+  }
+
+  private async parseSlotPackMessages(slotPack: SlotPack, operatorId: string): Promise<ParsedFT8Message[]> {
     const operator = this.deps.getOperatorById(operatorId);
     const currentMode = this.deps.getCurrentMode();
     const isOperatorTransmittingInSourceSlot = operator?.isTransmitting === true
@@ -614,22 +647,9 @@ export class DecisionOrchestrator {
         return null;
       }
 
-      // 部分解码消息（含 `<...>` 未解码呼号占位符）不得作为自动决策输入，
-      // 但需保留在 parsedMessages 中供广播/监控 hook 观察原始解码。
-      const isPartialDecode = FT8MessageParser.rawContainsUndecodedCallsign(frame.message);
-      const parsedMessage: ParsedFT8Message = {
-        message: FT8MessageParser.parseMessage(frame.message),
-        snr: isLocalTxEcho ? LOCAL_OPERATOR_SIMULATED_SNR : frame.snr,
-        dt: frame.dt,
-        df: frame.freq,
-        rawMessage: frame.message,
-        slotId: slotPack.slotId,
-        timestamp: slotPack.startMs,
-        isPartialDecode,
-        logbookAnalysis: frame.logbookAnalysis,
-      };
+      const parsedMessage = this.parseFrame(frame, slotPack);
 
-      if (frame.snr === -999 || isPartialDecode) {
+      if (isLocalTxEcho || parsedMessage.isPartialDecode) {
         // 部分解码消息跳过日志本分析，避免以 `...` 查询产生 isNewCallsign 假象污染排序
         return parsedMessage;
       }
@@ -1338,10 +1358,7 @@ export class DecisionOrchestrator {
     signal: AbortSignal,
   ): Promise<boolean> {
     const operator = this.deps.getOperatorById(operatorId);
-    if (!operator
-        || operator.isTransmitting
-        || !this.isOperatorPureStandby(operatorId)
-        || this.deps.isStoppedDirectCallAutoReplyEnabled?.(operatorId) !== true) {
+    if (!operator || !this.canWakeFromStoppedDirectCallAutoReply(operatorId)) {
       return false;
     }
 
@@ -1401,6 +1418,12 @@ export class DecisionOrchestrator {
     });
 
     return true;
+  }
+
+  /** Stopped, idle (TX6 without a target) and opted in to stopped direct-call auto-reply. */
+  private canWakeFromStoppedDirectCallAutoReply(operatorId: string): boolean {
+    return this.isOperatorPureStandby(operatorId)
+      && this.deps.isStoppedDirectCallAutoReplyEnabled?.(operatorId) === true;
   }
 
   private async applyStrategyStop(operatorId: string): Promise<void> {
