@@ -350,11 +350,15 @@ export const LogBookRecentGlobeResponseSchema = z.object({
 
 export const LogBookWorkedGridQuerySchema = z.object({
   band: z.string().optional(),
+  mode: z.string().optional(),
 });
 
 export const LogBookWorkedGridItemSchema = z.object({
   grid: z.string().regex(/^[A-R]{2}[0-9]{2}$/),
+  /** QSOs in this 4-character grid. */
   count: z.number().int().positive(),
+  /** Of those, QSOs confirmed through LoTW or QRZ. */
+  confirmedCount: z.number().int().nonnegative(),
 });
 
 export const LogBookWorkedGridResponseSchema = z.object({
@@ -363,6 +367,7 @@ export const LogBookWorkedGridResponseSchema = z.object({
     items: z.array(LogBookWorkedGridItemSchema),
     meta: z.object({
       band: z.string().optional(),
+      mode: z.string().optional(),
       total: z.number().int().nonnegative(),
     }),
   }),

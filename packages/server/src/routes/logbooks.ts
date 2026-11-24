@@ -46,7 +46,7 @@ import {
 } from '@tx5dr/contracts';
 import { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import { ConfigManager } from '../config/config-manager.js';
-import { gridToCoordinates, LogbookOperationError, LogQueryOptions } from "@tx5dr/core";
+import { gridToCoordinates, isQsoConfirmed, LogbookOperationError, LogQueryOptions } from "@tx5dr/core";
 import { RadioError, RadioErrorCode, RadioErrorSeverity } from '../utils/errors/RadioError.js';
 import { requireRole, requireExistingLogbookAccess } from '../auth/authPlugin.js';
 import { AuthManager } from '../auth/AuthManager.js';
@@ -1223,9 +1223,12 @@ export async function logbookRoutes(fastify: FastifyInstance) {
       if (bandFrequencyRange) {
         queryOptions.frequencyRange = bandFrequencyRange;
       }
+      if (options.mode) {
+        queryOptions.mode = options.mode;
+      }
 
       const qsos = await logBook.provider.queryQSOs(queryOptions);
-      const workedGridMap = new Map<string, number>();
+      const workedGridMap = new Map<string, { count: number; confirmedCount: number }>();
 
       for (const qso of qsos) {
         const workedGrid = getFourCharacterGrid(qso.grid);
@@ -1233,11 +1236,16 @@ export async function logbookRoutes(fastify: FastifyInstance) {
           continue;
         }
 
-        workedGridMap.set(workedGrid, (workedGridMap.get(workedGrid) || 0) + 1);
+        const entry = workedGridMap.get(workedGrid) ?? { count: 0, confirmedCount: 0 };
+        entry.count += 1;
+        if (isQsoConfirmed(qso)) {
+          entry.confirmedCount += 1;
+        }
+        workedGridMap.set(workedGrid, entry);
       }
 
       const items = Array.from(workedGridMap.entries())
-        .map(([grid, count]) => ({ grid, count }))
+        .map(([grid, entry]) => ({ grid, ...entry }))
         .sort((left, right) => {
           if (right.count !== left.count) {
             return right.count - left.count;
@@ -1251,6 +1259,7 @@ export async function logbookRoutes(fastify: FastifyInstance) {
           items,
           meta: {
             band: options.band,
+            mode: options.mode,
             total: items.length,
           },
         },
