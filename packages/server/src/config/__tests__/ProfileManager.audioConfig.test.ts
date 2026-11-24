@@ -64,6 +64,7 @@ const { state, mockConfigManager, mockEngine, mockReloadAudioConfig } = vi.hoist
   const engine = {
     getStatus: vi.fn(() => ({ isRunning: false, engineState: 'idle' })),
     stop: vi.fn(async () => {}),
+    restorePersistedModeForProfile: vi.fn(async () => {}),
     start: vi.fn(async () => {}),
     emit: vi.fn(),
     getAudioStreamManager: vi.fn(() => ({
@@ -366,6 +367,26 @@ describe('ProfileManager audio runtime config application', () => {
     expect(mockReloadAudioConfig).toHaveBeenCalledTimes(1);
     expect(mockEngine.start).toHaveBeenCalledTimes(1);
     expect(mockReloadAudioConfig.mock.invocationCallOrder[0]).toBeLessThan(mockEngine.start.mock.invocationCallOrder[0]);
+  });
+
+  it('aligns the engine mode with the activated Profile before starting it', async () => {
+    const manager = ProfileManager.getInstance();
+
+    await manager.activateProfile('profile-1');
+
+    expect(mockEngine.restorePersistedModeForProfile).toHaveBeenCalledOnce();
+    expect(mockConfigManager.switchActiveProfile.mock.invocationCallOrder[0])
+      .toBeLessThan(mockEngine.restorePersistedModeForProfile.mock.invocationCallOrder[0]);
+    expect(mockEngine.restorePersistedModeForProfile.mock.invocationCallOrder[0])
+      .toBeLessThan(mockEngine.start.mock.invocationCallOrder[0]);
+  });
+
+  it('does not start the engine when the Profile mode cannot be aligned', async () => {
+    mockEngine.restorePersistedModeForProfile.mockRejectedValueOnce(new Error('engine still running'));
+    const manager = ProfileManager.getInstance();
+
+    await expect(manager.activateProfile('profile-1')).resolves.toMatchObject({ success: true });
+    expect(mockEngine.start).not.toHaveBeenCalled();
   });
 
   it('delegates profile activation to ConfigManager.switchActiveProfile', async () => {

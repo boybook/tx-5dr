@@ -194,8 +194,10 @@ export class ProfileManager {
       wasRunning,
     });
 
-    // 阶段4：始终启动引擎（使用新 Profile 配置）
+    // 阶段4：引擎先对齐新 Profile 记忆的模式，再启动（使用新 Profile 配置）。
+    // 对齐失败时不启动，避免引擎与电台/持久化模式不一致。
     try {
+      await engine.restorePersistedModeForProfile();
       logger.info('Starting engine with new profile config...');
       await engine.start();
       logger.info('Engine started');

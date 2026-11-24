@@ -145,6 +145,9 @@ export interface DeepCWModelPathOptions {
 
 const DEFAULT_DEEPCW_MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 
+/** Mode names that own their own engine mode and are never a remembered digital mode. */
+const NON_DIGITAL_MODE_NAMES: ReadonlySet<string> = new Set(['VOICE', 'CW', 'RTTY', 'SSTV', 'FAX']);
+
 export function resolveDeepCWModelPath(
   config: DeepCWModelPathConfig,
   options: DeepCWModelPathOptions = {},
@@ -1565,44 +1568,83 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
 
   private restorePersistedModePhase(): void {
     logger.info('Initialization phase: restore-mode');
+    this.adoptPersistedMode('restore-mode');
+    this.configureAudioProcessingForCurrentMode('restore-mode');
+  }
 
+  /**
+   * Align a stopped engine with the active Profile's remembered mode.
+   *
+   * Profile activation loads that Profile's operating memory into the persisted
+   * last* values, and radio bootstrap restores the radio from them. The engine
+   * must follow before it starts; otherwise it runs one mode while the radio and
+   * the next restart use another.
+   */
+  async restorePersistedModeForProfile(): Promise<void> {
+    await this.modeSwitchTail.catch(() => undefined);
+    const engineState = this.engineLifecycle.getEngineState();
+    if (engineState !== EngineState.IDLE) {
+      throw new Error(`Cannot restore the Profile mode while the engine is ${engineState}`);
+    }
+
+    const target = this.resolvePersistedMode();
+    if (target.engineMode === this.engineMode && target.mode.name === this.currentMode.name) {
+      return;
+    }
+
+    logger.info(`Aligning engine mode with the active Profile: ${this.engineMode}/${this.currentMode.name} -> ${target.engineMode}/${target.mode.name}`);
+    await this.leaveEngineModeRuntime(target.engineMode);
+    this.adoptPersistedMode('profile-activated');
+    await this.engineLifecycle.rebuildResourcePlan();
+    this.emitModeAndStatusSnapshot();
+  }
+
+  private resolvePersistedMode(): { engineMode: EngineMode; mode: ModeDescriptor } {
     const configManager = ConfigManager.getInstance();
-    const lastEngineMode = configManager.getLastEngineMode();
-    const lastDigitalModeName = configManager.getLastDigitalModeName();
-
-    if (lastEngineMode === 'digital' && lastDigitalModeName && lastDigitalModeName !== this.currentMode.name) {
-      const targetMode = Object.values(MODES).find(m => m.name === lastDigitalModeName);
-      if (targetMode && targetMode.name !== 'VOICE' && targetMode.name !== 'CW' && targetMode.name !== 'RTTY') {
-        this.currentMode = targetMode;
-        this.applyDecodeWindowOverrides();
-        this.syncCurrentModeToRuntimeComponents('restore-digital-mode');
-        logger.info(`Restored last digital mode: ${this.currentMode.name}`);
+    switch (configManager.getLastEngineMode()) {
+      case 'voice':
+        return { engineMode: 'voice', mode: MODES.VOICE };
+      case 'cw':
+        return { engineMode: 'cw', mode: MODES.CW };
+      case 'rtty':
+        return { engineMode: 'rtty', mode: MODES.RTTY };
+      case 'image':
+        return {
+          engineMode: 'image',
+          mode: configManager.getLastImageFrequency()?.mode === 'FAX' ? MODES.FAX : MODES.SSTV,
+        };
+      default: {
+        const lastDigitalModeName = configManager.getLastDigitalModeName();
+        const digitalMode = Object.values(MODES).find(
+          (mode) => mode.name === lastDigitalModeName && !NON_DIGITAL_MODE_NAMES.has(mode.name),
+        );
+        if (digitalMode) {
+          return { engineMode: 'digital', mode: digitalMode };
+        }
+        // Keep the current digital mode when the remembered name is unusable.
+        return {
+          engineMode: 'digital',
+          mode: NON_DIGITAL_MODE_NAMES.has(this.currentMode.name) ? MODES.FT8 : this.currentMode,
+        };
       }
     }
+  }
 
-    if (lastEngineMode === 'voice') {
-      this.engineMode = 'voice';
-      this.currentMode = MODES.VOICE;
-      this.syncCurrentModeToRuntimeComponents('restore-voice-mode');
-      logger.info('Restored last engine mode: voice');
-    } else if (lastEngineMode === 'cw') {
-      this.engineMode = 'cw';
-      this.currentMode = MODES.CW;
-      this.syncCurrentModeToRuntimeComponents('restore-cw-mode');
-      logger.info('Restored last engine mode: cw');
-    } else if (lastEngineMode === 'rtty') {
-      this.engineMode = 'rtty';
-      this.currentMode = MODES.RTTY;
-      this.syncCurrentModeToRuntimeComponents('restore-rtty-mode');
-      logger.info('Restored last engine mode: rtty');
-    } else if (lastEngineMode === 'image') {
-      this.engineMode = 'image';
-      this.currentMode = configManager.getLastImageFrequency()?.mode === 'FAX' ? MODES.FAX : MODES.SSTV;
-      this.syncCurrentModeToRuntimeComponents('restore-image-mode');
-      logger.info('Restored last engine mode: image');
+  private adoptPersistedMode(reason: string): void {
+    const target = this.resolvePersistedMode();
+    if (target.engineMode === this.engineMode && target.mode.name === this.currentMode.name) {
+      return;
     }
 
-    this.configureAudioProcessingForCurrentMode('restore-mode');
+    this.engineMode = target.engineMode;
+    this.currentMode = target.mode;
+    if (target.engineMode === 'digital') {
+      this.applyDecodeWindowOverrides();
+      logger.info(`Restored last digital mode: ${this.currentMode.name}`);
+    } else {
+      logger.info(`Restored last engine mode: ${target.engineMode}`);
+    }
+    this.syncCurrentModeToRuntimeComponents(reason);
   }
 
   private configureAudioProcessingForCurrentMode(reason: string): void {
@@ -2360,6 +2402,25 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
     await manager.stop(reason);
   }
 
+  /** Stop keyers and mode-owned runtimes that do not survive leaving the current engine mode. */
+  private async leaveEngineModeRuntime(targetEngineMode: EngineMode): Promise<void> {
+    if (this.engineMode === 'voice' && targetEngineMode !== 'voice') {
+      await this.voiceKeyerManager?.stopActive('leaving voice mode');
+    }
+
+    if (this.engineMode === 'rtty' && targetEngineMode !== 'rtty') {
+      await this.rttyService?.abort('leaving rtty mode');
+    }
+
+    if (this.engineMode === 'cw') {
+      await this.cwKeyerManager?.stopActive('leaving cw mode');
+      if (targetEngineMode !== 'cw') {
+        await this.stopCWDecoderRuntime('leaving-cw-mode');
+        this.cwDecoderStartedEngine = false;
+      }
+    }
+  }
+
   private async switchEngineMode(targetEngineMode: EngineMode, targetMode: ModeDescriptor): Promise<void> {
     const previousEngineMode = this.engineMode;
     const previousMode = this.currentMode;
@@ -2380,24 +2441,9 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       || targetEngineMode === 'image' || targetEngineMode === 'rtty';
     // CW keying can lazy-init its own manager, but RX monitor/decoder still
     // need the engine audio chain. Preserve the user's running/idle intent.
-    const comingFromCW = this.engineMode === 'cw';
     logger.info(`Switching engine mode: ${this.engineMode}/${this.currentMode.name} -> ${targetEngineMode}/${targetMode.name}`);
 
-    if (this.engineMode === 'voice' && targetEngineMode !== 'voice') {
-      await this.voiceKeyerManager?.stopActive('leaving voice mode');
-    }
-
-    if (this.engineMode === 'rtty' && targetEngineMode !== 'rtty') {
-      await this.rttyService?.abort('leaving rtty mode');
-    }
-
-    if (comingFromCW) {
-      await this.cwKeyerManager?.stopActive('leaving cw mode');
-      if (targetEngineMode !== 'cw') {
-        await this.stopCWDecoderRuntime('leaving-cw-mode');
-        this.cwDecoderStartedEngine = false;
-      }
-    }
+    await this.leaveEngineModeRuntime(targetEngineMode);
 
     if (engineState === EngineState.STARTING) {
       logger.info('Mode switch requested while engine is starting, waiting for startup to settle first');
