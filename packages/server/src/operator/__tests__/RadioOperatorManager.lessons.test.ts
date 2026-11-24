@@ -1,6 +1,6 @@
 import EventEmitter from 'eventemitter3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { DigitalRadioEngineEvents, FrameMessage, QSORecord, SlotPack } from '@tx5dr/contracts';
+import type { DigitalRadioEngineEvents, FrameMessage, QSORecord, RadioOperatorConfig, SlotInfo, SlotPack } from '@tx5dr/contracts';
 import { MODES } from '@tx5dr/contracts';
 import { FT8MessageParser } from '@tx5dr/core';
 import { ConfigManager } from '../../config/config-manager.js';
@@ -9,8 +9,9 @@ import { CallsignContextTracker } from '../../slot/CallsignContextTracker.js';
 import { RadioOperatorManager } from '../RadioOperatorManager.js';
 
 // Characterization of QSO completion admission and history reconstruction
-// (ft8-lessons QSO-02, QSO-16, QSO-17, QSO-32). These describe current
-// behavior; they do not change it.
+// (ft8-lessons QSO-02, QSO-16, QSO-17, QSO-32) and of the multi-signal
+// carrier layout check (TX-08). These describe current behavior; they do not
+// change it.
 
 const SLOT_MS = MODES.FT8.slotMs;
 const THIRTY_MINUTES_MS = 30 * 60 * 1000;
@@ -56,6 +57,8 @@ function createManager(options: {
   getKnownRadioFrequency?: () => number | null;
   getRadioFrequency?: () => Promise<number | null>;
   callsignTracker?: unknown;
+  encodeQueue?: { push: ReturnType<typeof vi.fn> };
+  mode?: typeof MODES.FT8;
 }) {
   const eventEmitter = new EventEmitter<DigitalRadioEngineEvents>();
   const slotPackManager = {
@@ -91,9 +94,9 @@ function createManager(options: {
 
   const manager = new RadioOperatorManager({
     eventEmitter,
-    encodeQueue: { push: vi.fn() } as any,
+    encodeQueue: (options.encodeQueue ?? { push: vi.fn() }) as any,
     clockSource: { now: vi.fn(() => 0) } as any,
-    getCurrentMode: () => MODES.FT8,
+    getCurrentMode: () => options.mode ?? MODES.FT8,
     setRadioFrequency: vi.fn(),
     slotPackManager: slotPackManager as any,
     getRadioFrequency: options.getRadioFrequency,
@@ -107,8 +110,9 @@ function createManager(options: {
     resetOperatorPluginRuntime: vi.fn(),
     interruptOperatorTransmission: vi.fn().mockResolvedValue(undefined),
     logbookSyncHost: { onQSOComplete: vi.fn() },
+    isRunning: vi.fn(() => false),
   } as any);
-  return { manager, slotPackManager };
+  return { manager, slotPackManager, eventEmitter };
 }
 
 type RecordQsoPayload = {
@@ -383,5 +387,126 @@ describe('QSO-32 callsign-context enrichment', () => {
       reportSent: '0',
       reportReceived: '-3',
     });
+  });
+});
+
+describe('TX-08 multi-signal audio carrier layout', () => {
+  type Carrier = { operatorId: string; streamId: string; transmission: string; audioFrequencyHz: number };
+
+  async function transmitFrame(options: {
+    mode?: typeof MODES.FT8;
+    operatorFrequencies: Record<string, number>;
+    batches?: Record<string, Array<Omit<Carrier, 'operatorId'>>>;
+    singles?: Record<string, string>;
+  }) {
+    const mode = options.mode ?? MODES.FT8;
+    vi.spyOn(ConfigManager, 'getInstance').mockReturnValue({
+      updateOperatorConfig: vi.fn().mockResolvedValue(undefined),
+      getOperatorConfig: vi.fn(() => undefined),
+      getFT8Config: () => ({ maxSameTransmissionCount: 20 }),
+    } as any);
+    const encodeQueue = { push: vi.fn() };
+    const { manager, eventEmitter } = createManager({
+      books: {},
+      station: { logBookId: 'log-BG5DRB', callsign: 'BG5DRB' },
+      encodeQueue,
+      mode,
+    });
+    const textMessages: Array<{ key?: string; params?: Record<string, string> }> = [];
+    eventEmitter.on('textMessage', message => textMessages.push(message as any));
+    for (const [id, frequency] of Object.entries(options.operatorFrequencies)) {
+      await manager.addOperator({
+        id, myCallsign: 'BG5DRB', myGrid: 'PL09', frequency, transmitCycles: [0], mode,
+      } as RadioOperatorConfig);
+      manager.getOperatorById(id)!.start();
+    }
+    manager.start();
+
+    for (const [operatorId, transmissions] of Object.entries(options.batches ?? {})) {
+      eventEmitter.emit('requestTransmitBatch', { operatorId, transmissions } as any);
+    }
+    for (const [operatorId, transmission] of Object.entries(options.singles ?? {})) {
+      eventEmitter.emit('requestTransmit', { operatorId, transmission } as any);
+    }
+    manager.processPendingTransmissions({
+      id: 'slot-0', startMs: 0, utcSeconds: 0, phaseMs: 0, driftMs: 0, cycleNumber: 0, mode: mode.name,
+    } as SlotInfo);
+
+    const encoded = encodeQueue.push.mock.calls.map(([request]) => `${request.operatorId}@${request.frequency}`);
+    return { encoded, conflicts: textMessages.filter(message => message.key === 'multiSignalFrequencyConflict') };
+  }
+
+  const pair = (a: number, b: number) => [
+    { streamId: 'a', transmission: 'CQ BG5DRB PL09', audioFrequencyHz: a },
+    { streamId: 'b', transmission: 'JA1AAA BG5DRB -10', audioFrequencyHz: b },
+  ];
+
+  it('requires FT8 carriers at least 60 Hz apart', async () => {
+    const accepted = await transmitFrame({ operatorFrequencies: { op1: 1500 }, batches: { op1: pair(1500, 1560) } });
+    expect(accepted.encoded).toEqual(['op1@1500', 'op1@1560']);
+    expect(accepted.conflicts).toEqual([]);
+
+    vi.restoreAllMocks();
+    const rejected = await transmitFrame({ operatorFrequencies: { op1: 1500 }, batches: { op1: pair(1500, 1559) } });
+    expect(rejected.encoded).toEqual([]);
+    expect(rejected.conflicts).toEqual([expect.objectContaining({ params: { minimumSpacingHz: '60' } })]);
+  });
+
+  it('requires FT4 carriers at least 100 Hz apart', async () => {
+    const accepted = await transmitFrame({
+      mode: MODES.FT4, operatorFrequencies: { op1: 1500 }, batches: { op1: pair(1500, 1600) },
+    });
+    expect(accepted.encoded).toEqual(['op1@1500', 'op1@1600']);
+
+    vi.restoreAllMocks();
+    const rejected = await transmitFrame({
+      mode: MODES.FT4, operatorFrequencies: { op1: 1500 }, batches: { op1: pair(1500, 1599) },
+    });
+    expect(rejected.encoded).toEqual([]);
+    expect(rejected.conflicts).toEqual([expect.objectContaining({ params: { minimumSpacingHz: '100' } })]);
+  });
+
+  it('keeps every carrier of a multi-signal frame between 100 and 5000 Hz', async () => {
+    const edges = await transmitFrame({ operatorFrequencies: { op1: 1500 }, batches: { op1: pair(100, 5000) } });
+    expect(edges.encoded).toEqual(['op1@100', 'op1@5000']);
+
+    vi.restoreAllMocks();
+    const tooLow = await transmitFrame({ operatorFrequencies: { op1: 1500 }, batches: { op1: pair(99, 1500) } });
+    expect(tooLow.encoded).toEqual([]);
+    expect(tooLow.conflicts).toHaveLength(1);
+
+    vi.restoreAllMocks();
+    const tooHigh = await transmitFrame({ operatorFrequencies: { op1: 1500 }, batches: { op1: pair(1500, 5001) } });
+    expect(tooHigh.encoded).toEqual([]);
+    expect(tooHigh.conflicts).toHaveLength(1);
+  });
+
+  it('drops only the operator whose own set is unsafe', async () => {
+    const result = await transmitFrame({
+      operatorFrequencies: { op1: 1500, op2: 2500 },
+      batches: { op1: pair(1500, 1520) },
+      singles: { op2: 'CQ BG5DRB PL09' },
+    });
+
+    expect(result.encoded).toEqual(['op2@2500']);
+    expect(result.conflicts).toHaveLength(1);
+  });
+
+  it('rejects the whole frame when carriers from different operators collide', async () => {
+    // A single transmission without an explicit carrier uses the operator's configured frequency.
+    const result = await transmitFrame({
+      operatorFrequencies: { op1: 1500, op2: 1530 },
+      singles: { op1: 'CQ BG5DRB PL09', op2: 'JA1AAA BG5DRB -10' },
+    });
+
+    expect(result.encoded).toEqual([]);
+    expect(result.conflicts).toHaveLength(1);
+  });
+
+  it('does not check the layout of a single carrier', async () => {
+    const result = await transmitFrame({ operatorFrequencies: { op1: 6000 }, singles: { op1: 'CQ BG5DRB PL09' } });
+
+    expect(result.encoded).toEqual(['op1@6000']);
+    expect(result.conflicts).toEqual([]);
   });
 });

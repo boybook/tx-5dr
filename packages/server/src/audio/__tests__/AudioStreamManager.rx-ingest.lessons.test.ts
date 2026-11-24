@@ -42,6 +42,7 @@ vi.mock('../../utils/audioUtils.js', () => ({
 }));
 
 import { AudioStreamManager } from '../AudioStreamManager.js';
+import { clearResamplerCache } from '../../utils/audioUtils.js';
 
 /** Source frames arrive at 48 kHz so every chunk goes through the async resampler into 12 kHz. */
 const SOURCE_SAMPLE_RATE = 48_000;
@@ -145,6 +146,26 @@ describe('AudioStreamManager RX ingest timing and generations', () => {
     expect(processedFrames).toEqual([{ length: 960, sampleRate: 9600 }]);
 
     await manager.stopStream();
+  });
+
+  it('RX-16: restarts the stateful resampler stream when the processing rate changes or the input stops', async () => {
+    const manager = new AudioStreamManager();
+    const adapter = createInputAdapter();
+    manager.setIcomWlanAudioAdapter(adapter as never);
+    await manager.startStream();
+    vi.mocked(clearResamplerCache).mockClear();
+
+    // Same rate: the running filter stream is kept.
+    expect(manager.setInputProcessingSampleRate(12_000, 'unchanged')).toBe(false);
+    expect(clearResamplerCache).not.toHaveBeenCalled();
+
+    // New rate: filter state from the old rate must not leak into the new stream.
+    expect(manager.setInputProcessingSampleRate(9600, 'test-cw')).toBe(true);
+    expect(clearResamplerCache).toHaveBeenCalledTimes(1);
+
+    // Stopping input ends the stream; a restart begins from fresh filter state.
+    await manager.stopStream();
+    expect(clearResamplerCache).toHaveBeenCalledTimes(2);
   });
 
   it('RX-18: does not write an input chunk from the previous stream generation after stop and restart', async () => {
