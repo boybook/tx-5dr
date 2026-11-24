@@ -9,6 +9,7 @@ import {
   buildReceptionGlobeModel,
   escapeGlobeLabelText,
   getReceptionFreshness,
+  getReceptionHeatScale,
   type ReceptionStation,
 } from './receptionGlobe';
 import { useReceptionPings } from '../components/logbook/useReceptionPings';
@@ -95,6 +96,84 @@ describe('reception globe model', () => {
 
   it('escapes externally supplied label text', () => {
     expect(escapeGlobeLabelText('<img src=x onerror="a">&\'')).toBe('&lt;img src=x onerror=&quot;a&quot;&gt;&amp;&#39;');
+  });
+});
+
+describe('reception heat', () => {
+  /** Heat mass the glow stacks up around a locator: every heat point within a few degrees. */
+  function heatAt(model: ReturnType<typeof buildReceptionGlobeModel>, locator: string): number {
+    const station = model.stations.find(entry => entry.locator === locator);
+    if (!station) return 0;
+    return model.heatPoints
+      .filter(point => Math.hypot(point.lat - station.lat, point.lng - station.lng) <= 4)
+      .reduce((total, point) => total + point.weight, 0);
+  }
+
+  function receivers(prefix: string, locator: string, count: number, snr: number): PSKReporterReceptionSpot[] {
+    return Array.from({ length: count }, (_, index) => spot(`${prefix}${index}`, locator, 2, { snr }));
+  }
+
+  it('rates an area by how well it hears, not only by how many receivers it has', () => {
+    // Twelve receivers barely decoding versus four hearing the signal well.
+    const view = applyReceptionUpdate(null, update('snapshot', [
+      ...receivers('DL', 'JO52', 12, -22),
+      ...receivers('JA', 'PM95', 4, -4),
+    ]), NOW);
+    const model = buildReceptionGlobeModel(view, HOME, NOW);
+
+    expect(heatAt(model, 'PM95')).toBeGreaterThan(heatAt(model, 'JO52'));
+  });
+
+  it('warms an area with more receivers at the same signal, with diminishing returns', () => {
+    const view = applyReceptionUpdate(null, update('snapshot', [
+      ...receivers('VK', 'QF57', 2, -12),
+      ...receivers('W', 'FN31', 8, -12),
+    ]), NOW);
+    const model = buildReceptionGlobeModel(view, HOME, NOW);
+    const few = heatAt(model, 'QF57');
+    const many = heatAt(model, 'FN31');
+
+    expect(many).toBeGreaterThan(few);
+    expect(many).toBeLessThan(few * 3);
+  });
+
+  it('warms an area with stronger reports at the same receiver count', () => {
+    const view = applyReceptionUpdate(null, update('snapshot', [
+      ...receivers('VK', 'QF57', 3, -20),
+      ...receivers('W', 'FN31', 3, -6),
+    ]), NOW);
+    const model = buildReceptionGlobeModel(view, HOME, NOW);
+
+    expect(heatAt(model, 'FN31')).toBeGreaterThan(heatAt(model, 'QF57'));
+  });
+
+  it("uses a receiver's typical report, so one lucky decode does not light its area", () => {
+    const view = applyReceptionUpdate(null, update('snapshot', [
+      spot('VK2JEH', 'QF57', 9, { snr: -23 }),
+      spot('VK2JEH', 'QF57', 6, { snr: -22 }),
+      spot('VK2JEH', 'QF57', 2, { snr: 4 }),
+      spot('W1AW', 'FN31', 2, { snr: -8 }),
+    ]), NOW);
+    const model = buildReceptionGlobeModel(view, HOME, NOW);
+
+    expect(heatAt(model, 'FN31')).toBeGreaterThan(heatAt(model, 'QF57'));
+  });
+
+  it('dims the whole glow when even the best area only hears us marginally', () => {
+    const weak = buildReceptionGlobeModel(applyReceptionUpdate(null, update('snapshot', receivers('VK', 'QF57', 1, -23)), NOW), HOME, NOW);
+    const strong = buildReceptionGlobeModel(applyReceptionUpdate(null, update('snapshot', receivers('W', 'FN31', 10, -3)), NOW), HOME, NOW);
+
+    expect(getReceptionHeatScale(weak.heatPoints)).toBeLessThan(0.5);
+    expect(getReceptionHeatScale(weak.heatPoints)).toBeGreaterThan(0);
+    expect(getReceptionHeatScale(strong.heatPoints)).toBe(1);
+    expect(getReceptionHeatScale([])).toBeGreaterThan(0);
+  });
+
+  it('merges the receivers of one area into a single heat point', () => {
+    const view = applyReceptionUpdate(null, update('snapshot', receivers('DL', 'JO52', 6, -10)), NOW);
+    const model = buildReceptionGlobeModel(view, HOME, NOW);
+
+    expect(model.heatPoints).toHaveLength(1);
   });
 });
 

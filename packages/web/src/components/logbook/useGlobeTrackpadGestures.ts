@@ -90,13 +90,19 @@ export interface GlobeView {
   altitude: number;
 }
 
+/** Pan bounds of a flat map view; null on the globe. */
+export type GlobePanLimitsFn = (altitude: number) => { maxLatitude: number; uniformLongitude: boolean } | null;
+
 export function useGlobeTrackpadGestures(
   containerRef: RefObject<HTMLElement | null>,
   globeRef: RefObject<GlobeMethods | undefined>,
   onViewChange: (view: GlobeView) => void,
+  getPanLimits?: GlobePanLimitsFn,
 ): void {
   const onViewChangeRef = useRef(onViewChange);
   onViewChangeRef.current = onViewChange;
+  const getPanLimitsRef = useRef(getPanLimits);
+  getPanLimitsRef.current = getPanLimits;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -141,8 +147,11 @@ export function useGlobeTrackpadGestures(
       const camera = globe.camera() as CameraLike;
       const radiansPerPixel = getGlobeRadiansPerPixel(next.altitude, container.clientHeight, camera.fov ?? 50);
       const degreesPerPixel = (radiansPerPixel * PAN_SENSITIVITY * 180) / Math.PI;
-      next.lat = Math.max(-MAX_LATITUDE, Math.min(MAX_LATITUDE, next.lat - dy * degreesPerPixel));
-      const longitudeScale = Math.max(MIN_LONGITUDE_SCALE, Math.cos((next.lat * Math.PI) / 180));
+      // A flat map keeps its edge out of view and is as wide at every latitude.
+      const limits = getPanLimitsRef.current?.(next.altitude) ?? null;
+      const maxLatitude = limits ? Math.min(MAX_LATITUDE, limits.maxLatitude) : MAX_LATITUDE;
+      next.lat = Math.max(-maxLatitude, Math.min(maxLatitude, next.lat - dy * degreesPerPixel));
+      const longitudeScale = limits?.uniformLongitude ? 1 : Math.max(MIN_LONGITUDE_SCALE, Math.cos((next.lat * Math.PI) / 180));
       next.lng += (dx * degreesPerPixel) / longitudeScale;
     };
 

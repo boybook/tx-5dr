@@ -460,10 +460,77 @@ section[role="dialog"][data-placement="center"].w-full:not(.max-w-full) {
   }
 }
 
-/* The receiver hover card on the logbook globe draws its own dark frame. */
-.float-tooltip-kap:has(> .globe-reception-card) {
-  padding: 0;
-  background: transparent;
-  border-radius: 0;
-  max-width: none;
+/* Callsign beside an actionable station on the logbook globe; placed by the marker layer. */
+.globe-marker-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  white-space: nowrap;
+  font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.02em;
+  text-shadow: 0 0 3px rgba(2, 6, 23, 0.95), 0 0 8px rgba(2, 6, 23, 0.8);
+  will-change: transform;
+}
+
+/*
+ * The flash highlight sweeping across a label with its glyph. It is an overlay
+ * of the same text so the label keeps its halo; the marker layer restarts it
+ * for each fresh decode. Its length matches SHEEN_SECONDS in globeMarkerLayer.ts.
+ */
+.globe-marker-label::after {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  color: transparent;
+  text-shadow: none;
+  background: linear-gradient(110deg, transparent 38%, rgba(255, 255, 255, 0.95) 50%, transparent 62%);
+  background-size: 300% 100%;
+  background-position: 100% 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.globe-marker-label[data-sheen]::after {
+  animation: globe-label-sheen 0.55s ease-in-out var(--sheen-delay, 0s) 1 both;
+}
+
+/*
+ * One enter/leave motion for the globe's own hover panels and cards, close to
+ * the toolbar tooltips: a short fade with a slight grow from the side they
+ * open from. Closed panels stay mounted so they can animate out.
+ */
+.globe-pop {
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(var(--globe-pop-shift, 4px)) scale(0.96);
+  transform-origin: var(--globe-pop-origin, bottom left);
+  transition:
+    opacity 140ms ease-in,
+    transform 140ms ease-in,
+    visibility 0s linear 140ms;
+}
+
+.globe-pop[data-open='true'] {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition:
+    opacity 160ms ease-out,
+    transform 200ms cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .globe-pop,
+  .globe-pop[data-open='true'] {
+    transform: none;
+  }
+}
+
+@keyframes globe-label-sheen {
+  0% { background-position: 100% 0; opacity: 1; }
+  85% { opacity: 1; }
+  100% { background-position: 0 0; opacity: 0; }
 }

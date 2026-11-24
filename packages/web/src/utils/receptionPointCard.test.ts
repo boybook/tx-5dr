@@ -32,7 +32,6 @@ describe('reception point card', () => {
 
   it('shows band, mode, strength, distance and age at a glance', () => {
     const html = buildReceptionPointCardHtml(station(), getReceptionTheme('teal'), NOW, t);
-    expect(html).toContain('globe-reception-card');
     expect(html).toContain('>15m<');
     expect(html).toContain('>FT8<');
     expect(html).toContain('-8 dB');

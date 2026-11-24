@@ -23,10 +23,27 @@ const MAX_VIEW_SPOTS = 3000;
  * The glow is a kernel density over ~40k vertices per point, computed on the
  * CPU where WebGPU is missing. Weights are quantised so the periodic freshness
  * refresh does not recompute it for invisible changes, and the point count is
- * capped to the strongest receivers.
+ * capped to the warmest areas.
  */
 const HEAT_WEIGHT_STEP = 0.05;
 const MAX_HEAT_POINTS = 300;
+/**
+ * Receivers are pooled into areas about as wide as the glow's kernel, so the
+ * glow shows how well each area hears rather than how many receivers it holds.
+ */
+const HEAT_AREA_DEGREES = 4;
+/** Freshness-weighted receiver count at which an area's count factor reaches 1. */
+const HEAT_REFERENCE_RECEIVERS = 8;
+/**
+ * Area weight drawn at the full glow, about eight receivers hearing us at
+ * -6 dB. The glow layer normalises to its strongest area, so without this a
+ * lone marginal receiver would glow as brightly as a well-covered continent.
+ */
+const HEAT_FULL_WEIGHT = 0.75;
+/** Dimmest the strongest area is drawn, so weak coverage stays visible. */
+const HEAT_MIN_SCALE = 0.35;
+/** Quality assumed for a report without SNR: an ordinary, not a marginal, decode. */
+const HEAT_UNKNOWN_SNR_QUALITY = 0.5;
 const EARTH_RADIUS_KM = 6371;
 
 export interface ReceptionView {
@@ -34,6 +51,17 @@ export interface ReceptionView {
   callsigns: string[];
   windowMs: number;
   spots: PSKReporterReceptionSpot[];
+}
+
+/**
+ * Brightness of the glow as a whole, from its strongest area's absolute weight:
+ * multiplies the layer's normalised density before colouring. Quantised so it
+ * changes only with visible differences.
+ */
+export function getReceptionHeatScale(points: readonly ReceptionHeatPoint[]): number {
+  const strongest = points.reduce((max, point) => Math.max(max, point.weight), 0);
+  const scale = Math.min(1, Math.max(HEAT_MIN_SCALE, strongest / HEAT_FULL_WEIGHT));
+  return Math.round(scale / HEAT_WEIGHT_STEP) * HEAT_WEIGHT_STEP;
 }
 
 /** Applies a pushed update; spots outside the window are dropped. */
@@ -149,12 +177,65 @@ function getReceptionPointSize(snr: number | undefined): number {
   return 0.27;
 }
 
-/** A strong report lights its area more than a marginal one. */
-function getReceptionSignalWeight(snr: number | undefined): number {
-  if (snr === undefined) return 0.8;
-  if (snr >= -10) return 1;
-  if (snr >= -18) return 0.8;
-  return 0.62;
+/**
+ * How well a receiver hears us, from its typical SNR: linear in dB from about
+ * 0.1 at the FT8 decode floor (-24 dB) to 1 at 0 dB and above.
+ */
+export function getReceptionSignalQuality(snr: number | undefined): number {
+  if (snr === undefined || !Number.isFinite(snr)) return HEAT_UNKNOWN_SNR_QUALITY;
+  return Math.min(1, Math.max(0.1, (snr + 26) / 26));
+}
+
+function median(values: readonly number[]): number | undefined {
+  if (values.length === 0) return undefined;
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+/** Key of the roughly equal-area cell, about HEAT_AREA_DEGREES wide, holding a point. */
+function getHeatAreaKey(lat: number, lng: number): string {
+  const row = Math.min(Math.floor((lat + 90) / HEAT_AREA_DEGREES), Math.ceil(180 / HEAT_AREA_DEGREES) - 1);
+  const rowCenterLat = -90 + (row + 0.5) * HEAT_AREA_DEGREES;
+  const columns = Math.max(1, Math.round((360 * Math.cos(rowCenterLat * Math.PI / 180)) / HEAT_AREA_DEGREES));
+  const column = Math.min(columns - 1, Math.floor(((((lng + 180) % 360) + 360) % 360) / (360 / columns)));
+  return `${row}:${column}`;
+}
+
+/**
+ * One heat point per area, weighted by both how many receivers hear us there
+ * and how well they do: the freshness-weighted mean signal quality times a
+ * logarithmic receiver count. A few strong receivers outweigh a crowd of
+ * marginal decodes; more receivers still warm an area, with diminishing returns.
+ */
+function buildReceptionHeatPoints(stations: readonly ReceptionStation[], typicalSnr: ReadonlyMap<string, number | undefined>): ReceptionHeatPoint[] {
+  const areas = new Map<string, { latSum: number; lngSum: number; members: number; freshness: number; quality: number }>();
+  for (const station of stations) {
+    const key = getHeatAreaKey(station.lat, station.lng);
+    const area = areas.get(key) ?? { latSum: 0, lngSum: 0, members: 0, freshness: 0, quality: 0 };
+    const quality = getReceptionSignalQuality(typicalSnr.get(station.callsign));
+    area.latSum += station.lat;
+    area.lngSum += station.lng;
+    area.members += 1;
+    area.freshness += station.freshness;
+    area.quality += station.freshness * quality;
+    areas.set(key, area);
+  }
+
+  const countScale = Math.log2(1 + HEAT_REFERENCE_RECEIVERS);
+  return Array.from(areas.values())
+    .filter(area => area.freshness > 0)
+    .map<ReceptionHeatPoint>(area => {
+      const meanQuality = area.quality / area.freshness;
+      const countFactor = Math.log2(1 + area.freshness) / countScale;
+      return {
+        lat: area.latSum / area.members,
+        lng: area.lngSum / area.members,
+        weight: Math.max(HEAT_WEIGHT_STEP, Math.round((meanQuality * countFactor) / HEAT_WEIGHT_STEP) * HEAT_WEIGHT_STEP),
+      };
+    })
+    .sort((left, right) => right.weight - left.weight)
+    .slice(0, MAX_HEAT_POINTS);
 }
 
 export function buildReceptionPingRing(
@@ -187,9 +268,15 @@ export function buildReceptionGlobeModel(
   }
 
   const stationsByCall = new Map<string, ReceptionStation>();
+  const snrsByCall = new Map<string, number[]>();
   let latestReportAt: number | undefined;
   for (const spot of view.spots) {
     latestReportAt = Math.max(latestReportAt ?? 0, spot.reportedAt);
+    if (spot.snr !== undefined && Number.isFinite(spot.snr)) {
+      const snrs = snrsByCall.get(spot.receiverCallsign) ?? [];
+      snrs.push(spot.snr);
+      snrsByCall.set(spot.receiverCallsign, snrs);
+    }
     const existing = stationsByCall.get(spot.receiverCallsign);
     if (existing) {
       existing.reportCount += 1;
@@ -231,18 +318,9 @@ export function buildReceptionGlobeModel(
     station,
   }));
 
-  const heatPoints = stations
-    .map<ReceptionHeatPoint>(station => ({
-      lat: station.lat,
-      lng: station.lng,
-      weight: Math.max(
-        HEAT_WEIGHT_STEP,
-        Math.round((Math.max(0.12, station.freshness) * getReceptionSignalWeight(station.snr)) / HEAT_WEIGHT_STEP)
-          * HEAT_WEIGHT_STEP,
-      ),
-    }))
-    .sort((left, right) => right.weight - left.weight)
-    .slice(0, MAX_HEAT_POINTS);
+  // A receiver's typical report, so one lucky decode does not light its area.
+  const typicalSnr = new Map(stations.map(station => [station.callsign, median(snrsByCall.get(station.callsign) ?? [])]));
+  const heatPoints = buildReceptionHeatPoints(stations, typicalSnr);
 
   const targetRings = stations
     .filter(station => targetCalls.has(station.callsign) && now - station.transmittedAt <= RECEPTION_TARGET_HEARD_MS)

@@ -1,9 +1,9 @@
-import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Popover, PopoverContent, PopoverTrigger, Select, SelectItem, Spinner, Tooltip } from '@heroui/react';
-import { getGridBounds, type LogBookWorkedGridItem, type OperatorStatus, type QSORecord, type StationInfo } from '@tx5dr/contracts';
+import type { LogBookWorkedGridItem, OperatorStatus, QSORecord, StationInfo } from '@tx5dr/contracts';
 import { api, ApiError, getBandFromFrequency } from '@tx5dr/core';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faClockRotateLeft, faTableCells, faTowerBroadcast, type IconDefinition } from '@fortawesome/free-solid-svg-icons';
+import { faCircleHalfStroke, faClockRotateLeft, faEarListen, faEarthAsia, faMap, faTableCells, faTowerBroadcast, type IconDefinition } from '@fortawesome/free-solid-svg-icons';
 import Globe, { type GlobeMethods } from 'react-globe.gl';
 import * as THREE from 'three';
 import { feature } from 'topojson-client';
@@ -15,25 +15,45 @@ import { isElectron, isMacOS } from '../../utils/config';
 import { OperatorsContext } from '../../store/radio/contexts';
 import { useViewportHeightValue } from '../../hooks/useViewportHeight';
 import {
-  buildWorkedGridGlobeModel,
   buildPagedQSOGlobeModel,
   buildInProgressQSOGlobeModel,
-  getMaidenheadGridLines,
   type GlobeArc,
   type GlobeStationPoint,
-  type WorkedGridLabel,
-  type WorkedGridLine,
 } from '../../utils/logbookGlobe';
 import {
+  GRID_SQUARE_SWITCH_ALTITUDE,
+  buildGridStatusData,
+  createMaidenheadGridLayer,
+  gridSquareAt,
+} from '../../utils/maidenheadGridLayer';
+import { createSolarTerminatorLayer, getSubsolarPoint, latLngToGlobeDirection } from '../../utils/solarTerminator';
+import { createGlobeHazeLayer } from '../../utils/globeAtmosphere';
+import { PixelRatioGovernor, getPixelRatioLevels } from '../../utils/adaptivePixelRatio';
+import { GLOBE_LAND_CAP_ALTITUDE, LAND_CAP_DEPTH_BIAS, applyGlobeLayerOrder, getCameraNear, type GlobeShellMesh } from '../../utils/globeShell';
+import { intersectGlobe } from '../../utils/globePicking';
+import { createGlobeMapProjection, intersectFlatMap } from '../../utils/globeMapProjection';
+import { useGlobeMapView } from './useGlobeMapView';
+import { createGlobeMarkerLayer, type GlobeMarker } from '../../utils/globeMarkerLayer';
+import {
+  buildLiveStations,
+  getLiveStationOpacity,
+  type LiveDecodeView,
+  type LiveStation,
+} from '../../utils/liveDecodes';
+import { buildLiveDecodeCardHtml, buildSimpleGlobeCardHtml } from '../../utils/liveDecodeCard';
+import { useDisplayNotificationSettings } from '../../hooks/useDisplayNotificationSettings';
+import LiveTargetCard, { type LiveTargeting } from './LiveTargetCard';
+import {
   buildReceptionGlobeModel,
+  getReceptionHeatScale,
   getReceptionHeatSignature,
-  type ReceptionGlobePoint,
+  type ReceptionStation,
   type ReceptionHeatPoint,
   type ReceptionView,
 } from '../../utils/receptionGlobe';
 import { useReceptionPings } from './useReceptionPings';
 import { useGlobeTrackpadGestures } from './useGlobeTrackpadGestures';
-import { buildReceptionPointCardHtml } from '../../utils/receptionPointCard';
+import { buildReceptionPointCardHtml, getHeardMeAccent } from '../../utils/receptionPointCard';
 import { LOGBOOK_BAND_OPTIONS } from './logbookBands';
 import {
   RECEPTION_THEMES,
@@ -54,18 +74,29 @@ const EARTH_BUMP_URL = '/globe/earth-topology.png';
 const INITIAL_POV_ANIMATION_MS = 900;
 const FOCUS_POV_ANIMATION_MS = 1400;
 const DEFAULT_POV_ALTITUDE = 1.0;
-const WORKED_GRID_SWITCH_ALTITUDE = 0.62;
-const WORKED_GRID_LABEL_LIMIT = 120;
-const WORKED_GRID_MIN_VISIBLE_DEGREES = 34;
-const WORKED_GRID_MAX_VISIBLE_DEGREES = 68;
-const POV_SYNC_INTERVAL_MS = 120;
-const POV_SYNC_ALTITUDE_EPSILON = 0.025;
-const POV_SYNC_CENTER_EPSILON_WITH_GRIDS = 1.2;
-const POV_SYNC_CENTER_EPSILON_IDLE = 999;
 const WORKED_GRID_CACHE_LIMIT = 4;
+/** The day/night shading moves 0.25 degrees a minute; a minute is smooth enough. */
+const TERMINATOR_TICK_MS = 60_000;
 const EMPTY_OPERATORS: OperatorStatus[] = [];
 const RECEPTION_TICK_MS = 30_000;
-const RECEPTION_POINT_ALTITUDE = 0.0045;
+/** A press that moves less than this and ends within CLICK_MAX_MS is a click, not a drag. */
+const CLICK_MAX_MOVE_PX = 4;
+const CLICK_MAX_MS = 500;
+/** The live ageing refresh lands just after each slot boundary. */
+const LIVE_TICK_AFTER_BOUNDARY_MS = 50;
+/** Neutral glyph colour of stations that are not needed. */
+const LIVE_NEUTRAL_COLOR = '#e2e8f0';
+/**
+ * While stations are heard live, the logbook history is context: its arcs and
+ * points step back so the stations worth calling stand out.
+ */
+const HISTORY_RECEDED_ALPHA = 0.4;
+
+function scaleRgbaAlpha(color: string, factor: number): string {
+  const match = /^rgba\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)$/.exec(color);
+  if (!match) return color;
+  return `rgba(${match[1]}, ${match[2]}, ${match[3]}, ${(Number(match[4]) * factor).toFixed(3)})`;
+}
 /** Gaussian radius of the coverage glow, in degrees of arc. */
 const RECEPTION_FOG_BANDWIDTH = 4.5;
 /** Above the land caps (0.0025) so the glow tints land instead of sitting under the overlay. */
@@ -85,6 +116,10 @@ const RECEPTION_FOG_PATCH_FRAMES = 30;
  */
 type SceneMaterial = { depthWrite: boolean; blending: number; needsUpdate: boolean };
 type SceneObject = { __globeObjType?: string; material?: SceneMaterial | SceneMaterial[] };
+/** Frames to keep re-applying the layer order after mount; land arrives a few frames late. */
+const LAND_ORDER_PATCH_FRAMES = 180;
+/** Frames to wait for globe.gl to load the night texture (about a minute). */
+const EARTH_TEXTURE_WAIT_FRAMES = 3600;
 
 function applyHeatmapGlowMaterial(globe: GlobeMethods | undefined): boolean {
   if (!globe || typeof globe.scene !== 'function') return false;
@@ -114,17 +149,72 @@ const GLOBE_TOOLTIP_CLASSNAMES = {
 };
 const GLOBE_TOOLTIP_MUTED_CLASS = 'text-[rgba(148,163,184,0.95)]';
 const GLOBE_TOOLTIP_FAINT_CLASS = 'text-[rgba(148,163,184,0.7)]';
-// The pale land overlay steps back while the reception glow is shown, so the
-// glow and the night texture both stay readable.
-const getLandCapColor = () => 'rgba(226, 232, 240, 0.2)';
-const getDimmedLandCapColor = () => 'rgba(226, 232, 240, 0.13)';
+/**
+ * The pale land tint is added light: blending towards white would flatten the
+ * texture and the relief beneath it, adding keeps every difference in them.
+ * It steps back while the reception glow is shown, so the glow and the night
+ * texture both stay readable.
+ */
+const LAND_TINT_RGB = [226, 232, 240] as const;
+const LAND_TINT_LIFT = 0.15;
+const LAND_TINT_DIMMED_LIFT = 0.1;
+/** Shaded relief of the terrain (Natural Earth, public domain); 8K where the GPU takes it. */
+const RELIEF_TEXTURE_URL = '/globe/relief-4k.jpg';
+const RELIEF_TEXTURE_HD_URL = '/globe/relief-8k.jpg';
+const RELIEF_TEXTURE_HD_MIN_SIZE = 8192;
+
+function setLandTint(material: { color: { setRGB(r: number, g: number, b: number, colorSpace: string): unknown } }, lift: number): void {
+  const [r, g, b] = LAND_TINT_RGB;
+  material.color.setRGB((r / 255) * lift, (g / 255) * lift, (b / 255) * lift, THREE.SRGBColorSpace);
+}
 const getLandStrokeColor = () => 'rgba(241, 245, 249, 0.2)';
 const getDimmedLandStrokeColor = () => 'rgba(241, 245, 249, 0.16)';
+// Stable accessors: a new function on every render makes globe.gl re-digest
+// all land polygons.
+const getLandSideColor = () => 'rgba(51, 65, 85, 0.08)';
 const RECEPTION_TOOLTIP_STATION_LIMIT = 5;
 const RECEPTION_PANEL_CLOSE_DELAY_MS = 200;
 const RECEPTION_CREDIT = 'Data from PSK Reporter by Philip Gladstone. Live spots from mqtt.pskreporter.info by Tom Fanning M0LTE.';
 
-type GlobePointDatum = GlobeStationPoint | ReceptionGlobePoint;
+type GlobeMarkerData =
+  | { kind: 'home'; grid: string }
+  | { kind: 'history'; point: GlobeStationPoint }
+  | { kind: 'reception'; station: ReceptionStation }
+  | { kind: 'live'; station: LiveStation };
+
+/**
+ * Glyph size of a worked grid: the model sizes points in globe units by how
+ * often the grid was worked (and lifts the latest QSO); markers are pixels.
+ */
+function getHistoryMarkerSize(modelSize: number): number {
+  return Math.round(Math.min(12, 5 + modelSize * 3.4));
+}
+
+/** Glyph size of a receiver ring by its report strength. */
+function getReceptionMarkerSize(snr: number | undefined): number {
+  if (snr === undefined) return 8;
+  if (snr >= -10) return 10;
+  if (snr >= -18) return 8;
+  return 7;
+}
+
+/**
+ * Visual hierarchy of a live station (see liveDecodes.ts): needed CQ callers
+ * stand out with colour, shape and their callsign; the rest steps back.
+ */
+function getLiveMarkerStyle(station: LiveStation): Pick<GlobeMarker, 'shape' | 'size' | 'color' | 'opacity' | 'hollow' | 'priority'> {
+  const age = getLiveStationOpacity(station.ageSlots);
+  switch (station.tier) {
+    case 1:
+      return { shape: 'diamond', size: 13, color: station.color ?? LIVE_NEUTRAL_COLOR, opacity: age, hollow: station.approximate, priority: 8 };
+    case 2:
+      return { shape: station.isCq ? 'diamond' : 'dot', size: 8, color: station.color ?? LIVE_NEUTRAL_COLOR, opacity: 0.9 * age, hollow: station.approximate, priority: 6 };
+    case 3:
+      return { shape: 'diamond', size: 9, color: LIVE_NEUTRAL_COLOR, opacity: (station.approximate ? 0.4 : 0.55) * age, hollow: station.approximate, priority: 4 };
+    default:
+      return { shape: 'dot', size: 4, color: LIVE_NEUTRAL_COLOR, opacity: 0.4 * age, hollow: false, priority: 1 };
+  }
+}
 
 const GLOBE_ALL_BANDS_KEY = '__all__';
 const GLOBE_SELECT_LISTBOX_PROPS = {
@@ -176,8 +266,33 @@ const GlobeIconToggle: React.FC<{
   </Tooltip>
 );
 
-function isReceptionPoint(point: object): point is ReceptionGlobePoint {
-  return (point as ReceptionGlobePoint).kind === 'reception';
+type GlobeShellLayer = { mesh: GlobeShellMesh; altitude: number; setGlobeRadius?: (radius: number) => void };
+
+/** Places a shell layer at its altitude; layers placing their own geometry take the radius. */
+function getCustomLayerObject(layer: object, globeRadius: number): GlobeShellMesh {
+  const shell = layer as GlobeShellLayer;
+  if (shell.setGlobeRadius) {
+    shell.setGlobeRadius(globeRadius);
+  } else {
+    shell.mesh.scale.setScalar(globeRadius * (1 + shell.altitude));
+  }
+  return shell.mesh;
+}
+
+/** Shell layers update themselves; the update hook only stops globe.gl from rebuilding them. */
+function keepCustomLayerObject(): void {}
+
+/**
+ * Keeps depth precision steady across zoom levels (see getCameraNear): the
+ * near plane follows the camera's height above the globe.
+ */
+function syncCameraNear(globe: GlobeMethods | null | undefined, altitude: number): void {
+  if (!globe || typeof globe.camera !== 'function' || typeof globe.getGlobeRadius !== 'function') return;
+  const camera = globe.camera() as { near: number; updateProjectionMatrix(): void };
+  const near = getCameraNear(altitude * globe.getGlobeRadius());
+  if (Math.abs(camera.near - near) <= near * 0.05) return;
+  camera.near = near;
+  camera.updateProjectionMatrix();
 }
 
 type GlobeControls = {
@@ -192,24 +307,6 @@ type LandTopology = {
   objects: {
     land: unknown;
   };
-};
-
-type GlobeGridPath = WorkedGridLine | {
-  kind: 'worked-grid';
-  precision: 2 | 4;
-  grid: string;
-  count: number;
-  points: Array<[number, number]>;
-};
-
-type GlobeGridTile = {
-  grid: string;
-  count: number;
-  precision: 2 | 4;
-  lat: number;
-  lng: number;
-  width: number;
-  height: number;
 };
 
 type GlobePolygonGeometry = {
@@ -227,28 +324,14 @@ function getLandGeometry(polygon: object): GlobePolygonGeometry {
   return (polygon as Feature<Geometry>).geometry as unknown as GlobePolygonGeometry;
 }
 
-function getGridPathColor(path: object): string {
-  const gridPath = path as GlobeGridPath;
-  if (gridPath.kind === 'worked-grid') {
-    return gridPath.precision === 4
-      ? 'rgba(248, 113, 113, 0.26)'
-      : 'rgba(248, 113, 113, 0.22)';
-  }
-  return gridPath.precision === 4
-    ? 'rgba(248, 113, 113, 0.07)'
-    : 'rgba(248, 113, 113, 0.1)';
-}
-
-function getGridTileAltitude(tile: object): number {
-  return (tile as GlobeGridTile).precision === 4 ? 0.0062 : 0.0054;
-}
-
-interface RecentQSOGlobeCardProps {
+export interface RecentQSOGlobeCardProps {
   active?: boolean;
   logBookId: string;
   qsos: QSORecord[];
   loading: boolean;
   bandFilter?: string;
+  /** Logbook mode filter; the worked grid overlay follows it. */
+  modeFilter?: string;
   /** Sets the logbook band filter shared with the table; omitted hides the globe control. */
   onBandFilterChange?: (band: string | undefined) => void;
   pageSize: number;
@@ -261,30 +344,10 @@ interface RecentQSOGlobeCardProps {
   reception?: ReceptionView | null;
   /** Whether the viewer may turn reception feedback on (administrators only). */
   canEnableReception?: boolean;
-}
-
-function toRadians(value: number): number {
-  return value * Math.PI / 180;
-}
-
-function angularDistanceDegrees(
-  lat1: number,
-  lng1: number,
-  lat2: number,
-  lng2: number,
-): number {
-  const lat1Rad = toRadians(lat1);
-  const lat2Rad = toRadians(lat2);
-  const deltaLngRad = toRadians(lng2 - lng1);
-  const cosine = Math.sin(lat1Rad) * Math.sin(lat2Rad)
-    + Math.cos(lat1Rad) * Math.cos(lat2Rad) * Math.cos(deltaLngRad);
-  const clampedCosine = Math.min(1, Math.max(-1, cosine));
-  return Math.acos(clampedCosine) * 180 / Math.PI;
-}
-
-function shortestLongitudeDeltaDegrees(left: number, right: number): number {
-  const delta = Math.abs(left - right) % 360;
-  return delta > 180 ? 360 - delta : delta;
+  /** Stations heard in the latest receive slots. */
+  liveDecodes?: LiveDecodeView | null;
+  /** Calling a heard station from a pinned card; absent where the page cannot. */
+  liveTargeting?: LiveTargeting | null;
 }
 
 function formatUtcTime(timestamp?: number): string {
@@ -308,6 +371,7 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
   qsos,
   loading,
   bandFilter,
+  modeFilter,
   onBandFilterChange,
   pageSize,
   pageSizeOptions,
@@ -317,6 +381,8 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
   operators: operatorsProp,
   reception = null,
   canEnableReception = false,
+  liveDecodes = null,
+  liveTargeting = null,
 }) => {
   const { t } = useTranslation('logbook');
   const [stationInfo, setStationInfo] = useState<StationInfo | null>(null);
@@ -327,8 +393,9 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
   const [workedGridItems, setWorkedGridItems] = useState<LogBookWorkedGridItem[]>([]);
   const [workedGridLoading, setWorkedGridLoading] = useState(false);
   const [workedGridError, setWorkedGridError] = useState<string | null>(null);
-  const [globeAltitude, setGlobeAltitude] = useState(DEFAULT_POV_ALTITUDE);
-  const [globeCenter, setGlobeCenter] = useState({ lat: 0, lng: 0 });
+  const [showTerminator, setShowTerminator] = useState(true);
+  /** Coarse view state for the status text only; the shader follows the camera itself. */
+  const [showGridSquares, setShowGridSquares] = useState(DEFAULT_POV_ALTITUDE <= GRID_SQUARE_SWITCH_ALTITUDE);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const globeRef = useRef<GlobeMethods | undefined>(undefined);
   const activeRef = useRef(active);
@@ -337,8 +404,27 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
   const hasInitialFocusRef = useRef(false);
   const lastFocusKeyRef = useRef<string | null>(null);
   const workedGridCacheRef = useRef<Map<string, LogBookWorkedGridItem[]>>(new Map());
-  const lastViewportSyncRef = useRef({ lat: 0, lng: 0, altitude: DEFAULT_POV_ALTITUDE });
-  const lastViewportSyncAtRef = useRef(0);
+  /** Follows the pointer; its child holds the card and animates in and out. */
+  const hoverCardRef = useRef<HTMLDivElement | null>(null);
+  const hoverCardBodyRef = useRef<HTMLDivElement | null>(null);
+  const markerLabelsRef = useRef<HTMLDivElement | null>(null);
+  const [showLive, setShowLive] = useState(true);
+  /** A heard station pinned by a click; `autoCall` when it was a double click. */
+  const [pinned, setPinned] = useState<{
+    key: number;
+    station: LiveStation;
+    anchor: { x: number; y: number };
+    bounds: { width: number; height: number };
+    autoCall: boolean;
+  } | null>(null);
+  const pinnedCallsign = pinned?.station.callsign ?? null;
+  const pointerDownRef = useRef<{ x: number; y: number; at: number } | null>(null);
+  const hoverSizeRef = useRef({ width: 0, height: 0 });
+  const [liveNow, setLiveNow] = useState(() => Date.now());
+  // Scrolled into view in a visible tab: clocks and animations run only then.
+  const [onScreen, setOnScreen] = useState(true);
+  const running = active && onScreen;
+  const { settings: highlightSettings } = useDisplayNotificationSettings();
   const viewportHeight = useViewportHeightValue();
 
   useEffect(() => {
@@ -347,7 +433,9 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
     if (!globe || !container) return;
     let visible = true;
     const updateAnimation = () => {
-      if (!activeRef.current || document.hidden || !visible) globe.pauseAnimation();
+      const shown = !document.hidden && visible;
+      setOnScreen(shown);
+      if (!activeRef.current || !shown) globe.pauseAnimation();
       else globe.resumeAnimation();
     };
     refreshAnimationRef.current = updateAnimation;
@@ -379,24 +467,128 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
     });
     return material;
   }, []);
-  const workedGridTileMaterial2 = useMemo(() => new THREE.MeshBasicMaterial({
-    color: new THREE.Color('rgb(239, 68, 68)'),
-    transparent: true,
-    opacity: 0.12,
-    depthWrite: false,
-  }), []);
-  const workedGridTileMaterial4 = useMemo(() => new THREE.MeshBasicMaterial({
-    color: new THREE.Color('rgb(239, 68, 68)'),
-    transparent: true,
-    opacity: 0.18,
-    depthWrite: false,
-  }), []);
+  // Unrolls every layer into a flat map and back (see globeMapProjection).
+  const mapProjection = useMemo(() => createGlobeMapProjection(), []);
+  const { view: globeView, setView: setGlobeView, flatRef, getPanLimits } = useGlobeMapView(globeRef, mapProjection, running);
+  // GPU overlays: each is one sphere shell shaded per pixel, so camera moves
+  // never rebuild meshes or re-render React.
+  const gridLayer = useMemo(() => createMaidenheadGridLayer(mapProjection), [mapProjection]);
+  const terminatorLayer = useMemo(() => createSolarTerminatorLayer(undefined, mapProjection), [mapProjection]);
+  const hazeLayer = useMemo(() => createGlobeHazeLayer(mapProjection), [mapProjection]);
+  const markerLayer = useMemo(() => createGlobeMarkerLayer(mapProjection), [mapProjection]);
+  const customLayers = useMemo(
+    () => [gridLayer, terminatorLayer, hazeLayer, markerLayer],
+    [gridLayer, terminatorLayer, hazeLayer, markerLayer],
+  );
+  useEffect(() => {
+    markerLayer.setLabelContainer(markerLabelsRef.current);
+    return () => markerLayer.setLabelContainer(null);
+  }, [markerLayer]);
+
+  // Rendering resolution follows the frame rate (see adaptivePixelRatio): it
+  // drops while frames are late and returns once they are on time.
+  const pixelRatioGovernorRef = useRef<PixelRatioGovernor | null>(null);
+  useEffect(() => {
+    const globe = globeRef.current;
+    if (!running || !globe || typeof globe.renderer !== 'function') return;
+    const renderer = globe.renderer() as { setPixelRatio?: (ratio: number) => void };
+    if (typeof renderer.setPixelRatio !== 'function') return;
+    const naturalRatio = Math.min(2, window.devicePixelRatio || 1);
+    pixelRatioGovernorRef.current ??= new PixelRatioGovernor(getPixelRatioLevels(naturalRatio));
+    const governor = pixelRatioGovernorRef.current;
+    const apply = (ratio: number) => {
+      renderer.setPixelRatio?.(ratio);
+      gridLayer.setPixelScale(ratio / naturalRatio);
+    };
+    let last = performance.now();
+    let frame = window.requestAnimationFrame(function measure(now: number) {
+      const ratio = governor.frame(now - last, now);
+      last = now;
+      if (ratio !== null) {
+        logger.debug('Page globe rendering resolution changed', { pixelRatio: ratio });
+        apply(ratio);
+      }
+      frame = window.requestAnimationFrame(measure);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [running, gridLayer]);
+
+  // The city lights read the globe's own night texture: one copy in memory,
+  // uploaded once. globe.gl sets it on the material once it has loaded.
+  useEffect(() => {
+    let frame = 0;
+    let remaining = EARTH_TEXTURE_WAIT_FRAMES;
+    const attach = () => {
+      const texture = (globeMaterial as { map?: unknown }).map;
+      if (texture) {
+        terminatorLayer.setEarthTexture(texture);
+        return;
+      }
+      if (--remaining > 0) frame = window.requestAnimationFrame(attach);
+    };
+    attach();
+    return () => window.cancelAnimationFrame(frame);
+  }, [globeMaterial, terminatorLayer]);
+
+  // The land tint: one material for every land cap, recoloured in place.
+  const landCapMaterial = useMemo(() => {
+    const material = new THREE.MeshBasicMaterial({
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      polygonOffset: true,
+      polygonOffsetFactor: LAND_CAP_DEPTH_BIAS.factor,
+      polygonOffsetUnits: LAND_CAP_DEPTH_BIAS.units,
+    });
+    setLandTint(material, LAND_TINT_LIFT);
+    return material;
+  }, []);
+  useEffect(() => () => landCapMaterial.dispose(), [landCapMaterial]);
+
+  // Terrain relief, loaded once as a single channel (a quarter of the memory
+  // of colour). The ground shading reads it, so it shows in 3D and on the map.
+  useEffect(() => {
+    const renderer = globeRef.current && typeof globeRef.current.renderer === 'function'
+      ? globeRef.current.renderer() as { capabilities?: { maxTextureSize?: number } }
+      : null;
+    if (!renderer) return;
+    const url = (renderer.capabilities?.maxTextureSize ?? 0) >= RELIEF_TEXTURE_HD_MIN_SIZE
+      ? RELIEF_TEXTURE_HD_URL
+      : RELIEF_TEXTURE_URL;
+    let disposed = false;
+    let loaded: { dispose(): void } | null = null;
+    new THREE.TextureLoader().load(url, (texture: {
+      format: number;
+      colorSpace: string;
+      anisotropy: number;
+      needsUpdate: boolean;
+      dispose(): void;
+    }) => {
+      if (disposed) {
+        texture.dispose();
+        return;
+      }
+      texture.format = THREE.RedFormat;
+      texture.colorSpace = THREE.NoColorSpace;
+      texture.anisotropy = 4;
+      texture.needsUpdate = true;
+      loaded = texture;
+      terminatorLayer.setReliefTexture(texture);
+    }, undefined, () => logger.warn('Page globe relief texture failed to load', { url }));
+    return () => {
+      disposed = true;
+      terminatorLayer.setReliefTexture(null);
+      loaded?.dispose();
+    };
+  }, [terminatorLayer]);
 
   useEffect(() => () => {
     globeMaterial.dispose();
-    workedGridTileMaterial2.dispose();
-    workedGridTileMaterial4.dispose();
-  }, [globeMaterial, workedGridTileMaterial2, workedGridTileMaterial4]);
+    gridLayer.dispose();
+    terminatorLayer.dispose();
+    hazeLayer.dispose();
+    markerLayer.dispose();
+  }, [globeMaterial, gridLayer, terminatorLayer, hazeLayer, markerLayer]);
 
   const landPolygons = useMemo(() => {
     const land = feature(landTopology as LandTopology, (landTopology as LandTopology).objects.land);
@@ -409,25 +601,53 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
   const operatorsCtx = useContext(OperatorsContext);
   const operators = operatorsProp ?? operatorsCtx?.operators ?? EMPTY_OPERATORS;
   const inProgressModel = useMemo(
-    () => buildInProgressQSOGlobeModel(operators, stationInfo),
-    [operators, stationInfo],
+    () => buildInProgressQSOGlobeModel(operators, stationInfo, globeModel.homePoint),
+    [operators, stationInfo, globeModel.homePoint],
   );
-  const workedGridModel = useMemo(() => buildWorkedGridGlobeModel(workedGridItems), [workedGridItems]);
+  const workedGridStatus = useMemo(() => buildGridStatusData(workedGridItems), [workedGridItems]);
+  useEffect(() => {
+    gridLayer.setStatus(workedGridStatus);
+  }, [gridLayer, workedGridStatus]);
+  useEffect(() => {
+    gridLayer.mesh.visible = showWorkedGrids;
+    if (!showWorkedGrids && hoverCardBodyRef.current) hoverCardBodyRef.current.dataset.open = 'false';
+  }, [gridLayer, showWorkedGrids]);
+  useEffect(() => {
+    terminatorLayer.setDaylightVisible(showTerminator);
+    // The haze follows day and night only while they are shown.
+    if (!showTerminator) hazeLayer.setSunDirection(null);
+    if (!showTerminator || !running) return;
+    const tick = () => {
+      const now = new Date();
+      terminatorLayer.setTime(now);
+      const sun = getSubsolarPoint(now);
+      hazeLayer.setSunDirection(latLngToGlobeDirection(sun.lat, sun.lng));
+    };
+    tick();
+    const timer = window.setInterval(tick, TERMINATOR_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [terminatorLayer, hazeLayer, showTerminator, running]);
   const [showReception, setShowReception] = useState(true);
   const [receptionNow, setReceptionNow] = useState(() => Date.now());
   const hasReceptionSpots = (reception?.spots.length ?? 0) > 0;
   useEffect(() => {
-    if (!hasReceptionSpots || !active) return;
+    if (!hasReceptionSpots || !running) return;
     setReceptionNow(Date.now());
     const timer = setInterval(() => setReceptionNow(Date.now()), RECEPTION_TICK_MS);
     return () => clearInterval(timer);
-  }, [hasReceptionSpots, active, reception]);
-  const receptionTargetCalls = useMemo(() => new Set(
+  }, [hasReceptionSpots, running, reception]);
+  // Operator updates arrive several times a second; the set is rebuilt (and
+  // everything depending on it) only when the called stations change.
+  const receptionTargetKey = useMemo(() => Array.from(new Set(
     operators
       .filter(op => op.currentSlot !== 'TX6')
       .flatMap(op => [op.context?.targetCall, ...(op.context?.targetCalls ?? [])])
       .flatMap(call => (call ? [call.trim().toUpperCase()] : [])),
-  ), [operators]);
+  )).sort().join(' '), [operators]);
+  const receptionTargetCalls = useMemo(
+    () => new Set(receptionTargetKey ? receptionTargetKey.split(' ') : []),
+    [receptionTargetKey],
+  );
   const receptionHome = globeModel.homePoint;
   // The globe follows the logbook band filter, reception included.
   const bandReception = useMemo<ReceptionView | null>(() => (
@@ -488,7 +708,6 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
     saveReceptionThemeId(id);
     logger.info('Page globe reception theme changed', { theme: id });
   };
-  const receptionFogColorFn = useMemo(() => () => receptionTheme.fogColor, [receptionTheme]);
   const receptionModel = useMemo(
     () => buildReceptionGlobeModel(bandReception, receptionHome, receptionNow, receptionTargetCalls, receptionTheme),
     [bandReception, receptionHome, receptionNow, receptionTargetCalls, receptionTheme],
@@ -498,7 +717,7 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
     // A band switch is a new view: its stations appear settled, without rings.
     `${reception?.callsigns.join(',') ?? ''}|${bandFilter ?? ''}`,
     reception !== null,
-    showReception && active,
+    showReception && running,
     receptionTheme,
   );
   const defaultGlobeHeight = useMemo(() => {
@@ -585,7 +804,7 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
   }, []);
 
   useEffect(() => {
-    logger.info('Page globe model prepared', {
+    logger.debug('Page globe model prepared', {
       qsoCount: globeModel.summary.qsoCount,
       hasHome: !!globeModel.homePoint,
       remotePointCount: globeModel.remotePoints.length,
@@ -596,7 +815,7 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
 
   useEffect(() => {
     const activeOperators = operators.filter((op) => op.currentSlot !== 'TX6');
-    logger.info('Page globe in-progress model prepared', {
+    logger.debug('Page globe in-progress model prepared', {
       operatorCount: operators.length,
       activeOperatorCount: activeOperators.length,
       inProgressArcCount: inProgressModel.arcs.length,
@@ -612,7 +831,7 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
       return;
     }
 
-    const cacheKey = `${logBookId}:${bandFilter || 'all'}`;
+    const cacheKey = `${logBookId}:${bandFilter || 'all'}:${modeFilter || 'all'}`;
     const cached = workedGridCacheRef.current.get(cacheKey);
     if (cached) {
       workedGridCacheRef.current.delete(cacheKey);
@@ -634,9 +853,13 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
         logger.info('Requesting worked grids for page globe', {
           logBookId,
           band: bandFilter || null,
+          mode: modeFilter || null,
         });
 
-        const response = await api.getLogBookWorkedGrids(logBookId, bandFilter ? { band: bandFilter } : undefined);
+        const response = await api.getLogBookWorkedGrids(logBookId, {
+          ...(bandFilter ? { band: bandFilter } : {}),
+          ...(modeFilter ? { mode: modeFilter } : {}),
+        });
         if (cancelled) {
           return;
         }
@@ -653,6 +876,7 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
         logger.info('Worked grids for page globe loaded', {
           logBookId,
           band: bandFilter || null,
+          mode: modeFilter || null,
           count: response.data.items.length,
         });
       } catch (error) {
@@ -675,7 +899,7 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [bandFilter, logBookId, showWorkedGrids, t]);
+  }, [bandFilter, modeFilter, logBookId, showWorkedGrids, t]);
 
   useEffect(() => {
     if (!globeRef.current || !globeModel.homePoint || loading) {
@@ -683,7 +907,8 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
     }
 
     const controls = globeRef.current.controls() as unknown as GlobeControls;
-    controls.autoRotate = true;
+    // The flat map stays where the user put it.
+    controls.autoRotate = !flatRef.current;
     controls.autoRotateSpeed = 0.35;
     controls.enableZoom = true;
     controls.update?.();
@@ -709,15 +934,11 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
       lng: globeModel.homePoint.lng,
       altitude: DEFAULT_POV_ALTITUDE,
     }, animationDuration);
-    setGlobeAltitude(DEFAULT_POV_ALTITUDE);
-    setGlobeCenter({
-      lat: globeModel.homePoint.lat,
-      lng: globeModel.homePoint.lng,
-    });
+    setShowGridSquares(DEFAULT_POV_ALTITUDE <= GRID_SQUARE_SWITCH_ALTITUDE);
 
     hasInitialFocusRef.current = true;
     lastFocusKeyRef.current = focusKey;
-  }, [globeModel.homePoint, loading]);
+  }, [globeModel.homePoint, loading, flatRef]);
 
   useEffect(() => {
     const globe = globeRef.current;
@@ -770,21 +991,129 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
     : !globeModel.homePoint
       ? t('globe.missingHomeCurrentPage')
       : t('globe.emptyCurrentPage');
-  const visibleReceptionPoints = showReception ? receptionModel.points : null;
-  const visiblePoints = useMemo<GlobePointDatum[]>(() => {
-    const historyPoints = showQsoHistory ? globeModel.remotePoints : [];
-    const stationPoints: GlobePointDatum[] = loading || !hasRenderableData
-      ? []
-      : globeModel.homePoint
-        ? [globeModel.homePoint, ...historyPoints]
-        : historyPoints;
-    return visibleReceptionPoints && visibleReceptionPoints.length > 0
-      ? [...visibleReceptionPoints, ...stationPoints]
-      : stationPoints;
-  }, [loading, hasRenderableData, globeModel.homePoint, globeModel.remotePoints, showQsoHistory, visibleReceptionPoints]);
+  const liveHasSlots = (liveDecodes?.slots.length ?? 0) > 0;
+  const liveSlotMs = liveDecodes?.slotMs;
+  // Stations age by whole slots, so the clock only needs to move at slot
+  // boundaries (and when new decodes arrive).
+  useEffect(() => {
+    if (!showLive || !running || !liveHasSlots || !liveSlotMs) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const schedule = () => {
+      const wait = liveSlotMs - (Date.now() % liveSlotMs) + LIVE_TICK_AFTER_BOUNDARY_MS;
+      timer = setTimeout(() => {
+        setLiveNow(Date.now());
+        schedule();
+      }, wait);
+    };
+    setLiveNow(Date.now());
+    schedule();
+    return () => clearTimeout(timer);
+  }, [showLive, running, liveHasSlots, liveSlotMs, liveDecodes]);
+  const liveStations = useMemo(
+    () => (showLive ? buildLiveStations(liveDecodes, liveNow, highlightSettings, receptionTargetCalls) : []),
+    [showLive, liveDecodes, liveNow, highlightSettings, receptionTargetCalls],
+  );
+  // Needed CQ callers pop in once when they first appear, and every fresh
+  // decode (a new station, or a newer slot of a known one) flashes briefly.
+  // A reload or the first snapshot shows everything settled.
+  const livePopRef = useRef<{
+    primed: boolean;
+    poppedAt: Map<string, number>;
+    seen: Map<string, { slotStartMs: number; flashAt?: number }>;
+  }>({ primed: false, poppedAt: new Map(), seen: new Map() });
+  const globeMarkers = useMemo<GlobeMarker<GlobeMarkerData>[]>(() => {
+    const markers: GlobeMarker<GlobeMarkerData>[] = [];
+    const home = globeModel.homePoint;
+    if (home) {
+      markers.push({
+        id: 'home', lat: home.lat, lng: home.lng, shape: 'home', size: 16, color: home.color,
+        opacity: 1, priority: 10, data: { kind: 'home', grid: home.grid },
+      });
+    }
+    if (!loading && hasRenderableData && showQsoHistory) {
+      const historyOpacity = liveStations.length > 0 ? 0.5 : 0.85;
+      for (const point of globeModel.remotePoints) {
+        markers.push({
+          id: `history:${point.grid}`, lat: point.lat, lng: point.lng, shape: 'dot', size: getHistoryMarkerSize(point.size), color: point.color,
+          opacity: historyOpacity, priority: 2, data: { kind: 'history', point },
+        });
+      }
+    }
+    if (showReception) {
+      for (const point of receptionModel.points) {
+        markers.push({
+          id: `reception:${point.station.callsign}`, lat: point.lat, lng: point.lng, shape: 'ring',
+          size: getReceptionMarkerSize(point.station.snr), color: getHeardMeAccent(receptionTheme),
+          opacity: 0.3 + point.station.freshness * 0.65, priority: 3, data: { kind: 'reception', station: point.station },
+        });
+      }
+    }
+    const pops = livePopRef.current;
+    const tierOne = new Set<string>();
+    const heard = new Set<string>();
+    for (const station of liveStations) {
+      heard.add(station.callsign);
+      const seen = pops.seen.get(station.callsign);
+      let flashAt = seen?.flashAt;
+      if (pops.primed && (!seen || station.slotStartMs > seen.slotStartMs)) {
+        flashAt = performance.now();
+      }
+      pops.seen.set(station.callsign, { slotStartMs: station.slotStartMs, flashAt });
+      let popAt: number | undefined;
+      if (station.tier === 1) {
+        tierOne.add(station.callsign);
+        popAt = pops.poppedAt.get(station.callsign);
+        if (popAt === undefined && pops.primed) {
+          popAt = performance.now();
+          pops.poppedAt.set(station.callsign, popAt);
+        }
+      }
+      markers.push({
+        id: `live:${station.callsign}`, lat: station.lat, lng: station.lng, ...getLiveMarkerStyle(station),
+        popAt, flashAt, label: station.tier === 1 ? station.callsign : undefined, data: { kind: 'live', station },
+      });
+    }
+    for (const callsign of pops.seen.keys()) {
+      if (!heard.has(callsign)) pops.seen.delete(callsign);
+    }
+    for (const callsign of pops.poppedAt.keys()) {
+      if (!tierOne.has(callsign)) pops.poppedAt.delete(callsign);
+    }
+    if (liveStations.length > 0) pops.primed = true;
+    return markers;
+  }, [globeModel.homePoint, globeModel.remotePoints, loading, hasRenderableData, showQsoHistory, showReception, receptionModel.points, receptionTheme, liveStations]);
+  useEffect(() => {
+    markerLayer.setMarkers(globeMarkers);
+  }, [markerLayer, globeMarkers]);
+  const liveCounts = useMemo(() => ({
+    total: liveStations.length,
+    actionable: liveStations.filter(station => station.tier === 1).length,
+  }), [liveStations]);
+  // History arcs recede by colour alone. globe.gl keys arcs by object, so the
+  // same objects stay bound to their tube meshes and only the vertex colours
+  // update; swapping in copies (or changing the stroke) rebuilds every tube
+  // on every frame of a one-second transition.
+  const historyRecedes = liveCounts.total > 0;
+  const recededArcColors = useMemo(
+    () => new Map(globeModel.arcs.map(arc => [arc, scaleRgbaAlpha(arc.color, HISTORY_RECEDED_ALPHA)])),
+    [globeModel.arcs],
+  );
+  const getArcColor = useCallback(
+    (arc: object) => (historyRecedes && recededArcColors.get(arc as GlobeArc)) || (arc as GlobeArc).color,
+    [historyRecedes, recededArcColors],
+  );
   const visibleArcs = useMemo(() => loading || !hasRenderableData || !showQsoHistory
     ? inProgressModel.arcs
     : [...globeModel.arcs, ...inProgressModel.arcs], [loading, hasRenderableData, showQsoHistory, globeModel.arcs, inProgressModel.arcs]);
+  /** Latest QSO with each worked grid, for its hover card. */
+  const latestArcByGrid = useMemo(() => {
+    const latest = new Map<string, GlobeArc>();
+    for (const arc of globeModel.arcs) {
+      const known = latest.get(arc.grid);
+      if (!known || arc.startTime > known.startTime) latest.set(arc.grid, arc);
+    }
+    return latest;
+  }, [globeModel.arcs]);
   // globe.gl binds one mesh per datum object. Reusing the same datum keeps the
   // mesh (and its patched material) across updates; only the KDE is recomputed.
   const receptionFogDatum = useMemo(() => ({ points: [] as ReceptionHeatPoint[] }), []);
@@ -794,6 +1123,13 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
   const latestHeatPointsRef = useRef(receptionModel.heatPoints);
   latestHeatPointsRef.current = receptionModel.heatPoints;
   const [fogHeatPoints, setFogHeatPoints] = useState<ReceptionHeatPoint[]>(EMPTY_HEAT_POINTS);
+  // The glow layer normalises to its strongest area; scale it back by how good
+  // that area's reception actually is, so weak coverage reads as weak.
+  const receptionHeatScale = useMemo(() => getReceptionHeatScale(fogHeatPoints), [fogHeatPoints]);
+  const receptionFogColorFn = useMemo(
+    () => () => (density: number) => receptionTheme.fogColor(density * receptionHeatScale),
+    [receptionTheme, receptionHeatScale],
+  );
   const lastFogUpdateAtRef = useRef(0);
   useEffect(() => {
     const apply = () => {
@@ -819,6 +1155,9 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
   }, [showReception, fogHeatPoints, receptionFogDatum]);
   const receptionFogVisible = receptionHeatmaps.length > 0;
   useEffect(() => {
+    setLandTint(landCapMaterial, receptionFogVisible ? LAND_TINT_DIMMED_LIFT : LAND_TINT_LIFT);
+  }, [landCapMaterial, receptionFogVisible]);
+  useEffect(() => {
     if (receptionHeatmaps.length === 0) return;
     let frame = 0;
     let remaining = RECEPTION_FOG_PATCH_FRAMES;
@@ -827,6 +1166,8 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
     // instead of stopping at the first one found.
     const patch = () => {
       applyHeatmapGlowMaterial(globeRef.current);
+      const globe = globeRef.current;
+      if (globe && typeof globe.scene === 'function') applyGlobeLayerOrder(globe.scene());
       if (--remaining > 0) {
         frame = window.requestAnimationFrame(patch);
       }
@@ -834,6 +1175,24 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
     patch();
     return () => window.cancelAnimationFrame(frame);
   }, [receptionHeatmaps]);
+  // globe.gl builds the land caps a few frames after mount and offers no
+  // render order option; order them before the night shade once they exist.
+  // Should they ever be rebuilt unordered, land merely shows undimmed at night.
+  useEffect(() => {
+    let frame = 0;
+    let remaining = LAND_ORDER_PATCH_FRAMES;
+    let settleFrames = 30;
+    const patch = () => {
+      const globe = globeRef.current;
+      const found = !!globe && typeof globe.scene === 'function' && applyGlobeLayerOrder(globe.scene());
+      if (found) settleFrames -= 1;
+      if (--remaining > 0 && settleFrames > 0) {
+        frame = window.requestAnimationFrame(patch);
+      }
+    };
+    patch();
+    return () => window.cancelAnimationFrame(frame);
+  }, [landPolygons]);
   const visibleReceptionRings = showReception ? receptionModel.targetRings : null;
   const visibleRings = useMemo(() => {
     const historyRings = showQsoHistory
@@ -902,110 +1261,10 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
       </div>
     );
   }, [receptionModel, receptionStationCount, receptionStatus, receptionNow, reception?.callsigns, t]);
-  const useFourCharacterWorkedGrid = globeAltitude <= WORKED_GRID_SWITCH_ALTITUDE;
-  const activeWorkedGridPolygons = showWorkedGrids
-    ? (useFourCharacterWorkedGrid ? workedGridModel.precision4.polygons : workedGridModel.precision2.polygons)
-    : [];
-  const maxVisibleAngularDistance = useFourCharacterWorkedGrid
-    ? Math.max(18, Math.min(42, 12 + globeAltitude * 12))
-    : Math.max(
-      WORKED_GRID_MIN_VISIBLE_DEGREES,
-      Math.min(WORKED_GRID_MAX_VISIBLE_DEGREES, 24 + globeAltitude * 26),
-    );
-  const baseGridLatWindow = useFourCharacterWorkedGrid
-    ? Math.max(5, Math.min(18, 3 + globeAltitude * 8))
-    : Math.max(10, Math.min(46, 7 + globeAltitude * 18));
-  const baseGridLngWindow = useFourCharacterWorkedGrid
-    ? Math.max(7, Math.min(26, 5 + globeAltitude * 10))
-    : Math.max(14, Math.min(64, 10 + globeAltitude * 24));
-  const visibleWorkedGridPolygons = useMemo(
-    () => activeWorkedGridPolygons.filter((polygon) => {
-      const bounds = getGridBounds(polygon.grid);
-      if (!bounds) {
-        return false;
-      }
-
-      return angularDistanceDegrees(globeCenter.lat, globeCenter.lng, bounds.centerLat, bounds.centerLon) <= maxVisibleAngularDistance;
-    }),
-    [activeWorkedGridPolygons, globeCenter.lat, globeCenter.lng, maxVisibleAngularDistance],
+  const workedGridConfirmedCount = useMemo(
+    () => workedGridItems.filter(item => (item.confirmedCount ?? 0) > 0).length,
+    [workedGridItems],
   );
-  const activeWorkedGridLabels = useMemo(
-    () => (showWorkedGrids
-      ? (useFourCharacterWorkedGrid
-        ? workedGridModel.precision4.labels
-        : workedGridModel.precision2.labels)
-        .filter((label) => angularDistanceDegrees(globeCenter.lat, globeCenter.lng, label.lat, label.lng) <= maxVisibleAngularDistance)
-        .slice(0, WORKED_GRID_LABEL_LIMIT)
-      : []),
-    [globeCenter.lat, globeCenter.lng, maxVisibleAngularDistance, showWorkedGrids, useFourCharacterWorkedGrid, workedGridModel.precision2.labels, workedGridModel.precision4.labels],
-  );
-  const pathsData = useMemo(() => {
-    if (!showWorkedGrids) {
-      return [];
-    }
-
-    const result: GlobeGridPath[] = [
-      ...getMaidenheadGridLines(useFourCharacterWorkedGrid ? 4 : 2).filter((line) => {
-        if (line.axis === 'lat') {
-          return Math.abs(line.value - globeCenter.lat) <= baseGridLatWindow;
-        }
-        return shortestLongitudeDeltaDegrees(line.value, globeCenter.lng) <= baseGridLngWindow;
-      }),
-    ];
-
-    for (const polygon of visibleWorkedGridPolygons) {
-      const bounds = getGridBounds(polygon.grid);
-      if (!bounds) {
-        continue;
-      }
-
-      result.push({
-        kind: 'worked-grid',
-        precision: polygon.precision,
-        grid: polygon.grid,
-        count: polygon.count,
-        points: [
-          [bounds.latMin, bounds.lonMin],
-          [bounds.latMin, bounds.lonMax],
-          [bounds.latMax, bounds.lonMax],
-          [bounds.latMax, bounds.lonMin],
-          [bounds.latMin, bounds.lonMin],
-        ],
-      });
-    }
-
-    return result;
-  }, [
-    baseGridLatWindow,
-    baseGridLngWindow,
-    globeCenter.lat,
-    globeCenter.lng,
-    showWorkedGrids,
-    useFourCharacterWorkedGrid,
-    visibleWorkedGridPolygons,
-  ]);
-  const tilesData = useMemo(() => {
-    if (!showWorkedGrids) {
-      return [];
-    }
-
-    return visibleWorkedGridPolygons.map((polygon) => {
-      const bounds = getGridBounds(polygon.grid);
-      if (!bounds) {
-        return null;
-      }
-
-      return {
-        grid: polygon.grid,
-        count: polygon.count,
-        precision: polygon.precision,
-        lat: bounds.centerLat,
-        lng: bounds.centerLon,
-        width: bounds.lonMax - bounds.lonMin,
-        height: bounds.latMax - bounds.latMin,
-      };
-    }).filter((tile): tile is GlobeGridTile => !!tile);
-  }, [showWorkedGrids, visibleWorkedGridPolygons]);
   const workedGridStatusText = !showWorkedGrids
     ? null
     : workedGridLoading
@@ -1016,64 +1275,206 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
           ? t('globe.workedGridEmpty')
         : t('globe.workedGridLoaded', {
             count: workedGridItems.length,
-            precision: useFourCharacterWorkedGrid ? 4 : 2,
+            confirmed: workedGridConfirmedCount,
+            precision: showGridSquares ? 4 : 2,
           });
 
-  const syncViewportState = (pov: GlobePointOfView, force = false) => {
-    const nextLat = pov.lat ?? 0;
-    const nextLng = pov.lng ?? 0;
-    const nextAltitude = pov.altitude ?? lastViewportSyncRef.current.altitude;
-    const previous = lastViewportSyncRef.current;
-
-    if (!force && !showWorkedGrids) {
-      return;
-    }
-
-    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    const centerDelta = angularDistanceDegrees(previous.lat, previous.lng, nextLat, nextLng);
-    const altitudeDelta = Math.abs(previous.altitude - nextAltitude);
-    const precisionChanged = (previous.altitude <= WORKED_GRID_SWITCH_ALTITUDE) !== (nextAltitude <= WORKED_GRID_SWITCH_ALTITUDE);
-    const centerThreshold = showWorkedGrids ? POV_SYNC_CENTER_EPSILON_WITH_GRIDS : POV_SYNC_CENTER_EPSILON_IDLE;
-    const shouldSync = force
-      || precisionChanged
-      || now - lastViewportSyncAtRef.current >= POV_SYNC_INTERVAL_MS
-      || centerDelta >= centerThreshold
-      || altitudeDelta >= POV_SYNC_ALTITUDE_EPSILON;
-
-    if (!shouldSync) {
-      return;
-    }
-
-    lastViewportSyncRef.current = {
-      lat: nextLat,
-      lng: nextLng,
-      altitude: nextAltitude,
-    };
-    lastViewportSyncAtRef.current = now;
-
-    setGlobeCenter((currentValue) => (
-      currentValue.lat === nextLat && currentValue.lng === nextLng
-        ? currentValue
-        : { lat: nextLat, lng: nextLng }
-    ));
-    setGlobeAltitude((currentValue) => (
-      Math.abs(currentValue - nextAltitude) < 0.0001
-        ? currentValue
-        : nextAltitude
-    ));
+  // Camera moves call these every frame: React hears only actual changes.
+  const showGridSquaresRef = useRef(showGridSquares);
+  showGridSquaresRef.current = showGridSquares;
+  const syncViewportState = (pov: GlobePointOfView) => {
+    if (pov.altitude === undefined) return;
+    syncCameraNear(globeRef.current, pov.altitude);
+    const squares = pov.altitude <= GRID_SQUARE_SWITCH_ALTITUDE;
+    if (showGridSquaresRef.current === squares) return;
+    showGridSquaresRef.current = squares;
+    setShowGridSquares(squares);
   };
 
-  useEffect(() => {
-    if (!showWorkedGrids || !globeRef.current) {
-      return;
-    }
-
-    syncViewportState(globeRef.current.pointOfView(), true);
-  }, [showWorkedGrids]);
+  // Moving the view leaves a pinned card behind its station, so the user's own
+  // drags, wheel and trackpad gestures close it. Auto-rotation does not: it
+  // also moves the camera, and stops when a card is pinned.
+  const pinnedRef = useRef(pinned);
+  pinnedRef.current = pinned;
+  const closePinnedOnUserMove = () => {
+    if (!pinnedRef.current) return;
+    pinnedRef.current = null;
+    setPinned(null);
+  };
 
   // Trackpad drag pans and pinch zooms like a native map; they bypass
   // OrbitControls, so the view state is synced here instead of in onZoom.
-  useGlobeTrackpadGestures(containerRef, globeRef, (view) => syncViewportState(view));
+  useGlobeTrackpadGestures(containerRef, globeRef, (view) => {
+    closePinnedOnUserMove();
+    syncViewportState(view);
+  }, getPanLimits);
+
+  const describeMarker = (marker: GlobeMarker): string => {
+    const data = marker.data as GlobeMarkerData;
+    switch (data.kind) {
+      case 'home':
+        return buildSimpleGlobeCardHtml([t('globe.homeLabel'), data.grid]);
+      case 'history': {
+        const latest = latestArcByGrid.get(data.point.grid);
+        return buildSimpleGlobeCardHtml([
+          data.point.grid,
+          t('globe.pointCount', { count: data.point.count }),
+          ...(data.point.callsigns.length > 0 ? [data.point.callsigns.join(', ')] : []),
+          ...(latest
+            ? [`${latest.mode} · ${(latest.frequency / 1_000_000).toFixed(3)} MHz · ${formatUtcTime(latest.startTime)} UTC`]
+            : []),
+        ]);
+      }
+      case 'reception':
+        return buildReceptionPointCardHtml(data.station, receptionTheme, Date.now(), t);
+      case 'live':
+        return buildLiveDecodeCardHtml(data.station, globeModel.homePoint, t);
+    }
+  };
+  const describeGrid = (clientX: number, clientY: number, globe: GlobeMethods, canvasRect: DOMRect): string | null => {
+    const camera = globe.camera();
+    const pointer = new THREE.Vector3(
+      ((clientX - canvasRect.left) / canvasRect.width) * 2 - 1,
+      -((clientY - canvasRect.top) / canvasRect.height) * 2 + 1,
+      0.5,
+    ).unproject(camera);
+    // Mid-way between globe and map nothing is picked.
+    const morph = mapProjection.morph;
+    if (morph > 0 && morph < 1) return null;
+    const coords = morph >= 1
+      ? intersectFlatMap(camera.position, pointer.sub(camera.position), globe.getGlobeRadius())
+      : intersectGlobe(camera.position, pointer.sub(camera.position), globe.getGlobeRadius());
+    const grid = coords ? gridSquareAt(coords.lat, coords.lng) : null;
+    if (!grid) return null;
+    const status = workedGridStatus.byGrid.get(grid);
+    if (!showGridSquares) return buildSimpleGlobeCardHtml([grid.slice(0, 2)]);
+    return buildSimpleGlobeCardHtml(status
+      ? [grid, t('globe.pointCount', { count: status.count }), ...(status.confirmedCount > 0 ? [t('globe.gridConfirmedCount', { count: status.confirmedCount })] : [])]
+      : [grid]);
+  };
+
+  // Hover: markers are picked in screen space and grids by one ray-sphere
+  // lookup, once per animation frame, written straight to the DOM so pointer
+  // moves never re-render the card.
+  const hoverFrameRef = useRef(0);
+  useEffect(() => () => window.cancelAnimationFrame(hoverFrameRef.current), []);
+  const handleGlobeHoverEnd = () => {
+    window.cancelAnimationFrame(hoverFrameRef.current);
+    if (hoverCardBodyRef.current) hoverCardBodyRef.current.dataset.open = 'false';
+  };
+  const handleGlobeHover = (event: React.PointerEvent<HTMLElement>) => {
+    const down = pointerDownRef.current;
+    if (down && !(Math.hypot(event.clientX - down.x, event.clientY - down.y) <= CLICK_MAX_MOVE_PX)) {
+      closePinnedOnUserMove();
+    }
+    // Mouse only, and only over the globe itself, not the controls above it.
+    if (event.pointerType !== 'mouse' || !(event.target instanceof HTMLCanvasElement)) {
+      handleGlobeHoverEnd();
+      return;
+    }
+    const { clientX, clientY } = event;
+    window.cancelAnimationFrame(hoverFrameRef.current);
+    hoverFrameRef.current = window.requestAnimationFrame(() => {
+      const container = containerRef.current;
+      const hover = hoverCardRef.current;
+      const body = hoverCardBodyRef.current;
+      const globe = globeRef.current;
+      if (!container || !hover || !body || !globe || typeof globe.camera !== 'function') return;
+      const canvasRect = globe.renderer().domElement.getBoundingClientRect();
+      if (canvasRect.width <= 0 || canvasRect.height <= 0) return;
+      const picked = markerLayer.pick(clientX - canvasRect.left, clientY - canvasRect.top);
+      // The pinned card already shows its station.
+      const marker = picked && (picked.data as GlobeMarkerData).kind === 'live'
+        && (picked.data as { station: LiveStation }).station.callsign === pinnedCallsign
+        ? null
+        : picked;
+      const html = marker
+        ? describeMarker(marker)
+        : showWorkedGrids ? describeGrid(clientX, clientY, globe, canvasRect) : null;
+      if (!html) {
+        body.dataset.open = 'false';
+        return;
+      }
+      // The card is measured only when its content changes: reading its size
+      // on every move would force a layout each time.
+      if (body.innerHTML !== html) {
+        body.innerHTML = html;
+        hoverSizeRef.current = { width: hover.offsetWidth, height: hover.offsetHeight };
+      }
+      const { width, height } = hoverSizeRef.current;
+      const rect = container.getBoundingClientRect();
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
+      const flipX = x + 16 + width > rect.width;
+      const flipY = y + 16 + height > rect.height;
+      const left = flipX ? x - 16 - width : x + 16;
+      const top = flipY ? y - 16 - height : y + 16;
+      hover.style.transform = `translate(${Math.round(Math.max(0, left))}px, ${Math.round(Math.max(0, top))}px)`;
+      // Grows out of the corner nearest the pointer.
+      body.style.setProperty('--globe-pop-origin', `${flipY ? 'bottom' : 'top'} ${flipX ? 'right' : 'left'}`);
+      body.style.setProperty('--globe-pop-shift', flipY ? '4px' : '-4px');
+      body.dataset.open = 'true';
+    });
+  };
+
+  /** The live station under a client point, with the point relative to the container. */
+  const pickLiveStation = (clientX: number, clientY: number) => {
+    const container = containerRef.current;
+    const globe = globeRef.current;
+    if (!container || !globe || typeof globe.renderer !== 'function') return null;
+    const canvasRect = globe.renderer().domElement.getBoundingClientRect();
+    const marker = markerLayer.pick(clientX - canvasRect.left, clientY - canvasRect.top);
+    const data = marker?.data as GlobeMarkerData | undefined;
+    const rect = container.getBoundingClientRect();
+    return {
+      station: data?.kind === 'live' ? data.station : null,
+      anchor: { x: clientX - rect.left, y: clientY - rect.top },
+      bounds: { width: rect.width, height: rect.height },
+    };
+  };
+  const pinStation = (clientX: number, clientY: number, autoCall: boolean) => {
+    const hit = pickLiveStation(clientX, clientY);
+    if (!hit?.station) {
+      setPinned(null);
+      return;
+    }
+    const controls = globeRef.current?.controls() as GlobeControls | undefined;
+    if (controls) controls.autoRotate = false;
+    handleGlobeHoverEnd();
+    const station = hit.station;
+    setPinned({ key: Date.now() + Math.random(), station, anchor: hit.anchor, bounds: hit.bounds, autoCall });
+  };
+  // A click pins the card; dragging the globe is not a click.
+  const handleGlobePointerDown = (event: React.PointerEvent<HTMLElement>) => {
+    pointerDownRef.current = event.target instanceof HTMLCanvasElement
+      ? { x: event.clientX, y: event.clientY, at: performance.now() }
+      : null;
+  };
+  const handleGlobePointerUp = (event: React.PointerEvent<HTMLElement>) => {
+    const down = pointerDownRef.current;
+    pointerDownRef.current = null;
+    if (!down || !(event.target instanceof HTMLCanvasElement)) return;
+    const moved = Math.hypot(event.clientX - down.x, event.clientY - down.y);
+    // Written to fail closed: an unreadable position is not a click.
+    if (!(moved <= CLICK_MAX_MOVE_PX) || performance.now() - down.at > CLICK_MAX_MS) return;
+    pinStation(event.clientX, event.clientY, false);
+  };
+  // A double click calls at once, as in the decode table.
+  const handleGlobeDoubleClick = (event: React.MouseEvent<HTMLElement>) => {
+    if (!(event.target instanceof HTMLCanvasElement)) return;
+    pinStation(event.clientX, event.clientY, true);
+  };
+  useEffect(() => {
+    if (!pinned) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPinned(null);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [pinned]);
+  useEffect(() => {
+    if (!showLive || !active) setPinned(null);
+  }, [showLive, active]);
 
   const handleExpandedToggle = () => {
     setIsExpanded((currentValue) => {
@@ -1111,6 +1512,14 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
     <section
       ref={containerRef}
       data-logbook-globe-banner="true"
+      onPointerMove={handleGlobeHover}
+      onPointerLeave={handleGlobeHoverEnd}
+      onPointerDown={handleGlobePointerDown}
+      onPointerUp={handleGlobePointerUp}
+      onDoubleClick={handleGlobeDoubleClick}
+      onWheel={(event) => {
+        if (event.target instanceof HTMLCanvasElement) closePinnedOnUserMove();
+      }}
       className="relative w-full overflow-hidden border-b border-default-200/10 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.18),transparent_30%),radial-gradient(circle_at_bottom,rgba(249,115,22,0.16),transparent_26%),linear-gradient(180deg,rgba(2,6,23,0.98),rgba(6,10,20,1))] transition-[min-height,height] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"
       style={{ minHeight: globeHeight, height: globeHeight }}
     >
@@ -1125,6 +1534,10 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
         globeImageUrl={EARTH_TEXTURE_URL}
         bumpImageUrl={EARTH_BUMP_URL}
         waitForGlobeReady={false}
+        // globe.gl's own hover tracking raycasts the whole scene (land, arcs,
+        // rings) every 50 ms even while the pointer rests; markers and grid
+        // squares are picked in screen space instead (see handleGlobeHover).
+        enablePointerInteraction={false}
         animateIn
         globeMaterial={globeMaterial}
         showGraticules={false}
@@ -1133,19 +1546,10 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
         atmosphereAltitude={0.17}
         polygonsData={landPolygons as object[]}
         polygonGeoJsonGeometry={getLandGeometry}
-        polygonAltitude={0.0025}
-        polygonCapColor={receptionFogVisible ? getDimmedLandCapColor : getLandCapColor}
-        polygonSideColor={() => 'rgba(51, 65, 85, 0.08)'}
+        polygonAltitude={GLOBE_LAND_CAP_ALTITUDE}
+        polygonCapMaterial={landCapMaterial}
+        polygonSideColor={getLandSideColor}
         polygonStrokeColor={receptionFogVisible ? getDimmedLandStrokeColor : getLandStrokeColor}
-        pathsData={pathsData as object[]}
-        pathPoints="points"
-        pathPointLat={(point) => (point as [number, number])[0]}
-        pathPointLng={(point) => (point as [number, number])[1]}
-        pathColor={getGridPathColor}
-        pathStroke={null}
-        pathPointAlt={0.007}
-        pathResolution={1}
-        pathTransitionDuration={0}
         heatmapsData={receptionHeatmaps}
         heatmapPoints="points"
         heatmapPointLat="lat"
@@ -1156,43 +1560,15 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
         heatmapColorSaturation={1.6}
         heatmapBaseAltitude={RECEPTION_FOG_ALTITUDE}
         heatmapsTransitionDuration={RECEPTION_FOG_TRANSITION_MS}
-        tilesData={tilesData as object[]}
-        tileLat="lat"
-        tileLng="lng"
-        tileWidth="width"
-        tileHeight="height"
-        tileAltitude={getGridTileAltitude}
-        tileMaterial={(tile: object) => ((tile as GlobeGridTile).precision === 4 ? workedGridTileMaterial4 : workedGridTileMaterial2)}
-        tileCurvatureResolution={2}
-        tilesTransitionDuration={0}
-        tileLabel={(tile) => {
-          const workedTile = tile as GlobeGridTile;
-          return `${workedTile.grid} · ${t('globe.pointCount', { count: workedTile.count })}`;
-        }}
-        pointsData={visiblePoints}
-        pointLat="lat"
-        pointLng="lng"
-        pointAltitude={(point) => (isReceptionPoint(point)
-          ? RECEPTION_POINT_ALTITUDE
-          : (point as GlobeStationPoint).isHome ? 0.06 : 0.012)}
-        pointRadius="size"
-        pointResolution={10}
-        pointColor="color"
-        pointLabel={(point) => {
-          if (isReceptionPoint(point)) {
-            return buildReceptionPointCardHtml(point.station, receptionTheme, Date.now(), t);
-          }
-          const stationPoint = point as GlobeStationPoint;
-          return stationPoint.isHome
-            ? `${t('globe.homeLabel')}${stationPoint.grid ? ` · ${stationPoint.grid}` : ''}`
-            : `${stationPoint.grid} · ${t('globe.pointCount', { count: stationPoint.count })}${stationPoint.callsigns.length > 0 ? `<br/>${stationPoint.callsigns.join(', ')}` : ''}`;
-        }}
+        customLayerData={customLayers}
+        customThreeObject={getCustomLayerObject}
+        customThreeObjectUpdate={keepCustomLayerObject}
         arcsData={visibleArcs}
         arcStartLat="startLat"
         arcStartLng="startLng"
         arcEndLat="endLat"
         arcEndLng="endLng"
-        arcColor="color"
+        arcColor={getArcColor}
         arcAltitude="altitude"
         arcStroke="stroke"
         arcCurveResolution={48}
@@ -1200,10 +1576,6 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
         arcDashLength="dashLength"
         arcDashGap="dashGap"
         arcDashAnimateTime="dashAnimateTime"
-        arcLabel={(arc) => {
-          const globeArc = arc as GlobeArc;
-          return `${globeArc.callsign} · ${globeArc.grid}<br/>${globeArc.mode} · ${(globeArc.frequency / 1_000_000).toFixed(3)} MHz<br/>${formatUtcTime(globeArc.startTime)} UTC`;
-        }}
         ringsData={visibleRings}
         ringLat="lat"
         ringLng="lng"
@@ -1212,19 +1584,6 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
         ringMaxRadius="maxRadius"
         ringPropagationSpeed="propagationSpeed"
         ringRepeatPeriod="repeatPeriod"
-        labelsData={activeWorkedGridLabels as object[]}
-        labelLat="lat"
-        labelLng="lng"
-        labelText="text"
-        labelColor={() => 'rgba(254,226,226,0.92)'}
-        labelAltitude={0.012}
-        labelSize={(label) => ((label as WorkedGridLabel).precision === 4 ? 0.42 : 0.7)}
-        labelResolution={2}
-        labelIncludeDot={false}
-        labelLabel={(label) => {
-          const workedGridLabel = label as WorkedGridLabel;
-          return `${workedGridLabel.grid} · ${t('globe.pointCount', { count: workedGridLabel.count })}`;
-        }}
         onGlobeReady={() => {
           logger.info('Page globe renderer ready', {
             width: effectiveGlobeWidth,
@@ -1235,12 +1594,11 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
           }
 
           const controls = globeRef.current.controls() as unknown as GlobeControls;
-          controls.autoRotate = true;
+          controls.autoRotate = !flatRef.current;
           controls.autoRotateSpeed = 0.35;
           controls.update?.();
 
-          const pov = globeRef.current.pointOfView();
-          syncViewportState(pov, true);
+          syncViewportState(globeRef.current.pointOfView());
         }}
         onZoom={(pov) => {
           const controls = globeRef.current?.controls() as GlobeControls | undefined;
@@ -1250,6 +1608,9 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
           syncViewportState(pov);
         }}
       />
+
+      {/* Callsigns of the actionable stations, positioned by the marker layer each frame. */}
+      <div ref={markerLabelsRef} aria-hidden="true" className="pointer-events-none absolute left-0 top-0 z-10" />
 
       {shouldShowStatusOverlay && (
         <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center px-6 text-center">
@@ -1262,7 +1623,7 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
         </div>
       )}
 
-      <div className="absolute bottom-4 left-4 z-30 flex flex-wrap items-center gap-2 sm:bottom-5 sm:left-5 lg:bottom-6 lg:left-6">
+      <div className="absolute bottom-4 left-4 z-30 flex max-w-[calc(100%-8.5rem)] flex-wrap items-center gap-2 sm:bottom-5 sm:left-5 lg:bottom-6 lg:left-6">
         <button
           type="button"
           onClick={handleExpandedToggle}
@@ -1373,6 +1734,20 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
           onPress={handleWorkedGridToggle}
         />
 
+        <GlobeIconToggle
+          active={showLive}
+          icon={faEarListen}
+          label={showLive ? t('globe.hideLive') : t('globe.showLive')}
+          onPress={() => setShowLive(value => !value)}
+        />
+
+        <GlobeIconToggle
+          active={showTerminator}
+          icon={faCircleHalfStroke}
+          label={showTerminator ? t('globe.hideTerminator') : t('globe.showTerminator')}
+          onPress={() => setShowTerminator(value => !value)}
+        />
+
         {showReceptionChip && (
           <div
             className="relative"
@@ -1440,42 +1815,44 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
               )}
             </button>
 
-            {receptionPanelOpen && (
-              // The bottom padding bridges the gap to the chip so the pointer
-              // can move into the panel without closing it.
-              <div className="absolute bottom-full left-0 z-40 pb-2">
-                <div className={`w-[300px] rounded-xl p-2.5 ${GLOBE_TOOLTIP_CLASSNAMES.content}`}>
-                  {receptionTooltip}
-                  <div className="mt-2 border-t border-white/10 px-1 pt-2.5 text-xs">
-                    <p className={GLOBE_TOOLTIP_MUTED_CLASS}>
-                      {t('globe.receptionTheme')}
-                      <span className="mx-1.5 text-[rgba(148,163,184,0.5)]">·</span>
-                      <span className="text-[rgba(226,232,240,0.94)]">{t(receptionTheme.labelKey)}</span>
-                    </p>
-                    <div role="radiogroup" aria-label={t('globe.receptionTheme')} className="mt-2.5 flex items-center gap-3 pb-1">
-                      {RECEPTION_THEMES.map(theme => {
-                        const selected = theme.id === receptionTheme.id;
-                        return (
-                          <button
-                            key={theme.id}
-                            type="button"
-                            role="radio"
-                            aria-checked={selected}
-                            aria-label={t(theme.labelKey)}
-                            title={t(theme.labelKey)}
-                            onClick={() => handleReceptionThemeChange(theme.id)}
-                            className={`h-6 w-6 rounded-full transition-all duration-200 ${selected
-                              ? 'scale-110 ring-2 ring-[rgba(248,250,252,0.85)] ring-offset-2 ring-offset-[rgb(15,23,42)]'
-                              : 'opacity-60 hover:scale-105 hover:opacity-100'}`}
-                            style={{ background: theme.swatch }}
-                          />
-                        );
-                      })}
-                    </div>
+            {/* Stays mounted so it can animate out; the bottom padding bridges the
+                gap to the chip so the pointer can move into the panel. */}
+            <div
+              className="globe-pop absolute bottom-full left-0 z-40 pb-2"
+              data-open={receptionPanelOpen}
+              aria-hidden={!receptionPanelOpen}
+            >
+              <div className={`w-[300px] rounded-xl p-2.5 ${GLOBE_TOOLTIP_CLASSNAMES.content}`}>
+                {receptionTooltip}
+                <div className="mt-2 border-t border-white/10 px-1 pt-2.5 text-xs">
+                  <p className={GLOBE_TOOLTIP_MUTED_CLASS}>
+                    {t('globe.receptionTheme')}
+                    <span className="mx-1.5 text-[rgba(148,163,184,0.5)]">·</span>
+                    <span className="text-[rgba(226,232,240,0.94)]">{t(receptionTheme.labelKey)}</span>
+                  </p>
+                  <div role="radiogroup" aria-label={t('globe.receptionTheme')} className="mt-2.5 flex items-center gap-3 pb-1">
+                    {RECEPTION_THEMES.map(theme => {
+                      const selected = theme.id === receptionTheme.id;
+                      return (
+                        <button
+                          key={theme.id}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          aria-label={t(theme.labelKey)}
+                          title={t(theme.labelKey)}
+                          onClick={() => handleReceptionThemeChange(theme.id)}
+                          className={`h-6 w-6 rounded-full transition-all duration-200 ${selected
+                            ? 'scale-110 ring-2 ring-[rgba(248,250,252,0.85)] ring-offset-2 ring-offset-[rgb(15,23,42)]'
+                            : 'opacity-60 hover:scale-105 hover:opacity-100'}`}
+                          style={{ background: theme.swatch }}
+                        />
+                      );
+                    })}
                   </div>
                 </div>
               </div>
-            )}
+            </div>
           </div>
         )}
 
@@ -1534,13 +1911,94 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
 
       </div>
 
-      {workedGridStatusText && (
-        <div className="pointer-events-none absolute bottom-16 left-4 z-30 sm:bottom-[4.5rem] sm:left-5 lg:bottom-[5rem] lg:left-6">
-          <div className="rounded-full border border-white/10 bg-[rgba(2,6,23,0.46)] px-3 py-1.5 text-xs text-[rgba(226,232,240,0.7)] backdrop-blur-md">
-            {workedGridStatusText}
-          </div>
+      {pinned && (
+        <LiveTargetCard
+          key={pinned.key}
+          station={pinned.station}
+          home={globeModel.homePoint}
+          anchor={pinned.anchor}
+          bounds={pinned.bounds}
+          targeting={liveTargeting}
+          autoCall={pinned.autoCall}
+          onClose={() => setPinned(null)}
+        />
+      )}
+
+      <div ref={hoverCardRef} aria-hidden="true" className="pointer-events-none absolute left-0 top-0 z-30">
+        <div ref={hoverCardBodyRef} className="globe-pop" data-open="false" />
+      </div>
+
+      {(workedGridStatusText || (showLive && liveCounts.total > 0)) && (
+        <div className="pointer-events-none absolute bottom-16 left-4 z-30 flex flex-col items-start gap-1.5 sm:bottom-[4.5rem] sm:left-5 lg:bottom-[5rem] lg:left-6">
+          {showLive && liveCounts.total > 0 && (
+            <div className="flex items-center gap-3 rounded-full border border-white/10 bg-[rgba(2,6,23,0.46)] px-3 py-1.5 text-xs text-[rgba(226,232,240,0.7)] backdrop-blur-md">
+              <span>{t('globe.liveSummary', { count: liveCounts.total, actionable: liveCounts.actionable })}</span>
+              <span className="flex items-center gap-2.5">
+                <span className="flex items-center gap-1">
+                  <span className="h-2 w-2 rotate-45 rounded-[1px] bg-[rgba(226,232,240,0.85)]" aria-hidden="true" />
+                  {t('globe.liveLegendCq')}
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="h-2 w-2 rounded-full bg-[rgba(226,232,240,0.85)]" aria-hidden="true" />
+                  {t('globe.liveLegendBusy')}
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="h-2 w-2 rotate-45 rounded-[1px] border border-[rgba(226,232,240,0.85)]" aria-hidden="true" />
+                  {t('globe.liveLegendApproximate')}
+                </span>
+              </span>
+            </div>
+          )}
+          {workedGridStatusText && (
+            <div className="flex items-center gap-3 rounded-full border border-white/10 bg-[rgba(2,6,23,0.46)] px-3 py-1.5 text-xs text-[rgba(226,232,240,0.7)] backdrop-blur-md">
+              <span>{workedGridStatusText}</span>
+              {workedGridItems.length > 0 && !workedGridLoading && !workedGridError && (
+                <span className="flex items-center gap-2.5">
+                  <span className="flex items-center gap-1">
+                    <span className="h-2 w-2 rounded-sm bg-[rgb(239,68,68)]" aria-hidden="true" />
+                    {t('globe.legendWorked')}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="h-2 w-2 rounded-sm bg-[rgb(52,211,153)]" aria-hidden="true" />
+                    {t('globe.legendConfirmed')}
+                  </span>
+                </span>
+              )}
+            </div>
+          )}
         </div>
       )}
+
+      {/* How the whole map is drawn, apart from the layer toggles. */}
+      <div
+        role="radiogroup"
+        aria-label={t('globe.viewMode')}
+        className="absolute bottom-4 right-4 z-30 flex h-10 items-center gap-0.5 rounded-full border border-white/10 bg-[rgba(15,23,42,0.52)] p-1 shadow-[0_10px_30px_rgba(2,6,23,0.28)] backdrop-blur-md sm:bottom-5 sm:right-5 lg:bottom-6 lg:right-6"
+      >
+        {([
+          { view: 'globe', icon: faEarthAsia, short: '3D', label: t('globe.viewGlobe') },
+          { view: 'flat', icon: faMap, short: '2D', label: t('globe.viewFlat') },
+        ] as const).map((option) => {
+          const selected = globeView === option.view;
+          return (
+            <Tooltip key={option.view} content={option.label} placement="top" delay={150} closeDelay={0} classNames={GLOBE_TOOLTIP_CLASSNAMES}>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                aria-label={option.label}
+                onClick={() => setGlobeView(option.view)}
+                className={`inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-xs font-medium tracking-wide transition-all duration-300 ${selected
+                  ? 'bg-[rgba(30,58,95,0.75)] text-[rgba(224,242,254,0.95)] shadow-[inset_0_0_0_1px_rgba(125,211,252,0.3)]'
+                  : 'text-[rgba(226,232,240,0.5)] hover:text-[rgba(226,232,240,0.85)]'}`}
+              >
+                <FontAwesomeIcon icon={option.icon} className="h-3 w-3" />
+                <span>{option.short}</span>
+              </button>
+            </Tooltip>
+          );
+        })}
+      </div>
 
       {hasDesktopOverlay && (
         <div className="pointer-events-none absolute inset-0 z-20 hidden lg:grid lg:grid-cols-[minmax(300px,0.68fr)_minmax(0,1fr)_minmax(280px,0.54fr)] lg:items-stretch">

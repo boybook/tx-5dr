@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useState, useEffect, useMemo, useRef } from 'react';
 import {
   Table,
   TableHeader,
@@ -46,7 +46,15 @@ import type {
   LogbookRestorePreflight,
   DigitalRadioEngineEvents,
 } from '@tx5dr/contracts';
-import { PSKReporterReceptionUpdateSchema, UserRole } from '@tx5dr/contracts';
+import {
+  LOGBOOK_SELECT_TARGET_FEATURE,
+  LogbookLiveDecodesUpdateSchema,
+  LogbookSelectTargetResultSchema,
+  PSKReporterReceptionUpdateSchema,
+  UserRole,
+  WSMessageType,
+  type LogbookSelectTargetCommand,
+} from '@tx5dr/contracts';
 import { api, WSClient, ApiError, getDisplayMode } from '@tx5dr/core';
 import { getLogbookWebSocketUrl } from '../../utils/config';
 import { hasDesktopCapability } from '../../utils/desktopBridge';
@@ -58,9 +66,12 @@ import { useSyncProviderStatuses } from './useSyncProviderStatuses';
 import { PluginIframeHost } from '../plugins/PluginIframeHost';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
-import RecentQSOGlobeCard from './RecentQSOGlobeCard';
+import LiveLogbookGlobe from './LiveLogbookGlobe';
 import { LOGBOOK_BAND_OPTIONS } from './logbookBands';
-import { applyReceptionUpdate, type ReceptionView } from '../../utils/receptionGlobe';
+import { applyReceptionUpdate } from '../../utils/receptionGlobe';
+import { applyLiveDecodesUpdate, type LiveStation } from '../../utils/liveDecodes';
+import { TargetRequestTracker, buildSelectedFrame } from '../../utils/liveTargeting';
+import { createLogbookGlobeFeed, mergeOperatorStatus } from '../../utils/logbookGlobeFeed';
 import LogbookRecoveryModal from './LogbookRecoveryModal';
 import { getAuthHeaders, getStoredJwt } from '../../utils/authHeaders';
 import { QrzCallsignLink } from '../common/QrzCallsignLink';
@@ -191,10 +202,12 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
   const [addFormData, setAddFormData] = useState<Partial<QSORecord>>(createDefaultAddQSOFormData);
   const [isAddSaving, setIsAddSaving] = useState(false);
 
-  // 实时操作员状态（用于地球虚线渲染）
-  const [operators, setOperators] = useState<OperatorStatus[]>([]);
-  // PSK Reporter reception feedback for this page's operator callsign
-  const [reception, setReception] = useState<ReceptionView | null>(null);
+  // Operator status, reception reports and live decodes for the globe. They
+  // update several times a second, so they stay out of this page's state.
+  const globeFeed = useMemo(createLogbookGlobeFeed, []);
+  // Calling heard stations from the globe goes over the logbook socket.
+  const targetRequestsRef = useRef(new TargetRequestTracker());
+  const sendTargetCommandRef = useRef<((command: LogbookSelectTargetCommand) => void) | null>(null);
 
   // 获取操作员连接的日志本
   // 日志本ID就是呼号，如果没有指定则使用操作员ID作为后备
@@ -335,22 +348,13 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     const handleOperatorStatusUpdate = (status: unknown) => {
       const op = status as OperatorStatus;
       if (!op?.id) return;
-      setOperators(prev => {
-        const exists = prev.findIndex(item => item.id === op.id);
-        if (exists >= 0) {
-          if (prev[exists] === op || JSON.stringify(prev[exists]) === JSON.stringify(op)) return prev;
-          const next = [...prev];
-          next[exists] = op;
-          return next;
-        }
-        return [...prev, op];
-      });
+      globeFeed.update(state => ({ operators: mergeOperatorStatus(state.operators, op) }));
     };
 
     const handleOperatorsList = (payload: unknown) => {
       const data = payload as { operators?: OperatorStatus[] };
       if (Array.isArray(data?.operators)) {
-        setOperators(data.operators);
+        globeFeed.update(() => ({ operators: data.operators }));
       }
     };
 
@@ -367,19 +371,59 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
         logger.warn('Ignoring malformed reception feedback update');
         return;
       }
-      setReception(previous => applyReceptionUpdate(previous, parsed.data, Date.now()));
+      globeFeed.update(state => ({ reception: applyReceptionUpdate(state.reception, parsed.data, Date.now()) }));
+    };
+
+    const handleLiveDecodes = (payload: unknown) => {
+      const parsed = LogbookLiveDecodesUpdateSchema.safeParse(payload);
+      if (!parsed.success) {
+        logger.warn('Ignoring malformed live decodes update');
+        return;
+      }
+      globeFeed.update(state => ({ liveDecodes: applyLiveDecodesUpdate(state.liveDecodes, parsed.data) }));
     };
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     client.onWSEvent('operatorsList' as any, handleOperatorsList);
     client.onWSEvent('pskreporterReceptionUpdate', handleReceptionUpdate);
+    client.onWSEvent('logbookLiveDecodes', handleLiveDecodes);
+    client.onWSEvent('handshakeComplete', (data) => {
+      const supported = data?.supportedFeatures?.includes(LOGBOOK_SELECT_TARGET_FEATURE) ?? false;
+      globeFeed.update(() => ({ targetingSupported: supported }));
+    });
+    // While reconnecting the client drops commands, so waiting selections
+    // fail now instead of timing out; the next handshake re-enables calling.
+    const handleConnectionLost = () => {
+      globeFeed.update(() => ({ targetingSupported: false }));
+      targetRequestsRef.current.failAll();
+    };
+    client.onWSEvent('disconnected', handleConnectionLost);
+    client.onWSEvent('reconnecting', handleConnectionLost);
+    client.onWSEvent('logbookSelectTargetResult', (payload: unknown) => {
+      const parsed = LogbookSelectTargetResultSchema.safeParse(payload);
+      if (parsed.success) targetRequestsRef.current.resolve(parsed.data);
+    });
+    sendTargetCommandRef.current = (command) => client.send(WSMessageType.LOGBOOK_SELECT_TARGET, command);
     client.connect().catch(() => {});
 
     return () => {
+      sendTargetCommandRef.current = null;
+      targetRequestsRef.current.failAll();
       client.disconnect();
-      setReception(null);
+      globeFeed.reset();
     };
-  }, [operatorId, effectiveLogBookId, t]);
+  }, [operatorId, effectiveLogBookId, t, globeFeed]);
+
+  const selectLiveTarget = useCallback((targetOperatorId: string, station: LiveStation) => (
+    targetRequestsRef.current.request(
+      { operatorId: targetOperatorId, callsign: station.callsign, selectedFrame: buildSelectedFrame(station) },
+      (command) => {
+        const send = sendTargetCommandRef.current;
+        if (!send) throw new Error('Logbook socket is not connected');
+        send(command);
+      },
+    )
+  ), []);
 
   // 加载QSO记录
   const loadQSOs = async () => {
@@ -2434,20 +2478,22 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
 
       {viewPolicy.showLogbookContent && (
         <AnimatedLogbookGlobe visible={logbookView === 'qsos'}>
-          {drawingActive => <RecentQSOGlobeCard
+          {drawingActive => <LiveLogbookGlobe
+            feed={globeFeed}
+            operatorId={operatorId || undefined}
+            selectLiveTarget={selectLiveTarget}
             active={drawingActive}
             logBookId={effectiveLogBookId}
             qsos={qsos}
             loading={loading}
             bandFilter={filters.band}
+            modeFilter={filters.mode}
             onBandFilterChange={(band) => handleFilterChange('band', band)}
             pageSize={itemsPerPage}
             pageSizeOptions={[...PAGE_SIZE_OPTIONS]}
             onPageSizeChange={handleItemsPerPageChange}
             desktopLeftOverlay={desktopGlobeTitleOverlay}
             desktopRightOverlay={desktopDxccOverlay}
-            operators={operators}
-            reception={reception}
             canEnableReception={isAdmin}
           />}
         </AnimatedLogbookGlobe>
