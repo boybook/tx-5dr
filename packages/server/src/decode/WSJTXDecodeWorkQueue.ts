@@ -18,6 +18,11 @@ type DecodeWorkQueueLifecycleState = 'stopped' | 'starting' | 'running' | 'stopp
 export interface DecodeWorkQueueEvents {
   'decodeComplete': (result: DecodeResult) => void;
   'decodeError': (error: Error, request: DecodeRequest) => void;
+  /**
+   * A decode session ended by cancellation; its undelivered windows will never
+   * complete or fail. May repeat for one session; consumers must be idempotent.
+   */
+  'decodeSessionCancelled': (sessionId: string, reason: DecodeSessionCancelReason) => void;
   'queueEmpty': () => void;
   'decodeWorkerUnavailable': (status: DecodeWorkerPoolHealthSnapshot) => void;
   'decodeWorkerRecovered': (status: DecodeWorkerPoolHealthSnapshot) => void;
@@ -26,11 +31,14 @@ export interface DecodeWorkQueueEvents {
 export interface WSJTXDecodeWorkQueueOptions {
   maxConcurrency?: number;
   poolFactory?: (maxConcurrency?: number) => WSJTXDecodeProcessPool;
+  /** Calibrated wall clock that produced each request's decision deadline. */
+  now?: () => number;
 }
 
 export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> implements IDecodeQueue {
   private readonly maxConcurrency?: number;
   private readonly poolFactory: (maxConcurrency?: number) => WSJTXDecodeProcessPool;
+  private readonly now: () => number;
   private pool: WSJTXDecodeProcessPool | null = null;
   private lifecycleState: DecodeWorkQueueLifecycleState = 'stopped';
   private startPromise: Promise<void> | null = null;
@@ -47,6 +55,7 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
       : maxConcurrencyOrOptions ?? {};
     this.maxConcurrency = options.maxConcurrency;
     this.poolFactory = options.poolFactory ?? ((maxConcurrency) => new WSJTXDecodeProcessPool({ workerCount: maxConcurrency }));
+    this.now = options.now ?? (() => Date.now());
     logger.info('decode work queue initialized in lazy lifecycle mode', {
       maxConcurrency: this.maxConcurrency,
       lifecycleState: this.lifecycleState,
@@ -163,9 +172,18 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
       if (this.pool !== pool || this.lifecycleState !== 'running' || delivery?.cancelReason) {
         throw new DecodeSessionCancelledError(delivery?.cancelReason ?? 'stopped');
       }
-      this.emit('decodeComplete', result);
+      // Lateness is judged here, on the clock that produced the deadline; the
+      // worker process has no access to the calibrated clock.
+      this.emit('decodeComplete', request.decisionDeadlineMs === undefined
+        ? result
+        : { ...result, late: this.now() > request.decisionDeadlineMs });
     } catch (error) {
-      if (isDecodeSessionCancelled(error)) throw error;
+      if (isDecodeSessionCancelled(error)) {
+        // Pool-owned cancellations (worker failure, expiry, final-window
+        // completion) reach the queue only through rejected work.
+        if (sessionId) this.emit('decodeSessionCancelled', sessionId, (error as DecodeSessionCancelledError).reason);
+        throw error;
+      }
       const err = error instanceof Error ? error : new Error(String(error));
       logger.error('decode failed', { slotId: request.slotId, windowIdx: request.windowIdx, error: err.message });
       this.emit('decodeError', err, request);
@@ -188,6 +206,7 @@ export class WSJTXDecodeWorkQueue extends EventEmitter<DecodeWorkQueueEvents> im
     const delivery = this.deliveries.get(sessionId);
     if (delivery) delivery.cancelReason = reason;
     this.pool?.cancelSession(sessionId, reason);
+    this.emit('decodeSessionCancelled', sessionId, reason);
   }
 
   getStatus() {

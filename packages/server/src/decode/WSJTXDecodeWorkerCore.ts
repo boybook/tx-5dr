@@ -103,7 +103,6 @@ export class WSJTXDecodeWorkerCore {
           processingTimeMs: performance.now() - startTime,
           nativeProcessingTimeMs: 0,
           decodeDepth,
-          ...(request.decisionDeadlineMs !== undefined ? { late: Date.now() > request.decisionDeadlineMs } : {}),
           decodeStage: request.decodeStage,
           windowOffsetMs: request.windowOffsetMs || 0,
         };
@@ -239,7 +238,6 @@ export class WSJTXDecodeWorkerCore {
       processingTimeMs,
       nativeProcessingTimeMs: nativeProcessingTimeMs ?? performance.now() - nativeStart,
       decodeDepth,
-      ...(request.decisionDeadlineMs !== undefined ? { late: Date.now() > request.decisionDeadlineMs } : {}),
       ...(request.decodeStage !== undefined ? { decodeStage: request.decodeStage } : {}),
       ...(decodeStats ? { decodeStats } : {}),
       windowOffsetMs: request.windowOffsetMs || 0,

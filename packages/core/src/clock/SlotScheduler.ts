@@ -80,6 +80,8 @@ export class SlotScheduler {
   private shouldDecodeWhileTransmitting?: () => boolean;
   private decodeApContextProvider?: DecodeApContextProvider;
   private getDecodeDepth?: () => number;
+  /** Calibrated wall clock shared with the slot clock; stamps decode requests. */
+  private readonly now: () => number;
   private readonly sessions = new Map<string, ScheduledDecodeSession>();
   private generation = 0;
   private retiredThroughMs = -Infinity;
@@ -95,6 +97,7 @@ export class SlotScheduler {
     shouldDecodeWhileTransmitting?: () => boolean,
     decodeApContextProvider?: DecodeApContextProvider,
     getDecodeDepth?: () => number,
+    now: () => number = () => Date.now(),
   ) {
     this.slotClock = slotClock;
     this.decodeQueue = decodeQueue;
@@ -103,6 +106,7 @@ export class SlotScheduler {
     this.shouldDecodeWhileTransmitting = shouldDecodeWhileTransmitting;
     this.decodeApContextProvider = decodeApContextProvider;
     this.getDecodeDepth = getDecodeDepth;
+    this.now = now;
     this.boundHandleSubWindow = this.handleSubWindow.bind(this);
   }
   
@@ -224,7 +228,7 @@ export class SlotScheduler {
         windowIdx,
         pcm: pcmBuffer,
         sampleRate: actualSampleRate, // 使用实际采样率
-        timestamp: Date.now(),
+        timestamp: this.now(),
         windowOffsetMs,
         decodeDepth,
         decodeSessionId: slotInfo.id,

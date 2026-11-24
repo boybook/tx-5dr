@@ -147,6 +147,12 @@ export class ClockCoordinator {
       engineEmitter.emit('decodeError', { error, request });
     });
 
+    // SlotScheduler uses the slot id as the decode session id. A cancelled
+    // session delivers no further windows, so its partial batch is final.
+    this.lm.listen(decodeQueue, 'decodeSessionCancelled', (sessionId: string) => {
+      slotPackManager.markDecodeSessionCancelled(sessionId);
+    });
+
     // ─── SlotPackManager 事件 ──────────────────────
 
     this.lm.listen(slotPackManager, 'slotPackUpdated', async (slotPack: { slotId: string; startMs: number; frames: Array<{ snr: number; dt: number; freq: number; message: string }>; stats: { totalDecodes: number } }) => {
