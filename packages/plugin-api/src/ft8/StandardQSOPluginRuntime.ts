@@ -1053,7 +1053,14 @@ interface StandardQSOCheckpoint {
     qsoLifecycleEpoch: number;
     post73RetryContext?: Post73RetryContext;
     qsoContextHistory: Array<[string, CachedQSOContext]>;
+    /** Optional so checkpoints taken before this field existed still restore. */
+    peerSignalHistory?: Array<[string, number]>;
     foxHash?: string;
+}
+
+/** Key for the measured-SNR history: exact sender callsign, case-insensitive. */
+function peerSignalKey(callsign: string): string {
+    return callsign.trim().toUpperCase();
 }
 
 export class StandardQSOPluginRuntime implements StrategyRuntime {
@@ -1101,6 +1108,10 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
     private qsoContextHistory = new Map<string, CachedQSOContext>();
     // 最大缓存数量，避免内存泄漏
     private readonly MAX_CONTEXT_CACHE = 100;
+    // Latest locally measured SNR per sender (callsign -> dB), in insertion
+    // order so the oldest entry is evicted first. It is the report source for
+    // TX2/TX3 when no report has been set explicitly.
+    private peerSignalHistory = new Map<string, number>();
     // Fox/Hound 模式：记录 Fox 的哈希码
     public foxHash?: string;
 
@@ -1325,6 +1336,8 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         // 过滤掉发送者是我自己的消息；部分解码消息（含 `<...>` 占位符）绝不参与 QSO 决策
         const filteredMessages = messages.filter((msg) => !msg.isPartialDecode && (msg.message.type == FT8MessageType.CUSTOM || msg.message.type == FT8MessageType.UNKNOWN || msg.message.type == FT8MessageType.FOX_RR73 || !callsignMatches(msg.message.senderCallsign, this.operator.config.myCallsign)));
 
+        this.observePeerSignals(filteredMessages);
+
         // 处理接收到的消息
         const result = await currentState.handle(this, filteredMessages);
 
@@ -1459,6 +1472,73 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         this.context.reportSent = snr;
     }
 
+    /**
+     * The report value TX2/TX3 carry. An explicit context report wins (0 is a
+     * real report). Otherwise, as in WSJT-X, report our own measured SNR of
+     * the peer's latest decode; +00 is only the last resort when nothing from
+     * the peer has been heard. The resolved value is not written back to the
+     * context: the physical receipt records what actually reached the air.
+     */
+    private resolveOutgoingReport(targetCallsign: string): number {
+        const explicit = this.context.reportSent;
+        if (typeof explicit === 'number' && Number.isFinite(explicit)) {
+            return explicit;
+        }
+        return this.peerSignalHistory.get(peerSignalKey(targetCallsign)) ?? 0;
+    }
+
+    private recordPeerSignal(callsign: string | undefined, snr: number): void {
+        if (!callsign
+            || !Number.isFinite(snr)
+            || isUndecodedCallsignPlaceholder(callsign)
+            || callsignMatches(callsign, this.operator.config.myCallsign)) {
+            return;
+        }
+        const key = peerSignalKey(callsign);
+        this.peerSignalHistory.delete(key);
+        this.peerSignalHistory.set(key, snr);
+        if (this.peerSignalHistory.size > this.MAX_CONTEXT_CACHE) {
+            const oldest = this.peerSignalHistory.keys().next().value;
+            if (oldest !== undefined) this.peerSignalHistory.delete(oldest);
+        }
+    }
+
+    /**
+     * Record the measured SNR of every decoded sender. When the current target
+     * is heard while no report is set, refresh TX2/TX3 so the next report
+     * frame carries the measurement; a slot the operator edited is left alone.
+     */
+    private observePeerSignals(messages: ParsedFT8Message[]): void {
+        const targetCallsign = this.context.targetCallsign;
+        const previousReport = targetCallsign ? this.resolveOutgoingReport(targetCallsign) : undefined;
+        for (const msg of messages) {
+            if (msg.isPartialDecode) continue;
+            const sender = (msg.message as { senderCallsign?: unknown }).senderCallsign;
+            this.recordPeerSignal(typeof sender === 'string' ? sender : undefined, msg.snr);
+        }
+        if (!targetCallsign
+            || previousReport === undefined
+            || isUndecodedCallsignPlaceholder(targetCallsign)) {
+            return;
+        }
+        const nextReport = this.resolveOutgoingReport(targetCallsign);
+        if (nextReport === previousReport) {
+            return;
+        }
+        const stale = this.buildReportSlots(targetCallsign, previousReport);
+        const fresh = this.buildReportSlots(targetCallsign, nextReport);
+        let changed = false;
+        for (const slot of ['TX2', 'TX3'] as const) {
+            if (this.slots[slot] === stale[slot]) {
+                this.slots[slot] = fresh[slot];
+                changed = true;
+            }
+        }
+        if (changed) {
+            this.notifySlotsUpdated();
+        }
+    }
+
     getInitialOutboundCallState(): SlotsIndex {
         return this.operator.config.skipTx1 === true ? 'TX2' : 'TX1';
     }
@@ -1499,6 +1579,8 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         this.qsoStartTime = lastMessage.slotInfo.startMs;
         this.context.reportSent = lastMessage.message.snr;
         const msg = FT8MessageParser.parseMessage(lastMessage.message.message);
+        const lastSender = (msg as { senderCallsign?: unknown }).senderCallsign;
+        this.recordPeerSignal(typeof lastSender === 'string' ? lastSender : undefined, lastMessage.message.snr);
         const parsedMessage: ParsedFT8Message = {
             message: msg,
             snr: lastMessage.message.snr,
@@ -1605,6 +1687,7 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
                 callsign,
                 { ...cached },
             ]),
+            peerSignalHistory: Array.from(this.peerSignalHistory.entries()),
             foxHash: this.foxHash,
         };
         return checkpoint;
@@ -1642,6 +1725,9 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         this.qsoContextHistory = new Map(
             state.qsoContextHistory.map(([callsign, cached]) => [callsign, { ...cached }]),
         );
+        // Restored with the slots so a rolled-back observation and the TX2/TX3
+        // text derived from it stay consistent.
+        this.peerSignalHistory = new Map(state.peerSignalHistory ?? []);
         this.foxHash = state.foxHash;
     }
 
@@ -1830,28 +1916,47 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
         return this.state;
     }
 
+    /** The report-carrying slots (TX2/TX3) for a target and report value. */
+    private buildReportSlots(targetCallsign: string, report: number): Pick<Slots, 'TX2' | 'TX3'> {
+        const myCallsign = this.operator.config.myCallsign;
+        const signalReport = FT8MessageParser.generateMessage({
+            type: FT8MessageType.SIGNAL_REPORT,
+            senderCallsign: myCallsign,
+            targetCallsign,
+            report,
+        });
+        if (FT8MessageParser.isStandardCallsign(targetCallsign)) {
+            return {
+                TX2: signalReport,
+                TX3: FT8MessageParser.generateMessage({
+                    type: FT8MessageType.ROGER_REPORT,
+                    senderCallsign: myCallsign,
+                    targetCallsign,
+                    report,
+                }),
+            };
+        }
+        // WSJT-X pack77 accepts hashed nonstandard-call structured replies, including RR73.
+        return {
+            TX2: signalReport,
+            TX3: `<${targetCallsign}> ${myCallsign} R${FT8MessageParser.generateSignalReport(report)}`,
+        };
+    }
+
     private updateTargetSlotsForSpecialCallsign(targetCallsign: string): void {
-        const report = this.context.reportSent || 0;
         const wrappedTarget = `<${targetCallsign}>`;
         const myCallsign = this.operator.config.myCallsign;
-        const reportText = FT8MessageParser.generateSignalReport(report);
         const gridCall = {
             type: FT8MessageType.CALL,
             senderCallsign: myCallsign,
             targetCallsign,
             grid: this.context.config.myGrid,
         } as const;
-        const signalReport = {
-            type: FT8MessageType.SIGNAL_REPORT,
-            senderCallsign: myCallsign,
-            targetCallsign,
-            report,
-        } as const;
+        const reportSlots = this.buildReportSlots(targetCallsign, this.resolveOutgoingReport(targetCallsign));
 
         this.slots.TX1 = FT8MessageParser.generateMessage(gridCall);
-        this.slots.TX2 = FT8MessageParser.generateMessage(signalReport);
-        // WSJT-X pack77 accepts hashed nonstandard-call structured replies, including RR73.
-        this.slots.TX3 = `${wrappedTarget} ${myCallsign} R${reportText}`;
+        this.slots.TX2 = reportSlots.TX2;
+        this.slots.TX3 = reportSlots.TX3;
         this.slots.TX4 = `${wrappedTarget} ${myCallsign} RR73`;
         this.slots.TX5 = `${wrappedTarget} ${myCallsign} 73`;
     }
@@ -1875,18 +1980,12 @@ export class StandardQSOPluginRuntime implements StrategyRuntime {
                     targetCallsign: this.context.targetCallsign,
                     grid: this.context.config.myGrid,
                 });
-                this.slots.TX2 = FT8MessageParser.generateMessage({
-                    type: FT8MessageType.SIGNAL_REPORT,
-                    senderCallsign: this.operator.config.myCallsign,
-                    targetCallsign: this.context.targetCallsign,
-                    report: this.context.reportSent || 0,
-                });
-                this.slots.TX3 = FT8MessageParser.generateMessage({
-                    type: FT8MessageType.ROGER_REPORT,
-                    senderCallsign: this.operator.config.myCallsign,
-                    targetCallsign: this.context.targetCallsign,
-                    report: this.context.reportSent || 0,
-                });
+                const reportSlots = this.buildReportSlots(
+                    this.context.targetCallsign,
+                    this.resolveOutgoingReport(this.context.targetCallsign),
+                );
+                this.slots.TX2 = reportSlots.TX2;
+                this.slots.TX3 = reportSlots.TX3;
                 this.slots.TX4 = FT8MessageParser.generateMessage({
                     type: FT8MessageType.RRR,
                     senderCallsign: this.operator.config.myCallsign,
