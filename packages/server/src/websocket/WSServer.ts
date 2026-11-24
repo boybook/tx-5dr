@@ -27,6 +27,11 @@ import type {
 import { FT8MessageParser, WSMessageHandler } from '@tx5dr/core';
 import { getBandFromFrequency } from '@tx5dr/core';
 import type { QueuedStrategyMutationResult } from '@tx5dr/plugin-api';
+import {
+  OperatorTargetCommandService,
+  getCallRejectionMessageKey,
+  getQueueRejectionMessageKey,
+} from './OperatorTargetCommandService.js';
 import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';
 import type { ProcessMonitor } from '../services/ProcessMonitor.js';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
@@ -414,10 +419,18 @@ export class WSServer extends WSMessageHandler {
     return WSServer.instance;
   }
 
-  constructor(digitalRadioEngine: DigitalRadioEngine, processMonitor?: ProcessMonitor) {
+  /** Shared with the logbook socket, so both channels take targets alike. */
+  private targetCommands: OperatorTargetCommandService;
+
+  constructor(
+    digitalRadioEngine: DigitalRadioEngine,
+    processMonitor?: ProcessMonitor,
+    targetCommands: OperatorTargetCommandService = new OperatorTargetCommandService(digitalRadioEngine),
+  ) {
     super();
     WSServer.instance = this;
     this.digitalRadioEngine = digitalRadioEngine;
+    this.targetCommands = targetCommands;
     if (processMonitor) {
       this.processMonitor = processMonitor;
       processMonitor.setBroadcastCallback((snapshot) => {
@@ -1669,72 +1682,19 @@ export class WSServer extends WSMessageHandler {
         selectedFrameMessage: selectedFrame?.message ?? null,
         selectedFrameSlotStartMs: selectedFrame?.slotStartMs ?? null,
       });
-      const operator = this.digitalRadioEngine.operatorManager.getOperator(operatorId);
-      if (!operator) {
-        throw new Error(`Operator ${operatorId} does not exist`);
-      }
-      const currentMode = this.digitalRadioEngine.getStatus().currentMode;
-      const lastMessage = selectedFrame
-        ? {
-            message: {
-              message: selectedFrame.message,
-              snr: selectedFrame.snr,
-              dt: selectedFrame.dt,
-              freq: selectedFrame.freq,
-              confidence: 1,
-            } as FrameMessage,
-            slotInfo: {
-              id: `manual-${selectedFrame.slotStartMs}`,
-              startMs: selectedFrame.slotStartMs,
-              phaseMs: 0,
-              driftMs: 0,
-              cycleNumber: Math.floor(selectedFrame.slotStartMs / currentMode.slotMs) % 2,
-              utcSeconds: Math.floor(selectedFrame.slotStartMs / 1000),
-              mode: currentMode.name,
-            } as SlotInfo,
-          }
-        : this.digitalRadioEngine.getSlotPackManager().getLastMessageFromCallsign(callsign, operatorId);
-      const result = await this.digitalRadioEngine.pluginManager.requestCall(operatorId, callsign, lastMessage, {
-        submitCurrentFrame: true,
-        source: 'operator-edit',
-        reason: 'UI requestCall updated operator context',
-      });
+      const result = await this.targetCommands.requestCall(operatorId, callsign, selectedFrame);
       if (result?.outcome === 'rejected') {
         this.sendToConnection(connectionId, WSMessageType.ERROR, {
           message: `operator_call_rejected:${result.reason}`,
-          userMessageKey: `radio:operator.callRejection.${result.reason}`,
+          userMessageKey: getCallRejectionMessageKey(result.reason),
           code: 'OPERATOR_CALL_REJECTED',
           severity: 'warning',
           context: { command: 'operatorRequestCall', operatorId },
         });
       }
-      this.digitalRadioEngine.operatorManager.emitOperatorStatusUpdate(operatorId);
     } catch (error) {
       this.handleCommandError(error, 'operatorRequestCall');
     }
-  }
-
-  private buildSelectedFrameLastMessage(selectedFrame: any): { message: FrameMessage; slotInfo: SlotInfo } | undefined {
-    if (!selectedFrame) return undefined;
-    const currentMode = this.digitalRadioEngine.getStatus().currentMode;
-    return {
-      message: {
-        message: selectedFrame.message,
-        snr: selectedFrame.snr,
-        dt: selectedFrame.dt,
-        freq: selectedFrame.freq,
-        confidence: 1,
-      } as FrameMessage,
-      slotInfo: {
-        id: `manual-${selectedFrame.slotStartMs}`,
-        startMs: selectedFrame.slotStartMs,
-        phaseMs: 0,
-        driftMs: 0,
-        cycleNumber: Math.floor(selectedFrame.slotStartMs / currentMode.slotMs) % 2,
-        utcSeconds: Math.floor(selectedFrame.slotStartMs / 1000),
-        mode: currentMode.name,
-      } as SlotInfo,
-    };
   }
 
   private handleQueueMutationRejection(
@@ -1743,17 +1703,9 @@ export class WSServer extends WSMessageHandler {
     result: QueuedStrategyMutationResult,
   ): boolean {
     if (result.outcome !== 'rejected') return false;
-    const messageKey = result.reason ? {
-      queue_full: 'queueFull',
-      invalid_target: 'invalidTarget',
-      entry_not_found: 'entryNotFound',
-      entry_not_retryable: 'entryNotRetryable',
-      active_entry: 'activeEntry',
-      version_conflict: 'versionConflict',
-    }[result.reason] : undefined;
     this.sendToConnection(connectionId, WSMessageType.ERROR, {
       message: result.reason ?? 'queue_command_rejected',
-      userMessageKey: messageKey ? `radio:operator.queueErrors.${messageKey}` : undefined,
+      userMessageKey: getQueueRejectionMessageKey(result.reason),
       code: RadioErrorCode.INVALID_OPERATION,
       context: { command },
       details: { queue: result.snapshot },
@@ -1769,12 +1721,7 @@ export class WSServer extends WSMessageHandler {
         callsign,
         startIfIdle: startIfIdle === true,
       });
-      const result = await this.digitalRadioEngine.pluginManager.enqueueQueueTarget(operatorId, {
-        callsign,
-        lastMessage: this.buildSelectedFrameLastMessage(selectedFrame),
-      }, {
-        startIfIdle: startIfIdle === true,
-      });
+      const result = await this.targetCommands.enqueue(operatorId, callsign, selectedFrame, startIfIdle === true);
       this.handleQueueMutationRejection(connectionId, 'operatorQueueEnqueue', result);
     } catch (error) {
       this.handleCommandError(error, 'operatorQueueEnqueue');

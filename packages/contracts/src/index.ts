@@ -104,6 +104,7 @@ export * from './schema/transmission.schema.js';
 
 // PSKReporter Schema
 export * from './schema/pskreporter.schema.js';
+export * from './schema/logbook-live.schema.js';
 
 // Radio Profile Schema
 export * from './schema/radio-profile.schema.js';

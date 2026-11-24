@@ -164,6 +164,11 @@ export enum WSMessageType {
   LOGBOOK_CHANGE_NOTICE = 'logbookChangeNotice',
   // PSK Reporter reception feedback for the followed callsigns (logbook WS only)
   PSKREPORTER_RECEPTION_UPDATE = 'pskreporterReceptionUpdate',
+  // Decodes of the latest receive slots, analysed for the page's operator (logbook WS only)
+  LOGBOOK_LIVE_DECODES = 'logbookLiveDecodes',
+  // Pick a heard station as an operator's QSO target from a logbook page, and its answer (logbook WS only)
+  LOGBOOK_SELECT_TARGET = 'logbookSelectTarget',
+  LOGBOOK_SELECT_TARGET_RESULT = 'logbookSelectTargetResult',
   
   // ===== 电台连接管理 =====
   RADIO_STATUS_CHANGED = 'radioStatusChanged',
@@ -2262,6 +2267,8 @@ export interface DigitalRadioEngineEvents {
   logbookHealthChanged: (data: { logBookId: string; health: z.infer<typeof LogbookHealthSchema> }) => void;
   logbookWriteFailed: (data: z.infer<typeof WSLogbookWriteFailedMessageSchema>['data']) => void;
   pskreporterReceptionUpdate: (data: import('./pskreporter.schema.js').PSKReporterReceptionUpdate) => void;
+  logbookLiveDecodes: (data: import('./logbook-live.schema.js').LogbookLiveDecodesUpdate) => void;
+  logbookSelectTargetResult: (data: import('./logbook-live.schema.js').LogbookSelectTargetResult) => void;
   textMessage: (data: z.infer<typeof WSTextMessageSchema>['data']) => void;
 
   /** @deprecated Tuner state is now delivered via radioCapabilityChanged event (id='tuner_switch') */

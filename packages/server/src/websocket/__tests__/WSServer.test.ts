@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SLOT_PACK_HISTORY_LIMIT, UserRole, WSMessageType, type SlotPack, type SystemStatus } from '@tx5dr/contracts';
 import { WSConnection, WSServer } from '../WSServer.js';
+import { OperatorTargetCommandService } from '../OperatorTargetCommandService.js';
 import { ConfigManager } from '../../config/config-manager.js';
 import { AuthManager } from '../../auth/AuthManager.js';
 import { EventEmitter } from 'eventemitter3';
@@ -54,6 +55,7 @@ describe('WSServer meter projection', () => {
       getStatus: () => ({ currentMode: { name: 'FT8', slotMs: 15000 } }),
       getSlotPackManager: () => ({ getLastMessageFromCallsign: () => undefined }),
     };
+    server.targetCommands = new OperatorTargetCommandService(server.digitalRadioEngine);
     server.logOperatorCommand = vi.fn();
     server.sendToConnection = vi.fn();
     server.broadcast = vi.fn();
@@ -488,6 +490,7 @@ describe('WSServer security filtering', () => {
     }));
     const server = Object.create(WSServer.prototype) as any;
     server.digitalRadioEngine = { pluginManager: { enqueueQueueTarget } };
+    server.targetCommands = new OperatorTargetCommandService(server.digitalRadioEngine);
     server.logOperatorCommand = vi.fn();
     server.handleQueueMutationRejection = vi.fn();
     server.handleCommandError = vi.fn();

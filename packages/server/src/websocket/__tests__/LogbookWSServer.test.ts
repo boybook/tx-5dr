@@ -169,7 +169,8 @@ describe('LogbookWSServer health notices', () => {
           ? ['operator-1']
           : [],
       }),
-    };
+      getOperatorsStatus: () => [],
+    } as typeof engine.operatorManager;
     const send = vi.fn();
     const socket = {
       on: vi.fn(),
@@ -178,6 +179,7 @@ describe('LogbookWSServer health notices', () => {
     };
     const server = new LogbookWSServer(engine as any);
     server.addConnection(socket, { operatorId: 'operator-1' });
+    send.mockClear();
 
     engine.emit('logbookHealthChanged', { logBookId: 'logbook-N0CALL' });
 
@@ -205,9 +207,29 @@ describe('LogbookWSServer operator visibility', () => {
       getLogManager: () => ({
         getOperatorIdsForLogBook: () => [],
       }),
-    };
+      getOperatorsStatus: () => [createOperatorStatus('operator-1'), createOperatorStatus('operator-2')],
+    } as typeof engine.operatorManager;
     return engine;
   }
+
+  // Regression: the list was only broadcast when operators were added or
+  // removed, so a page opened on an idle station had no operator to call with.
+  it('sends each page the operators it may see as soon as it connects', () => {
+    const server = new LogbookWSServer(createEngine() as any);
+    const scopedSocket = createSocket();
+    const adminSocket = createSocket();
+    const concreteSocket = createSocket();
+    server.addConnection(scopedSocket, { logBookId: 'logbook-shared', authorizedOperatorIds: ['operator-1'] });
+    server.addConnection(adminSocket);
+    server.addConnection(concreteSocket, { operatorId: 'operator-2', authorizedOperatorIds: ['operator-1', 'operator-2'] });
+
+    const operatorIds = (socket: ReturnType<typeof createSocket>) => parseSentMessages(socket)
+      .find(message => message.type === WSMessageType.OPERATORS_LIST)
+      ?.data.operators.map((operator: OperatorStatus) => operator.id);
+    expect(operatorIds(scopedSocket)).toEqual(['operator-1']);
+    expect(operatorIds(adminSocket)).toEqual(['operator-1', 'operator-2']);
+    expect(operatorIds(concreteSocket)).toEqual(['operator-2']);
+  });
 
   it('limits a logbook-only connection while preserving unrestricted admin delivery', () => {
     const engine = createEngine();
@@ -219,6 +241,8 @@ describe('LogbookWSServer operator visibility', () => {
       authorizedOperatorIds: ['operator-1'],
     });
     server.addConnection(adminSocket);
+    scopedSocket.send.mockClear();
+    adminSocket.send.mockClear();
 
     const operator1 = createOperatorStatus('operator-1');
     const operator2 = createOperatorStatus('operator-2');
@@ -250,6 +274,7 @@ describe('LogbookWSServer operator visibility', () => {
       operatorId: 'operator-1',
       authorizedOperatorIds: ['operator-1', 'operator-2'],
     });
+    socket.send.mockClear();
 
     const operator1 = createOperatorStatus('operator-1');
     const operator2 = createOperatorStatus('operator-2');
@@ -276,6 +301,7 @@ describe('LogbookWSServer reception feedback', () => {
     engine.operatorManager = {
       getLogManager: () => ({ getOperatorIdsForLogBook: () => [] }),
       getOperator: (id: string) => (callsigns[id] ? { config: { myCallsign: callsigns[id] } } : undefined),
+      getOperatorsStatus: () => [],
     };
     return engine;
   }

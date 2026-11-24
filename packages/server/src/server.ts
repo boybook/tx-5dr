@@ -36,6 +36,10 @@ import {
   authorizeLogbookConnectionParams,
   resolveLogbookConnectionParams,
 } from './websocket/LogbookWSServer.js';
+import { LogbookLiveDecodeFeed } from './websocket/LogbookLiveDecodeFeed.js';
+import { OperatorScopedSlotPackProjectionService } from './websocket/OperatorScopedSlotPackProjectionService.js';
+import { OperatorTargetCommandService } from './websocket/OperatorTargetCommandService.js';
+import { buildAbility, canWithData } from './auth/ability.js';
 import { getPSKReporterReceptionService } from './services/pskreporterReception/index.js';
 import { DeviceUiWSServer } from './device-ui/DeviceUiWSServer.js';
 import { deviceUiRoutes } from './device-ui/routes.js';
@@ -519,9 +523,41 @@ export async function createServer() {
   bootLogger.info('realtime audio transport manager started');
 
   // 初始化WebSocket服务器（集成业务逻辑）
-  const wsServer = new WSServer(digitalRadioEngine, processMonitor);
+  // One target command path for the main socket and logbook pages.
+  const targetCommands = new OperatorTargetCommandService(digitalRadioEngine);
+  const wsServer = new WSServer(digitalRadioEngine, processMonitor, targetCommands);
   const pskreporterReception = getPSKReporterReceptionService();
-  const logbookWsServer = new LogbookWSServer(digitalRadioEngine, pskreporterReception);
+  const logbookSlotPackProjection = new OperatorScopedSlotPackProjectionService({
+    callsignTracker: digitalRadioEngine.callsignTracker,
+    logManager: digitalRadioEngine.operatorManager.getLogManager(),
+  });
+  const logbookLiveDecodes = new LogbookLiveDecodeFeed({
+    projectSlotPack: (slotPack, operatorId) => logbookSlotPackProjection.projectSlotPack(slotPack, operatorId),
+    getOperatorCallsigns: (operatorId) => {
+      const callsign = digitalRadioEngine.operatorManager.getOperator(operatorId)?.config.myCallsign;
+      return callsign ? [callsign] : [];
+    },
+    getActiveSlotPacks: () => digitalRadioEngine.getActiveSlotPacks(),
+  });
+  const logbookWsServer = new LogbookWSServer(digitalRadioEngine, pskreporterReception, logbookLiveDecodes, {
+    // The same CASL rule as the main socket's operator commands, from the
+    // token's current grants so revoked or narrowed tokens stop at once.
+    canManageOperator: (tokenId, operatorId) => {
+      if (!authManager.isAuthEnabled()) return true;
+      if (!tokenId || !authManager.isTokenStillValid(tokenId)) return false;
+      const permissions = authManager.getTokenCurrentPermissions(tokenId);
+      if (!permissions) return false;
+      const ability = buildAbility({
+        role: permissions.role,
+        operatorIds: permissions.operatorIds,
+        permissionGrants: permissions.permissionGrants,
+      });
+      return canWithData(ability, 'manage', 'Operator', { id: operatorId });
+    },
+    selectTarget: (operatorId, callsign, selectedFrame) => (
+      targetCommands.selectTarget(operatorId, callsign, selectedFrame)
+    ),
+  }, (tokenId) => !authManager.isAuthEnabled() || authManager.isTokenStillValid(tokenId));
   const deviceUiWsServer = new DeviceUiWSServer(digitalRadioEngine, deviceServiceAuthManager);
   fastify.log.info('WebSocket server initialized');
 
@@ -836,7 +872,7 @@ export async function createServer() {
       }
 
       fastify.log.info(`Logbook WS client connected: operatorId=${operatorId || ''}, logBookId=${connectionParams.logBookId || ''}`);
-      logbookWsServer.addConnection(socket, authorization.params);
+      logbookWsServer.addConnection(socket, { ...authorization.params, tokenId: decoded.tokenId });
     } catch (e) {
       fastify.log.warn('Logbook WS connection parameter parsing failed, rejecting');
       socket.close(4002, 'Invalid connection parameters');

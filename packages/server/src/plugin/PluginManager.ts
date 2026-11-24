@@ -802,6 +802,11 @@ export class PluginManager {
     return this.getStrategyInstance(operatorId)?.plugin.definition.strategyFeatures?.targetQueue === 1;
   }
 
+  /** How a target-queue strategy starts on a new target: at once, or when the operator toggles it. */
+  getTargetQueueActivation(operatorId: string): 'immediate' | 'operator-toggle' {
+    return this.getStrategyInstance(operatorId)?.plugin.definition.strategyFeatures?.queueActivation ?? 'immediate';
+  }
+
   observeStrategyMessages(
     operatorId: string,
     messages: import('@tx5dr/contracts').ParsedFT8Message[],
