@@ -40,7 +40,10 @@ export interface WallClockReadResult {
   presentSamples: number;
   /** 落在未来（尚未到达）而零填充的采样数 */
   futureSamples: number;
-  /** 落在过去（已被环形缓冲逐出）而零填充的采样数 */
+  /**
+   * Zero-filled samples that lie in the past: evicted from the ring, or captured before
+   * the latest timeline break (resync), whose wall-clock position is no longer known.
+   */
   evictedSamples: number;
   /** 请求窗口起点对应的绝对采样序号 */
   startSampleIndex: number;
@@ -58,6 +61,8 @@ function clamp(value: number, min: number, max: number): number {
  * - 一个平滑采集时钟模型把绝对采样序号映射到挂钟时间：
  *     wallTimeOf(index) = anchorWallMs + (index - anchorSampleIndex) / estimatedRate * 1000
  *   每次写入用 chunk 到达时间对锚点做漏积分纠偏（抗抖动），大误差时重锚（应对断裂）。
+ *   After a resync, pre-break samples are no longer wall-clock addressable (they read as
+ *   evicted), so a stall gap is never folded into the timeline.
  * - 读取（readByWallClock）按挂钟时间换算到绝对采样区间并精确返回，缺失部分零填充。
  *   这使解码窗口的位置不受瞬时到达延迟影响，从架构上解决“整窗偏移导致 FT8 解不出”。
  *
@@ -79,6 +84,12 @@ export class RingBuffer {
   private estimatedRate: number;               // 平滑有效采样率（速率环初期禁用，恒等于 sampleRate）
   private lastErrMs = 0;                        // 最近一次写入的模型误差（诊断用）
   private resyncCount = 0;                      // 重锚次数（诊断用）
+  /**
+   * First absolute sample index of the current timeline (totalSamplesWritten at the latest
+   * resync). The linear wall-clock mapping cannot place earlier samples correctly, so
+   * readByWallClock treats them as evicted instead of shifting them across the gap.
+   */
+  private timelineStartIndex = 0;
 
   // --- seq 丢包检测（仅 ICOM 提供 seq 时启用）---
   private lastSeq: number | null = null;        // 上一个已接受的线级序列号
@@ -209,6 +220,10 @@ export class RingBuffer {
       // 时间线断裂（停顿/丢包/时钟跳变）：重锚使 chunk 末尾对齐到达时间，立即重对齐。
       this.anchorWallMs = arrivalTimeMs - (projectedTotal / this.estimatedRate) * 1000;
       this.anchorSampleIndex = 0;
+      // Under the new anchor, pre-break samples would appear to end right where this chunk
+      // starts, i.e. shifted by the gap length. Misplaced audio is worse than missing audio
+      // for DT-sensitive decoding, so only post-break samples stay wall-clock addressable.
+      this.timelineStartIndex = this.totalSamplesWritten;
       this.resyncCount += 1;
       this.logResyncIfNeeded(errMs, arrivalTimeMs);
       return;
@@ -304,6 +319,7 @@ export class RingBuffer {
       modelErrMs: Number(errMs.toFixed(1)),
       resyncCount: this.resyncCount,
       totalSamplesWritten: this.totalSamplesWritten,
+      timelineStartSampleIndex: this.timelineStartIndex,
       sampleRate: this.sampleRate,
     });
     this.lastResyncLogAt = now;
@@ -346,9 +362,9 @@ export class RingBuffer {
     const startIdx = Math.round(this.sampleIndexAtWall(startMs));
     const endIdx = startIdx + requestedSamples;
 
-    // 物理保留的绝对序号区间 [lo, hi)
+    // Wall-clock addressable absolute range [lo, hi): physically retained and not before the current timeline start
     const hi = this.totalSamplesWritten;
-    const lo = this.totalSamplesWritten - this.storedSamples;
+    const lo = Math.max(this.totalSamplesWritten - this.storedSamples, this.timelineStartIndex);
 
     const copyStart = Math.max(startIdx, lo);
     const copyEnd = Math.min(endIdx, hi);
@@ -419,6 +435,7 @@ export class RingBuffer {
     this.anchorSampleIndex = 0;
     this.estimatedRate = this.sampleRate;
     this.lastErrMs = 0;
+    this.timelineStartIndex = 0;
     this.lastSeq = null;
     this.lostPackets = 0;
     this.dupPackets = 0;
@@ -445,6 +462,7 @@ export class RingBuffer {
       estimatedRate: this.estimatedRate,
       modelErrMs: this.lastErrMs,
       resyncCount: this.resyncCount,
+      timelineStartSampleIndex: this.timelineStartIndex,
       lastSeq: this.lastSeq,
       lostPackets: this.lostPackets,
       dupPackets: this.dupPackets,
