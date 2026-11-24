@@ -1811,6 +1811,8 @@ describe('PluginManager standard-qso late re-decision', () => {
       if (source === 'slot-start') {
         await (pluginManager as any).handleSlotStart(createSlotInfo(30_000), pack);
       } else {
+        // RadioOperatorManager only re-decides a stopped operator that passes this gate.
+        expect(pluginManager.shouldProcessStoppedOperatorReDecision(operator.config.id, pack)).toBe(true);
         expect(await pluginManager.reDecideOperator(operator.config.id, pack)).toBe(true);
       }
 
