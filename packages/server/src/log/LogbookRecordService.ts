@@ -16,6 +16,7 @@ import {
   getCQZone,
   getCallsignInfo,
   getITUZone,
+  isQsoConfirmed,
   normalizeQsoModeForStorage,
   resolveDXCCEntity,
 } from '@tx5dr/core';
@@ -138,12 +139,6 @@ function normalizedMode(mode?: string): string {
   return (mode || 'UNKNOWN').toUpperCase();
 }
 
-function isConfirmed(qso: QSORecord): boolean {
-  return qso.lotwQslReceived === 'Y'
-    || qso.lotwQslReceived === 'V'
-    || qso.qrzQslReceived === 'Y';
-}
-
 function isTwoWayConfirmed(qso: QSORecord): boolean {
   return (qso.lotwQslSent === 'Y' && (qso.lotwQslReceived === 'Y' || qso.lotwQslReceived === 'V'))
     || (qso.qrzQslSent === 'Y' && qso.qrzQslReceived === 'Y');
@@ -180,7 +175,7 @@ function matchesFilters(qso: QSORecord, options?: LogQueryOptions): boolean {
   }
   if (options.excludeModes?.some(mode => mode.toUpperCase() === qso.mode.toUpperCase())) return false;
   if (options.qslStatus) {
-    const confirmed = isConfirmed(qso);
+    const confirmed = isQsoConfirmed(qso);
     const uploaded = qso.lotwQslSent === 'Y' || qso.qrzQslSent === 'Y';
     if (options.qslStatus === 'confirmed' && !confirmed) return false;
     if (options.qslStatus === 'uploaded' && (!uploaded || confirmed)) return false;
@@ -211,7 +206,7 @@ function addToIndex(index: RecordIndex, qso: QSORecord): void {
     index.workedDxccEntities.add(qso.dxccId);
     if (band !== 'Unknown') addToBucket(index.workedBandDxcc, band, qso.dxccId);
     addToBucket(index.workedModeDxcc, normalizedMode(qso.mode), qso.dxccId);
-    if (isConfirmed(qso)) {
+    if (isQsoConfirmed(qso)) {
       index.confirmedDxccEntities.add(qso.dxccId);
       if (band !== 'Unknown') addToBucket(index.confirmedBandDxcc, band, qso.dxccId);
       addToBucket(index.confirmedModeDxcc, normalizedMode(qso.mode), qso.dxccId);
@@ -242,7 +237,7 @@ function sameDerivedIndexIdentity(left: QSORecord, right: QSORecord): boolean {
 }
 
 function addConfirmedIndex(index: RecordIndex, qso: QSORecord): void {
-  if (!qso.dxccId || !isConfirmed(qso)) return;
+  if (!qso.dxccId || !isQsoConfirmed(qso)) return;
   const band = getBandFromFrequency(qso.frequency);
   index.confirmedDxccEntities.add(qso.dxccId);
   if (band !== 'Unknown') addToBucket(index.confirmedBandDxcc, band, qso.dxccId);
@@ -433,8 +428,8 @@ export class LogbookRecordService {
     this.byId.delete(id);
     this.byId.set(record.id, record);
     if (sameDerivedIndexIdentity(existing, record)) {
-      const wasConfirmed = isConfirmed(existing);
-      const isNowConfirmed = isConfirmed(record);
+      const wasConfirmed = isQsoConfirmed(existing);
+      const isNowConfirmed = isQsoConfirmed(record);
       if (!wasConfirmed && isNowConfirmed) addConfirmedIndex(this.index, record);
       if (wasConfirmed && !isNowConfirmed) this.indexValid = false;
     } else {
@@ -613,7 +608,7 @@ export class LogbookRecordService {
       if (qso.dxccNeedsReview) reviewCount += 1;
       if (!qso.dxccId) continue;
       const deleted = qso.dxccStatus === 'deleted';
-      const confirmed = isConfirmed(qso);
+      const confirmed = isQsoConfirmed(qso);
       (deleted ? workedDeleted : workedCurrent).add(qso.dxccId);
       if (confirmed) (deleted ? confirmedDeleted : confirmedCurrent).add(qso.dxccId);
       const band = getBandFromFrequency(qso.frequency);

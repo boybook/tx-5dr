@@ -1,3 +1,4 @@
 // 导出接口和工具类
 export * from './ILogProvider.js';
 export * from './qsoMode.js';
+export * from './qslConfirmation.js';
