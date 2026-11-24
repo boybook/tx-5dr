@@ -52,7 +52,9 @@ older captures from recreating sessions. Cleanup acknowledgement uses the
 worker startup timeout (10 seconds by default); failure retires and replaces
 only that worker. All worker removal paths settle affected jobs and discard
 session references and timers. Ordinary cancellation does not emit decode
-errors or alter radio/PTT state.
+errors or alter radio/PTT state. The work queue reports every cancellation,
+whether requested by the scheduler or observed as cancelled work from the pool,
+as a `decodeSessionCancelled` event (possibly more than once per session).
 
 After attempting reclamation and dispatch, maintenance detects queued demand
 with no dispatch or successful completion for 20 seconds. A cleanup currently
@@ -71,9 +73,15 @@ PCM and decoded message contents are not part of these summaries. Maintenance
 and summaries run even without new requests, and are disposed with the pool.
 
 Stage results are incremental; SlotPackManager remains responsible for
-cross-window message de-duplication and final slot persistence. Decode history
-records the configured depth, native stage, native processing time, and late
-completion state. Performance telemetry is observational and does not select a
+cross-window message de-duplication and final slot persistence. The final batch
+is written once every expected window has completed or failed, or once the
+session is cancelled: a cancelled session's undelivered windows never arrive, so
+the windows already delivered form the final batch. A slot without any decode
+result writes no record. Decode history records the configured depth, native
+stage, native processing time, and late completion state. Lateness is judged in
+the server process when the result is delivered, using the same calibrated
+clock that produced the decision deadline; the worker process does not judge
+it. Performance telemetry is observational and does not select a
 different depth.
 
 The process pool keeps a bounded native-duration sample and exposes p50/p95

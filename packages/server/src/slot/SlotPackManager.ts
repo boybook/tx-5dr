@@ -34,10 +34,14 @@ interface DecodeWindowCompletionState {
   completedWindows: Set<number>;
   hasDecodeResult: boolean;
   persistedFinal: boolean;
+  /** The decode session was cancelled; undelivered windows will never arrive. */
+  sessionCancelled: boolean;
 }
 
 interface SlotPackManagerOptions {
   persistence?: SlotPackPersistenceLike;
+  /** Calibrated wall clock; slot start times are expressed in it. */
+  now?: () => number;
 }
 
 /**
@@ -54,12 +58,15 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
   private decodeWindowCompletions = new Map<string, DecodeWindowCompletionState>();
   /** 上一次 clearInMemory() 的时间戳，用于过滤过时的解码结果 */
   private lastClearTimestamp = 0;
+  private readonly now: () => number;
   /** 本实例开始接收时隙包的时间，早于它的帧只可能存在于持久化日志中 */
-  private readonly createdAt = Date.now();
+  private readonly createdAt: number;
 
   constructor(options: SlotPackManagerOptions = {}) {
     super();
     this.persistence = options.persistence ?? new SlotPackPersistence();
+    this.now = options.now ?? (() => Date.now());
+    this.createdAt = this.now();
   }
 
   /**
@@ -71,7 +78,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     this.slotPacks.clear();
     this.decodeWindowCompletions.clear();
     this.lastSlotPack = null;
-    this.lastClearTimestamp = Date.now();
+    this.lastClearTimestamp = this.now();
   }
 
   /**
@@ -319,7 +326,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
       slotPack.stats.successfulDecodes++;
     }
     slotPack.stats.totalFramesBeforeDedup += filteredFrames.length;
-    slotPack.stats.lastUpdated = Date.now();
+    slotPack.stats.lastUpdated = this.now();
     
     // 添加解码历史
     slotPack.decodeHistory.push({
@@ -381,6 +388,23 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
     this.persistFinalDecodeBatchIfComplete(slotId);
   }
 
+  /**
+   * 标记一个解码会话已被取消（例如时隙中途开始发射）。被取消的窗口既不会
+   * 完成也不会报错，因此把已送达的窗口视为该 slot 的全部结果：有解码结果时
+   * 照常落盘最终批次并发出复查事件，没有结果时不写空记录。
+   */
+  markDecodeSessionCancelled(slotId: string): void {
+    const state = this.decodeWindowCompletions.get(slotId);
+    if (!state || state.persistedFinal || state.sessionCancelled) return;
+    state.sessionCancelled = true;
+    logger.debug('Finalizing cancelled decode session', {
+      slotId,
+      completedWindows: state.completedWindows.size,
+      expectedWindowCount: state.expectedWindowCount,
+    });
+    this.persistFinalDecodeBatchIfComplete(slotId);
+  }
+
   private markDecodeWindowCompleted(slotId: string, windowIdx: number, hasDecodeResult: boolean): void {
     const state = this.getDecodeWindowCompletionState(slotId, windowIdx);
     state.completedWindows.add(windowIdx);
@@ -396,6 +420,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
         completedWindows: new Set<number>(),
         hasDecodeResult: false,
         persistedFinal: false,
+        sessionCancelled: false,
       };
       this.decodeWindowCompletions.set(slotId, state);
     } else if (windowIdx + 1 > state.expectedWindowCount) {
@@ -407,7 +432,8 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
 
   private persistFinalDecodeBatchIfComplete(slotId: string): void {
     const state = this.decodeWindowCompletions.get(slotId);
-    if (!state || state.persistedFinal || state.completedWindows.size < state.expectedWindowCount) {
+    if (!state || state.persistedFinal
+      || (!state.sessionCancelled && state.completedWindows.size < state.expectedWindowCount)) {
       return;
     }
 
@@ -760,7 +786,7 @@ export class SlotPackManager extends EventEmitter<SlotPackManagerEvents> {
    * 清理过期的时隙包（超过指定时间的）
    */
   cleanupExpiredSlotPacks(maxAgeMs: number = 60000): number {
-    const now = Date.now();
+    const now = this.now();
     let cleanedCount = 0;
     let lastSlotPackRemoved = false;
     

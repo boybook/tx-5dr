@@ -321,7 +321,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       },
     );
     this.audioStreamManager = new AudioStreamManager({ now: () => this.clockSource.now() });
-    this.realDecodeQueue = new WSJTXDecodeWorkQueue();
+    this.realDecodeQueue = new WSJTXDecodeWorkQueue({ now: () => this.clockSource.now() });
     const decodeWorkerEvents = this as unknown as DecodeWorkerEngineEmitter;
     this.realDecodeQueue.on('decodeWorkerUnavailable', (status) => {
       decodeWorkerEvents.emit('decodeWorkerUnavailable', status);
@@ -330,13 +330,13 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       decodeWorkerEvents.emit('decodeWorkerRecovered', status);
     });
     this.realEncodeQueue = new WSJTXEncodeWorkQueue(1);
-    this.slotPackManager = new SlotPackManager();
+    this.slotPackManager = new SlotPackManager({ now: () => this.clockSource.now() });
     const initialFrequency = ConfigManager.getInstance().getLastSelectedFrequency();
     this.slotPackManager.setFrequencyContext(initialFrequency);
     this.on('frequencyChanged', (data) => {
       this.slotPackManager.setFrequencyContext(data);
     });
-    this.audioMixer = new AudioMixer(100);
+    this.audioMixer = new AudioMixer({ mixingWindowMs: 100, now: () => this.clockSource.now() });
     this.radioManager = new PhysicalRadioManager();
     this.digitalFrameCoordinator = new DigitalFrameCoordinator({ now: () => this.clockSource.now() });
     this.operatorIntentCoordinator = new OperatorIntentCoordinator();
@@ -1418,6 +1418,7 @@ export class DigitalRadioEngine extends EventEmitter<DigitalRadioEngineEvents> {
       () => ConfigManager.getInstance().getFT8Config().decodeWhileTransmitting ?? false,
       (slotInfo, windowIdx) => this._operatorManager.getDecodeApContext(slotInfo, windowIdx),
       () => ConfigManager.getInstance().getDecodeWindowSettings()?.decodeDepth ?? 3,
+      () => this.clockSource.now(),
     );
 
     const spectrumSettings = ConfigManager.getInstance().getSpectrumSettings();
