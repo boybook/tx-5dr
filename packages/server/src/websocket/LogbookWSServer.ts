@@ -3,8 +3,12 @@
 
 import { WSMessageHandler } from '@tx5dr/core';
 import { UserRole, WSMessageType } from '@tx5dr/contracts';
-import type { OperatorStatus } from '@tx5dr/contracts';
+import type { OperatorStatus, PSKReporterReceptionSpot, PSKReporterReceptionUpdate } from '@tx5dr/contracts';
 import type { DigitalRadioEngine } from '../DigitalRadioEngine.js';
+import type {
+  PSKReporterReceptionService,
+  ReceptionFollow,
+} from '../services/pskreporterReception/PSKReporterReceptionService.js';
 
 interface LogbookConnection {
   id: string;
@@ -13,6 +17,8 @@ interface LogbookConnection {
   operatorId?: string;
   logBookId?: string;
   authorizedOperatorIds?: Set<string>;
+  /** Reception feedback interest in the connection's operator callsigns. */
+  receptionFollow?: ReceptionFollow;
 }
 
 interface LogBookIdResolver {
@@ -99,8 +105,97 @@ export class LogbookWSServer {
   private connections = new Map<string, LogbookConnection>();
   private idCounter = 0;
 
-  constructor(private engine: DigitalRadioEngine) {
+  constructor(
+    private engine: DigitalRadioEngine,
+    private reception?: PSKReporterReceptionService,
+  ) {
     this.setupEngineListeners();
+    this.setupReceptionListeners();
+  }
+
+  private setupReceptionListeners() {
+    const reception = this.reception;
+    if (!reception) return;
+    reception.on('spots', (spots) => {
+      for (const conn of this.connections.values()) {
+        const callsigns = conn.receptionFollow?.callsigns;
+        if (!callsigns || callsigns.length === 0) continue;
+        const own = spots.filter(spot => callsigns.includes(spot.senderCallsign));
+        if (own.length > 0) {
+          this.sendReception(conn, 'append', own);
+        }
+      }
+    });
+    let lastState = reception.getState();
+    reception.on('stateChanged', (state) => {
+      // Turning the feature on or off changes what is stored; other changes
+      // (connecting, reconnecting) only change the state, so pages keep their
+      // spots instead of receiving a full snapshot on every network blip.
+      const contentChanged = state === 'disabled' || lastState === 'disabled';
+      lastState = state;
+      for (const conn of this.connections.values()) {
+        if (contentChanged) {
+          this.sendReceptionSnapshot(conn);
+        } else {
+          this.sendReception(conn, 'append', []);
+        }
+      }
+    });
+  }
+
+  /** Callsigns of the operators a connection shows; empty for an unfiltered admin view. */
+  private resolveFollowedCallsigns(conn: LogbookConnection): string[] {
+    const operatorManager = this.engine.operatorManager;
+    let operatorIds: string[] = [];
+    if (conn.operatorId) {
+      operatorIds = [conn.operatorId];
+    } else if (conn.authorizedOperatorIds) {
+      operatorIds = Array.from(conn.authorizedOperatorIds);
+    } else if (conn.logBookId) {
+      operatorIds = operatorManager.getLogManager().getOperatorIdsForLogBook(conn.logBookId);
+    }
+    return operatorIds.flatMap((operatorId) => {
+      const callsign = operatorManager.getOperator(operatorId)?.config.myCallsign;
+      return callsign ? [callsign] : [];
+    });
+  }
+
+  /** Follow changed operator callsigns; sends a fresh snapshot when the set changed. */
+  private refreshReceptionFollows() {
+    if (!this.reception) return;
+    for (const conn of this.connections.values()) {
+      const follow = conn.receptionFollow;
+      if (!follow) continue;
+      const before = follow.callsigns.join(',');
+      follow.update(this.resolveFollowedCallsigns(conn));
+      if (follow.callsigns.join(',') !== before) {
+        this.sendReceptionSnapshot(conn);
+      }
+    }
+  }
+
+  private sendReceptionSnapshot(conn: LogbookConnection) {
+    const follow = conn.receptionFollow;
+    if (!this.reception || !follow) return;
+    this.sendReception(conn, 'snapshot', this.reception.getSpots(follow.callsigns));
+  }
+
+  private sendReception(
+    conn: LogbookConnection,
+    kind: PSKReporterReceptionUpdate['kind'],
+    spots: PSKReporterReceptionSpot[],
+  ) {
+    const reception = this.reception;
+    const follow = conn.receptionFollow;
+    if (!reception || !follow) return;
+    const update: PSKReporterReceptionUpdate = {
+      kind,
+      state: reception.getState(),
+      callsigns: [...follow.callsigns],
+      windowMs: reception.windowMs,
+      spots,
+    };
+    this.send(conn, WSMessageType.PSKREPORTER_RECEPTION_UPDATE, update);
   }
 
   private setupEngineListeners() {
@@ -129,9 +224,11 @@ export class LogbookWSServer {
     // 推送操作员状态更新（用于通联日志页面的实时虚线渲染）
     this.engine.on('operatorStatusUpdate' as any, (status: OperatorStatus) => {
       this.broadcastOperatorStatusUpdate(status);
+      this.refreshReceptionFollows();
     });
     this.engine.on('operatorsList' as any, (data: { operators: OperatorStatus[] }) => {
       this.broadcastOperatorsList(data.operators);
+      this.refreshReceptionFollows();
     });
   }
 
@@ -144,10 +241,10 @@ export class LogbookWSServer {
       try { handler.handleRawMessage(typeof raw === 'string' ? raw : raw?.toString?.()); } catch {}
     });
     ws.on('close', () => {
-      this.connections.delete(id);
+      this.removeConnection(id);
     });
     ws.on('error', () => {
-      this.connections.delete(id);
+      this.removeConnection(id);
     });
 
     const conn: LogbookConnection = {
@@ -161,7 +258,18 @@ export class LogbookWSServer {
         : undefined,
     };
     this.connections.set(id, conn);
+    if (this.reception) {
+      conn.receptionFollow = this.reception.follow(this.resolveFollowedCallsigns(conn));
+      this.sendReceptionSnapshot(conn);
+    }
     return id;
+  }
+
+  private removeConnection(id: string) {
+    const conn = this.connections.get(id);
+    if (!conn) return;
+    this.connections.delete(id);
+    conn.receptionFollow?.release();
   }
 
   private send(conn: LogbookConnection, type: string, data?: any) {
@@ -170,7 +278,7 @@ export class LogbookWSServer {
       conn.ws.send(msg);
     } catch (e) {
       // 出错则移除连接
-      this.connections.delete(conn.id);
+      this.removeConnection(conn.id);
     }
   }
 
@@ -227,6 +335,7 @@ export class LogbookWSServer {
 
   cleanup() {
     for (const c of this.connections.values()) {
+      c.receptionFollow?.release();
       try { c.ws.close(); } catch {}
     }
     this.connections.clear();

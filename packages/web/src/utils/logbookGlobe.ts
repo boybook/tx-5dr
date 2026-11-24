@@ -62,7 +62,10 @@ export interface RecentQSOGlobeModel {
   homePoint: GlobeStationPoint | null;
   remotePoints: GlobeStationPoint[];
   arcs: GlobeArc[];
+  /** All rings, including `homeRing`. */
   rings: GlobeRing[];
+  /** The station's own pulse; stays visible when QSO history is hidden. */
+  homeRing: GlobeRing | null;
   summary: {
     qsoCount: number;
     uniqueGridCount: number;
@@ -373,15 +376,18 @@ export function buildPagedQSOGlobeModel(qsos: QSORecord[], stationInfo?: Station
     }
   }
 
-  if (homePoint) {
-    rings.push({
+  const homeRing: GlobeRing | null = homePoint
+    ? {
       lat: homePoint.lat,
       lng: homePoint.lng,
       color: ['rgba(249, 115, 22, 0.65)', 'rgba(249, 115, 22, 0.08)'],
       maxRadius: 4.8,
       propagationSpeed: 2.2,
       repeatPeriod: 1600,
-    });
+    }
+    : null;
+  if (homeRing) {
+    rings.push(homeRing);
   }
 
   if (highlightedGrid) {
@@ -411,6 +417,7 @@ export function buildPagedQSOGlobeModel(qsos: QSORecord[], stationInfo?: Station
     remotePoints: Array.from(pointMap.values()),
     arcs,
     rings,
+    homeRing,
     summary: {
       qsoCount: qsos.length,
       uniqueGridCount: pointMap.size,

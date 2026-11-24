@@ -52,6 +52,7 @@ export const WS_MESSAGE_EVENT_MAP: Record<string, string> = {
   [WSMessageType.LOGBOOK_HEALTH_CHANGED]: 'logbookHealthChanged',
   [WSMessageType.LOGBOOK_WRITE_FAILED]: 'logbookWriteFailed',
   [WSMessageType.LOGBOOK_CHANGE_NOTICE]: 'logbookChangeNotice',
+  [WSMessageType.PSKREPORTER_RECEPTION_UPDATE]: 'pskreporterReceptionUpdate',
 
   // 频率相关事件
   [WSMessageType.FREQUENCY_CHANGED]: 'frequencyChanged',

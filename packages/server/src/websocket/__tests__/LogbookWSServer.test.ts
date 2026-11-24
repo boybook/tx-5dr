@@ -269,3 +269,79 @@ describe('LogbookWSServer operator visibility', () => {
     });
   });
 });
+
+describe('LogbookWSServer reception feedback', () => {
+  function createReceptionEngine(callsigns: Record<string, string>) {
+    const engine = new EventEmitter() as EventEmitter & { operatorManager: unknown };
+    engine.operatorManager = {
+      getLogManager: () => ({ getOperatorIdsForLogBook: () => [] }),
+      getOperator: (id: string) => (callsigns[id] ? { config: { myCallsign: callsigns[id] } } : undefined),
+    };
+    return engine;
+  }
+
+  function createReception() {
+    const reception = new EventEmitter() as EventEmitter & Record<string, unknown>;
+    const follows: Array<{ callsigns: string[]; released: boolean }> = [];
+    Object.assign(reception, {
+      windowMs: 1_800_000,
+      getState: () => 'live',
+      getSpots: vi.fn(() => []),
+      follow: vi.fn((initial: string[]) => {
+        const entry = {
+          callsigns: [...initial],
+          released: false,
+          update(next: string[]) { entry.callsigns = [...next]; },
+          release() { entry.released = true; },
+        };
+        follows.push(entry);
+        return entry;
+      }),
+    });
+    return { reception, follows };
+  }
+
+  function receptionMessages(socket: ReturnType<typeof createSocket>) {
+    return parseSentMessages(socket).filter(message => message.type === WSMessageType.PSKREPORTER_RECEPTION_UPDATE);
+  }
+
+  it('follows each page operator callsign and routes spots only to that page', () => {
+    const engine = createReceptionEngine({ 'operator-1': 'BG5DRB', 'operator-2': 'BA1ZZZ' });
+    const { reception, follows } = createReception();
+    const server = new LogbookWSServer(engine as any, reception as any);
+    const first = createSocket();
+    const second = createSocket();
+    server.addConnection(first, { operatorId: 'operator-1' });
+    server.addConnection(second, { operatorId: 'operator-2' });
+
+    expect(follows.map(follow => follow.callsigns)).toEqual([['BG5DRB'], ['BA1ZZZ']]);
+    expect(receptionMessages(first)).toEqual([expect.objectContaining({
+      data: { kind: 'snapshot', state: 'live', callsigns: ['BG5DRB'], windowMs: 1_800_000, spots: [] },
+    })]);
+
+    reception.emit('spots', [
+      { id: 'a', senderCallsign: 'BG5DRB', receiverCallsign: 'VK2JEH' },
+      { id: 'b', senderCallsign: 'BA1ZZZ', receiverCallsign: 'OH2JJA' },
+    ]);
+    expect(receptionMessages(first).at(-1)?.data).toMatchObject({
+      kind: 'append',
+      spots: [{ id: 'a' }],
+    });
+    expect(receptionMessages(second).at(-1)?.data.spots).toEqual([
+      expect.objectContaining({ id: 'b' }),
+    ]);
+
+    // A connection blip only updates the state; turning the feature off resends the content.
+    (reception as Record<string, unknown>).getState = () => 'reconnecting';
+    reception.emit('stateChanged', 'reconnecting');
+    expect(receptionMessages(first).at(-1)?.data).toMatchObject({ kind: 'append', state: 'reconnecting', spots: [] });
+    (reception as Record<string, unknown>).getState = () => 'disabled';
+    reception.emit('stateChanged', 'disabled');
+    expect(receptionMessages(first).at(-1)?.data).toMatchObject({ kind: 'snapshot', state: 'disabled' });
+
+    const closeHandler = first.on.mock.calls.find(([event]) => event === 'close')?.[1] as () => void;
+    closeHandler();
+    expect(follows[0]?.released).toBe(true);
+    expect(follows[1]?.released).toBe(false);
+  });
+});

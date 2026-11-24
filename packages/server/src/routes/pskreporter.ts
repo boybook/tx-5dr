@@ -5,9 +5,10 @@
  */
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { PSKReporterConfig } from '@tx5dr/contracts';
+import { PSKReporterConfig, PSKReporterReceptionConfigSchema } from '@tx5dr/contracts';
 import { ConfigManager } from '../config/config-manager.js';
 import { getPSKReporterService } from '../services/PSKReporterService.js';
+import { getPSKReporterReceptionService } from '../services/pskreporterReception/index.js';
 import { RadioError, RadioErrorCode } from '../utils/errors/RadioError.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -140,6 +141,35 @@ export async function pskreporterRoutes(fastify: FastifyInstance) {
       }
       throw RadioError.from(error, RadioErrorCode.INVALID_OPERATION);
     }
+  });
+
+  /**
+   * GET /pskreporter/reception/config
+   * Reception feedback setting (live reports of other stations hearing this station)
+   */
+  fastify.get('/pskreporter/reception/config', async (_request: FastifyRequest, reply: FastifyReply) => {
+    return reply.code(200).send({
+      success: true,
+      data: configManager.getPSKReporterReceptionConfig(),
+    });
+  });
+
+  /**
+   * PUT /pskreporter/reception/config
+   */
+  fastify.put('/pskreporter/reception/config', async (request: FastifyRequest, reply: FastifyReply) => {
+    const parsed = PSKReporterReceptionConfigSchema.partial().strict().safeParse(request.body ?? {});
+    if (!parsed.success) {
+      throw new RadioError({
+        code: RadioErrorCode.INVALID_CONFIG,
+        message: `Invalid reception feedback config: ${parsed.error.message}`,
+        userMessage: 'Invalid reception feedback settings',
+      });
+    }
+    const config = await configManager.updatePSKReporterReceptionConfig(parsed.data);
+    getPSKReporterReceptionService().onConfigChanged();
+    logger.info('PSKReporter reception feedback configuration updated', { enabled: config.enabled });
+    return reply.code(200).send({ success: true, data: config });
   });
 
   /**

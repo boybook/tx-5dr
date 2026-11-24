@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render } from '@testing-library/react';
+import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import RecentQSOGlobeCard from './RecentQSOGlobeCard';
 
@@ -63,5 +63,36 @@ describe('logbook globe drawing lifetime', () => {
     expect(disconnect).toHaveBeenCalledOnce();
     act(() => document.dispatchEvent(new Event('visibilitychange')));
     expect(mocks.globe.resumeAnimation).toHaveBeenCalledTimes(resumeBeforeUnmount);
+  });
+});
+
+describe('logbook globe reception entry', () => {
+  const props = { logBookId: 'fixture', qsos: [], loading: false, pageSize: 25, pageSizeOptions: [25, 50], onPageSizeChange: () => {} };
+  const view = (state: 'disabled' | 'live') => ({ state, callsigns: ['BG5DRB'], windowMs: 1_800_000, spots: [] });
+
+  it('offers the off-state entry only while reception feedback is disabled', async () => {
+    const rendered = render(<RecentQSOGlobeCard {...props} reception={view('disabled')} canEnableReception />);
+    await act(async () => {});
+    expect(rendered.getByLabelText('globe.receptionOffTitle')).toBeTruthy();
+
+    rendered.rerender(<RecentQSOGlobeCard {...props} reception={view('live')} canEnableReception />);
+    expect(rendered.queryByLabelText('globe.receptionOffTitle')).toBeNull();
+    expect(rendered.getByText('globe.receptionWaiting')).toBeTruthy();
+  });
+});
+
+describe('logbook globe reception panel', () => {
+  it('opens on hover and switches the heatmap theme inside the panel', async () => {
+    const props = { logBookId: 'fixture', qsos: [], loading: false, pageSize: 25, pageSizeOptions: [25, 50], onPageSizeChange: () => {} };
+    const reception = { state: 'live' as const, callsigns: ['BG5DRB'], windowMs: 1_800_000, spots: [] };
+    const rendered = render(<RecentQSOGlobeCard {...props} reception={reception} />);
+    await act(async () => {});
+    expect(rendered.queryByRole('radiogroup')).toBeNull();
+
+    fireEvent.mouseEnter(rendered.getByLabelText('globe.receptionHide').parentElement!);
+    const spectrum = rendered.getByRole('radio', { name: 'globe.receptionThemeSpectrum' });
+    expect(spectrum.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(spectrum);
+    expect(rendered.getByRole('radio', { name: 'globe.receptionThemeSpectrum' }).getAttribute('aria-checked')).toBe('true');
   });
 });

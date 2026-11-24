@@ -18,6 +18,7 @@ import { api, ApiError } from '@tx5dr/core';
 import type {
   DecodeWindowSettings,
   PSKReporterConfig,
+  PSKReporterReceptionConfig,
   PSKReporterStatus,
   RealtimeSettingsResponseData,
   RealtimeTransportPolicy,
@@ -366,6 +367,8 @@ export const SystemSettings = forwardRef<
   // PSKReporter 状态
   const [pskrConfig, setPskrConfig] = useState<PSKReporterConfig | null>(null);
   const [originalPskrConfig, setOriginalPskrConfig] = useState<PSKReporterConfig | null>(null);
+  const [pskrReception, setPskrReception] = useState<PSKReporterReceptionConfig | null>(null);
+  const [originalPskrReception, setOriginalPskrReception] = useState<PSKReporterReceptionConfig | null>(null);
   const [pskrStatus, setPskrStatus] = useState<PSKReporterStatus | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_pskrStatusLoading, setPskrStatusLoading] = useState(false);
@@ -498,6 +501,15 @@ export const SystemSettings = forwardRef<
       }
     } catch (err) {
       logger.error('Failed to load PSKReporter config:', err);
+    }
+    try {
+      const reception = await api.getPSKReporterReceptionConfig();
+      if (reception.success && reception.data) {
+        setPskrReception(reception.data);
+        setOriginalPskrReception(reception.data);
+      }
+    } catch (err) {
+      logger.error('Failed to load PSKReporter reception config:', err);
     }
   };
 
@@ -936,6 +948,10 @@ export const SystemSettings = forwardRef<
     );
   };
 
+  const hasPskrReceptionChanges = () => (
+    !!pskrReception && !!originalPskrReception && pskrReception.enabled !== originalPskrReception.enabled
+  );
+
   // 检查解码窗口设置是否有变化
   const hasDecodeWindowChanges = () => {
     return (
@@ -980,6 +996,7 @@ export const SystemSettings = forwardRef<
       spectrumWhileTransmitting !== originalSpectrumValue ||
       maxSameTransmissionCount !== originalMaxSameTransmissionCount ||
       hasPskrChanges() ||
+      hasPskrReceptionChanges() ||
       hasDecodeWindowChanges() ||
       hasNtpServerChanges() ||
       !remoteAccessSettingsEqual(remoteAccessSettings, originalRemoteAccessSettings) ||
@@ -1146,6 +1163,16 @@ export const SystemSettings = forwardRef<
         }
       }
 
+      if (pskrReception && hasPskrReceptionChanges()) {
+        const receptionResult = await api.updatePSKReporterReceptionConfig({ enabled: pskrReception.enabled });
+        if (receptionResult.success && receptionResult.data) {
+          setPskrReception(receptionResult.data);
+          setOriginalPskrReception(receptionResult.data);
+        } else {
+          throw new Error(t('system.pskrSaveFailed'));
+        }
+      }
+
       // 保存解码窗口设置
       if (hasDecodeWindowChanges()) {
         const dwSettings: Record<string, unknown> = {
@@ -1254,7 +1281,7 @@ export const SystemSettings = forwardRef<
   useEffect(() => {
     const hasChanges = hasUnsavedChanges();
     onUnsavedChanges?.(hasChanges);
-  }, [decodeWhileTransmitting, spectrumWhileTransmitting, maxSameTransmissionCount, originalDecodeValue, originalSpectrumValue, originalMaxSameTransmissionCount, pskrConfig, originalPskrConfig, decodeWindowState, originalDecodeWindowState, ntpServers, originalNtpServers, remoteAccessSettings, originalRemoteAccessSettings, logLevel, originalLogLevel, realtimeTransportPolicy, originalRealtimeTransportPolicy, rtcDataAudioPublicHost, originalRtcDataAudioPublicHost, rtcDataAudioPublicUdpPort, originalRtcDataAudioPublicUdpPort, closeBehavior, originalCloseBehavior, desktopHttpsEnabled, originalDesktopHttpsEnabled, desktopHttpsMode, originalDesktopHttpsMode, desktopHttpsPort, originalDesktopHttpsPort, desktopHttpsRedirectExternalHttp, originalDesktopHttpsRedirectExternalHttp, onUnsavedChanges]);
+  }, [decodeWhileTransmitting, spectrumWhileTransmitting, maxSameTransmissionCount, originalDecodeValue, originalSpectrumValue, originalMaxSameTransmissionCount, pskrConfig, originalPskrConfig, pskrReception, originalPskrReception, decodeWindowState, originalDecodeWindowState, ntpServers, originalNtpServers, remoteAccessSettings, originalRemoteAccessSettings, logLevel, originalLogLevel, realtimeTransportPolicy, originalRealtimeTransportPolicy, rtcDataAudioPublicHost, originalRtcDataAudioPublicHost, rtcDataAudioPublicUdpPort, originalRtcDataAudioPublicUdpPort, closeBehavior, originalCloseBehavior, desktopHttpsEnabled, originalDesktopHttpsEnabled, desktopHttpsMode, originalDesktopHttpsMode, desktopHttpsPort, originalDesktopHttpsPort, desktopHttpsRedirectExternalHttp, originalDesktopHttpsRedirectExternalHttp, onUnsavedChanges]);
 
   const runtimeHints = realtimeRuntime?.connectivityHints ?? null;
   const rtcDataAudioRuntime = realtimeRuntime?.rtcDataAudio ?? null;
@@ -2731,6 +2758,25 @@ export const SystemSettings = forwardRef<
               </div>
             </SettingsBlock>
           )}
+
+          <SettingsRow
+            label={t('system.pskrReceptionTitle')}
+            description={(
+              <>
+                {t('system.pskrReceptionDesc')}
+                <span className="mt-1 block">{t('system.pskrReceptionCredit')}</span>
+              </>
+            )}
+            control={(
+              <Switch
+                isSelected={pskrReception?.enabled ?? false}
+                onValueChange={(enabled) => setPskrReception((current) => (current ? { ...current, enabled } : current))}
+                isDisabled={isSaving || !pskrReception}
+                size="sm"
+                color={pskrReception?.enabled ? 'success' : 'default'}
+              />
+            )}
+          />
         </SettingsSection>
       </div>
 

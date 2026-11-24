@@ -94,7 +94,66 @@ export const PSKReporterStatusSchema = z.object({
   lastError: z.string().optional(),
 });
 
+/**
+ * Host-only setting for PSK Reporter reception feedback: reports of other
+ * stations hearing this station's operator callsigns. It is separate from the
+ * upload configuration and is not part of the plugin settings surface.
+ */
+export const PSKReporterReceptionConfigSchema = z.object({
+  /** Follow the callsigns of open logbook pages through PSK Reporter. */
+  enabled: z.boolean().default(false),
+});
+
+/** Connection state of the reception feedback feed for the Host. */
+export const PSKReporterReceptionStateSchema = z.enum([
+  /** The setting is off; nothing is requested. */
+  'disabled',
+  /** Enabled, but no open logbook page needs a callsign. */
+  'idle',
+  'connecting',
+  'live',
+  /** The live feed dropped; a delayed reconnect is scheduled. */
+  'reconnecting',
+]);
+
+/** One station that reported hearing a followed callsign. */
+export const PSKReporterReceptionSpotSchema = z.object({
+  /** Stable identity: sender, receiver and receiver report second. */
+  id: z.string().min(1),
+  /** Followed callsign that was heard, upper case. */
+  senderCallsign: z.string().min(1),
+  receiverCallsign: z.string().min(1),
+  receiverLocator: z.string().min(4),
+  /** RF frequency in Hz when reported. */
+  frequency: z.number().optional(),
+  mode: z.string(),
+  /** Reported SNR in dB when available. */
+  snr: z.number().optional(),
+  /** Start of the heard transmission (Unix ms); falls back to the report time. */
+  transmittedAt: z.number(),
+  /** Time the receiver reported the spot (Unix ms). */
+  reportedAt: z.number(),
+  /** `live` arrived through the realtime feed, `history` through the backfill query. */
+  source: z.enum(['live', 'history']),
+});
+
+/** Reception feedback pushed to a logbook page connection. */
+export const PSKReporterReceptionUpdateSchema = z.object({
+  /** `snapshot` replaces the client view; `append` adds new spots. */
+  kind: z.enum(['snapshot', 'append']),
+  state: PSKReporterReceptionStateSchema,
+  /** Callsigns followed for this connection. */
+  callsigns: z.array(z.string()),
+  /** Retention window of the spots in ms, measured from `transmittedAt`. */
+  windowMs: z.number().positive(),
+  spots: z.array(PSKReporterReceptionSpotSchema),
+});
+
 // 类型导出
+export type PSKReporterReceptionConfig = z.infer<typeof PSKReporterReceptionConfigSchema>;
+export type PSKReporterReceptionState = z.infer<typeof PSKReporterReceptionStateSchema>;
+export type PSKReporterReceptionSpot = z.infer<typeof PSKReporterReceptionSpotSchema>;
+export type PSKReporterReceptionUpdate = z.infer<typeof PSKReporterReceptionUpdateSchema>;
 export type PSKReporterStats = z.infer<typeof PSKReporterStatsSchema>;
 export type PSKReporterConfig = z.infer<typeof PSKReporterConfigSchema>;
 

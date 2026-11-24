@@ -1,7 +1,9 @@
 import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { Select, SelectItem, Spinner } from '@heroui/react';
+import { Button, Popover, PopoverContent, PopoverTrigger, Select, SelectItem, Spinner, Tooltip } from '@heroui/react';
 import { getGridBounds, type LogBookWorkedGridItem, type OperatorStatus, type QSORecord, type StationInfo } from '@tx5dr/contracts';
-import { api } from '@tx5dr/core';
+import { api, ApiError, getBandFromFrequency } from '@tx5dr/core';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faClockRotateLeft, faTableCells, faTowerBroadcast, type IconDefinition } from '@fortawesome/free-solid-svg-icons';
 import Globe, { type GlobeMethods } from 'react-globe.gl';
 import * as THREE from 'three';
 import { feature } from 'topojson-client';
@@ -22,6 +24,24 @@ import {
   type WorkedGridLabel,
   type WorkedGridLine,
 } from '../../utils/logbookGlobe';
+import {
+  buildReceptionGlobeModel,
+  getReceptionHeatSignature,
+  type ReceptionGlobePoint,
+  type ReceptionHeatPoint,
+  type ReceptionView,
+} from '../../utils/receptionGlobe';
+import { useReceptionPings } from './useReceptionPings';
+import { useGlobeTrackpadGestures } from './useGlobeTrackpadGestures';
+import { buildReceptionPointCardHtml } from '../../utils/receptionPointCard';
+import { LOGBOOK_BAND_OPTIONS } from './logbookBands';
+import {
+  RECEPTION_THEMES,
+  getReceptionTheme,
+  loadReceptionThemeId,
+  saveReceptionThemeId,
+  type ReceptionThemeId,
+} from '../../utils/receptionThemes';
 
 const logger = createLogger('RecentQSOGlobeCard');
 
@@ -44,6 +64,121 @@ const POV_SYNC_CENTER_EPSILON_WITH_GRIDS = 1.2;
 const POV_SYNC_CENTER_EPSILON_IDLE = 999;
 const WORKED_GRID_CACHE_LIMIT = 4;
 const EMPTY_OPERATORS: OperatorStatus[] = [];
+const RECEPTION_TICK_MS = 30_000;
+const RECEPTION_POINT_ALTITUDE = 0.0045;
+/** Gaussian radius of the coverage glow, in degrees of arc. */
+const RECEPTION_FOG_BANDWIDTH = 4.5;
+/** Above the land caps (0.0025) so the glow tints land instead of sitting under the overlay. */
+const RECEPTION_FOG_ALTITUDE = 0.0032;
+/** Frames to keep re-applying the glow material after a data change. */
+const RECEPTION_FOG_PATCH_FRAMES = 30;
+
+/**
+ * The heatmap is a whole-globe shell. Its material writes depth even where it
+ * is fully transparent, which hides any layer it covers: above the land caps
+ * it hides them on the whole hemisphere, below them it punches holes where the
+ * flat cap triangles sag. A glow must not occlude anything, so depth writes
+ * are off, and it is blended additively: it adds light to the night texture
+ * below instead of painting over it. globe.gl exposes no heatmap material
+ * option and rebuilds the mesh when its data changes, so the mesh is patched
+ * after updates.
+ */
+type SceneMaterial = { depthWrite: boolean; blending: number; needsUpdate: boolean };
+type SceneObject = { __globeObjType?: string; material?: SceneMaterial | SceneMaterial[] };
+
+function applyHeatmapGlowMaterial(globe: GlobeMethods | undefined): boolean {
+  if (!globe || typeof globe.scene !== 'function') return false;
+  let found = false;
+  globe.scene().traverse((object: SceneObject) => {
+    if (object.__globeObjType !== 'heatmap') return;
+    found = true;
+    const materials = ([] as SceneMaterial[]).concat(object.material ?? []);
+    for (const material of materials) {
+      if (material.depthWrite || material.blending !== THREE.AdditiveBlending) {
+        material.depthWrite = false;
+        material.blending = THREE.AdditiveBlending;
+        material.needsUpdate = true;
+      }
+    }
+  });
+  return found;
+}
+const RECEPTION_FOG_TRANSITION_MS = 1200;
+const EMPTY_HEATMAPS: object[] = [];
+/** Minimum spacing of glow recomputations; receiver batches arrive in bursts. */
+const RECEPTION_FOG_MIN_INTERVAL_MS = 3000;
+const EMPTY_HEAT_POINTS: ReceptionHeatPoint[] = [];
+// The globe is always dark, so its hover panels stay dark in the light theme too.
+const GLOBE_TOOLTIP_CLASSNAMES = {
+  content: 'border border-white/10 bg-[rgba(15,23,42,0.95)] text-[rgba(226,232,240,0.94)] shadow-[0_14px_36px_rgba(2,6,23,0.5)] backdrop-blur-xl',
+};
+const GLOBE_TOOLTIP_MUTED_CLASS = 'text-[rgba(148,163,184,0.95)]';
+const GLOBE_TOOLTIP_FAINT_CLASS = 'text-[rgba(148,163,184,0.7)]';
+// The pale land overlay steps back while the reception glow is shown, so the
+// glow and the night texture both stay readable.
+const getLandCapColor = () => 'rgba(226, 232, 240, 0.2)';
+const getDimmedLandCapColor = () => 'rgba(226, 232, 240, 0.13)';
+const getLandStrokeColor = () => 'rgba(241, 245, 249, 0.2)';
+const getDimmedLandStrokeColor = () => 'rgba(241, 245, 249, 0.16)';
+const RECEPTION_TOOLTIP_STATION_LIMIT = 5;
+const RECEPTION_PANEL_CLOSE_DELAY_MS = 200;
+const RECEPTION_CREDIT = 'Data from PSK Reporter by Philip Gladstone. Live spots from mqtt.pskreporter.info by Tom Fanning M0LTE.';
+
+type GlobePointDatum = GlobeStationPoint | ReceptionGlobePoint;
+
+const GLOBE_ALL_BANDS_KEY = '__all__';
+const GLOBE_SELECT_LISTBOX_PROPS = {
+  itemClasses: {
+    base: 'text-[rgba(248,250,252,0.94)] [&_svg]:text-[rgba(248,250,252,0.94)] data-[hover=true]:bg-white/10 data-[selectable=true]:focus:bg-white/10',
+    title: 'text-[rgba(248,250,252,0.94)] group-data-[selected=true]:text-white',
+  },
+};
+const GLOBE_SELECT_CLASSNAMES = {
+  base: 'min-w-0',
+  trigger: 'h-10 min-h-10 border-0 bg-transparent pl-0 pr-0 shadow-none data-[hover=true]:bg-transparent data-[open=true]:bg-transparent',
+  innerWrapper: 'shadow-none',
+  mainWrapper: 'shadow-none',
+  value: 'pl-0 pr-0 text-sm text-[rgba(248,250,252,0.94)]',
+  popoverContent: 'border border-white/10 bg-[rgba(15,23,42,0.92)] text-[rgba(248,250,252,0.94)] backdrop-blur-xl',
+  selectorIcon: 'text-[rgba(226,232,240,0.72)]',
+  listboxWrapper: 'max-h-60',
+};
+// HeroUI sizes the popover to the trigger; band labels such as
+// "1.25m (222MHz)" need more room than the compact trigger.
+const GLOBE_BAND_SELECT_CLASSNAMES = {
+  ...GLOBE_SELECT_CLASSNAMES,
+  popoverContent: `${GLOBE_SELECT_CLASSNAMES.popoverContent} min-w-[168px]`,
+};
+// `className` styles the popover element that receives the inline width;
+// passing `classNames` here would replace Select's own content slot styles.
+const GLOBE_BAND_SELECT_POPOVER_PROPS = { className: 'min-w-[168px]' };
+const GLOBE_SELECT_ITEM_CLASS = 'text-[rgba(248,250,252,0.94)] [&_svg]:text-[rgba(248,250,252,0.94)]';
+
+/** Round icon toggle for the globe controls; the label appears on hover. */
+const GlobeIconToggle: React.FC<{
+  active: boolean;
+  icon: IconDefinition;
+  label: string;
+  onPress: () => void;
+}> = ({ active, icon, label, onPress }) => (
+  <Tooltip content={label} placement="top" delay={150} closeDelay={0} classNames={GLOBE_TOOLTIP_CLASSNAMES}>
+    <button
+      type="button"
+      onClick={onPress}
+      aria-pressed={active}
+      aria-label={label}
+      className={`inline-flex h-10 w-10 items-center justify-center rounded-full border shadow-[0_10px_30px_rgba(2,6,23,0.28)] backdrop-blur-md transition-all duration-300 ${active
+        ? 'border-[rgba(125,211,252,0.3)] bg-[rgba(30,58,95,0.6)] text-[rgba(224,242,254,0.95)] hover:border-[rgba(125,211,252,0.45)]'
+        : 'border-white/10 bg-[rgba(15,23,42,0.52)] text-[rgba(226,232,240,0.5)] hover:border-white/20 hover:bg-[rgba(15,23,42,0.68)] hover:text-[rgba(226,232,240,0.8)]'}`}
+    >
+      <FontAwesomeIcon icon={icon} className="h-3.5 w-3.5" />
+    </button>
+  </Tooltip>
+);
+
+function isReceptionPoint(point: object): point is ReceptionGlobePoint {
+  return (point as ReceptionGlobePoint).kind === 'reception';
+}
 
 type GlobeControls = {
   autoRotate: boolean;
@@ -114,12 +249,18 @@ interface RecentQSOGlobeCardProps {
   qsos: QSORecord[];
   loading: boolean;
   bandFilter?: string;
+  /** Sets the logbook band filter shared with the table; omitted hides the globe control. */
+  onBandFilterChange?: (band: string | undefined) => void;
   pageSize: number;
   pageSizeOptions: number[];
   onPageSizeChange: (pageSize: number) => void;
   desktopLeftOverlay?: React.ReactNode;
   desktopRightOverlay?: React.ReactNode;
   operators?: OperatorStatus[];
+  /** PSK Reporter reports of other stations hearing this logbook's operator. */
+  reception?: ReceptionView | null;
+  /** Whether the viewer may turn reception feedback on (administrators only). */
+  canEnableReception?: boolean;
 }
 
 function toRadians(value: number): number {
@@ -167,18 +308,22 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
   qsos,
   loading,
   bandFilter,
+  onBandFilterChange,
   pageSize,
   pageSizeOptions,
   onPageSizeChange,
   desktopLeftOverlay,
   desktopRightOverlay,
   operators: operatorsProp,
+  reception = null,
+  canEnableReception = false,
 }) => {
   const { t } = useTranslation('logbook');
   const [stationInfo, setStationInfo] = useState<StationInfo | null>(null);
   const [globeWidth, setGlobeWidth] = useState(0);
   const [isExpanded, setIsExpanded] = useState(false);
   const [showWorkedGrids, setShowWorkedGrids] = useState(false);
+  const [showQsoHistory, setShowQsoHistory] = useState(true);
   const [workedGridItems, setWorkedGridItems] = useState<LogBookWorkedGridItem[]>([]);
   const [workedGridLoading, setWorkedGridLoading] = useState(false);
   const [workedGridError, setWorkedGridError] = useState<string | null>(null);
@@ -268,6 +413,94 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
     [operators, stationInfo],
   );
   const workedGridModel = useMemo(() => buildWorkedGridGlobeModel(workedGridItems), [workedGridItems]);
+  const [showReception, setShowReception] = useState(true);
+  const [receptionNow, setReceptionNow] = useState(() => Date.now());
+  const hasReceptionSpots = (reception?.spots.length ?? 0) > 0;
+  useEffect(() => {
+    if (!hasReceptionSpots || !active) return;
+    setReceptionNow(Date.now());
+    const timer = setInterval(() => setReceptionNow(Date.now()), RECEPTION_TICK_MS);
+    return () => clearInterval(timer);
+  }, [hasReceptionSpots, active, reception]);
+  const receptionTargetCalls = useMemo(() => new Set(
+    operators
+      .filter(op => op.currentSlot !== 'TX6')
+      .flatMap(op => [op.context?.targetCall, ...(op.context?.targetCalls ?? [])])
+      .flatMap(call => (call ? [call.trim().toUpperCase()] : [])),
+  ), [operators]);
+  const receptionHome = globeModel.homePoint;
+  // The globe follows the logbook band filter, reception included.
+  const bandReception = useMemo<ReceptionView | null>(() => (
+    reception && bandFilter
+      ? {
+        ...reception,
+        spots: reception.spots.filter(spot => (
+          spot.frequency !== undefined && getBandFromFrequency(spot.frequency) === bandFilter
+        )),
+      }
+      : reception
+  ), [reception, bandFilter]);
+  const [receptionEnableOpen, setReceptionEnableOpen] = useState(false);
+  const [receptionEnabling, setReceptionEnabling] = useState(false);
+  const [receptionEnableError, setReceptionEnableError] = useState<string | null>(null);
+  // The server pushes a new snapshot to every logbook page once the setting
+  // changes, so enabling here takes effect without a reload.
+  const handleEnableReception = async () => {
+    setReceptionEnabling(true);
+    setReceptionEnableError(null);
+    try {
+      await api.updatePSKReporterReceptionConfig({ enabled: true });
+      logger.info('Reception feedback enabled from the logbook globe');
+      setReceptionEnableOpen(false);
+    } catch (error) {
+      logger.warn('Enabling reception feedback from the logbook globe failed', error);
+      setReceptionEnableError(error instanceof ApiError ? error.userMessage : t('globe.receptionEnableFailed'));
+    } finally {
+      setReceptionEnabling(false);
+    }
+  };
+  const [receptionPanelOpen, setReceptionPanelOpen] = useState(false);
+  const receptionPanelCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearReceptionPanelCloseTimer = () => {
+    if (receptionPanelCloseTimerRef.current) {
+      clearTimeout(receptionPanelCloseTimerRef.current);
+      receptionPanelCloseTimerRef.current = null;
+    }
+  };
+  const openReceptionPanel = () => {
+    clearReceptionPanelCloseTimer();
+    setReceptionPanelOpen(true);
+  };
+  const scheduleReceptionPanelClose = () => {
+    clearReceptionPanelCloseTimer();
+    receptionPanelCloseTimerRef.current = setTimeout(() => {
+      receptionPanelCloseTimerRef.current = null;
+      setReceptionPanelOpen(false);
+    }, RECEPTION_PANEL_CLOSE_DELAY_MS);
+  };
+  useEffect(() => () => {
+    if (receptionPanelCloseTimerRef.current) clearTimeout(receptionPanelCloseTimerRef.current);
+  }, []);
+  const [receptionThemeId, setReceptionThemeId] = useState<ReceptionThemeId>(loadReceptionThemeId);
+  const receptionTheme = getReceptionTheme(receptionThemeId);
+  const handleReceptionThemeChange = (id: ReceptionThemeId) => {
+    setReceptionThemeId(id);
+    saveReceptionThemeId(id);
+    logger.info('Page globe reception theme changed', { theme: id });
+  };
+  const receptionFogColorFn = useMemo(() => () => receptionTheme.fogColor, [receptionTheme]);
+  const receptionModel = useMemo(
+    () => buildReceptionGlobeModel(bandReception, receptionHome, receptionNow, receptionTargetCalls, receptionTheme),
+    [bandReception, receptionHome, receptionNow, receptionTargetCalls, receptionTheme],
+  );
+  const receptionPings = useReceptionPings(
+    receptionModel.stations,
+    // A band switch is a new view: its stations appear settled, without rings.
+    `${reception?.callsigns.join(',') ?? ''}|${bandFilter ?? ''}`,
+    reception !== null,
+    showReception && active,
+    receptionTheme,
+  );
   const defaultGlobeHeight = useMemo(() => {
     const effectiveWidth = globeWidth || GLOBE_WIDTH_FALLBACK;
     return Math.max(GLOBE_HEIGHT_MIN, Math.min(GLOBE_HEIGHT_MAX, Math.round(effectiveWidth * 0.33)));
@@ -537,17 +770,138 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
     : !globeModel.homePoint
       ? t('globe.missingHomeCurrentPage')
       : t('globe.emptyCurrentPage');
-  const visiblePoints = useMemo<GlobeStationPoint[]>(() => loading || !hasRenderableData
-    ? []
-    : globeModel.homePoint
-      ? [globeModel.homePoint, ...globeModel.remotePoints]
-      : globeModel.remotePoints, [loading, hasRenderableData, globeModel.homePoint, globeModel.remotePoints]);
-  const visibleArcs = useMemo(() => loading || !hasRenderableData
+  const visibleReceptionPoints = showReception ? receptionModel.points : null;
+  const visiblePoints = useMemo<GlobePointDatum[]>(() => {
+    const historyPoints = showQsoHistory ? globeModel.remotePoints : [];
+    const stationPoints: GlobePointDatum[] = loading || !hasRenderableData
+      ? []
+      : globeModel.homePoint
+        ? [globeModel.homePoint, ...historyPoints]
+        : historyPoints;
+    return visibleReceptionPoints && visibleReceptionPoints.length > 0
+      ? [...visibleReceptionPoints, ...stationPoints]
+      : stationPoints;
+  }, [loading, hasRenderableData, globeModel.homePoint, globeModel.remotePoints, showQsoHistory, visibleReceptionPoints]);
+  const visibleArcs = useMemo(() => loading || !hasRenderableData || !showQsoHistory
     ? inProgressModel.arcs
-    : [...globeModel.arcs, ...inProgressModel.arcs], [loading, hasRenderableData, globeModel.arcs, inProgressModel.arcs]);
-  const visibleRings = useMemo(() => loading || !hasRenderableData
-    ? inProgressModel.rings
-    : [...globeModel.rings, ...inProgressModel.rings], [loading, hasRenderableData, globeModel.rings, inProgressModel.rings]);
+    : [...globeModel.arcs, ...inProgressModel.arcs], [loading, hasRenderableData, showQsoHistory, globeModel.arcs, inProgressModel.arcs]);
+  // globe.gl binds one mesh per datum object. Reusing the same datum keeps the
+  // mesh (and its patched material) across updates; only the KDE is recomputed.
+  const receptionFogDatum = useMemo(() => ({ points: [] as ReceptionHeatPoint[] }), []);
+  // The glow only changes when the quantised points do, and at most every few
+  // seconds; the density pass is expensive without WebGPU.
+  const heatSignature = getReceptionHeatSignature(receptionModel.heatPoints);
+  const latestHeatPointsRef = useRef(receptionModel.heatPoints);
+  latestHeatPointsRef.current = receptionModel.heatPoints;
+  const [fogHeatPoints, setFogHeatPoints] = useState<ReceptionHeatPoint[]>(EMPTY_HEAT_POINTS);
+  const lastFogUpdateAtRef = useRef(0);
+  useEffect(() => {
+    const apply = () => {
+      lastFogUpdateAtRef.current = Date.now();
+      setFogHeatPoints(latestHeatPointsRef.current);
+    };
+    const wait = RECEPTION_FOG_MIN_INTERVAL_MS - (Date.now() - lastFogUpdateAtRef.current);
+    // Appearing or clearing is immediate; only refinements are spaced out.
+    if (wait <= 0 || heatSignature === '' || fogHeatPoints.length === 0) {
+      apply();
+      return;
+    }
+    const timer = setTimeout(apply, wait);
+    return () => clearTimeout(timer);
+    // Keyed by the signature on purpose: the latest points are read from a ref.
+  }, [heatSignature]);
+  const receptionHeatmaps = useMemo<object[]>(() => {
+    if (!showReception || fogHeatPoints.length === 0) {
+      return EMPTY_HEATMAPS;
+    }
+    receptionFogDatum.points = fogHeatPoints;
+    return [receptionFogDatum];
+  }, [showReception, fogHeatPoints, receptionFogDatum]);
+  const receptionFogVisible = receptionHeatmaps.length > 0;
+  useEffect(() => {
+    if (receptionHeatmaps.length === 0) return;
+    let frame = 0;
+    let remaining = RECEPTION_FOG_PATCH_FRAMES;
+    // The layer applies data on later frames and may (re)create the mesh at any
+    // of them, so every heatmap mesh is patched for a fixed number of frames
+    // instead of stopping at the first one found.
+    const patch = () => {
+      applyHeatmapGlowMaterial(globeRef.current);
+      if (--remaining > 0) {
+        frame = window.requestAnimationFrame(patch);
+      }
+    };
+    patch();
+    return () => window.cancelAnimationFrame(frame);
+  }, [receptionHeatmaps]);
+  const visibleReceptionRings = showReception ? receptionModel.targetRings : null;
+  const visibleRings = useMemo(() => {
+    const historyRings = showQsoHistory
+      ? globeModel.rings
+      : globeModel.homeRing ? [globeModel.homeRing] : [];
+    const rings = loading || !hasRenderableData
+      ? inProgressModel.rings
+      : [...historyRings, ...inProgressModel.rings];
+    // Reception rings come first so the in-progress rings draw above them.
+    return visibleReceptionRings && (visibleReceptionRings.length > 0 || receptionPings.length > 0)
+      ? [...visibleReceptionRings, ...receptionPings, ...rings]
+      : rings;
+  }, [loading, hasRenderableData, showQsoHistory, globeModel.rings, globeModel.homeRing, inProgressModel.rings, visibleReceptionRings, receptionPings]);
+  const receptionStationCount = receptionModel.stations.length;
+  const showReceptionOffEntry = reception?.state === 'disabled' && reception.callsigns.length > 0;
+  // Shown whenever the feature is on, so the feed state is always visible.
+  const showReceptionChip = !!reception && reception.state !== 'disabled' && reception.callsigns.length > 0;
+  const receptionStatus: 'heard' | 'waiting' | 'connecting' | 'reconnecting' = receptionStationCount > 0
+    ? 'heard'
+    : reception?.state === 'live'
+      ? 'waiting'
+      : reception?.state === 'reconnecting'
+        ? 'reconnecting'
+        : 'connecting';
+  const receptionTooltip = useMemo(() => {
+    const callsign = reception?.callsigns.join(', ') ?? '';
+    if (receptionStationCount === 0) {
+      const statusKey = receptionStatus === 'waiting'
+        ? 'globe.receptionStatusWaiting'
+        : receptionStatus === 'reconnecting'
+          ? 'globe.receptionStatusReconnecting'
+          : 'globe.receptionStatusConnecting';
+      return (
+        <div className="max-w-[280px] space-y-2 px-1 py-1.5 text-xs">
+          <p className="font-medium">{t(statusKey, { callsign })}</p>
+          <p className={GLOBE_TOOLTIP_MUTED_CLASS}>{t('globe.receptionDelayNote')}</p>
+          <p className={`text-[10px] leading-snug ${GLOBE_TOOLTIP_FAINT_CLASS}`}>{RECEPTION_CREDIT}</p>
+        </div>
+      );
+    }
+    const farthestStations = [...receptionModel.stations]
+      .filter(station => station.distanceKm !== undefined)
+      .sort((left, right) => (right.distanceKm ?? 0) - (left.distanceKm ?? 0))
+      .slice(0, RECEPTION_TOOLTIP_STATION_LIMIT);
+    const latestMinutes = receptionModel.latestReportAt
+      ? Math.max(0, Math.round((receptionNow - receptionModel.latestReportAt) / 60_000))
+      : null;
+    return (
+      <div className="max-w-[280px] space-y-2 px-1 py-1.5 text-xs">
+        <p className="font-medium">{t('globe.receptionTooltipTitle', { callsign })}</p>
+        {farthestStations.length > 0 && (
+          <ul className="space-y-0.5 font-mono text-[11px]">
+            {farthestStations.map(station => (
+              <li key={station.callsign} className="flex justify-between gap-4">
+                <span>{station.callsign}</span>
+                <span className={GLOBE_TOOLTIP_MUTED_CLASS}>{Math.round(station.distanceKm ?? 0).toLocaleString()} km</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {latestMinutes !== null && (
+          <p className={GLOBE_TOOLTIP_MUTED_CLASS}>{t('globe.receptionLatest', { count: latestMinutes })}</p>
+        )}
+        <p className={GLOBE_TOOLTIP_MUTED_CLASS}>{t('globe.receptionDelayNote')}</p>
+        <p className={`text-[10px] leading-snug ${GLOBE_TOOLTIP_FAINT_CLASS}`}>{RECEPTION_CREDIT}</p>
+      </div>
+    );
+  }, [receptionModel, receptionStationCount, receptionStatus, receptionNow, reception?.callsigns, t]);
   const useFourCharacterWorkedGrid = globeAltitude <= WORKED_GRID_SWITCH_ALTITUDE;
   const activeWorkedGridPolygons = showWorkedGrids
     ? (useFourCharacterWorkedGrid ? workedGridModel.precision4.polygons : workedGridModel.precision2.polygons)
@@ -717,6 +1071,10 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
     syncViewportState(globeRef.current.pointOfView(), true);
   }, [showWorkedGrids]);
 
+  // Trackpad drag pans and pinch zooms like a native map; they bypass
+  // OrbitControls, so the view state is synced here instead of in onZoom.
+  useGlobeTrackpadGestures(containerRef, globeRef, (view) => syncViewportState(view));
+
   const handleExpandedToggle = () => {
     setIsExpanded((currentValue) => {
       const nextValue = !currentValue;
@@ -776,9 +1134,9 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
         polygonsData={landPolygons as object[]}
         polygonGeoJsonGeometry={getLandGeometry}
         polygonAltitude={0.0025}
-        polygonCapColor={() => 'rgba(226, 232, 240, 0.2)'}
+        polygonCapColor={receptionFogVisible ? getDimmedLandCapColor : getLandCapColor}
         polygonSideColor={() => 'rgba(51, 65, 85, 0.08)'}
-        polygonStrokeColor={() => 'rgba(241, 245, 249, 0.2)'}
+        polygonStrokeColor={receptionFogVisible ? getDimmedLandStrokeColor : getLandStrokeColor}
         pathsData={pathsData as object[]}
         pathPoints="points"
         pathPointLat={(point) => (point as [number, number])[0]}
@@ -788,6 +1146,16 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
         pathPointAlt={0.007}
         pathResolution={1}
         pathTransitionDuration={0}
+        heatmapsData={receptionHeatmaps}
+        heatmapPoints="points"
+        heatmapPointLat="lat"
+        heatmapPointLng="lng"
+        heatmapPointWeight="weight"
+        heatmapBandwidth={RECEPTION_FOG_BANDWIDTH}
+        heatmapColorFn={receptionFogColorFn}
+        heatmapColorSaturation={1.6}
+        heatmapBaseAltitude={RECEPTION_FOG_ALTITUDE}
+        heatmapsTransitionDuration={RECEPTION_FOG_TRANSITION_MS}
         tilesData={tilesData as object[]}
         tileLat="lat"
         tileLng="lng"
@@ -804,11 +1172,16 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
         pointsData={visiblePoints}
         pointLat="lat"
         pointLng="lng"
-        pointAltitude={(point) => ((point as GlobeStationPoint).isHome ? 0.06 : 0.012)}
+        pointAltitude={(point) => (isReceptionPoint(point)
+          ? RECEPTION_POINT_ALTITUDE
+          : (point as GlobeStationPoint).isHome ? 0.06 : 0.012)}
         pointRadius="size"
         pointResolution={10}
         pointColor="color"
         pointLabel={(point) => {
+          if (isReceptionPoint(point)) {
+            return buildReceptionPointCardHtml(point.station, receptionTheme, Date.now(), t);
+          }
           const stationPoint = point as GlobeStationPoint;
           return stationPoint.isHome
             ? `${t('globe.homeLabel')}${stationPoint.grid ? ` · ${stationPoint.grid}` : ''}`
@@ -921,22 +1294,8 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
             variant="flat"
             size="sm"
             className="w-[116px] min-w-[116px]"
-            listboxProps={{
-              itemClasses: {
-                base: 'text-[rgba(248,250,252,0.94)] [&_svg]:text-[rgba(248,250,252,0.94)] data-[hover=true]:bg-white/10 data-[selectable=true]:focus:bg-white/10',
-                title: 'text-[rgba(248,250,252,0.94)] group-data-[selected=true]:text-white',
-              },
-            }}
-            classNames={{
-              base: 'min-w-0',
-              trigger: 'h-10 min-h-10 border-0 bg-transparent pl-0 pr-0 shadow-none data-[hover=true]:bg-transparent data-[open=true]:bg-transparent',
-              innerWrapper: 'shadow-none',
-              mainWrapper: 'shadow-none',
-              value: 'pl-0 pr-0 text-sm text-[rgba(248,250,252,0.94)]',
-              popoverContent: 'border border-white/10 bg-[rgba(15,23,42,0.92)] text-[rgba(248,250,252,0.94)] backdrop-blur-xl',
-              selectorIcon: 'text-[rgba(226,232,240,0.72)]',
-              listboxWrapper: 'max-h-60',
-            }}
+            listboxProps={GLOBE_SELECT_LISTBOX_PROPS}
+            classNames={GLOBE_SELECT_CLASSNAMES}
             onSelectionChange={handlePageSizeChange}
             renderValue={() => (
               <span className="text-sm text-[rgba(248,250,252,0.94)]">
@@ -948,7 +1307,7 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
               <SelectItem
                 key={String(option)}
                 textValue={t('globe.displayCountOption', { count: option })}
-                className="text-[rgba(248,250,252,0.94)] [&_svg]:text-[rgba(248,250,252,0.94)]"
+                className={GLOBE_SELECT_ITEM_CLASS}
               >
                 {t('globe.displayCountOption', { count: option })}
               </SelectItem>
@@ -956,14 +1315,223 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
           </Select>
         </div>
 
-        <button
-          type="button"
-          onClick={handleWorkedGridToggle}
-          aria-pressed={showWorkedGrids}
-          className="inline-flex h-10 items-center rounded-full border border-white/10 bg-[rgba(15,23,42,0.52)] px-4 text-sm text-[rgba(226,232,240,0.84)] shadow-[0_10px_30px_rgba(2,6,23,0.28)] backdrop-blur-md transition-all duration-300 hover:border-white/20 hover:bg-[rgba(15,23,42,0.68)]"
-        >
-          {showWorkedGrids ? t('globe.hideWorkedGrids') : t('globe.showWorkedGrids')}
-        </button>
+        {onBandFilterChange && (
+          <div className={`flex h-10 items-center rounded-full border bg-[rgba(15,23,42,0.52)] pl-4 pr-2 text-sm text-[rgba(226,232,240,0.84)] shadow-[0_10px_30px_rgba(2,6,23,0.28)] backdrop-blur-md transition-all duration-300 hover:bg-[rgba(15,23,42,0.68)] ${bandFilter
+            ? 'border-[rgba(125,211,252,0.32)] hover:border-[rgba(125,211,252,0.45)]'
+            : 'border-white/10 hover:border-white/20'}`}
+          >
+            <Select
+              aria-label={t('globe.bandFilter')}
+              selectedKeys={[bandFilter || GLOBE_ALL_BANDS_KEY]}
+              disallowEmptySelection
+              selectionMode="single"
+              variant="flat"
+              size="sm"
+              className="w-[92px] min-w-[92px]"
+              listboxProps={GLOBE_SELECT_LISTBOX_PROPS}
+              classNames={GLOBE_BAND_SELECT_CLASSNAMES}
+              popoverProps={GLOBE_BAND_SELECT_POPOVER_PROPS}
+              onSelectionChange={(keys) => {
+                const selected = keys === 'all' ? undefined : String(Array.from(keys)[0] ?? '');
+                if (!selected) return;
+                const next = selected === GLOBE_ALL_BANDS_KEY ? undefined : selected;
+                if (next === bandFilter) return;
+                logger.info('Page globe band filter changed', { band: next ?? null });
+                onBandFilterChange(next);
+              }}
+              renderValue={() => (
+                <span className="text-sm text-[rgba(248,250,252,0.94)]">
+                  {bandFilter || t('globe.allBands')}
+                </span>
+              )}
+            >
+              {[
+                <SelectItem key={GLOBE_ALL_BANDS_KEY} textValue={t('globe.allBands')} className={GLOBE_SELECT_ITEM_CLASS}>
+                  {t('globe.allBands')}
+                </SelectItem>,
+                ...LOGBOOK_BAND_OPTIONS.map(option => (
+                  <SelectItem key={option.key} textValue={option.label} className={GLOBE_SELECT_ITEM_CLASS}>
+                    {option.label}
+                  </SelectItem>
+                )),
+              ]}
+            </Select>
+          </div>
+        )}
+
+        <GlobeIconToggle
+          active={showQsoHistory}
+          icon={faClockRotateLeft}
+          label={showQsoHistory ? t('globe.hideQsoHistory') : t('globe.showQsoHistory')}
+          onPress={() => setShowQsoHistory(value => !value)}
+        />
+
+        <GlobeIconToggle
+          active={showWorkedGrids}
+          icon={faTableCells}
+          label={showWorkedGrids ? t('globe.hideWorkedGrids') : t('globe.showWorkedGrids')}
+          onPress={handleWorkedGridToggle}
+        />
+
+        {showReceptionChip && (
+          <div
+            className="relative"
+            onMouseEnter={openReceptionPanel}
+            onMouseLeave={scheduleReceptionPanelClose}
+            onFocus={openReceptionPanel}
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                scheduleReceptionPanelClose();
+              }
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') setReceptionPanelOpen(false);
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setShowReception(value => !value)}
+              aria-pressed={showReception}
+              aria-label={showReception ? t('globe.receptionHide') : t('globe.receptionShow')}
+              className={`inline-flex h-10 items-center gap-2.5 rounded-full border bg-[rgba(15,23,42,0.52)] px-4 text-sm shadow-[0_10px_30px_rgba(2,6,23,0.28)] backdrop-blur-md transition-all duration-300 hover:bg-[rgba(15,23,42,0.68)] ${showReception
+                ? 'text-[rgba(226,232,240,0.84)]'
+                : 'border-white/10 text-[rgba(226,232,240,0.5)] hover:border-white/20'}`}
+              style={showReception ? { borderColor: `rgba(${receptionTheme.accentRgb}, 0.32)` } : undefined}
+            >
+              <span
+                aria-hidden="true"
+                className={`h-2 w-2 shrink-0 rounded-full ${!showReception
+                  ? 'bg-[rgba(148,163,184,0.6)]'
+                  : receptionStatus === 'reconnecting'
+                    ? 'animate-pulse bg-[rgb(251,191,36)]'
+                    : receptionStatus === 'connecting'
+                      ? 'animate-pulse'
+                      : ''}`}
+                style={!showReception || receptionStatus === 'reconnecting'
+                  ? undefined
+                  : receptionStatus === 'waiting'
+                    ? { border: `1.5px solid rgb(${receptionTheme.accentRgb})` }
+                    : {
+                      background: receptionTheme.swatch,
+                      opacity: receptionStatus === 'connecting' ? 0.6 : 1,
+                      boxShadow: receptionStatus === 'heard' ? `0 0 8px rgba(${receptionTheme.accentRgb}, 0.8)` : undefined,
+                    }}
+              />
+              {receptionStationCount > 0 ? (
+                <span className="whitespace-nowrap">
+                  {t('globe.receptionStations', { count: receptionStationCount })}
+                  {receptionModel.farthest?.distanceKm !== undefined && (
+                    <span className="hidden sm:inline">
+                      <span className="mx-1.5 text-[rgba(226,232,240,0.36)]">·</span>
+                      {t('globe.receptionFarthest', {
+                        distance: Math.round(receptionModel.farthest.distanceKm).toLocaleString(),
+                      })}
+                    </span>
+                  )}
+                </span>
+              ) : (
+                <span className="whitespace-nowrap">
+                  {receptionStatus === 'waiting'
+                    ? t('globe.receptionWaiting')
+                    : receptionStatus === 'reconnecting'
+                      ? t('globe.receptionReconnecting')
+                      : t('globe.receptionConnecting')}
+                </span>
+              )}
+            </button>
+
+            {receptionPanelOpen && (
+              // The bottom padding bridges the gap to the chip so the pointer
+              // can move into the panel without closing it.
+              <div className="absolute bottom-full left-0 z-40 pb-2">
+                <div className={`w-[300px] rounded-xl p-2.5 ${GLOBE_TOOLTIP_CLASSNAMES.content}`}>
+                  {receptionTooltip}
+                  <div className="mt-2 border-t border-white/10 px-1 pt-2.5 text-xs">
+                    <p className={GLOBE_TOOLTIP_MUTED_CLASS}>
+                      {t('globe.receptionTheme')}
+                      <span className="mx-1.5 text-[rgba(148,163,184,0.5)]">·</span>
+                      <span className="text-[rgba(226,232,240,0.94)]">{t(receptionTheme.labelKey)}</span>
+                    </p>
+                    <div role="radiogroup" aria-label={t('globe.receptionTheme')} className="mt-2.5 flex items-center gap-3 pb-1">
+                      {RECEPTION_THEMES.map(theme => {
+                        const selected = theme.id === receptionTheme.id;
+                        return (
+                          <button
+                            key={theme.id}
+                            type="button"
+                            role="radio"
+                            aria-checked={selected}
+                            aria-label={t(theme.labelKey)}
+                            title={t(theme.labelKey)}
+                            onClick={() => handleReceptionThemeChange(theme.id)}
+                            className={`h-6 w-6 rounded-full transition-all duration-200 ${selected
+                              ? 'scale-110 ring-2 ring-[rgba(248,250,252,0.85)] ring-offset-2 ring-offset-[rgb(15,23,42)]'
+                              : 'opacity-60 hover:scale-105 hover:opacity-100'}`}
+                            style={{ background: theme.swatch }}
+                          />
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {showReceptionOffEntry && (
+          <Popover
+            placement="top-start"
+            isOpen={receptionEnableOpen}
+            onOpenChange={(open) => {
+              setReceptionEnableOpen(open);
+              if (!open) setReceptionEnableError(null);
+            }}
+            classNames={{ content: GLOBE_TOOLTIP_CLASSNAMES.content }}
+          >
+            <PopoverTrigger>
+              <button
+                type="button"
+                aria-label={t('globe.receptionOffTitle')}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-[rgba(15,23,42,0.52)] text-[rgba(226,232,240,0.5)] shadow-[0_10px_30px_rgba(2,6,23,0.28)] backdrop-blur-md transition-all duration-300 hover:border-[rgba(45,212,191,0.36)] hover:bg-[rgba(15,23,42,0.68)] hover:text-[rgb(94,234,212)]"
+              >
+                <FontAwesomeIcon icon={faTowerBroadcast} className="h-3.5 w-3.5" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent>
+              <div className="w-[300px] space-y-3 px-1.5 py-2 text-xs">
+                <div className="flex items-center gap-2">
+                  <FontAwesomeIcon icon={faTowerBroadcast} className="h-3.5 w-3.5 text-[rgb(94,234,212)]" />
+                  <p className="text-sm font-medium">{t('globe.receptionOffTitle')}</p>
+                </div>
+                <p className={`leading-relaxed ${GLOBE_TOOLTIP_MUTED_CLASS}`}>
+                  {t('globe.receptionOffDesc', { callsign: reception?.callsigns.join(', ') ?? '' })}
+                </p>
+                {canEnableReception ? (
+                  <div className="space-y-2">
+                    <Button
+                      size="sm"
+                      radius="full"
+                      className="w-full bg-[rgba(45,212,191,0.9)] font-medium text-[rgb(4,47,46)]"
+                      isLoading={receptionEnabling}
+                      onPress={() => { void handleEnableReception(); }}
+                    >
+                      {t('globe.receptionEnable')}
+                    </Button>
+                    {receptionEnableError && (
+                      <p className="text-[rgb(252,165,165)]">{receptionEnableError}</p>
+                    )}
+                    <p className={GLOBE_TOOLTIP_FAINT_CLASS}>{t('globe.receptionEnableSettingsHint')}</p>
+                  </div>
+                ) : (
+                  <p className="text-[rgba(253,230,138,0.9)]">{t('globe.receptionEnableAdminOnly')}</p>
+                )}
+                <p className={`text-[10px] leading-snug ${GLOBE_TOOLTIP_FAINT_CLASS}`}>{RECEPTION_CREDIT}</p>
+              </div>
+            </PopoverContent>
+          </Popover>
+        )}
+
       </div>
 
       {workedGridStatusText && (

@@ -46,7 +46,7 @@ import type {
   LogbookRestorePreflight,
   DigitalRadioEngineEvents,
 } from '@tx5dr/contracts';
-import { UserRole } from '@tx5dr/contracts';
+import { PSKReporterReceptionUpdateSchema, UserRole } from '@tx5dr/contracts';
 import { api, WSClient, ApiError, getDisplayMode } from '@tx5dr/core';
 import { getLogbookWebSocketUrl } from '../../utils/config';
 import { hasDesktopCapability } from '../../utils/desktopBridge';
@@ -59,6 +59,8 @@ import { PluginIframeHost } from '../plugins/PluginIframeHost';
 import { useTranslation } from 'react-i18next';
 import { createLogger } from '../../utils/logger';
 import RecentQSOGlobeCard from './RecentQSOGlobeCard';
+import { LOGBOOK_BAND_OPTIONS } from './logbookBands';
+import { applyReceptionUpdate, type ReceptionView } from '../../utils/receptionGlobe';
 import LogbookRecoveryModal from './LogbookRecoveryModal';
 import { getAuthHeaders, getStoredJwt } from '../../utils/authHeaders';
 import { QrzCallsignLink } from '../common/QrzCallsignLink';
@@ -191,6 +193,8 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
 
   // 实时操作员状态（用于地球虚线渲染）
   const [operators, setOperators] = useState<OperatorStatus[]>([]);
+  // PSK Reporter reception feedback for this page's operator callsign
+  const [reception, setReception] = useState<ReceptionView | null>(null);
 
   // 获取操作员连接的日志本
   // 日志本ID就是呼号，如果没有指定则使用操作员ID作为后备
@@ -357,12 +361,23 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
     client.onWSEvent('logbookWriteFailed', handleLogbookWriteFailed);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     client.onWSEvent('operatorStatusUpdate' as any, handleOperatorStatusUpdate);
+    const handleReceptionUpdate = (payload: unknown) => {
+      const parsed = PSKReporterReceptionUpdateSchema.safeParse(payload);
+      if (!parsed.success) {
+        logger.warn('Ignoring malformed reception feedback update');
+        return;
+      }
+      setReception(previous => applyReceptionUpdate(previous, parsed.data, Date.now()));
+    };
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     client.onWSEvent('operatorsList' as any, handleOperatorsList);
+    client.onWSEvent('pskreporterReceptionUpdate', handleReceptionUpdate);
     client.connect().catch(() => {});
 
     return () => {
       client.disconnect();
+      setReception(null);
     };
   }, [operatorId, effectiveLogBookId, t]);
 
@@ -1739,24 +1754,12 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
               handleFilterChange('band', selected[0]);
             }}
           >
-            <DropdownItem key="">{t('filter.allBands')}</DropdownItem>
-            <DropdownItem key="160m">160m (1.8MHz)</DropdownItem>
-            <DropdownItem key="80m">80m (3.5MHz)</DropdownItem>
-            <DropdownItem key="60m">60m (5MHz)</DropdownItem>
-            <DropdownItem key="40m">40m (7MHz)</DropdownItem>
-            <DropdownItem key="30m">30m (10MHz)</DropdownItem>
-            <DropdownItem key="20m">20m (14MHz)</DropdownItem>
-            <DropdownItem key="17m">17m (18MHz)</DropdownItem>
-            <DropdownItem key="15m">15m (21MHz)</DropdownItem>
-            <DropdownItem key="12m">12m (24MHz)</DropdownItem>
-            <DropdownItem key="10m">10m (28MHz)</DropdownItem>
-            <DropdownItem key="6m">6m (50MHz)</DropdownItem>
-            <DropdownItem key="4m">4m (70MHz)</DropdownItem>
-            <DropdownItem key="2m">2m (144MHz)</DropdownItem>
-            <DropdownItem key="1.25m">1.25m (222MHz)</DropdownItem>
-            <DropdownItem key="70cm">70cm (430MHz)</DropdownItem>
-            <DropdownItem key="33cm">33cm (902MHz)</DropdownItem>
-            <DropdownItem key="23cm">23cm (1.2GHz)</DropdownItem>
+            {[
+              <DropdownItem key="">{t('filter.allBands')}</DropdownItem>,
+              ...LOGBOOK_BAND_OPTIONS.map(option => (
+                <DropdownItem key={option.key}>{option.label}</DropdownItem>
+              )),
+            ]}
           </DropdownMenu>
         </Dropdown>
 
@@ -2437,12 +2440,15 @@ const LogbookViewer: React.FC<LogbookViewerProps> = ({ operatorId, logBookId, op
             qsos={qsos}
             loading={loading}
             bandFilter={filters.band}
+            onBandFilterChange={(band) => handleFilterChange('band', band)}
             pageSize={itemsPerPage}
             pageSizeOptions={[...PAGE_SIZE_OPTIONS]}
             onPageSizeChange={handleItemsPerPageChange}
             desktopLeftOverlay={desktopGlobeTitleOverlay}
             desktopRightOverlay={desktopDxccOverlay}
             operators={operators}
+            reception={reception}
+            canEnableReception={isAdmin}
           />}
         </AnimatedLogbookGlobe>
       )}

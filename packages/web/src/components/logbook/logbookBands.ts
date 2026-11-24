@@ -1,0 +1,20 @@
+/** Bands offered by the logbook band filter, shared by the table and the globe. */
+export const LOGBOOK_BAND_OPTIONS: ReadonlyArray<{ key: string; label: string }> = [
+  { key: '160m', label: '160m (1.8MHz)' },
+  { key: '80m', label: '80m (3.5MHz)' },
+  { key: '60m', label: '60m (5MHz)' },
+  { key: '40m', label: '40m (7MHz)' },
+  { key: '30m', label: '30m (10MHz)' },
+  { key: '20m', label: '20m (14MHz)' },
+  { key: '17m', label: '17m (18MHz)' },
+  { key: '15m', label: '15m (21MHz)' },
+  { key: '12m', label: '12m (24MHz)' },
+  { key: '10m', label: '10m (28MHz)' },
+  { key: '6m', label: '6m (50MHz)' },
+  { key: '4m', label: '4m (70MHz)' },
+  { key: '2m', label: '2m (144MHz)' },
+  { key: '1.25m', label: '1.25m (222MHz)' },
+  { key: '70cm', label: '70cm (430MHz)' },
+  { key: '33cm', label: '33cm (902MHz)' },
+  { key: '23cm', label: '23cm (1.2GHz)' },
+];

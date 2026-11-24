@@ -459,3 +459,11 @@ section[role="dialog"][data-placement="center"].w-full:not(.max-w-full) {
     width: 9rem;
   }
 }
+
+/* The receiver hover card on the logbook globe draws its own dark frame. */
+.float-tooltip-kap:has(> .globe-reception-card) {
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+  max-width: none;
+}

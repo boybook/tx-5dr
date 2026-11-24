@@ -68,6 +68,7 @@ import type {
   SetDdsFrequencyResponse,
   HamlibConfig,
   PSKReporterConfig,
+  PSKReporterReceptionConfig,
   PSKReporterStatus,
   ProfileListResponse,
   ProfileActionResponse,
@@ -1986,6 +1987,31 @@ export const api = {
     );
   },
 
+  /** Reception feedback setting (reports of other stations hearing this station). */
+  async getPSKReporterReceptionConfig(
+    apiBase?: string,
+  ): Promise<{ success: boolean; data: PSKReporterReceptionConfig }> {
+    return apiRequest<{ success: boolean; data: PSKReporterReceptionConfig }>(
+      '/pskreporter/reception/config',
+      undefined,
+      apiBase
+    );
+  },
+
+  async updatePSKReporterReceptionConfig(
+    config: Partial<PSKReporterReceptionConfig>,
+    apiBase?: string
+  ): Promise<{ success: boolean; data: PSKReporterReceptionConfig }> {
+    return apiRequest<{ success: boolean; data: PSKReporterReceptionConfig }>(
+      '/pskreporter/reception/config',
+      {
+        method: 'PUT',
+        body: JSON.stringify(config),
+      },
+      apiBase
+    );
+  },
+
   // ========== rigctld 桥接 API ==========
 
   /** Read the current rigctld bridge status (config + running state + clients). */
@@ -2837,6 +2863,8 @@ export const {
   ,getPSKReporterConfig
   ,updatePSKReporterConfig
   ,getPSKReporterStatus
+  ,getPSKReporterReceptionConfig
+  ,updatePSKReporterReceptionConfig
   // rigctld bridge 函数
   ,getRigctldStatus
   ,updateRigctldConfig

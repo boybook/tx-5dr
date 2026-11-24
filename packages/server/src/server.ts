@@ -36,6 +36,7 @@ import {
   authorizeLogbookConnectionParams,
   resolveLogbookConnectionParams,
 } from './websocket/LogbookWSServer.js';
+import { getPSKReporterReceptionService } from './services/pskreporterReception/index.js';
 import { DeviceUiWSServer } from './device-ui/DeviceUiWSServer.js';
 import { deviceUiRoutes } from './device-ui/routes.js';
 import { voiceRoutes } from './routes/voice.js';
@@ -519,7 +520,8 @@ export async function createServer() {
 
   // 初始化WebSocket服务器（集成业务逻辑）
   const wsServer = new WSServer(digitalRadioEngine, processMonitor);
-  const logbookWsServer = new LogbookWSServer(digitalRadioEngine);
+  const pskreporterReception = getPSKReporterReceptionService();
+  const logbookWsServer = new LogbookWSServer(digitalRadioEngine, pskreporterReception);
   const deviceUiWsServer = new DeviceUiWSServer(digitalRadioEngine, deviceServiceAuthManager);
   fastify.log.info('WebSocket server initialized');
 
@@ -852,6 +854,7 @@ export async function createServer() {
     processMonitor.stop();
     wsServer.cleanup();
     logbookWsServer.cleanup();
+    pskreporterReception.stop();
     deviceUiWsServer.cleanup();
   });
 

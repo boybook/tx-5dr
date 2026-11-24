@@ -8,6 +8,8 @@ import {
   RadioOperatorConfig,
   HamlibConfig,
   PSKReporterConfig,
+  PSKReporterReceptionConfigSchema,
+  type PSKReporterReceptionConfig,
   DEFAULT_DECODE_WINDOW_SETTINGS,
   DEFAULT_RIGCTLD_BRIDGE_CONFIG,
   CWDecoderConfigSchema,
@@ -141,6 +143,8 @@ export interface AppConfig {
   };
   operators: RadioOperatorConfig[];
   pskreporter: PSKReporterConfig;
+  /** Live PSK Reporter reception feedback shown on logbook pages (Host-only). */
+  pskreporterReception?: PSKReporterReceptionConfig;
   /** Override log level. Unset = use LOG_LEVEL env var (default: warn in production, info in development). */
   logLevel?: 'debug' | 'info' | 'warn' | 'error';
   /** Decode window settings per mode (preset or custom timing) */
@@ -357,6 +361,7 @@ export function validateAppConfigCandidate(value: unknown): Record<string, unkno
   assertOptionalObject(value, 'ft8');
   assertOptionalObject(value, 'server');
   assertOptionalObject(value, 'pskreporter');
+  assertOptionalObject(value, 'pskreporterReception');
   assertOptionalObject(value, 'plugins');
   assertOptionalObject(value, 'rigctld');
   assertOptionalObject(value, 'cwDecoder');
@@ -1758,6 +1763,21 @@ export class ConfigManager {
    */
   async updatePSKReporterStats(stats: Partial<PSKReporterConfig['stats']>): Promise<void> {
     await this.setRuntimeValue('pskreporterStats', { ...this.getPSKReporterConfig().stats, ...stats });
+  }
+
+  /** PSK Reporter reception feedback setting; missing or invalid values read as the default. */
+  getPSKReporterReceptionConfig(): PSKReporterReceptionConfig {
+    const parsed = PSKReporterReceptionConfigSchema.safeParse(this.config.pskreporterReception ?? {});
+    return parsed.success ? parsed.data : PSKReporterReceptionConfigSchema.parse({});
+  }
+
+  async updatePSKReporterReceptionConfig(
+    patch: Partial<PSKReporterReceptionConfig>,
+  ): Promise<PSKReporterReceptionConfig> {
+    const next = PSKReporterReceptionConfigSchema.parse({ ...this.getPSKReporterReceptionConfig(), ...patch });
+    this.config.pskreporterReception = next;
+    await this.saveConfig();
+    return { ...next };
   }
 
   /**

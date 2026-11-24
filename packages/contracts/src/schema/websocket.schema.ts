@@ -162,6 +162,8 @@ export enum WSMessageType {
   LOGBOOK_WRITE_FAILED = 'logbookWriteFailed',
   // 仅通知的日志本变更事件（专用于日志本WS）
   LOGBOOK_CHANGE_NOTICE = 'logbookChangeNotice',
+  // PSK Reporter reception feedback for the followed callsigns (logbook WS only)
+  PSKREPORTER_RECEPTION_UPDATE = 'pskreporterReceptionUpdate',
   
   // ===== 电台连接管理 =====
   RADIO_STATUS_CHANGED = 'radioStatusChanged',
@@ -2259,6 +2261,7 @@ export interface DigitalRadioEngineEvents {
   logbookUpdated: (data: { logBookId: string; statistics: z.infer<typeof LogBookStatisticsSchema>; operatorId?: string }) => void;
   logbookHealthChanged: (data: { logBookId: string; health: z.infer<typeof LogbookHealthSchema> }) => void;
   logbookWriteFailed: (data: z.infer<typeof WSLogbookWriteFailedMessageSchema>['data']) => void;
+  pskreporterReceptionUpdate: (data: import('./pskreporter.schema.js').PSKReporterReceptionUpdate) => void;
   textMessage: (data: z.infer<typeof WSTextMessageSchema>['data']) => void;
 
   /** @deprecated Tuner state is now delivered via radioCapabilityChanged event (id='tuner_switch') */
