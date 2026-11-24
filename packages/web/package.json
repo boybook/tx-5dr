@@ -36,7 +36,7 @@
     "react-i18next": "^16.5.8",
     "react-markdown": "^10.1.0",
     "tailwindcss": "^3.4.16",
-    "three": "^0.180.0",
+    "three": "^0.187.0",
     "topojson-client": "^3.1.0",
     "world-atlas": "^2.0.2"
   },

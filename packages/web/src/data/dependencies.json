@@ -57,7 +57,7 @@
   },
   {
     "name": "three",
-    "version": "0.180.x",
+    "version": "0.187.x",
     "license": "MIT",
     "url": "https://threejs.org",
     "category": "frontend"

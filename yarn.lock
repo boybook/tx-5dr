@@ -6029,7 +6029,7 @@ __metadata:
     react-i18next: "npm:^16.5.8"
     react-markdown: "npm:^10.1.0"
     tailwindcss: "npm:^3.4.16"
-    three: "npm:^0.180.0"
+    three: "npm:^0.187.0"
     topojson-client: "npm:^3.1.0"
     typescript: "npm:^5.8.3"
     vite: "npm:^6.4.6"
@@ -13388,17 +13388,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"three@npm:>=0.179 <1":
+"three@npm:>=0.179 <1, three@npm:^0.187.0":
   version: 0.187.0
   resolution: "three@npm:0.187.0"
   checksum: 10c0/5c2cfeacbbf7203c3b34305d439cc5c7e9b1a3c2844528c708b2afa36788d25665fabc562212e09cc3981d5d591a31cb20ed3aa506d7cbf6c1720d21e3ea4f3f
-  languageName: node
-  linkType: hard
-
-"three@npm:^0.180.0":
-  version: 0.180.0
-  resolution: "three@npm:0.180.0"
-  checksum: 10c0/2b5954b3e0946676cd606f126b1fbbe337ab6e72ae5a25b3eadbf1b8c502c17f21d851b9f5fe035edd48736306e339f143b5ee9cd4e91a2e614681abacef08de
   languageName: node
   linkType: hard
 
