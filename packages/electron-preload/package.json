@@ -1,6 +1,6 @@
 {
   "name": "@tx5dr/electron-preload",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "main": "dist/preload.js",
   "scripts": {
     "build": "tsc",
