@@ -124,7 +124,7 @@ function pruneNodeModules(nm) {
     '@electron', '@electron-builder',
     '@rollup', '@esbuild', '@vitejs', '@swc', '@turbo',
     '@types', '@eslint', '@eslint-community', '@typescript-eslint',
-    '@heroui', '@heroicons', '@fortawesome', '@react-aria', '@react-stately', '@react-types', '@formatjs', '@babel',
+    '@heroui', '@heroicons', '@fortawesome', '@react-aria', '@react-stately', '@react-types', '@formatjs',
     '@jridgewell', '@internationalized',
     '@vitest', '@statelyai', '@clinic', '@tensorflow',
     '@malept', '@gar', '@hapi', '@jest',
@@ -153,6 +153,14 @@ function pruneNodeModules(nm) {
 
   for (const scopeDir of scopeDirsToRemove) rmrf(path.join(nm, scopeDir));
   for (const pkgDir of packageDirsToRemove) rmrf(path.join(nm, pkgDir));
+  // @babel is build tooling except @babel/runtime, a helper library that
+  // production dependencies load at run time (mqtt -> worker-timers).
+  const babelScope = path.join(nm, '@babel');
+  if (fs.existsSync(babelScope)) {
+    for (const entry of fs.readdirSync(babelScope)) {
+      if (entry !== 'runtime') rmrf(path.join(babelScope, entry));
+    }
+  }
   rmGlob(nm, 'turbo');
 }
 

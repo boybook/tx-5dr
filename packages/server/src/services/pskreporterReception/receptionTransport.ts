@@ -5,7 +5,7 @@
  * History: https://retrieve.pskreporter.info/query (PSK Reporter by Philip Gladstone)
  */
 
-import { connect } from 'mqtt';
+import type { MqttClient } from 'mqtt';
 import { createLogger } from '../../utils/logger.js';
 import type {
   PSKReporterReceptionTransport,
@@ -20,43 +20,61 @@ const LIVE_FEED_URL = 'mqtt://mqtt.pskreporter.info:1883';
 const QUERY_URL = 'https://retrieve.pskreporter.info/query';
 const MAX_QUERY_RESPONSE_BYTES = 8 * 1024 * 1024;
 
+/**
+ * The MQTT library is loaded on first connection, not with the server: an
+ * optional feature whose dependencies are missing from a package must fail on
+ * its own (as a closed feed the service retries) instead of stopping startup.
+ */
 function connectLive(clientId: string, handlers: ReceptionLiveHandlers): ReceptionLiveClient {
-  const client = connect(LIVE_FEED_URL, {
-    clientId,
-    keepalive: 60,
-    clean: true,
-    connectTimeout: 15_000,
-    // Reconnects are scheduled by the service with backoff.
-    reconnectPeriod: 0,
-  });
+  let client: MqttClient | null = null;
   let finished = false;
   let lastError: Error | undefined;
-
-  client.on('connect', () => handlers.onConnect());
-  client.on('message', (topic, payload) => handlers.onMessage(topic, payload));
-  client.on('error', (error) => {
-    lastError = error;
-  });
-  client.on('close', () => {
+  const finish = (error?: Error) => {
     if (finished) return;
     finished = true;
-    handlers.onClose(lastError);
-  });
+    handlers.onClose(error);
+  };
+
+  import('mqtt')
+    .then(({ connect }) => {
+      if (finished) return;
+      const created = connect(LIVE_FEED_URL, {
+        clientId,
+        keepalive: 60,
+        clean: true,
+        connectTimeout: 15_000,
+        // Reconnects are scheduled by the service with backoff.
+        reconnectPeriod: 0,
+      });
+      client = created;
+      created.on('connect', () => handlers.onConnect());
+      created.on('message', (topic, payload) => handlers.onMessage(topic, payload));
+      created.on('error', (error) => {
+        lastError = error;
+      });
+      created.on('close', () => finish(lastError));
+    })
+    .catch((error: unknown) => {
+      logger.error('MQTT client library could not be loaded', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      finish(error instanceof Error ? error : new Error(String(error)));
+    });
 
   return {
     subscribe(topic) {
-      client.subscribe(topic, { qos: 0 }, (error) => {
+      client?.subscribe(topic, { qos: 0 }, (error) => {
         if (error) logger.warn('Live feed subscribe failed', { topic, error: error.message });
       });
     },
     unsubscribe(topic) {
-      client.unsubscribe(topic, (error) => {
+      client?.unsubscribe(topic, (error) => {
         if (error) logger.debug('Live feed unsubscribe failed', { topic, error: error.message });
       });
     },
     close() {
       finished = true;
-      client.end(true);
+      client?.end(true);
     },
   };
 }

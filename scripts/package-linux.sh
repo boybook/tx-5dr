@@ -194,8 +194,8 @@ REMOVE_PACKAGES=(
     postcss autoprefixer lilconfig postcss-load-config
     react-refresh react-is scheduler csstype
 
-    # Build helpers
-    @babel @jridgewell yaml source-map bluebird rxjs
+    # Build helpers (@babel is pruned below, keeping its runtime helpers)
+    @jridgewell yaml source-map bluebird rxjs
 
     # Testing / profiling
     vitest @vitest chai @statelyai autocannon clinic tsx
@@ -234,6 +234,10 @@ REMOVE_PACKAGES=(
 for pkg in "${REMOVE_PACKAGES[@]}"; do
     rm -rf "$NM/$pkg" 2>/dev/null || true
 done
+
+# @babel is build tooling except @babel/runtime, a helper library that
+# production dependencies load at run time (mqtt -> worker-timers).
+find "$NM/@babel" -mindepth 1 -maxdepth 1 ! -name runtime -exec rm -rf {} + 2>/dev/null || true
 
 # Remove turbo* glob
 find "$NM" -maxdepth 1 -name "turbo*" -exec rm -rf {} + 2>/dev/null || true
