@@ -17,6 +17,7 @@ import { useViewportHeightValue } from '../../hooks/useViewportHeight';
 import {
   buildPagedQSOGlobeModel,
   buildInProgressQSOGlobeModel,
+  keepArcObjects,
   type GlobeArc,
   type GlobeStationPoint,
 } from '../../utils/logbookGlobe';
@@ -277,6 +278,26 @@ function getCustomLayerObject(layer: object, globeRadius: number): GlobeShellMes
     shell.mesh.scale.setScalar(globeRadius * (1 + shell.altitude));
   }
   return shell.mesh;
+}
+
+/**
+ * Dash settings of an arc. globe.gl passes them to its arc shader as they
+ * are, and a solid arc leaves them unset: an undefined uniform reaches the GPU
+ * as NaN, and the shader's dash test on NaN is undefined, so some GPUs and
+ * drivers would cut a solid arc into pieces or drop it.
+ */
+const getArcDashLength = (arc: object): number => (arc as GlobeArc).dashLength ?? 1;
+const getArcDashGap = (arc: object): number => (arc as GlobeArc).dashGap ?? 0;
+const getArcDashAnimateTime = (arc: object): number => (arc as GlobeArc).dashAnimateTime ?? 0;
+
+/** The arcs with the objects they had in the previous render kept (see keepArcObjects). */
+function useKeptArcObjects(arcs: GlobeArc[]): GlobeArc[] {
+  const shownRef = useRef<Map<string, GlobeArc>>(new Map());
+  return useMemo(() => {
+    const kept = keepArcObjects(shownRef.current, arcs);
+    shownRef.current = kept.byKey;
+    return kept.arcs;
+  }, [arcs]);
 }
 
 /** Shell layers update themselves; the update hook only stops globe.gl from rebuilding them. */
@@ -604,6 +625,10 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
     () => buildInProgressQSOGlobeModel(operators, stationInfo, globeModel.homePoint),
     [operators, stationInfo, globeModel.homePoint],
   );
+  // Logbook reloads and operator updates rebuild the models; the arcs of the
+  // same QSOs keep their objects, so globe.gl keeps their tubes (see keepArcObjects).
+  const historyArcs = useKeptArcObjects(globeModel.arcs);
+  const inProgressArcs = useKeptArcObjects(inProgressModel.arcs);
   const workedGridStatus = useMemo(() => buildGridStatusData(workedGridItems), [workedGridItems]);
   useEffect(() => {
     gridLayer.setStatus(workedGridStatus);
@@ -985,7 +1010,11 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
   }, [isExpanded]);
 
   const hasRenderableData = !!globeModel.homePoint && globeModel.remotePoints.length > 0;
-  const shouldShowStatusOverlay = loading || !hasRenderableData;
+  // A reload keeps showing the records it replaces (the page keeps them until
+  // the new ones arrive): change notices reload the logbook after every QSO
+  // update, in bursts while a sync runs, and hiding the history each time
+  // would flash every arc and marker off and on.
+  const shouldShowStatusOverlay = !hasRenderableData;
   const statusMessage = loading
     ? t('globe.loadingCurrentPage')
     : !globeModel.homePoint
@@ -1030,7 +1059,7 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
         opacity: 1, priority: 10, data: { kind: 'home', grid: home.grid },
       });
     }
-    if (!loading && hasRenderableData && showQsoHistory) {
+    if (hasRenderableData && showQsoHistory) {
       const historyOpacity = liveStations.length > 0 ? 0.5 : 0.85;
       for (const point of globeModel.remotePoints) {
         markers.push({
@@ -1081,7 +1110,7 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
     }
     if (liveStations.length > 0) pops.primed = true;
     return markers;
-  }, [globeModel.homePoint, globeModel.remotePoints, loading, hasRenderableData, showQsoHistory, showReception, receptionModel.points, receptionTheme, liveStations]);
+  }, [globeModel.homePoint, globeModel.remotePoints, hasRenderableData, showQsoHistory, showReception, receptionModel.points, receptionTheme, liveStations]);
   useEffect(() => {
     markerLayer.setMarkers(globeMarkers);
   }, [markerLayer, globeMarkers]);
@@ -1095,16 +1124,16 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
   // on every frame of a one-second transition.
   const historyRecedes = liveCounts.total > 0;
   const recededArcColors = useMemo(
-    () => new Map(globeModel.arcs.map(arc => [arc, scaleRgbaAlpha(arc.color, HISTORY_RECEDED_ALPHA)])),
-    [globeModel.arcs],
+    () => new Map(historyArcs.map(arc => [arc, scaleRgbaAlpha(arc.color, HISTORY_RECEDED_ALPHA)])),
+    [historyArcs],
   );
   const getArcColor = useCallback(
     (arc: object) => (historyRecedes && recededArcColors.get(arc as GlobeArc)) || (arc as GlobeArc).color,
     [historyRecedes, recededArcColors],
   );
-  const visibleArcs = useMemo(() => loading || !hasRenderableData || !showQsoHistory
-    ? inProgressModel.arcs
-    : [...globeModel.arcs, ...inProgressModel.arcs], [loading, hasRenderableData, showQsoHistory, globeModel.arcs, inProgressModel.arcs]);
+  const visibleArcs = useMemo(() => !hasRenderableData || !showQsoHistory
+    ? inProgressArcs
+    : [...historyArcs, ...inProgressArcs], [hasRenderableData, showQsoHistory, historyArcs, inProgressArcs]);
   /** Latest QSO with each worked grid, for its hover card. */
   const latestArcByGrid = useMemo(() => {
     const latest = new Map<string, GlobeArc>();
@@ -1198,14 +1227,14 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
     const historyRings = showQsoHistory
       ? globeModel.rings
       : globeModel.homeRing ? [globeModel.homeRing] : [];
-    const rings = loading || !hasRenderableData
+    const rings = !hasRenderableData
       ? inProgressModel.rings
       : [...historyRings, ...inProgressModel.rings];
     // Reception rings come first so the in-progress rings draw above them.
     return visibleReceptionRings && (visibleReceptionRings.length > 0 || receptionPings.length > 0)
       ? [...visibleReceptionRings, ...receptionPings, ...rings]
       : rings;
-  }, [loading, hasRenderableData, showQsoHistory, globeModel.rings, globeModel.homeRing, inProgressModel.rings, visibleReceptionRings, receptionPings]);
+  }, [hasRenderableData, showQsoHistory, globeModel.rings, globeModel.homeRing, inProgressModel.rings, visibleReceptionRings, receptionPings]);
   const receptionStationCount = receptionModel.stations.length;
   const showReceptionOffEntry = reception?.state === 'disabled' && reception.callsigns.length > 0;
   // Shown whenever the feature is on, so the feed state is always visible.
@@ -1573,9 +1602,12 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
         arcStroke="stroke"
         arcCurveResolution={48}
         arcCircularResolution={6}
-        arcDashLength="dashLength"
-        arcDashGap="dashGap"
-        arcDashAnimateTime="dashAnimateTime"
+        arcDashLength={getArcDashLength}
+        arcDashGap={getArcDashGap}
+        arcDashAnimateTime={getArcDashAnimateTime}
+        // An arc's shape is fixed by its own altitude, so globe.gl's transition
+        // would only rebuild each new tube on every frame for a second.
+        arcsTransitionDuration={0}
         ringsData={visibleRings}
         ringLat="lat"
         ringLng="lng"

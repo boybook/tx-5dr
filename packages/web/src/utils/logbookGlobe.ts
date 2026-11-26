@@ -387,3 +387,35 @@ export function buildInProgressQSOGlobeModel(
 
   return { arcs, rings };
 }
+
+/**
+ * Carries arc objects over from the previous build of a model.
+ *
+ * globe.gl binds one tube mesh to each arc object. A rebuilt model holds new
+ * objects for the same QSOs (every logbook reload rebuilds it), and new
+ * objects make globe.gl drop every tube and build new ones, so all the arcs
+ * blink out and back. An arc that still describes the same QSO keeps its
+ * object instead. Its colour (its opacity fades with the QSO's age) is the
+ * one field allowed to change: it is copied onto the kept object, which
+ * globe.gl applies as a vertex colour update on the same mesh.
+ *
+ * `previous` maps arc keys to the objects last shown; the returned `byKey` is
+ * the map for the next call.
+ */
+export function keepArcObjects(
+  previous: ReadonlyMap<string, GlobeArc>,
+  next: readonly GlobeArc[],
+): { arcs: GlobeArc[]; byKey: Map<string, GlobeArc> } {
+  const byKey = new Map<string, GlobeArc>();
+  const arcs = next.map((arc) => {
+    const key = JSON.stringify({ ...arc, color: undefined });
+    // A second arc with the same key (the same QSO logged twice) gets its own object.
+    if (byKey.has(key)) return arc;
+    const kept = previous.get(key);
+    if (kept && kept.color !== arc.color) kept.color = arc.color;
+    const shown = kept ?? arc;
+    byKey.set(key, shown);
+    return shown;
+  });
+  return { arcs, byKey };
+}

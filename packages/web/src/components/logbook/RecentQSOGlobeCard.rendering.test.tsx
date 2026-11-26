@@ -196,3 +196,46 @@ describe('logbook globe live stations', () => {
     expect(rendered.queryByText('globe.liveSummary')).toBeNull();
   });
 });
+
+describe('logbook globe arcs across a reload', () => {
+  const records = [
+    { id: '1', callsign: 'JA1ABC', grid: 'PM95', myGrid: 'PM01', frequency: 14_074_000, mode: 'FT8', startTime: 1_700_000_000_000 },
+    { id: '2', callsign: 'VK2DEF', grid: 'QF56', myGrid: 'PM01', frequency: 14_074_000, mode: 'FT8', startTime: 1_700_000_100_000 },
+  ] as never[];
+  const props = { logBookId: 'fixture', pageSize: 25, pageSizeOptions: [25, 50], onPageSizeChange: () => {} };
+  // With records the globe turns its camera to the home station.
+  const camera = { controls: () => ({ update: () => {} }), pointOfView: () => ({ lat: 0, lng: 0, altitude: 2.5 }) };
+  beforeEach(() => { Object.assign(mocks.globe, camera); });
+  afterEach(() => {
+    const globe = mocks.globe as Record<string, unknown>;
+    delete globe.controls;
+    delete globe.pointOfView;
+  });
+
+  // Regression: change notices reload the logbook after every QSO update; the
+  // globe hid its history while loading and then rebuilt every arc, so all
+  // the arcs flashed off and on with each notice.
+  it('keeps the arcs and their objects while the logbook reloads', async () => {
+    const view = render(<RecentQSOGlobeCard {...props} qsos={records} loading={false} />);
+    await act(async () => {});
+    const arcs = mocks.props.arcsData as object[];
+    expect(arcs).toHaveLength(2);
+
+    view.rerender(<RecentQSOGlobeCard {...props} qsos={records} loading />);
+    expect(mocks.props.arcsData).toEqual(arcs);
+    view.rerender(<RecentQSOGlobeCard {...props} qsos={records.map(record => ({ ...(record as object) })) as never[]} loading={false} />);
+    const reloaded = mocks.props.arcsData as object[];
+    expect(reloaded).toHaveLength(2);
+    reloaded.forEach((arc, index) => expect(arc).toBe(arcs[index]));
+  });
+
+  it('gives solid arcs numeric dash settings', async () => {
+    render(<RecentQSOGlobeCard {...props} qsos={records} loading={false} />);
+    await act(async () => {});
+    const [arc] = mocks.props.arcsData as object[];
+    const dash = ['arcDashLength', 'arcDashGap', 'arcDashAnimateTime']
+      .map(name => (mocks.props[name] as (datum: object) => unknown)(arc));
+    expect(dash).toEqual([1, 0, 0]);
+    expect(mocks.props.arcsTransitionDuration).toBe(0);
+  });
+});
