@@ -17,7 +17,7 @@ import { useViewportHeightValue } from '../../hooks/useViewportHeight';
 import {
   buildPagedQSOGlobeModel,
   buildInProgressQSOGlobeModel,
-  keepArcObjects,
+  keepDatumObjects,
   type GlobeArc,
   type GlobeStationPoint,
 } from '../../utils/logbookGlobe';
@@ -290,14 +290,18 @@ const getArcDashLength = (arc: object): number => (arc as GlobeArc).dashLength ?
 const getArcDashGap = (arc: object): number => (arc as GlobeArc).dashGap ?? 0;
 const getArcDashAnimateTime = (arc: object): number => (arc as GlobeArc).dashAnimateTime ?? 0;
 
-/** The arcs with the objects they had in the previous render kept (see keepArcObjects). */
-function useKeptArcObjects(arcs: GlobeArc[]): GlobeArc[] {
-  const shownRef = useRef<Map<string, GlobeArc>>(new Map());
+/** An arc's opacity fades with the QSO's age; globe.gl recolours the same tube. */
+const ARC_MUTABLE_FIELDS: readonly (keyof GlobeArc)[] = ['color'];
+const NO_MUTABLE_FIELDS: readonly never[] = [];
+
+/** The datums with the objects they had in the previous render kept (see keepDatumObjects). */
+function useKeptObjects<T extends object>(items: T[], mutable: readonly (keyof T)[] = NO_MUTABLE_FIELDS): T[] {
+  const shownRef = useRef<Map<string, T>>(new Map());
   return useMemo(() => {
-    const kept = keepArcObjects(shownRef.current, arcs);
+    const kept = keepDatumObjects(shownRef.current, items, mutable);
     shownRef.current = kept.byKey;
-    return kept.arcs;
-  }, [arcs]);
+    return kept.items;
+  }, [items, mutable]);
 }
 
 /** Shell layers update themselves; the update hook only stops globe.gl from rebuilding them. */
@@ -626,9 +630,9 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
     [operators, stationInfo, globeModel.homePoint],
   );
   // Logbook reloads and operator updates rebuild the models; the arcs of the
-  // same QSOs keep their objects, so globe.gl keeps their tubes (see keepArcObjects).
-  const historyArcs = useKeptArcObjects(globeModel.arcs);
-  const inProgressArcs = useKeptArcObjects(inProgressModel.arcs);
+  // same QSOs keep their objects, so globe.gl keeps their tubes (see keepDatumObjects).
+  const historyArcs = useKeptObjects(globeModel.arcs, ARC_MUTABLE_FIELDS);
+  const inProgressArcs = useKeptObjects(inProgressModel.arcs, ARC_MUTABLE_FIELDS);
   const workedGridStatus = useMemo(() => buildGridStatusData(workedGridItems), [workedGridItems]);
   useEffect(() => {
     gridLayer.setStatus(workedGridStatus);
@@ -1235,6 +1239,9 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
       ? [...visibleReceptionRings, ...receptionPings, ...rings]
       : rings;
   }, [hasRenderableData, showQsoHistory, globeModel.rings, globeModel.homeRing, inProgressModel.rings, visibleReceptionRings, receptionPings]);
+  // The models rebuild their rings on every reload, operator update and
+  // reception refresh; a new ring object starts an extra pulse at once.
+  const shownRings = useKeptObjects(visibleRings);
   const receptionStationCount = receptionModel.stations.length;
   const showReceptionOffEntry = reception?.state === 'disabled' && reception.callsigns.length > 0;
   // Shown whenever the feature is on, so the feed state is always visible.
@@ -1608,7 +1615,7 @@ const RecentQSOGlobeCard: React.FC<RecentQSOGlobeCardProps> = ({
         // An arc's shape is fixed by its own altitude, so globe.gl's transition
         // would only rebuild each new tube on every frame for a second.
         arcsTransitionDuration={0}
-        ringsData={visibleRings}
+        ringsData={shownRings}
         ringLat="lat"
         ringLng="lng"
         ringColor="color"

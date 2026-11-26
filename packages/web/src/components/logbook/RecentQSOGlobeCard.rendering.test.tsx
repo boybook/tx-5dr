@@ -219,7 +219,9 @@ describe('logbook globe arcs across a reload', () => {
     const view = render(<RecentQSOGlobeCard {...props} qsos={records} loading={false} />);
     await act(async () => {});
     const arcs = mocks.props.arcsData as object[];
+    const rings = mocks.props.ringsData as object[];
     expect(arcs).toHaveLength(2);
+    expect(rings.length).toBeGreaterThan(0);
 
     view.rerender(<RecentQSOGlobeCard {...props} qsos={records} loading />);
     expect(mocks.props.arcsData).toEqual(arcs);
@@ -227,6 +229,7 @@ describe('logbook globe arcs across a reload', () => {
     const reloaded = mocks.props.arcsData as object[];
     expect(reloaded).toHaveLength(2);
     reloaded.forEach((arc, index) => expect(arc).toBe(arcs[index]));
+    (mocks.props.ringsData as object[]).forEach((ring, index) => expect(ring).toBe(rings[index]));
   });
 
   it('gives solid arcs numeric dash settings', async () => {

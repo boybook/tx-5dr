@@ -14,6 +14,20 @@ const RECENT_QSO_HIGHLIGHT_WINDOW_MS = 10 * 60 * 1000;
 const EARTH_RADIUS_KM = 6371;
 const ARC_SURFACE_CLEARANCE = 0.008;
 const LONG_ARC_LIFT_SOFTENING = 0.82;
+/** Arcs past this distance are drawn a little thicker. */
+const LONG_ARC_KM = 8000;
+/**
+ * Tube widths (globe units; the globe radius is 100). The red arcs of QSOs in
+ * progress and just made stand out by colour and their moving dashes, so
+ * they stay close to the history arcs' width.
+ */
+const ARC_STROKE = { history: 0.5, historyLong: 0.75, highlighted: 0.6, highlightedLong: 0.8 } as const;
+
+function getArcStroke(distanceKm: number, highlighted: boolean): number {
+  const long = distanceKm > LONG_ARC_KM;
+  if (highlighted) return long ? ARC_STROKE.highlightedLong : ARC_STROKE.highlighted;
+  return long ? ARC_STROKE.historyLong : ARC_STROKE.history;
+}
 
 export interface GlobeStationPoint {
   lat: number;
@@ -252,9 +266,7 @@ export function buildPagedQSOGlobeModel(qsos: QSORecord[], stationInfo?: Station
           ? `rgba(${HIGHLIGHT_ARC_COLOR}, ${getHighlightArcOpacity(qso.startTime)})`
           : `rgba(${ARC_BASE_COLOR}, ${getArcOpacity(qso.startTime, 24)})`,
         altitude: getRenderedArcAltitude(distanceKm, isHighlightedQso),
-        stroke: isHighlightedQso
-          ? (distanceKm > 8000 ? 1.1 : 0.9)
-          : (distanceKm > 8000 ? 0.75 : 0.5),
+        stroke: getArcStroke(distanceKm, isHighlightedQso),
         grid: qso.grid,
         callsign: qso.callsign,
         startTime: qso.startTime,
@@ -371,14 +383,17 @@ export function buildInProgressQSOGlobeModel(
       endLng: coords.lon,
       color: `rgba(${HIGHLIGHT_ARC_COLOR}, 0.85)`,
       altitude: getRenderedArcAltitude(distanceKm, true),
-      stroke: distanceKm > 8000 ? 1.1 : 0.9,
+      stroke: getArcStroke(distanceKm, true),
       dashLength: 0.1,
       dashGap: 0.05,
       dashAnimateTime: 2500,
       grid: op.context.targetGrid,
       callsign: op.context.targetCall,
-      startTime: Date.now(),
-      mode: op.strategy?.state ?? '',
+      // Not yet a logged QSO: no start time or mode. Fixed values keep the
+      // arc the same datum across operator updates (the strategy state moves
+      // every slot), so its tube and dashes carry on (see keepArcObjects).
+      startTime: 0,
+      mode: '',
       frequency: op.context.frequency ?? 0,
     });
 
@@ -389,33 +404,45 @@ export function buildInProgressQSOGlobeModel(
 }
 
 /**
- * Carries arc objects over from the previous build of a model.
+ * Carries globe datum objects over from the previous build of a model.
  *
- * globe.gl binds one tube mesh to each arc object. A rebuilt model holds new
- * objects for the same QSOs (every logbook reload rebuilds it), and new
- * objects make globe.gl drop every tube and build new ones, so all the arcs
- * blink out and back. An arc that still describes the same QSO keeps its
- * object instead. Its colour (its opacity fades with the QSO's age) is the
- * one field allowed to change: it is copied onto the kept object, which
- * globe.gl applies as a vertex colour update on the same mesh.
+ * globe.gl binds its objects to datum objects. A rebuilt model holds new
+ * objects for the same things (every logbook reload, operator update and
+ * reception refresh rebuilds one), and new objects make globe.gl rebuild
+ * them: every arc tube is dropped and built again, so the arcs blink, and a
+ * ring starts a new pulse at once while the old one plays out, so each
+ * refresh flashes an extra ring. A datum that still describes the same thing
+ * keeps its object instead.
  *
- * `previous` maps arc keys to the objects last shown; the returned `byKey` is
- * the map for the next call.
+ * `mutable` fields may change without making a new datum (an arc's colour
+ * fades with the QSO's age): they are copied onto the kept object, which
+ * globe.gl applies to the same object. Equal datums keep their objects in
+ * order. `previous` maps keys to the objects last shown; the returned `byKey`
+ * is the map for the next call.
  */
-export function keepArcObjects(
-  previous: ReadonlyMap<string, GlobeArc>,
-  next: readonly GlobeArc[],
-): { arcs: GlobeArc[]; byKey: Map<string, GlobeArc> } {
-  const byKey = new Map<string, GlobeArc>();
-  const arcs = next.map((arc) => {
-    const key = JSON.stringify({ ...arc, color: undefined });
-    // A second arc with the same key (the same QSO logged twice) gets its own object.
-    if (byKey.has(key)) return arc;
+export function keepDatumObjects<T extends object>(
+  previous: ReadonlyMap<string, T>,
+  next: readonly T[],
+  mutable: readonly (keyof T)[] = [],
+): { items: T[]; byKey: Map<string, T> } {
+  const byKey = new Map<string, T>();
+  const occurrences = new Map<string, number>();
+  const items = next.map((item) => {
+    const identity: Partial<T> = { ...item };
+    for (const field of mutable) delete identity[field];
+    const base = JSON.stringify(identity);
+    const occurrence = occurrences.get(base) ?? 0;
+    occurrences.set(base, occurrence + 1);
+    const key = `${base}#${occurrence}`;
     const kept = previous.get(key);
-    if (kept && kept.color !== arc.color) kept.color = arc.color;
-    const shown = kept ?? arc;
+    if (kept) {
+      for (const field of mutable) {
+        if (kept[field] !== item[field]) kept[field] = item[field];
+      }
+    }
+    const shown = kept ?? item;
     byKey.set(key, shown);
     return shown;
   });
-  return { arcs, byKey };
+  return { items, byKey };
 }
