@@ -46,7 +46,10 @@ const staging = path.resolve('release-staging');
 await fs.mkdir(staging, { recursive: true });
 const config = path.join(process.env.RUNNER_TEMP || staging, 'tx5dr-oss.conf');
 await fs.writeFile(config, `[Credentials]\nlanguage=EN\nregion=${region}\nendpoint=${process.env.OSS_ENDPOINT}\naccessKeyID=${process.env.OSS_ACCESS_KEY_ID}\naccessKeySecret=${process.env.OSS_ACCESS_KEY_SECRET}\n`, { mode: 0o600 });
-const oss = (...args) => run('ossutil', [...args, '-c', config]);
+// ossutil prints transfer progress for as long as an upload runs. Captured,
+// a slow upload overflowed the output buffer (spawnSync ENOBUFS) and killed
+// the publication; nothing reads it, so it goes straight to the job log.
+const oss = (...args) => { execFileSync('ossutil', [...args, '-c', config], { stdio: ['ignore', 'inherit', 'inherit'] }); };
 async function files(directory) {
   const result = [];
   for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
