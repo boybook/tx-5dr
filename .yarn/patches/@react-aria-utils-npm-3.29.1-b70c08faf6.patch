@@ -1,0 +1,149 @@
+diff --git a/dist/useId.main.js b/dist/useId.main.js
+index 72c06744cd8420f4f5a1be3254a2fc6ca07c9662..94960b71915ced24df1cb10586539098a9fa2bdf 100644
+--- a/dist/useId.main.js
++++ b/dist/useId.main.js
+@@ -35,12 +35,19 @@ let $8c61827343eed941$var$registry;
+ if (typeof FinalizationRegistry !== 'undefined') $8c61827343eed941$var$registry = new FinalizationRegistry((heldValue)=>{
+     $8c61827343eed941$export$d41a04c74483c6ef.delete(heldValue);
+ });
++// Register each ref once with itself as the unregister token; re-registering on every render leaks WeakCells.
++let $8c61827343eed941$var$registeredIds = new WeakMap();
+ function $8c61827343eed941$export$f680877a34711e37(defaultId) {
+     let [value, setValue] = (0, $dG5aF$react.useState)(defaultId);
+     let nextId = (0, $dG5aF$react.useRef)(null);
+     let res = (0, $dG5aF$reactariassr.useSSRSafeId)(value);
+     let cleanupRef = (0, $dG5aF$react.useRef)(null);
+-    if ($8c61827343eed941$var$registry) $8c61827343eed941$var$registry.register(cleanupRef, res);
++    let registeredId = $8c61827343eed941$var$registeredIds.get(cleanupRef);
++    if ($8c61827343eed941$var$registry && registeredId !== res) {
++        if (registeredId != null) $8c61827343eed941$var$registry.unregister(cleanupRef);
++        $8c61827343eed941$var$registry.register(cleanupRef, res, cleanupRef);
++        $8c61827343eed941$var$registeredIds.set(cleanupRef, res);
++    }
+     if ($8c61827343eed941$var$canUseDOM) {
+         const cacheIdRef = $8c61827343eed941$export$d41a04c74483c6ef.get(res);
+         if (cacheIdRef && !cacheIdRef.includes(nextId)) cacheIdRef.push(nextId);
+@@ -53,7 +60,10 @@ function $8c61827343eed941$export$f680877a34711e37(defaultId) {
+         return ()=>{
+             // In Suspense, the cleanup function may be not called
+             // when it is though, also remove it from the finalization registry.
+-            if ($8c61827343eed941$var$registry) $8c61827343eed941$var$registry.unregister(cleanupRef);
++            if ($8c61827343eed941$var$registry) {
++                $8c61827343eed941$var$registry.unregister(cleanupRef);
++                $8c61827343eed941$var$registeredIds.delete(cleanupRef);
++            }
+             $8c61827343eed941$export$d41a04c74483c6ef.delete(r);
+         };
+     }, [
+diff --git a/dist/useId.mjs b/dist/useId.mjs
+index aeb248ada486390a41826b7661534778f4d72c22..06eaf757e58ac081f5f135b03a3dbffcefb30fb6 100644
+--- a/dist/useId.mjs
++++ b/dist/useId.mjs
+@@ -27,12 +27,19 @@ let $bdb11010cef70236$var$registry;
+ if (typeof FinalizationRegistry !== 'undefined') $bdb11010cef70236$var$registry = new FinalizationRegistry((heldValue)=>{
+     $bdb11010cef70236$export$d41a04c74483c6ef.delete(heldValue);
+ });
++// Register each ref once with itself as the unregister token; re-registering on every render leaks WeakCells.
++let $bdb11010cef70236$var$registeredIds = new WeakMap();
+ function $bdb11010cef70236$export$f680877a34711e37(defaultId) {
+     let [value, setValue] = (0, $eKkEp$useState)(defaultId);
+     let nextId = (0, $eKkEp$useRef)(null);
+     let res = (0, $eKkEp$useSSRSafeId)(value);
+     let cleanupRef = (0, $eKkEp$useRef)(null);
+-    if ($bdb11010cef70236$var$registry) $bdb11010cef70236$var$registry.register(cleanupRef, res);
++    let registeredId = $bdb11010cef70236$var$registeredIds.get(cleanupRef);
++    if ($bdb11010cef70236$var$registry && registeredId !== res) {
++        if (registeredId != null) $bdb11010cef70236$var$registry.unregister(cleanupRef);
++        $bdb11010cef70236$var$registry.register(cleanupRef, res, cleanupRef);
++        $bdb11010cef70236$var$registeredIds.set(cleanupRef, res);
++    }
+     if ($bdb11010cef70236$var$canUseDOM) {
+         const cacheIdRef = $bdb11010cef70236$export$d41a04c74483c6ef.get(res);
+         if (cacheIdRef && !cacheIdRef.includes(nextId)) cacheIdRef.push(nextId);
+@@ -45,7 +52,10 @@ function $bdb11010cef70236$export$f680877a34711e37(defaultId) {
+         return ()=>{
+             // In Suspense, the cleanup function may be not called
+             // when it is though, also remove it from the finalization registry.
+-            if ($bdb11010cef70236$var$registry) $bdb11010cef70236$var$registry.unregister(cleanupRef);
++            if ($bdb11010cef70236$var$registry) {
++                $bdb11010cef70236$var$registry.unregister(cleanupRef);
++                $bdb11010cef70236$var$registeredIds.delete(cleanupRef);
++            }
+             $bdb11010cef70236$export$d41a04c74483c6ef.delete(r);
+         };
+     }, [
+diff --git a/dist/useId.module.js b/dist/useId.module.js
+index 88c41fa4f425cd4a1479952130ec15d28d0dbbf6..26fd73c6616c861d5cf74fad24f7474d95b070ed 100644
+--- a/dist/useId.module.js
++++ b/dist/useId.module.js
+@@ -27,12 +27,19 @@ let $bdb11010cef70236$var$registry;
+ if (typeof FinalizationRegistry !== 'undefined') $bdb11010cef70236$var$registry = new FinalizationRegistry((heldValue)=>{
+     $bdb11010cef70236$export$d41a04c74483c6ef.delete(heldValue);
+ });
++// Register each ref once with itself as the unregister token; re-registering on every render leaks WeakCells.
++let $bdb11010cef70236$var$registeredIds = new WeakMap();
+ function $bdb11010cef70236$export$f680877a34711e37(defaultId) {
+     let [value, setValue] = (0, $eKkEp$useState)(defaultId);
+     let nextId = (0, $eKkEp$useRef)(null);
+     let res = (0, $eKkEp$useSSRSafeId)(value);
+     let cleanupRef = (0, $eKkEp$useRef)(null);
+-    if ($bdb11010cef70236$var$registry) $bdb11010cef70236$var$registry.register(cleanupRef, res);
++    let registeredId = $bdb11010cef70236$var$registeredIds.get(cleanupRef);
++    if ($bdb11010cef70236$var$registry && registeredId !== res) {
++        if (registeredId != null) $bdb11010cef70236$var$registry.unregister(cleanupRef);
++        $bdb11010cef70236$var$registry.register(cleanupRef, res, cleanupRef);
++        $bdb11010cef70236$var$registeredIds.set(cleanupRef, res);
++    }
+     if ($bdb11010cef70236$var$canUseDOM) {
+         const cacheIdRef = $bdb11010cef70236$export$d41a04c74483c6ef.get(res);
+         if (cacheIdRef && !cacheIdRef.includes(nextId)) cacheIdRef.push(nextId);
+@@ -45,7 +52,10 @@ function $bdb11010cef70236$export$f680877a34711e37(defaultId) {
+         return ()=>{
+             // In Suspense, the cleanup function may be not called
+             // when it is though, also remove it from the finalization registry.
+-            if ($bdb11010cef70236$var$registry) $bdb11010cef70236$var$registry.unregister(cleanupRef);
++            if ($bdb11010cef70236$var$registry) {
++                $bdb11010cef70236$var$registry.unregister(cleanupRef);
++                $bdb11010cef70236$var$registeredIds.delete(cleanupRef);
++            }
+             $bdb11010cef70236$export$d41a04c74483c6ef.delete(r);
+         };
+     }, [
+diff --git a/src/useId.ts b/src/useId.ts
+index cbe8bfaee0dda5b55b68fa9e9ab175bf90e0fb3d..9e4a37cd883667b60e08c3a84f189ebc9673df77 100644
+--- a/src/useId.ts
++++ b/src/useId.ts
+@@ -37,6 +37,9 @@ if (typeof FinalizationRegistry !== 'undefined') {
+  * If a default is not provided, generate an id.
+  * @param defaultId - Default component id.
+  */
++// Register each ref once with itself as the unregister token; re-registering on every render leaks WeakCells.
++let registeredIds = new WeakMap<object, string>();
++
+ export function useId(defaultId?: string): string {
+   let [value, setValue] = useState(defaultId);
+   let nextId = useRef(null);
+@@ -44,8 +47,13 @@ export function useId(defaultId?: string): string {
+   let res = useSSRSafeId(value);
+   let cleanupRef = useRef(null);
+ 
+-  if (registry) {
+-    registry.register(cleanupRef, res);
++  let registeredId = registeredIds.get(cleanupRef);
++  if (registry && registeredId !== res) {
++    if (registeredId != null) {
++      registry.unregister(cleanupRef);
++    }
++    registry.register(cleanupRef, res, cleanupRef);
++    registeredIds.set(cleanupRef, res);
+   }
+ 
+   if (canUseDOM) {
+@@ -64,6 +72,7 @@ export function useId(defaultId?: string): string {
+       // when it is though, also remove it from the finalization registry.
+       if (registry) {
+         registry.unregister(cleanupRef);
++        registeredIds.delete(cleanupRef);
+       }
+       idsUpdaterMap.delete(r);
+     };

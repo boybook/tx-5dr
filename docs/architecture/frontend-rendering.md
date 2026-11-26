@@ -21,6 +21,15 @@ their identity across the TX epoch guard: an equal numeric value can still be a
 new sample after rekeying. A missing reading holds its own last sample and
 deadline; another meter updating cannot clear or extend that deadline.
 
+The server re-sends the spectrum session state with each audio spectrum frame.
+The reducer keeps the previous state reference when that payload is unchanged,
+so the mode and spectrum contexts do not re-render their consumers at the
+frame rate. A long-lived control must not re-render with every frame: each
+render of a HeroUI control used to leave a `FinalizationRegistry` entry behind
+until unmount. The `@react-aria/utils` patch in `.yarn/patches` registers each
+id once; when HeroUI changes its pinned version, carry the patch forward or
+confirm the new version contains the upstream fix (`react-aria` 3.51 and later).
+
 The CW decoder owns its transcript and control state. Its spectrum tuning
 projection contains only the target, width, visibility and tuning actions.
 Transcript updates do not invalidate the spectrum. Image paper rows continue to
@@ -107,6 +116,10 @@ camera state.
 - `layout/ModePane.test.tsx`: outgoing mode cleanup during asynchronous loading.
 - `components/radio/digital/frameVirtualRange.test.ts`: visible-range retention
   and bounded overscan for dense, sparse and edge ranges.
+- `store/__tests__/radioStore.spectrumSession.test.ts`: unchanged session state
+  keeps its reference.
+- `test/reactAriaUseId.test.tsx`: react-aria ids register once across
+  re-renders (fails if the dependency patch is lost).
 
 All paths above are relative to `packages/web/src`. Browser performance records
 must identify the workload, source revision, viewport and development/production

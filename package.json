@@ -67,6 +67,10 @@
     "tmp": "^0.2.7",
     "uuid": "^11.1.1",
     "cmake-js": "^8.0.0",
-    "typescript": "5.8.3"
+    "typescript": "5.8.3",
+    "@react-aria/utils@npm:3.29.1": "patch:@react-aria/utils@npm%3A3.29.1#~/.yarn/patches/@react-aria-utils-npm-3.29.1-b70c08faf6.patch",
+    "@react-aria/utils@npm:^3.29.1": "patch:@react-aria/utils@npm%3A3.29.1#~/.yarn/patches/@react-aria-utils-npm-3.29.1-b70c08faf6.patch",
+    "@react-aria/utils@npm:3.29.0": "patch:@react-aria/utils@npm%3A3.29.1#~/.yarn/patches/@react-aria-utils-npm-3.29.1-b70c08faf6.patch",
+    "@react-aria/utils@npm:^3.29.0": "patch:@react-aria/utils@npm%3A3.29.1#~/.yarn/patches/@react-aria-utils-npm-3.29.1-b70c08faf6.patch"
   }
 }
