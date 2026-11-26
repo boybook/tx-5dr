@@ -256,15 +256,31 @@ export function radioReducer(state: RadioState, action: RadioAction): RadioState
       };
     }
 
-    case 'setSpectrumSessionState':
+    case 'setSpectrumSessionState': {
+      // The server re-sends an unchanged session state with every audio
+      // spectrum frame. Keep the previous reference so the mode and spectrum
+      // contexts do not re-render all of their consumers at the frame rate.
+      const spectrumSessionState = JSON.stringify(state.spectrumSessionState) === JSON.stringify(action.payload)
+        ? state.spectrumSessionState
+        : action.payload;
+      const currentRadioMode = action.payload?.voice.radioMode ?? state.currentRadioMode;
+      const currentRadioFrequency = action.payload?.currentRadioFrequency && action.payload.currentRadioFrequency > 0
+        ? action.payload.currentRadioFrequency
+        : state.currentRadioFrequency;
+      if (
+        spectrumSessionState === state.spectrumSessionState
+        && currentRadioMode === state.currentRadioMode
+        && currentRadioFrequency === state.currentRadioFrequency
+      ) {
+        return state;
+      }
       return {
         ...state,
-        spectrumSessionState: action.payload,
-        currentRadioMode: action.payload?.voice.radioMode ?? state.currentRadioMode,
-        currentRadioFrequency: action.payload?.currentRadioFrequency && action.payload.currentRadioFrequency > 0
-          ? action.payload.currentRadioFrequency
-          : state.currentRadioFrequency,
+        spectrumSessionState,
+        currentRadioMode,
+        currentRadioFrequency,
       };
+    }
     
     case 'decodeError':
       logger.warn('Decode error:', action.payload);
