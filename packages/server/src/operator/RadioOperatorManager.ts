@@ -2155,6 +2155,10 @@ export class RadioOperatorManager {
     for (const transmission of request.transmissions) {
       this.pendingTransmissions.push({
         operatorId,
+        // Physical receipts are delivered only to the lifecycle that produced the
+        // intent. Without an origin the receipt is dropped, so a 73 re-encoded
+        // mid-slot after a late decode was never seen as sent and went out again.
+        strategyOrigin: this._pluginManager?.getStrategyFactOrigin?.(operatorId, normalizeStreamId(transmission.streamId)),
         streamId: transmission.streamId,
         transmission: transmission.transmission,
         audioFrequencyHz: transmission.audioFrequencyHz,

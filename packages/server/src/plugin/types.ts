@@ -99,8 +99,12 @@ export interface PluginSystemRuntimeState {
 export interface OperatorDecisionState {
   lastDecisionTransmission: string | null;
   lastDecisionMessageSet: Set<string> | null;
-  /** handleEncodeStart 已排队的发射文本（用于检测 slotStart/encodeStart 竞态） */
-  preDecisionEncodedTransmission?: string;
+  /**
+   * handleEncodeStart 已排队的发射文本及其时隙（用于检测 slotStart/encodeStart 竞态）。
+   * 按时隙比对：编码可能早于该时隙的决策开始（事件循环卡顿时 encodeStart 立即触发），
+   * 不能在决策中途清空。
+   */
+  preDecisionEncodedTransmission?: { slotStartMs: number; signature: string };
 }
 
 export interface TransmissionRefreshOptions {

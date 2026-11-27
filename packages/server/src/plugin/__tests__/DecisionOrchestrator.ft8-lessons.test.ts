@@ -295,6 +295,42 @@ describe('DecisionOrchestrator FT8 lessons (characterization)', () => {
       });
     });
 
+    async function runEncodeBeforeDecision(encodedSlotMs: number) {
+      const triggerReEncode = vi.fn();
+      const control = steeredStrategy();
+      control.initialText = 'CQ W1AAA FN42';
+      control.decidedText = 'CQ DX W1AAA FN42';
+      const { operator, pluginManager, batches } = await createHarness({
+        strategy: 'steered-strategy',
+        preparePlugins: (dataDir) => writeUserPlugin(dataDir, 'steered-strategy', STEERED_STRATEGY_SOURCE),
+        triggerReEncode,
+      });
+      // A stalled event loop delivers the slot boundary late: the encode timer is
+      // already due and fires before the slot decision has even started.
+      (pluginManager as any).handleEncodeStart(createSlotInfo(encodedSlotMs));
+      await (pluginManager as any).handleSlotStart(createSlotInfo(30_000), createSlotPack(15_000, ['CQ JA1AAA PM95']));
+      return { operator, triggerReEncode, batches };
+    }
+
+    it('corrects a frame encoded before the delayed slot decision began', async () => {
+      const { operator, triggerReEncode, batches } = await runEncodeBeforeDecision(30_000);
+
+      expect(batches.map((batch) => batch.transmissions.map((item) => item.transmission))).toEqual([
+        ['CQ W1AAA FN42'],
+      ]);
+      expect(triggerReEncode).toHaveBeenCalledTimes(1);
+      expect(triggerReEncode).toHaveBeenCalledWith(operator.config.id, {
+        source: 'late-decode',
+        reason: 'slot decision corrected an already encoded frame',
+      });
+    });
+
+    it('does not correct the current slot from a frame encoded for an earlier slot', async () => {
+      const { triggerReEncode } = await runEncodeBeforeDecision(0);
+
+      expect(triggerReEncode).not.toHaveBeenCalled();
+    });
+
     it('does not re-encode when the finished decision matches the frame already encoded', async () => {
       const { triggerReEncode, batches } = await runRacedSlot('CQ W1AAA FN42');
 

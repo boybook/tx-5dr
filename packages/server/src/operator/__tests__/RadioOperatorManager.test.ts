@@ -4268,6 +4268,47 @@ describe('RadioOperatorManager transmission acceptance notification', () => {
     expect(coordinator.getPlaybackOffsetMs(request.frameId, 4_500)).toBe(4_200);
   });
 
+  it('binds a late-decode mid-slot frame to the strategy lifecycle so its physical receipt is delivered', async () => {
+    // Regression: a 73 re-encoded mid-slot after a late RR73 decode carried no
+    // strategy origin, its physical receipt was dropped, and standard-qso stayed
+    // in TX5 and sent 73 again in the next transmit cycle.
+    mockMaxSameTransmissionCount(20);
+    const encodeQueue = { push: vi.fn() };
+    const slotMs = MODES.FT8.slotMs;
+    const { manager } = createManager({
+      logBook: { id: 'log-1', name: 'Test Log', provider: {} },
+      callsign: 'BG4IAJ',
+      clockNow: slotMs * 2 + 3_000,
+      encodeQueue,
+    });
+    const origin = { generation: 3, streamId: 'default', lifecycleEpoch: 7 };
+    const reDecideOperator = vi.fn(async () => true);
+    const getStrategyFactOrigin = vi.fn(() => ({ ...origin }));
+    manager.setPluginManager({
+      reDecideOperator,
+      getStrategyFactOrigin,
+      shouldProcessStoppedOperatorReDecision: vi.fn(() => false),
+      isQueueExecutionSuspended: vi.fn(() => false),
+      getCurrentTransmissions: vi.fn(() => defaultTransmissionSet('BG5AAA BG4IAJ 73')),
+      getOperatorRuntimeStatus: vi.fn(() => undefined),
+      isRunning: vi.fn(() => false),
+    } as any);
+    await addBasicOperator(manager, 'op1');
+    manager.start();
+
+    manager.reDecideOnLateDecodes(buildSlotPack('slot-prev', slotMs, []));
+    await vi.waitFor(() => expect(encodeQueue.push).toHaveBeenCalledTimes(1));
+
+    expect(reDecideOperator).toHaveBeenCalledWith('op1', expect.objectContaining({ startMs: slotMs }));
+    const request = encodeQueue.push.mock.calls[0][0];
+    expect(request).toMatchObject({ operatorId: 'op1', message: 'BG5AAA BG4IAJ 73' });
+    const coordinator = (manager as any).digitalFrameCoordinator;
+    const intents = coordinator.getIntentRequests(request.frameId);
+    expect(intents).toHaveLength(1);
+    expect(intents[0]).toMatchObject({ text: 'BG5AAA BG4IAJ 73', strategyOrigin: origin });
+    expect(getStrategyFactOrigin).toHaveBeenCalledWith('op1', 'default');
+  });
+
   it('keeps a too-late correction queued for the next slot', async () => {
     mockMaxSameTransmissionCount(20);
     const encodeQueue = { push: vi.fn() };

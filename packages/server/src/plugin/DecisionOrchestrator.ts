@@ -189,7 +189,6 @@ export class DecisionOrchestrator {
       const session = this.getOrCreateDecisionState(operatorId);
       session.lastDecisionTransmission = null;
       session.lastDecisionMessageSet = null;
-      session.preDecisionEncodedTransmission = undefined;
       automaticTargetMessages ??= await this.getScoredAutomaticTargetMessages(
         operatorId,
         actionableMessages,
@@ -214,14 +213,17 @@ export class DecisionOrchestrator {
       await this.notifyQSOFailIfPresent(operatorId, decision);
       this.updateSilentDirectedCallGate(operatorId, decision, slotInfo, slotPack);
 
-      // 竞态检测：如果 handleEncodeStart 在决策完成前已排队了发射内容，
-      // 且决策结果与之不同，触发替换编码以纠正过时的发射
-      if (session.preDecisionEncodedTransmission !== undefined
+      // 竞态检测：如果本时隙的 handleEncodeStart 在决策完成前已排队了发射内容
+      // （包括在决策开始之前就已编码），且决策结果与之不同，触发替换编码以纠正过时的发射
+      const encodedBeforeDecision = session.preDecisionEncodedTransmission?.slotStartMs === slotInfo.startMs
+        ? session.preDecisionEncodedTransmission.signature
+        : undefined;
+      if (encodedBeforeDecision !== undefined
           && session.lastDecisionTransmission !== null
-          && session.lastDecisionTransmission !== session.preDecisionEncodedTransmission) {
+          && session.lastDecisionTransmission !== encodedBeforeDecision) {
         logger.info('Stale encode corrected after decision', {
           operatorId,
-          stale: session.preDecisionEncodedTransmission,
+          stale: encodedBeforeDecision,
           correct: session.lastDecisionTransmission,
         });
         this.deps.triggerReEncode?.(operatorId, {
@@ -262,7 +264,10 @@ export class DecisionOrchestrator {
 
         // 记录即将编码的内容，供 handleSlotStart 检测竞态
         const session = this.getOrCreateDecisionState(operator.config.id);
-        session.preDecisionEncodedTransmission = this.getTransmissionSetSignature(transmissions) ?? undefined;
+        const signature = this.getTransmissionSetSignature(transmissions);
+        session.preDecisionEncodedTransmission = signature === null
+          ? undefined
+          : { slotStartMs: slotInfo.startMs, signature };
 
         this.deps.eventEmitter.emit('requestTransmitBatch', {
           operatorId: operator.config.id,
