@@ -57,6 +57,20 @@ try {
   await fs.rm(temporary, { recursive: true, force: true });
 }
 
+// The server imports these on first use, after startup, so the startup check above
+// cannot see a dependency that package pruning removed (mqtt needs @babel/runtime).
+process.stdout.write(execFileSync(node, ['--input-type=module', '-e', `
+  for (const name of ['mqtt', 'fast-jwt']) {
+    await import(name);
+    console.log('Packaged lazy import passed: ' + name);
+  }
+`], {
+  cwd: path.join(root, 'packages/server/dist'),
+  env: { ...process.env, ...runtimeEnv },
+  encoding: 'utf8',
+  stdio: ['ignore', 'pipe', 'inherit'],
+}));
+
 // Image Radio natives must load from the product's own module tree: evaluate the
 // check inside the packaged server directory, with the node binary under test.
 const imageRadioCheck = await fs.readFile(fileURLToPath(new URL('./smoke-image-radio.cjs', import.meta.url)), 'utf8');
