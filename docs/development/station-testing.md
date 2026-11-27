@@ -15,8 +15,8 @@ yarn test:station
 ```
 
 This builds server prerequisites and runs isolated FT8 caller, FT8 responder,
-FT4 caller and silent-peer cases. Config, data, cache, logs, plugins and plugin
-data live in a new temporary directory, whose absolute path is printed. Normal
+FT4 caller, silent-peer, the two host-fault regressions below and the RTTY
+cases. Config, data, cache, logs, plugins and plugin data live in a new temporary directory, whose absolute path is printed. Normal
 admin login and WebSocket handshake are exercised. External reporting and sync
 are disabled. Each QSO must survive a process restart.
 
@@ -32,6 +32,32 @@ the operator over the normal WebSocket API: it sends macros ending in `{RX}`,
 waits for the virtual peer's decoded reply, logs the QSO and checks it survives
 a restart. `rtty-noise` adds channel noise to the peer; `rtty-disconnect` closes
 the sending client mid-transmission and requires PTT release within 3 s.
+
+FT8/FT4 cases do not stop at the first decoded final message. The station keeps
+running until the exchange has been quiet for four slots (at most twelve), and
+the case fails if the exchange did not end cleanly: a 73 repeated without the
+peer repeating RR73 in the slot before, anything sent after our 73, or anything
+sent to the peer after its 73.
+
+Load-dependent timing faults can be reproduced on Dummy FT8/FT4 runs. They are
+external: a preload module (`scripts/lib/station-fault-injection.mjs`) acts at
+process boundaries, and product code has no test-only path.
+
+- `--decode-delay MIN-MAX` delays each station decode result returned by the
+  decode worker (order preserved; the virtual peer is not delayed).
+- `--boundary-stall MIN-MAX` blocks the server main thread across every slot
+  boundary, like a busy host, so slot timers fire late together.
+
+Each applied fault is recorded in `<case>/faults.jsonl`; a case whose requested
+fault never took effect fails. Two regression cases carry fixed faults:
+`ft8-responder-late-decode` (3.5–4.5 s decode delay: the peer's RR73 decodes after
+our slot has started and 73 is re-encoded mid-slot) and
+`ft4-caller-boundary-stall` (250–450 ms stalls: frames encoded before the slot
+decision must be corrected). Faults are not available for RTTY or hardware runs.
+
+```sh
+yarn test:station --case ft8-responder --decode-delay 2000-4000
+```
 
 A compatible external provider/strategy can be selected with `--provider`,
 `--strategy` and `--scenario`. `--plugins /absolute/path/built-plugins` copies

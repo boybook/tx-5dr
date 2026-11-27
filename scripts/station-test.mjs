@@ -8,7 +8,9 @@ import { parseArgs } from 'node:util';
 import { createInterface } from 'node:readline/promises';
 import crypto from 'node:crypto';
 import WebSocket from 'ws';
-import { assertStationPlugins, assertRestoredQsos, createWorkbenchQsoReader, readCallsignQsos } from './lib/station-test-support.mjs';
+import { pathToFileURL } from 'node:url';
+import { assertStationPlugins, assertRestoredQsos, createWorkbenchQsoReader, readCallsignQsos, findFinalExchangeViolations,
+  findUnreplacedInterruptions, lastExchangeSlot, parseMsRange } from './lib/station-test-support.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 const { values } = parseArgs({ options: {
@@ -17,10 +19,11 @@ const { values } = parseArgs({ options: {
   callsign: { type: 'string' }, grid: { type: 'string' }, 'skip-build': { type: 'boolean', default: false },
   plugin: { type: 'string', multiple: true, default: [] }, 'logbook-page': { type: 'string' },
   prepare: { type: 'boolean', default: false }, serve: { type: 'boolean', default: false },
+  'decode-delay': { type: 'string' }, 'boundary-stall': { type: 'string' },
   help: { type: 'boolean', default: false },
 } });
 if (values.help) {
-  process.stdout.write(`Usage: yarn test:station [--case ft8-caller|ft8-responder|ft4-caller|ft8-silence|rtty-caller|rtty-responder|rtty-noise|rtty-disconnect]
+  process.stdout.write(`Usage: yarn test:station [--case ft8-caller|ft8-responder|ft4-caller|ft8-silence|ft8-responder-late-decode|ft4-caller-boundary-stall|rtty-caller|rtty-responder|rtty-noise|rtty-disconnect]
   --strategy NAME --provider NAME --scenario ID --plugins /path/to/built-plugins
   --plugin NAME                 Also load a utility/UI plugin (repeatable)
   --logbook-page PAGE_ID         Verify the strategy's public ContestWorkbench QSO view
@@ -28,6 +31,8 @@ if (values.help) {
   --serve                       Keep an isolated UI station open; no automatic test verdict
   --artifacts /path/to/new-dir   Retain evidence and session.json (UI modes)
   --hardware /absolute/profile.json --callsign YOURCALL --grid YOURGRID
+  --decode-delay MIN-MAX        Dummy FT8/FT4: delay each station decode result by MIN-MAX ms
+  --boundary-stall MIN-MAX      Dummy FT8/FT4: block the server main thread MIN-MAX ms across every slot boundary
   --skip-build                  Use already refreshed build output
 UI modes use Dummy only, default to ft8-caller, and expire within ten minutes.
 Stop a UI session with the authenticated POST /api/station-test/stop or Ctrl-C.
@@ -45,6 +50,12 @@ const cases = {
   'ft8-responder': { mode: 'FT8', scenario: 'calling', cycle: 1 },
   'ft4-caller': { mode: 'FT4', scenario: 'standard', cycle: 0 },
   'ft8-silence': { mode: 'FT8', scenario: 'silence', cycle: 0, negative: true },
+  // Host faults at process boundaries. The peer's RR73 decodes after our slot has
+  // started, so 73 is re-encoded mid-slot; it must be sent once, not again later.
+  'ft8-responder-late-decode': { mode: 'FT8', scenario: 'calling', cycle: 1, faults: { decodeDelayMs: [3500, 4500] } },
+  // Every slot timer fires late, after the encode deadline: a frame already encoded
+  // from the previous step must be corrected (no RR73 after the peer's 73).
+  'ft4-caller-boundary-stall': { mode: 'FT4', scenario: 'standard', cycle: 0, faults: { boundaryStallMs: [250, 450] } },
   // Keyboard RTTY: the runner acts as the operator through the normal WebSocket API.
   'rtty-caller': { mode: 'RTTY', scenario: 'rtty-answering', cycle: 0, keyboard: 'caller' },
   'rtty-responder': { mode: 'RTTY', scenario: 'rtty-calling', cycle: 0, keyboard: 'responder' },
@@ -53,6 +64,16 @@ const cases = {
 };
 const selected = values.case ? [values.case] : values.hardware || uiMode ? ['ft8-caller'] : Object.keys(cases);
 for (const id of selected) if (!cases[id]) throw new Error(`Unknown station case: ${id}`);
+const cliFaults = {
+  ...(values['decode-delay'] !== undefined ? { decodeDelayMs: parseMsRange(values['decode-delay'], '--decode-delay') } : {}),
+  ...(values['boundary-stall'] !== undefined ? { boundaryStallMs: parseMsRange(values['boundary-stall'], '--boundary-stall') } : {}),
+};
+for (const id of selected) {
+  const faulted = cases[id].faults || Object.keys(cliFaults).length;
+  if (faulted && (values.hardware || cases[id].mode === 'RTTY')) {
+    throw new Error(`Host fault injection is for Dummy FT8/FT4 cases only: ${id}`);
+  }
+}
 const artifactRoot = path.resolve(values.artifacts ?? await fs.mkdtemp(path.join(os.tmpdir(), 'tx5dr-station-')));
 await fs.mkdir(artifactRoot, { recursive: true });
 process.stdout.write(`Station test artifacts: ${artifactRoot}\n`);
@@ -187,6 +208,8 @@ for (const id of selected) {
   await fs.mkdir(path.join(dir, 'config'));
   const now = Date.now();
   const isRtty = entry.mode === 'RTTY';
+  const faults = isRtty ? {} : { ...entry.faults, ...cliFaults };
+  const faultLog = path.join(dir, 'faults.jsonl');
   const frequency = entry.mode === 'FT4' || isRtty ? 14080000 : 14074000;
   const profile = hardwareProfile ?? { id: 'station-dummy', name: 'Station Dummy', radio: { type: 'serial', serial: { path: process.platform === 'win32' ? 'NUL' : '/dev/null', rigModel: 1 }, pttMethod: 'cat', digitalModeRadioMode: 'usb' },
     audio: { inputDeviceName: 'Station PCM device', outputDeviceName: 'Station PCM device', inputSampleRate: 48000, outputSampleRate: 48000, inputBufferSize: 1024, outputBufferSize: 1024 }, audioLockedToRadio: false, createdAt: now, updatedAt: now };
@@ -292,6 +315,13 @@ for (const id of selected) {
       TX5DR_CACHE_DIR: path.join(dir, 'cache'), TX5DR_PLUGINS_DIR: path.join(dir, 'plugins'), TX5DR_PLUGIN_DATA_DIR: path.join(dir, 'plugin-data'),
       TX5DR_SERVER_READY_FILE: path.join(dir, 'ready.json'), RTC_DATA_AUDIO_UDP_PORT: String(await freePort()) };
     if (uiMode) { env.WEB_PORT = String(webPort); env.TX5DR_WEB_DEV_PORT = String(webPort); }
+    // Faults apply to the verified run only; the restart check reads persisted state.
+    if (!restart && Object.keys(faults).length) {
+      const injector = pathToFileURL(path.join(root, 'scripts/lib/station-fault-injection.mjs')).href;
+      env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ''} --import=${injector}`.trim();
+      env.TX5DR_STATION_FAULTS = JSON.stringify({ ...faults, slotMs: MODES[entry.mode].slotMs });
+      env.TX5DR_STATION_FAULT_LOG = faultLog;
+    }
     child = spawn(process.execPath, [path.join(root, 'packages/server/dist/index.js')], { cwd: root, env, stdio: ['pipe', 'pipe', 'pipe'] });
     exited = once(child, 'exit');
     const log = await fs.open(path.join(dir, restart ? 'restart.log' : 'server.log'), 'w');
@@ -434,13 +464,29 @@ for (const id of selected) {
           if (status.phase === 'stopped') throw new Error('Station stopped during case verification');
           const records = await getQsos();
           const trace = (await fs.readFile(path.join(dir, 'peer.jsonl'), 'utf8')).split('\n').slice(0, -1).filter(Boolean).map(line => JSON.parse(line));
-          if (trace.some(event => event.kind === 'host-end' && event.data.phase === 'interrupted')) throw new Error('Observed station output was interrupted');
+          if (findUnreplacedInterruptions(trace, { now: Date.now() }).length) throw new Error('Observed station output was interrupted');
           const finalDecoded = trace.some(event => event.kind === 'host-decode' && event.data.messages.some(m =>
             m.text === `JA1AAA ${callsign} RR73` || m.text === `JA1AAA ${callsign} 73`));
           if (!records.some(q => q.callsign === 'JA1AAA') || !finalDecoded || pttActive) return false;
           await checkPlugins(false);
           return records;
         }, MODES[entry.mode].slotMs * 12, 'audio QSO completion and durable logbook');
+        // Completion is not the end of the exchange. Keep the station running until
+        // the exchange has been quiet for four slots, then require a clean ending:
+        // a repeated final or a reply after the peer's 73 only shows up here.
+        const slotMs = MODES[entry.mode].slotMs;
+        const exchange = { stationCallsign: callsign, peerCallsign: 'JA1AAA', slotMs };
+        const readTrace = async () => (await fs.readFile(path.join(dir, 'peer.jsonl'), 'utf8'))
+          .split('\n').slice(0, -1).filter(Boolean).map(line => JSON.parse(line));
+        const observeUntil = Date.now() + slotMs * 12;
+        await until(async () => {
+          const status = await api('/api/station-test/status'); if (status.phase === 'failed') throw new Error(status.error);
+          const trace = await readTrace();
+          if (findUnreplacedInterruptions(trace, { now: Date.now() }).length) throw new Error('Observed station output was interrupted');
+          return Date.now() >= Math.min(observeUntil, lastExchangeSlot(trace, exchange) + slotMs * 4);
+        }, slotMs * 13, 'final exchange observation');
+        const violations = findFinalExchangeViolations(await readTrace(), exchange);
+        if (violations.length) throw new Error(`Final exchange did not end cleanly: ${violations.join('; ')}`);
       }
       await checkPlugins(false);
       if (!isRtty) await api('/api/operators/station-operator/stop', {});
@@ -456,7 +502,18 @@ for (const id of selected) {
       assertRestoredQsos(qsos, restored);
       const trace = await fs.readFile(path.join(dir, 'peer.jsonl'), 'utf8');
       if (!entry.negative && !trace.includes('host-decode')) throw new Error('No observed transmission was decoded by the peer');
-      result = { id, result: 'passed', qsos: restored.length, hardware: Boolean(hardwareProfile), evidence: hardwareProfile ? 'actual-output' : 'virtual-device-consumed',
+      // A fault that never took effect would make the case pass for the wrong reason.
+      const appliedFaults = {};
+      if (Object.keys(faults).length) {
+        const evidence = (await fs.readFile(faultLog, 'utf8').catch(() => '')).split('\n').filter(Boolean).map(line => JSON.parse(line));
+        for (const [key, name] of [['decodeDelayMs', 'decode-delay'], ['boundaryStallMs', 'boundary-stall']]) {
+          if (!faults[key]) continue;
+          appliedFaults[name] = evidence.filter(entry => entry.fault === name).length;
+          if (!appliedFaults[name]) throw new Error(`Requested ${name} fault was never applied`);
+        }
+      }
+      result = { id, result: 'passed', qsos: restored.length,
+        ...(Object.keys(faults).length ? { faults: { requested: faults, applied: appliedFaults } } : {}), hardware: Boolean(hardwareProfile), evidence: hardwareProfile ? 'actual-output' : 'virtual-device-consumed',
         plugins: pluginSelection.map(({ name, version }) => ({ name, version })), logbookPage: values['logbook-page'] };
     }
   } catch (error) {

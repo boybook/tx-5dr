@@ -82,3 +82,99 @@ export async function readCallsignQsos(api) {
   }
   return records;
 }
+
+/** Parse an explicit `MIN-MAX` millisecond range for a station fault option. */
+export function parseMsRange(value, name) {
+  const match = /^(\d+)-(\d+)$/.exec(String(value ?? ''));
+  const range = match ? [Number(match[1]), Number(match[2])] : null;
+  if (!range || range[0] > range[1] || range[1] > 10000) throw new Error(`${name} must be MIN-MAX milliseconds (at most 10000)`);
+  return range;
+}
+
+function exchangeMessages(trace, stationCallsign, peerCallsign) {
+  const tail = text => text.split(' ').slice(2).join(' ');
+  const kind = text => {
+    const value = tail(text);
+    if (/^(RR73|RRR)$/.test(value)) return 'RR73';
+    if (value === '73') return '73';
+    if (/^R[+-]\d\d$/.test(value)) return 'R-report';
+    if (/^[+-]\d\d$/.test(value)) return 'report';
+    if (/^[A-R]{2}\d\d$/.test(value)) return 'call';
+    return value;
+  };
+  const ours = new Map();
+  for (const event of trace) {
+    if (event.kind !== 'host-decode') continue;
+    for (const message of event.data?.messages ?? []) {
+      if (typeof message.text === 'string' && message.text.startsWith(`${peerCallsign} ${stationCallsign} `)) {
+        ours.set(`${event.data.slot}|${message.text}`, { slot: event.data.slot, text: message.text, kind: kind(message.text) });
+      }
+    }
+  }
+  const peer = trace.filter(event => event.kind === 'reply-encoded' && typeof event.data?.text === 'string'
+    && event.data.text.startsWith(`${stationCallsign} ${peerCallsign} `))
+    .map(event => ({ slot: event.data.targetSlotStart, text: event.data.text, kind: kind(event.data.text) }));
+  const bySlot = (a, b) => a.slot - b.slot;
+  return { ours: [...ours.values()].sort(bySlot), peer: peer.sort(bySlot) };
+}
+
+/** Latest slot in which either side transmitted part of this exchange. */
+export function lastExchangeSlot(trace, { stationCallsign, peerCallsign }) {
+  const { ours, peer } = exchangeMessages(trace, stationCallsign, peerCallsign);
+  return Math.max(-Infinity, ...ours.map(m => m.slot), ...peer.map(m => m.slot));
+}
+
+// The peer message that moves each of our steps on.
+const NEXT_PEER_STEP = { call: 'report', report: 'R-report', 'R-report': 'RR73', RR73: '73' };
+
+/**
+ * A finished exchange must stay finished, and every frame must follow what the
+ * peer last sent. Our 73 is repeated only when the peer repeated RR73 in the
+ * slot just before it; after our 73 or the peer's 73 the station sends nothing
+ * else to that peer. Repeating a step after the peer already answered it means
+ * a frame encoded before the slot decision reached the air uncorrected (a frame
+ * replaced mid-slot leaves its replacement in the same slot and is accepted).
+ */
+export function findFinalExchangeViolations(trace, { stationCallsign, peerCallsign, slotMs }) {
+  const { ours, peer } = exchangeMessages(trace, stationCallsign, peerCallsign);
+  const violations = [];
+  const our73 = ours.filter(m => m.kind === '73');
+  for (const repeat of our73.slice(1)) {
+    if (!peer.some(m => m.kind === 'RR73' && m.slot === repeat.slot - slotMs)) {
+      violations.push(`73 repeated without a repeated RR73 (slot ${repeat.slot})`);
+    }
+  }
+  if (our73.length) {
+    for (const m of ours.filter(m => m.slot > our73[0].slot && m.kind !== '73')) {
+      violations.push(`sent "${m.text}" after our 73 (slot ${m.slot})`);
+    }
+  }
+  ours.forEach((m, index) => {
+    const previous = ours.slice(0, index).reverse().find(other => other.slot < m.slot);
+    if (!previous || previous.kind !== m.kind || !NEXT_PEER_STEP[m.kind]) return;
+    const answered = peer.some(p => p.kind === NEXT_PEER_STEP[m.kind] && p.slot === m.slot - slotMs && p.slot > previous.slot);
+    const replaced = ours.some(other => other.slot === m.slot && other.kind !== m.kind);
+    if (answered && !replaced) {
+      violations.push(`repeated ${m.kind} although the peer already sent ${NEXT_PEER_STEP[m.kind]} (slot ${m.slot})`);
+    }
+  });
+  const peer73 = peer.find(m => m.kind === '73');
+  if (peer73) {
+    for (const m of ours.filter(m => m.slot > peer73.slot)) {
+      violations.push(`sent "${m.text}" after the peer's 73 (slot ${m.slot})`);
+    }
+  }
+  return violations;
+}
+
+/**
+ * Interrupted station output that no replacement continued within graceMs. A
+ * frame corrected mid-slot (late decode, stale encode) is stopped and its
+ * replacement starts at once; output cut off without a successor is a failure.
+ */
+export function findUnreplacedInterruptions(trace, { now, graceMs = 2000 }) {
+  const starts = trace.filter(event => event.kind === 'host-start').map(event => event.at);
+  return trace.filter(event => event.kind === 'host-end' && event.data?.phase === 'interrupted'
+    && now - event.at > graceMs && !starts.some(at => at >= event.at && at <= event.at + graceMs))
+    .map(event => event.at);
+}
